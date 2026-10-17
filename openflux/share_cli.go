@@ -48,7 +48,7 @@ func shareConfig(specs []transportSpec, session bool, codec, secret, context, ho
 		case "oneme":
 			skipped = append(skipped, s.Name+": a MAX token belongs to one account; clients need their own")
 			continue
-		case "cupsonline":
+		case "cupsonline", "avito":
 			if r := rooms[s.Name]; r != nil {
 				if list := r.RoomList(); list != "" {
 					t.URL = list

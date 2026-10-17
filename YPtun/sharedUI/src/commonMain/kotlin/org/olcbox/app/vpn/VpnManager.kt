@@ -46,6 +46,9 @@ interface VpnManager {
     val pingTimeoutMs: Long get() = 6_000L
     val pingRounds: Int get() = 1
 
+    /** Settings «Пинг»: take the free-servers list from the aggregated GitHub Pages file instead of the built-in sources. */
+    val freeServersFromPages: Boolean get() = false
+
     /** The whole-location budget callers wrap [ping] in (it used to be a fixed 12 s). */
     val pingBudgetMs: Long get() = maxOf(12_000L, pingTimeoutMs * pingRounds + 3_000L)
 

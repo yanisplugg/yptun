@@ -307,6 +307,11 @@ private fun IosApp(
                     appBehavior = newBehavior
                     IosSharedStore.saveAppBehavior(newBehavior)
                 },
+                onSubscriptionKeyChanged = { oldKey, newKey ->
+                    val newBehavior = appBehavior.withSubscriptionKeyRenamed(oldKey, newKey)
+                    appBehavior = newBehavior
+                    IosSharedStore.saveAppBehavior(newBehavior)
+                },
                 onToggleGroupPinned = { key ->
                     val current = appBehavior.pinnedSubscriptionGroups
                     val updated = if (key in current) current - key else current + key

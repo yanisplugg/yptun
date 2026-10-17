@@ -339,6 +339,17 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun neverIntervalDisablesAutomaticChecks() = runTest {
+        val store = InMemoryAppUpdateSettingsStore()
+        store.save(AppUpdateSettings(intervalHours = AppUpdateSettings.NEVER_HOURS, lastCheckAtEpochMs = 1_000L))
+
+        val loaded = store.load()
+        assertEquals(AppUpdateSettings.NEVER_HOURS, loaded.intervalHours)
+        assertTrue(loaded.autoCheckDisabled)
+        assertFalse(loaded.isUpdateCheckDue(1_000L + 1000L * 60L * 60L * 1_000L))
+    }
+
+    @Test
     fun laterSuppressesSameUpdateUntilNextIntervalOrNewVersion() {
         val asset = AppUpdateAsset("olcbox-android.apk", "https://example/app.apk", 100)
         val info = AppUpdateInfo(

@@ -238,3 +238,34 @@ func TestReorderBufferStartsAtSenderLow(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A sender whose receiver is gone resends a piece for a while, then gives it
+// up and frees the window; its retry counter never wraps around.
+func TestSenderGivesUpOnAGoneReceiver(t *testing.T) {
+	var q sender
+	q.init()
+	now := time.Now()
+	q.lane[0].start(now)
+	q.lane[0].tokens = 10
+	for i := 0; i < 3; i++ {
+		q.enqueue([]byte{byte(i)})
+	}
+	if out := q.pull(0, 3, now); len(out) != 3 {
+		t.Fatalf("pulled %d", len(out))
+	}
+	first := q.low
+	e := &q.ring[first%txRingSize]
+	e.tries = 255
+	q.detectLoss(now.Add(time.Second))
+	q.pull(0, 3, now.Add(time.Second))
+	if e.tries != 255 {
+		t.Fatalf("tries wrapped to %d", e.tries)
+	}
+	e.tries = 0 // as if it had wrapped: must not panic
+	e.queued = false
+	q.detectLoss(now.Add(2 * time.Second))
+	q.detectLoss(now.Add(giveUpAfter + 2*time.Second))
+	if q.low != q.seq+1 || q.gaveUp != 3 {
+		t.Fatalf("low=%d seq=%d gaveUp=%d: the stale pieces still hold the window", q.low, q.seq, q.gaveUp)
+	}
+}

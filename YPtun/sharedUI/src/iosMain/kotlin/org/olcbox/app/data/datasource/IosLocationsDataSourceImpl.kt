@@ -65,6 +65,9 @@ class IosLocationsDataSourceImpl(
 
     override suspend fun loadLegacyLocations(): List<Pair<String, String>> = emptyList()
 
+    override suspend fun appBehavior(): org.olcbox.app.data.model.AppBehaviorSettings? =
+        org.olcbox.app.vpn.ios.IosSharedStore.loadAppBehavior()
+
     override suspend fun loadLegacyActiveLocationId(): String? = null
 
     override suspend fun loadDeviceIdentity(): String? = withContext(Dispatchers.Default) {

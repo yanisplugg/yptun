@@ -77,6 +77,12 @@ val LocalShowSubscriptionExpiry = staticCompositionLocalOf { false }
  */
 val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
 
+/** Whether ping pause/stop buttons and the per-subscription ping progress line are shown; off by default. */
+val LocalShowPingControls = staticCompositionLocalOf { false }
+
+/** Whether the location editor offers the fine-tuning fields of a configuration (AmneziaWG parameters); off by default. */
+val LocalAllowConfigEditing = staticCompositionLocalOf { false }
+
 /**
  * Whether the subscription group header shows the panel's description (`announce` header) under the
  * title. Provided near the app root from the persisted app-behavior toggle; off by default.
@@ -400,7 +406,7 @@ private fun locationSubtitle(location: LocationItem): String {
 
         EngineType.OpenFlux -> listOfNotNull("OpenFlux", config.openFlux?.summary())
 
-        EngineType.Snolc -> listOfNotNull("snolc", config.snolc?.summary())
+        EngineType.Snolc -> listOfNotNull("Snolc", config.snolc?.summary())
 
         else -> listOf(
             config?.providerName()

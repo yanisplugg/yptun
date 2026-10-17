@@ -122,7 +122,7 @@ object SingBoxRouting {
         val site = parse(profile.blockSites) + parse(profile.directSites) + parse(profile.proxySites)
         val ip = parseIp(profile.blockIp) + parseIp(profile.directIp) + parseIp(profile.proxyIp)
         val geositeTags = site.flatMap { it.geositeTags }.distinct()
-        val geoipTags = ip.flatMap { it.geoipTags }.distinct()
+        val geoipTags = (ip + site).flatMap { it.geoipTags }.distinct()
         if (geositeTags.isEmpty() && geoipTags.isEmpty()) return JsonArray(emptyList())
         val siteBase = geositeBase.ifBlank { DEFAULT_GEOSITE_BASE }.let { if (it.endsWith('/')) it else "$it/" }
         val ipBase = geoipBase.ifBlank { DEFAULT_GEOIP_BASE }.let { if (it.endsWith('/')) it else "$it/" }
@@ -170,7 +170,7 @@ object SingBoxRouting {
             val ipCidr = i.flatMap { it.ipCidr }.distinct()
             val sourceIpCidr = parseIp(rule.source).flatMap { it.ipCidr }.distinct()
             val ruleSetTags = (s.flatMap { it.geositeTags }.map { "geosite-$it" } +
-                i.flatMap { it.geoipTags }.map { "geoip-$it" }).distinct()
+                (s + i).flatMap { it.geoipTags }.map { "geoip-$it" }).distinct()
             val singlePorts = mutableListOf<Int>()
             val portRanges = mutableListOf<String>()
             splitPorts(rule.port, singlePorts, portRanges)
@@ -229,7 +229,7 @@ object SingBoxRouting {
     ): JsonArray {
         val enabled = rules.filter { it.enabled && it.hasMatcher() }
         val geositeTags = enabled.flatMap { parse(it.domains).flatMap(Selectors::geositeTags) }.distinct()
-        val geoipTags = enabled.flatMap { parseIp(it.ip).flatMap(Selectors::geoipTags) }.distinct()
+        val geoipTags = enabled.flatMap { (parse(it.domains) + parseIp(it.ip)).flatMap(Selectors::geoipTags) }.distinct()
         if (geositeTags.isEmpty() && geoipTags.isEmpty()) return JsonArray(emptyList())
         val siteBase = geositeBase.ifBlank { DEFAULT_GEOSITE_BASE }.let { if (it.endsWith('/')) it else "$it/" }
         val ipBase = geoipBase.ifBlank { DEFAULT_GEOIP_BASE }.let { if (it.endsWith('/')) it else "$it/" }
@@ -282,7 +282,7 @@ object SingBoxRouting {
         val domainRegex = s.flatMap { it.domainRegex }.distinct()
         val ipCidr = i.flatMap { it.ipCidr }.distinct()
         val geositeTags = s.flatMap { it.geositeTags }.distinct()
-        val geoipTags = i.flatMap { it.geoipTags }.distinct()
+        val geoipTags = (i + s).flatMap { it.geoipTags }.distinct()
 
         // Geo rule-sets (geosite + geoip) combined into one OR-matched rule (proven shipped form).
         if (geositeTags.isNotEmpty() || geoipTags.isNotEmpty()) {
@@ -312,7 +312,13 @@ object SingBoxRouting {
         val v = raw.trim()
         if (v.isEmpty()) return@mapNotNull null
         when {
-            v.startsWith("geosite:", true) -> sel(geosite = listOf(v.substringAfter(':').trim().lowercase()))
+            v.startsWith("geosite:", true) -> v.substringAfter(':').trim().lowercase().let { tag ->
+                // Telegram clients dial their data centres BY IP (a SOCKS5 CONNECT carries no domain), so
+                // geosite:telegram alone never matches them: without geoip:telegram they fall to the
+                // profile's final outbound — direct for an "only these through the proxy" profile, which
+                // is blocked, and Telegram sits on "Connecting". The geoip list rides along.
+                sel(geosite = listOf(tag), geoip = if (tag == "telegram") listOf(tag) else emptyList())
+            }
             v.startsWith("geoip:", true) -> sel(geoip = listOf(v.substringAfter(':').trim().lowercase()))
             // v2ray/Xray `domain:` = match the domain itself AND any subdomain. sing-box has no
             // single equivalent: domain_suffix is a RAW string suffix (so "ru" would also match

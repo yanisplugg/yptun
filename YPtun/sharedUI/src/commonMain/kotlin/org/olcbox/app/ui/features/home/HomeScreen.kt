@@ -1,6 +1,13 @@
 package org.olcbox.app.ui.features.home
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +31,8 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.IconButton
@@ -44,6 +53,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +65,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -120,6 +131,8 @@ fun HomeScreen(
     showGroupAutoPick: Boolean = true,
     onToggleGroupCollapsed: (String) -> Unit = {},
     onToggleGroupPinned: (String) -> Unit = {},
+    // A subscription's group key changed with its URL: (old key, new key) — pins/folders follow it.
+    onSubscriptionKeyChanged: (oldKey: String, newKey: String) -> Unit = { _, _ -> },
     onToggleGroupPingSort: (String) -> Unit = {},
     onToggleCustomLocationPinned: (String) -> Unit = {},
     onToggleCustomLocationsPingSort: () -> Unit = {},
@@ -166,6 +179,61 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // The list must not fall back to the top by itself. A background change of the data (the free servers are
+    // replaced by the auto-update, a refresh) can leave the list short for an instant, and LazyColumn then resets
+    // its position to 0 for good. When that happens with no finger on the list, bring the position back as soon
+    // as the items are there again.
+    LaunchedEffect(scrollState) {
+        var stable: Pair<Int, Int>? = null   // where the user last left the list (index > 0)
+        var touched = false                  // the user scrolled since [stable] was taken
+        var lost: Pair<Int, Int>? = null     // position to bring back after an unexpected fall to the top
+        snapshotFlow {
+            listOf(
+                scrollState.firstVisibleItemIndex,
+                scrollState.firstVisibleItemScrollOffset,
+                if (scrollState.isScrollInProgress) 1 else 0,
+                scrollState.layoutInfo.totalItemsCount
+            )
+        }.collect { (index, offset, scrolling, total) ->
+            if (scrolling == 1) {
+                touched = true
+                lost = null
+                return@collect
+            }
+            val back = lost
+            if (back != null) {
+                if (total > back.first) {
+                    lost = null
+                    scrollState.scrollToItem(back.first, back.second)
+                }
+                return@collect
+            }
+            val before = stable
+            if (index == 0 && offset == 0 && before != null && !touched) {
+                lost = before
+                if (total > before.first) {
+                    lost = null
+                    scrollState.scrollToItem(before.first, before.second)
+                }
+            } else {
+                stable = if (index > 0) index to offset else null
+                touched = false
+            }
+        }
+    }
+
+    // Free servers auto-update (the group menu's switch): checked every few minutes while the app lives.
+    // Only with the window in focus: a search checks thousands of servers on several threads, and run
+    // behind the screen / from the background it heats the phone (Samsung "uses a lot of resources").
+    val windowInfo = androidx.compose.ui.platform.LocalWindowInfo.current
+    LaunchedEffect(pingParallelism, freeServersLimit) {
+        delay(60_000L)
+        while (true) {
+            if (windowInfo.isWindowFocused) viewModel.autoUpdateFreeServersIfDue(pingParallelism, freeServersLimit)
+            delay(10 * 60_000L)
+        }
+    }
+
     LaunchedEffect(state.connectError) {
         val error = state.connectError
         if (!error.isNullOrBlank()) {
@@ -179,6 +247,17 @@ fun HomeScreen(
     // The ids a per-group auto-pick is running for (null = idle, or the whole-list Auto button).
     var autoPickTarget by remember { mutableStateOf<List<String>?>(null) }
     val pingsState = locationViewModel.pingsState
+    // Pause / resume / drop of the running ping pass: the group's ping button turns into these while it runs.
+    val pingPaused = (pingsState as? org.olcbox.app.ui.features.locations.PingsState.Loading)?.paused == true
+    val showPingControls = org.olcbox.app.ui.features.locations.components.LocalShowPingControls.current
+    val pingControls = remember(pingPaused, showPingControls) {
+        if (!showPingControls) null else org.olcbox.app.ui.features.locations.components.PingControls(
+            paused = pingPaused,
+            onPause = { locationViewModel.pausePings() },
+            onResume = { locationViewModel.resumePings() },
+            onCancel = { locationViewModel.cancelPings() }
+        )
+    }
     val locations = locationViewModel.locations.toList()
     // Drop selected ids that no longer exist (e.g. after a delete) so the count stays accurate.
     selectedIds.retainAll(locations.map { it.storageId }.toSet())
@@ -353,6 +432,17 @@ fun HomeScreen(
             Column {
                 if (updateAvailable) {
                     UpdateAvailableBanner(onClick = onUpdateClick)
+                }
+                // Free servers auto-update: the search runs silently, this strip (where the update banner
+                // writes) shows its progress and lets it be held or dropped.
+                androidx.compose.animation.AnimatedVisibility(visible = state.freeServersBackground) {
+                    FreeServersAutoStrip(
+                        progress = state.freeServersProgress,
+                        paused = state.freeServersPaused,
+                        onPause = { viewModel.pauseFreeServersSearch() },
+                        onResume = { viewModel.resumeFreeServersPaused() },
+                        onCancel = { viewModel.cancelFreeServersLoad() }
+                    )
                 }
                 if (showAppSettingsButton) {
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
@@ -534,6 +624,34 @@ fun HomeScreen(
                     requestDelete(PendingDelete.Subscription(ids))
                 },
                 onRenameSubscription = { url, name -> locationViewModel.renameSubscription(url, name) },
+                onToggleFreeServerPinned = { id, pinned -> locationViewModel.setLocationPinned(id, pinned) },
+                freeSearchRemaining = state.freeServersResumable,
+                onContinueFreeSearch = {
+                    viewModel.loadFreeServers(
+                        parallelism = pingParallelism,
+                        limit = freeServersLimit,
+                        resume = true,
+                        onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+                    )
+                },
+                onChangeSubscriptionUrl = { oldUrl, newUrl, oldKey ->
+                    locationViewModel.changeSubscriptionUrl(oldUrl, newUrl) { changed ->
+                        if (changed) {
+                            // The group key is `name|url`: it ends with the URL, so only that tail moves.
+                            val newKey = oldKey.removeSuffix(oldUrl.trim()) + newUrl.trim()
+                            onSubscriptionKeyChanged(oldKey, newKey)
+                            refreshOneSubscription(newUrl.trim())
+                        } else {
+                            scope.launch { snackbarHostState.showSnackbar(s.subscriptionLinkRejected) }
+                        }
+                    }
+                },
+                onSetSubscriptionCascade = { url, link ->
+                    locationViewModel.setSubscriptionCascade(url, link) { ok ->
+                        if (ok) viewModel.restartVpnIfRunning()
+                        else scope.launch { snackbarHostState.showSnackbar(s.subscriptionCascadeRejected) }
+                    }
+                },
                 onSetSubscriptionAutoUpdate = { url, enabled ->
                     locationViewModel.setSubscriptionAutoUpdate(url, enabled)
                 },
@@ -565,6 +683,9 @@ fun HomeScreen(
             }
         }
 
+        androidx.compose.runtime.CompositionLocalProvider(
+            org.olcbox.app.ui.features.locations.components.LocalPingControls provides pingControls
+        ) {
         if (wideLayout) {
             // Desktop: the connect controls sit centred in a left pane with a status line under the
             // button, the server list fills the right pane (capped so rows don't stretch on 4K).
@@ -604,7 +725,8 @@ fun HomeScreen(
                         modifier = Modifier
                             .widthIn(max = 760.dp)
                             .fillMaxHeight()
-                            .padding(start = 8.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
+                            .padding(start = 8.dp, end = 24.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         locationItems()
@@ -616,14 +738,17 @@ fun HomeScreen(
                 state = scrollState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .padding(innerPadding),
+                // contentPadding, not modifier padding: the latter clipped the list 8dp short of the bars,
+                // leaving a dead strip where cards were cut off.
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 connectItems()
                 locationItems()
             }
+        }
         }
 
         if (isLogsSheetOpen) {
@@ -726,10 +851,43 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {},
                 properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
-                confirmButton = {},
+                // Stop the search but keep what it has found so far (a pass over a long list takes hours).
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.stopFreeServersSearch {
+                            scope.launch {
+                                val result = snackbarHostState.showSnackbar(
+                                    s.freeServersNothingYet,
+                                    actionLabel = s.freeServersContinue
+                                )
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    viewModel.loadFreeServers(
+                                        parallelism = pingParallelism,
+                                        limit = freeServersLimit,
+                                        resume = true,
+                                        onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+                                    )
+                                }
+                            }
+                        }
+                    }) {
+                        Text(s.freeServersStopKeep)
+                    }
+                },
                 dismissButton = {
-                    TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
-                        Text(s.cancel)
+                    Row {
+                        TextButton(onClick = {
+                            if (state.freeServersPaused) viewModel.resumeFreeServersPaused() else viewModel.pauseFreeServersSearch()
+                        }) {
+                            Text(if (state.freeServersPaused) s.pingResume else s.pingPause)
+                        }
+                        // Closes the dialog; the strip under the toolbar keeps the progress and the result is saved silently.
+                        TextButton(onClick = { viewModel.sendFreeServersToBackground() }) {
+                            Text(s.freeServersToBackground)
+                        }
+                        TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
+                            Text(s.cancel)
+                        }
                     }
                 },
                 title = { Text(s.freeServers) },
@@ -742,12 +900,20 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                            if (state.freeServersPaused) Spacer(Modifier.size(36.dp)) else PingDot()
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(s.freeServersLoading, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    if (state.freeServersPaused) s.freeServers + " · " + s.pingPausedLabel else s.freeServersLoading,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
                                 Text(
                                     s.freeServersWaitNotice,
                                     style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    s.freeServersSourceNotice,
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -759,7 +925,8 @@ fun HomeScreen(
                                     modifier = Modifier.fillMaxWidth().height(4.dp)
                                 )
                                 Text(
-                                    s.freeServersProgressText(prog.checked, prog.total, prog.found),
+                                    s.freeServersProgressText(prog.checked, prog.total, prog.found) +
+                                        (prog.etaSeconds?.takeIf { !state.freeServersPaused }?.let { " · " + s.etaLeft(it) } ?: ""),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -774,9 +941,19 @@ fun HomeScreen(
             FreeServersSheet(
                 servers = freeServers,
                 onDismiss = { viewModel.dismissFreeServersSheet() },
-                onAddSelected = { selected ->
+                remaining = state.freeServersResumable,
+                onContinue = {
+                    viewModel.loadFreeServers(
+                        parallelism = pingParallelism,
+                        limit = freeServersLimit,
+                        resume = true,
+                        onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+                    )
+                },
+                onAddSelected = { selected, warpIds ->
                     viewModel.saveSelectedFreeServers(
                         selectedServers = selected,
+                        warpIds = warpIds,
                         onComplete = { count ->
                             scope.launch {
                                 snackbarHostState.showSnackbar(s.freeServersImported(count, freeServers.size))
@@ -925,6 +1102,92 @@ private sealed interface PendingDelete {
     data object AllConfigs : PendingDelete
     data object Unreachable : PendingDelete
     data object Duplicates : PendingDelete
+}
+
+/** Sonar-style "ping": a steady dot with a ring that swells and fades, instead of a spinner. */
+@Composable
+private fun PingDot(modifier: Modifier = Modifier, size: androidx.compose.ui.unit.Dp = 36.dp) {
+    val color = MaterialTheme.colorScheme.primary
+    val t = rememberInfiniteTransition(label = "ping")
+    val ring by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart), label = "ring")
+    val pulse by t.animateFloat(0.75f, 1f, infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Reverse), label = "pulse")
+    Box(modifier.size(size), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(size)
+                .graphicsLayer { scaleX = 0.3f + 0.7f * ring; scaleY = 0.3f + 0.7f * ring; alpha = 1f - ring }
+                .background(color.copy(alpha = 0.5f), CircleShape)
+        )
+        Box(
+            Modifier.size(size * 0.39f)
+                .graphicsLayer { scaleX = pulse; scaleY = pulse }
+                .background(color, CircleShape)
+        )
+    }
+}
+
+/**
+ * Strip above the navigation bar (next to the update banner) while the free servers auto-update: a ping dot,
+ * "Free servers · ~8 min left" over "Tested: 120 of 500 (working: 0)", a progress line, pause/resume and stop.
+ */
+@Composable
+private fun FreeServersAutoStrip(
+    progress: FreeServersProgress?,
+    paused: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val tail = when {
+        paused -> s.pingPausedLabel
+        progress?.etaSeconds != null -> s.etaLeft(progress.etaSeconds)
+        else -> null
+    }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (!paused) PingDot(size = 18.dp) else Spacer(Modifier.size(18.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = s.freeServers + (tail?.let { " · $it" } ?: ""),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    progress?.let {
+                        Text(
+                            text = s.freeServersProgressText(it.checked, it.total, it.found),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                IconButton(onClick = if (paused) onResume else onPause, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        if (paused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
+                        contentDescription = if (paused) s.pingResume else s.pingPause,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                IconButton(onClick = onCancel, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.Close, contentDescription = s.cancel, modifier = Modifier.size(20.dp))
+                }
+            }
+            if (progress != null && progress.total > 0) {
+                LinearProgressIndicator(
+                    progress = { (progress.checked.toFloat() / progress.total.toFloat()).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(2.dp)
+                )
+            }
+        }
+    }
 }
 
 @Composable

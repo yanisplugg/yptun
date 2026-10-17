@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.telegram
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -13,6 +14,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -40,8 +42,19 @@ internal object WarpConfigGenerator {
     /** Standard WARP data-plane endpoint. */
     private const val ENDPOINT = "engage.cloudflareclient.com:2408"
 
+    /** A generator answers with one account; the git-hosted mirror with a pool of them. */
+    private fun parseAccount(text: String): WarpServiceAccount =
+        if (text.trimStart().startsWith("[")) {
+            json.decodeFromString(ListSerializer(WarpServiceAccount.serializer()), text).random()
+        } else {
+            json.decodeFromString(WarpServiceAccount.serializer(), text)
+        }
+
     /** Direct Cloudflare registration (fallback only — blocked in some regions). */
     private const val REG_URL = "https://api.cloudflareclient.com/v0a2158/reg"
+
+    /** Pass-through of the same API on our Cloudflare Worker, tried when the direct one is blocked or times out. */
+    private const val REG_MIRROR_URL = "https://cache-mirror-7q.cdn-edge-7q.workers.dev/cf/v0a2158/reg"
     private const val CF_CLIENT_VERSION = "a-6.3-2158"
     private const val CF_USER_AGENT = "okhttp/3.12.1"
 
@@ -55,6 +68,8 @@ internal object WarpConfigGenerator {
         "https://warp-vercel-chi.vercel.app/api/warp-data",
         "https://warp-vercel-murex.vercel.app/api/warp-data",
         "https://warp-gen.netlify.app/",
+        // Git-hosted mirror (GitHub Pages, rebuilt hourly by a workflow): a JSON ARRAY of accounts, one is picked at random.
+        "https://breead1337.github.io/ws-cache-9e41/w.json",
     )
 
     /** Full tunnel: every connection the local SOCKS client (Telegram) makes rides WARP. */
@@ -107,7 +122,13 @@ internal object WarpConfigGenerator {
      * blocked Cloudflare API), then falls back to direct registration. Requires internet (first time
      * only — the caller caches the result). Throws only if BOTH paths fail.
      */
-    suspend fun generate(log: (String) -> Unit = {}): String {
+    suspend fun generate(log: (String) -> Unit = {}, officialFirst: Boolean = false): String {
+        // Plain-WireGuard WARP (the "official way"): register straight with Cloudflare first; if that API
+        // is blocked here, fall through to the server-side generators below.
+        if (officialFirst) {
+            runCatching { return generateViaCloudflare() }
+                .onFailure { log("WARP: official Cloudflare registration failed: ${it.message}") }
+        }
         generateViaService(log)?.let { return it }
         log("WARP: all generators failed — falling back to direct Cloudflare registration")
         return generateViaCloudflare()
@@ -118,9 +139,9 @@ internal object WarpConfigGenerator {
         val client = HttpClient(OkHttp) {
             expectSuccess = false
             install(HttpTimeout) {
-                connectTimeoutMillis = 8_000
-                requestTimeoutMillis = 10_000
-                socketTimeoutMillis = 10_000
+                connectTimeoutMillis = 4_000
+                requestTimeoutMillis = 6_000
+                socketTimeoutMillis = 6_000
             }
         }
         try {
@@ -131,7 +152,7 @@ internal object WarpConfigGenerator {
                         headers { append(HttpHeaders.UserAgent, BROWSER_USER_AGENT) }
                     }
                     if (response.status.value !in 200..299) return@runCatching null
-                    json.decodeFromString(WarpServiceAccount.serializer(), response.bodyAsText())
+                    parseAccount(response.bodyAsText())
                 }.onFailure { log("WARP generator $url failed: ${it.message}") }.getOrNull()
 
                 val priv = account?.privKey?.takeIf { it.isNotBlank() }
@@ -162,9 +183,9 @@ internal object WarpConfigGenerator {
         val client = HttpClient(OkHttp) {
             expectSuccess = false
             install(HttpTimeout) {
-                connectTimeoutMillis = 15_000
-                requestTimeoutMillis = 20_000
-                socketTimeoutMillis = 20_000
+                connectTimeoutMillis = 8_000
+                requestTimeoutMillis = 12_000
+                socketTimeoutMillis = 12_000
             }
         }
         val body: JsonObject = buildJsonObject {
@@ -177,19 +198,30 @@ internal object WarpConfigGenerator {
             put("locale", "en_US")
         }
 
+        val requestBody = json.encodeToString(JsonObject.serializer(), body)
         val responseText = try {
-            val response = client.post(REG_URL) {
-                contentType(ContentType.Application.Json)
-                headers {
-                    append(HttpHeaders.UserAgent, CF_USER_AGENT)
-                    append("CF-Client-Version", CF_CLIENT_VERSION)
-                }
-                setBody(json.encodeToString(JsonObject.serializer(), body))
+            var text: String? = null
+            var error: Throwable? = null
+            for (url in listOf(REG_URL, REG_MIRROR_URL)) {
+                text = runCatching {
+                    val response = client.post(url) {
+                        // Official API unanswered -> give up fast, the mirror is next.
+                        if (url == REG_URL) timeout { connectTimeoutMillis = 3_000; requestTimeoutMillis = 5_000; socketTimeoutMillis = 5_000 }
+                        contentType(ContentType.Application.Json)
+                        headers {
+                            append(HttpHeaders.UserAgent, CF_USER_AGENT)
+                            append("CF-Client-Version", CF_CLIENT_VERSION)
+                        }
+                        setBody(requestBody)
+                    }
+                    if (response.status.value !in 200..299) {
+                        throw IllegalStateException("Cloudflare WARP registration failed (HTTP ${response.status.value})")
+                    }
+                    response.bodyAsText()
+                }.onFailure { error = it }.getOrNull()
+                if (text != null) break
             }
-            if (response.status.value !in 200..299) {
-                throw IllegalStateException("Cloudflare WARP registration failed (HTTP ${response.status.value})")
-            }
-            response.bodyAsText()
+            text ?: throw error!!
         } finally {
             client.close()
         }

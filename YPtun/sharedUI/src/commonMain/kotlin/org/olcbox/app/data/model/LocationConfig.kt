@@ -17,6 +17,50 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 
 /**
+ * Positioning of the Cloudflare WARP tunnel when chained with a VLESS proxy:
+ * - [Client]: Client -> WARP -> VLESS -> Internet (WARP runs on client side before reaching VLESS)
+ * - [Server]: Client -> VLESS -> WARP -> Internet (WARP runs at the exit after VLESS)
+ */
+@Serializable
+enum class WarpMode {
+    @SerialName("client")
+    Client,
+
+    @SerialName("server")
+    Server;
+
+    companion object {
+        fun fromValue(value: String?): WarpMode = when (value?.trim()?.lowercase()) {
+            "server", "egress", "exit" -> Server
+            else -> Client
+        }
+    }
+}
+
+/**
+ * Which WARP tunnel protocol to use (independent of [WarpMode], i.e. valid on either side):
+ * - [Wg]: plain WireGuard, registered the official way (api.cloudflareclient.com). Runs inside the
+ *   proxy core (sing-box / xray), no obfuscation.
+ * - [Awg]: AmneziaWG with the DPI-evasion packet. Runs in the awgproxy userspace engine (SOCKS5 on
+ *   loopback); this is the one that gets through on networks that kill plain WireGuard.
+ */
+@Serializable
+enum class WarpProtocol {
+    @SerialName("wg")
+    Wg,
+
+    @SerialName("awg")
+    Awg;
+
+    companion object {
+        fun fromValue(value: String?): WarpProtocol = when (value?.trim()?.lowercase()) {
+            "wg", "wireguard" -> Wg
+            else -> Awg
+        }
+    }
+}
+
+/**
  * VK-TURN (freeturn) transport parameters for [EngineType.VkTurn]. [uri] is the
  * full freeturn:// share link issued by the panel (carries transport/obf params,
  * the WG config is extracted out of it into ProxyProfile.rawOutbound); [vkLink]
@@ -555,8 +599,52 @@ data class OpenFluxConfig(
     /** Session-only (`--negotiate`): encrypted, authenticated negotiation is required, no classic fallback. */
     @SerialName("negotiate")
     val negotiate: Boolean = false,
+    /** Raw cookie string of code.avito.ru ([TRANSPORT_AVITO]); reaches the core through the environment. */
+    @SerialName("avito_cookies")
+    val avitoCookies: String = "",
+    /**
+     * Multi-transport session (core `--transports`): several carriers at once, traffic goes over the
+     * highest-[OpenFluxCarrier.priority] one that reaches the exit and fails over to the others. Needs the
+     * encryption [secret], and the exit node must run the same carriers (an `openflux://` link of such an
+     * exit imports it whole). Empty = the single carrier ([transport] / [docUrl]).
+     */
+    @SerialName("carriers")
+    val carriers: List<OpenFluxCarrier> = emptyList(),
 ) {
-    fun usesMax(): Boolean = transport == TRANSPORT_MAX
+    fun usesMax(): Boolean = transport == TRANSPORT_MAX && !isSession()
+
+    fun isSession(): Boolean = carriers.isNotEmpty()
+
+    /** The carrier part of the core's command line (everything else is the same in both modes). */
+    fun carrierArgs(): List<String> = if (isSession()) buildList {
+        add("--transports")
+        add(carriers.joinToString(",") { "${it.type}:${it.priority}" })
+        carriers.forEach { c ->
+            if (c.type == TRANSPORT_DIRECT) addAll(listOf("--direct-dial", c.dial)) else addAll(listOf("--${c.type}-url", c.url))
+        }
+    } else buildList {
+        addAll(listOf("--transport", transport))
+        if (usesMax()) addAll(listOf("--maxUid", maxUid)) else addAll(listOf("--url", docUrl))
+    }
+
+    /** Switches multi-transport on (the current carrier becomes the first member) or off (back to one carrier). */
+    fun withSession(on: Boolean): OpenFluxConfig = when {
+        on && !isSession() -> copy(
+            carriers = listOf(
+                OpenFluxCarrier(
+                    type = transport.takeIf { it in SESSION_CARRIERS } ?: TRANSPORT_YANDEX,
+                    url = docUrl, priority = 100,
+                )
+            )
+        )
+        !on && isSession() -> carriers.filter { it.type != TRANSPORT_DIRECT }.maxByOrNull { it.priority }
+            ?.let { copy(transport = it.type, docUrl = it.url, carriers = emptyList()) }
+            ?: copy(carriers = emptyList())
+        else -> this
+    }
+
+    /** Whether any carrier in play is [type] (single mode or a session member). */
+    fun usesCarrier(type: String): Boolean = if (isSession()) carriers.any { it.type == type } else transport == type
 
     /** Core flags for the encryption (the key itself goes through a file, [secret] never in argv). */
     fun encryptionArgs(keyFile: String): List<String> = if (secret.isBlank()) emptyList() else buildList {
@@ -570,9 +658,15 @@ data class OpenFluxConfig(
     fun resolvedProxyCore(profile: ProxyProfile?, globalCore: ProxyCore = ProxyCore.Auto): ProxyCore =
         overTunnelProxyCore(proxyCore, profile, globalCore)
 
-    fun isComplete(): Boolean = when (transport) {
-        TRANSPORT_MAX -> maxToken.isNotBlank() && maxUid.trim().toLongOrNull() != null
-        else -> docUrl.trim().startsWith("http", ignoreCase = true)
+    fun isComplete(): Boolean {
+        if (usesCarrier(TRANSPORT_AVITO) && avitoCookies.isBlank()) return false
+        if (isSession()) return secret.isNotBlank() && carriers.all { it.isComplete() }
+        return when (transport) {
+            TRANSPORT_MAX -> maxToken.isNotBlank() && maxUid.trim().toLongOrNull() != null
+            // Room carriers are also given the room list their exit printed (base64url), not only a link.
+            TRANSPORT_CUPS, TRANSPORT_AVITO -> docUrl.trim().let { it.startsWith("http", ignoreCase = true) || ROOM_LIST.matches(it) }
+            else -> docUrl.trim().startsWith("http", ignoreCase = true)
+        }
     }
 
     fun normalized(): OpenFluxConfig = copy(
@@ -582,17 +676,23 @@ data class OpenFluxConfig(
         maxUid = maxUid.trim(),
         dnsServer = dnsServer.trim(),
         proxyLink = proxyLink.trim(),
+        avitoCookies = avitoCookies.trim(),
+        // Carriers are named by type in the core: one per type, known types only.
+        carriers = carriers.map { it.normalized() }.filter { it.type in SESSION_CARRIERS }.distinctBy { it.type },
         secret = secret.trim(),
         context = context.trim(),
         negotiate = negotiate && secret.isNotBlank(),
     )
 
     /** One-line summary for the location list. */
-    fun summary(): String = when (transport) {
+    fun summary(): String = if (isSession()) {
+        "Мультитранспорт · " + carriers.sortedByDescending { it.priority }.joinToString(" + ") { carrierLabel(it.type) }
+    } else when (transport) {
         TRANSPORT_MAX -> "MAX · звонок $maxUid"
         TRANSPORT_VYANDEX -> "Яндекс Документы (новый редактор)"
         TRANSPORT_MAILRU -> "Mail.ru Документы"
         TRANSPORT_CUPS -> "cups.online"
+        TRANSPORT_AVITO -> "Avito Code"
         TRANSPORT_TELEMOST -> "Яндекс Телемост"
         else -> "Яндекс Документы"
     }
@@ -609,9 +709,51 @@ data class OpenFluxConfig(
         const val TRANSPORT_CUPS = "cupsonline"
         /** Yandex Telemost conference (core 0.5.0): video relayed by the SFU, striped over several participants. */
         const val TRANSPORT_TELEMOST = "telemost"
-        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_TELEMOST, TRANSPORT_MAX)
+        /** Avito Code (code.avito.ru) rooms: needs the account's cookies on both ends (core 0.7.1). */
+        const val TRANSPORT_AVITO = "avito"
+        /** Plain TCP to the exit's own port — only inside a multi-transport session. */
+        const val TRANSPORT_DIRECT = "direct"
+        val TRANSPORTS = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_AVITO, TRANSPORT_TELEMOST, TRANSPORT_MAX)
+        /** Carriers a multi-transport session can mix (each takes one coordinate: a URL, or `host:port` for direct). */
+        val SESSION_CARRIERS = listOf(TRANSPORT_DIRECT, TRANSPORT_YANDEX, TRANSPORT_VYANDEX, TRANSPORT_MAILRU, TRANSPORT_CUPS, TRANSPORT_AVITO)
         const val DEFAULT_DNS = "1.1.1.1:53"
+        const val DEFAULT_PRIORITY = 50
+        private val ROOM_LIST = Regex("[A-Za-z0-9_-]{16,}")
+
+        fun carrierLabel(type: String): String = when (type) {
+            TRANSPORT_DIRECT -> "Напрямую"
+            TRANSPORT_VYANDEX -> "Яндекс (новый редактор)"
+            TRANSPORT_MAILRU -> "Mail.ru"
+            TRANSPORT_CUPS -> "cups.online"
+            TRANSPORT_AVITO -> "Avito Code"
+            TRANSPORT_MAX -> "MAX"
+            else -> "Яндекс Документы"
+        }
     }
+}
+
+/** One member of a multi-transport session ([OpenFluxConfig.carriers]). */
+@Serializable
+data class OpenFluxCarrier(
+    @SerialName("type")
+    val type: String = OpenFluxConfig.TRANSPORT_YANDEX,
+    /** Document / room link (or the room list an exit printed); unused by [OpenFluxConfig.TRANSPORT_DIRECT]. */
+    @SerialName("url")
+    val url: String = "",
+    /** Failover order: the highest one that reaches the exit carries the traffic; equal ones share it. */
+    @SerialName("priority")
+    val priority: Int = OpenFluxConfig.DEFAULT_PRIORITY,
+    /** `host:port` of the exit's direct listener ([OpenFluxConfig.TRANSPORT_DIRECT] only). */
+    @SerialName("dial")
+    val dial: String = "",
+) {
+    fun isComplete(): Boolean = when (type) {
+        OpenFluxConfig.TRANSPORT_DIRECT -> dial.substringAfterLast(':', "").toIntOrNull() in 1..65535 && dial.substringBeforeLast(':').isNotBlank()
+        OpenFluxConfig.TRANSPORT_CUPS, OpenFluxConfig.TRANSPORT_AVITO -> url.startsWith("http", ignoreCase = true) || url.length >= 16
+        else -> url.startsWith("http", ignoreCase = true)
+    }
+
+    fun normalized(): OpenFluxCarrier = copy(url = url.trim(), dial = dial.trim(), priority = priority.coerceIn(1, 1000))
 }
 
 /**
@@ -728,6 +870,22 @@ data class LocationConfig(
     @SerialName("proxy2")
     val proxy2: ProxyProfile? = null,
     /**
+     * Cloudflare WARP chaining toggle for VLESS (Standard / Chain) connections.
+     * When true, WARP is inserted either on the client side (before VLESS) or on the server side (after VLESS).
+     */
+    @SerialName("warp_enabled")
+    val warpEnabled: Boolean = false,
+    /**
+     * Where WARP is positioned:
+     * - [WarpMode.Client]: Client -> WARP -> VLESS -> Internet
+     * - [WarpMode.Server]: Client -> VLESS -> WARP -> Internet
+     */
+    @SerialName("warp_mode")
+    val warpMode: WarpMode = WarpMode.Client,
+    /** WARP tunnel protocol (WireGuard or AmneziaWG); valid for both [warpMode] sides. */
+    @SerialName("warp_protocol")
+    val warpProtocol: WarpProtocol = WarpProtocol.Awg,
+    /**
      * Deprecated/vestigial. Previously gated whether [proxy] was applied (off = direct). The main proxy
      * is now ALWAYS applied; the editor toggle controls [proxy2] instead. Kept only for back-compat
      * parsing of older saved locations.
@@ -821,6 +979,9 @@ data class LocationConfig(
             engine = engine,
             proxy = proxy,
             proxy2 = proxy2,
+            warpEnabled = warpEnabled,
+            warpMode = warpMode,
+            warpProtocol = warpProtocol,
             core = core,
             vkturn = vkturn,
             masterDns = masterDns?.normalized(),
@@ -1294,7 +1455,14 @@ data class SubscriptionMetadata(
      * renaming it in place would both break grouping and be undone by the next update.
      */
     @SerialName("custom_name")
-    val customName: String? = null
+    val customName: String? = null,
+    /**
+     * Share link of a cascade (second proxy) the USER set for the whole subscription. It is written into
+     * [LocationConfig.proxy2] of every server, and re-applied after each refresh — a refresh rebuilds the
+     * servers from the panel, which knows nothing about it.
+     */
+    @SerialName("cascade_link")
+    val cascadeLink: String? = null
 ) {
     fun normalized(): SubscriptionMetadata {
         return copy(
@@ -1314,7 +1482,8 @@ data class SubscriptionMetadata(
             iconUrl = iconUrl.cleanMetadataValue(),
             announce = announce.cleanMetadataValue(),
             providerId = providerId.cleanMetadataValue(),
-            customName = customName.cleanMetadataValue()
+            customName = customName.cleanMetadataValue(),
+            cascadeLink = cascadeLink.cleanMetadataValue()
         )
     }
 
@@ -1335,7 +1504,8 @@ data class SubscriptionMetadata(
                 webPageUrl.isNullOrBlank() &&
                 iconUrl.isNullOrBlank() &&
                 announce.isNullOrBlank() &&
-                providerId.isNullOrBlank()
+                providerId.isNullOrBlank() &&
+                cascadeLink.isNullOrBlank()
     }
 
     companion object {
@@ -1355,7 +1525,9 @@ data class LocationMetadata(
     val ip: String? = null,
     val comment: String? = null,
     val mimo: String? = null,
-    val subscription: SubscriptionMetadata? = null
+    val subscription: SubscriptionMetadata? = null,
+    /** Pinned by the user: a pinned free server survives the next free-servers search (see saveSelectedFreeServers). */
+    val pinned: Boolean = false
 ) {
     fun normalized(): LocationMetadata {
         val normalizedSubscription = subscription
@@ -1383,6 +1555,7 @@ data class LocationMetadata(
                 ip.isNullOrBlank() &&
                 comment.isNullOrBlank() &&
                 mimo.isNullOrBlank() &&
+                !pinned &&
                 (subscription == null || subscription.isEmpty())
     }
 }
@@ -1402,6 +1575,12 @@ data class LocationEntry(
     /** Optional second proxy chained on top of [proxy] (cascade). See [LocationConfig.proxy2]. */
     @SerialName("proxy2")
     val proxy2: ProxyProfile? = null,
+    @SerialName("warp_enabled")
+    val warpEnabled: Boolean = false,
+    @SerialName("warp_mode")
+    val warpMode: WarpMode = WarpMode.Client,
+    @SerialName("warp_protocol")
+    val warpProtocol: WarpProtocol = WarpProtocol.Awg,
     /** Vestigial; the main proxy is always applied now. Kept for back-compat parsing. */
     @SerialName("proxy_enabled")
     val proxyEnabled: Boolean = true,
@@ -1493,6 +1672,9 @@ data class LocationEntry(
                 engine = engine ?: EngineType.Stealth,
                 proxy = proxy,
                 proxy2 = proxy2,
+                warpEnabled = warpEnabled,
+                warpMode = warpMode,
+            warpProtocol = warpProtocol,
                 proxyEnabled = proxyEnabled,
                 core = core ?: ProxyCore.Auto,
                 vkturn = vkturn,
@@ -1526,6 +1708,9 @@ data class LocationEntry(
             engine = config.engine,
             proxy = config.proxy,
             proxy2 = config.proxy2,
+            warpEnabled = config.warpEnabled,
+            warpMode = config.warpMode,
+            warpProtocol = config.warpProtocol,
             proxyEnabled = config.proxyEnabled,
             core = config.core,
             vkturn = config.vkturn,
@@ -1567,6 +1752,9 @@ data class LocationEntry(
                 engine = config.engine,
                 proxy = config.proxy,
                 proxy2 = config.proxy2,
+                warpEnabled = config.warpEnabled,
+                warpMode = config.warpMode,
+            warpProtocol = config.warpProtocol,
                 proxyEnabled = config.proxyEnabled,
                 core = config.core,
                 vkturn = config.vkturn,

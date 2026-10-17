@@ -1076,6 +1076,121 @@ class LocationsRepositoryImplTest {
         assertTrue("bittorrent" in raw && "198.18.0.0/15" in raw, raw)
     }
 
+    // Settings -> Privacy: the daily ProviderID report goes out only while its switch is on.
+    @Test
+    fun providerReportIsSentOnlyWhileThePrivacySwitchIsOn() = runTest {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        var checks = 0
+        val engine = MockEngine { request ->
+            if (request.url.host == "check.happ-proxy.com") {
+                checks++
+                respond("ok")
+            } else {
+                respond(link, headers = headersOf("providerid", "prov-1"))
+            }
+        }
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(engine), StaticIdentityProvider("hwid-test"))
+        repo.importText("https://example.test/sub")
+
+        source.behavior = source.behavior.copy(providerReportEnabled = false)
+        repo.reportProviderUsage()
+        assertEquals(0, checks)
+
+        source.behavior = source.behavior.copy(providerReportEnabled = true)
+        repo.reportProviderUsage()
+        assertEquals(1, checks)
+    }
+
+    // Settings -> Privacy: what the subscription requests call themselves and carry.
+    private suspend fun subscriptionRequests(behavior: org.olcbox.app.data.model.AppBehaviorSettings): List<Pair<String, String?>> {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        val seen = mutableListOf<Pair<String, String?>>()
+        val engine = MockEngine { request ->
+            seen += request.headers[HttpHeaders.UserAgent].orEmpty() to request.headers["x-hwid"]
+            respond(link)
+        }
+        val source = FakeLocationsDataSource().also { it.behavior = behavior }
+        LocationsRepositoryImpl(source, HttpClient(engine), StaticIdentityProvider("real-hwid"))
+            .importText("https://example.test/sub")
+        return seen
+    }
+
+    @Test
+    fun defaultUserAgentIsYptunPlusAHappRequest() = runTest {
+        val uas = subscriptionRequests(org.olcbox.app.data.model.AppBehaviorSettings()).map { it.first }
+        assertTrue(uas.any { it.startsWith("Happ") } && uas.any { !it.startsWith("Happ") }, uas.toString())
+        // A value stored by the old two-way selector keeps meaning the same.
+        val legacy = subscriptionRequests(org.olcbox.app.data.model.AppBehaviorSettings(subscriptionUserAgent = "yptun")).map { it.first }
+        assertTrue(legacy.any { it.startsWith("Happ") }, legacy.toString())
+    }
+
+    @Test
+    fun yptunOnlyAndV2raytunNeverPresentAsHapp() = runTest {
+        val yptun = subscriptionRequests(
+            org.olcbox.app.data.model.AppBehaviorSettings(subscriptionUserAgent = org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_YPTUN_ONLY)
+        ).map { it.first }
+        assertTrue(yptun.isNotEmpty() && yptun.none { it.startsWith("Happ") }, yptun.toString())
+        val tun = subscriptionRequests(
+            org.olcbox.app.data.model.AppBehaviorSettings(subscriptionUserAgent = org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_V2RAYTUN)
+        ).map { it.first }
+        assertTrue(tun.isNotEmpty() && tun.all { it.startsWith("v2raytun/") }, tun.toString())
+        val happ = subscriptionRequests(
+            org.olcbox.app.data.model.AppBehaviorSettings(subscriptionUserAgent = org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_HAPP)
+        ).map { it.first }
+        assertTrue(happ.isNotEmpty() && happ.all { it == "Happ/1.0" }, happ.toString())
+    }
+
+    @Test
+    fun hwidIsSentOrWithheld() = runTest {
+        val real = subscriptionRequests(org.olcbox.app.data.model.AppBehaviorSettings()).mapNotNull { it.second }
+        assertTrue(real.isNotEmpty() && real.all { it == "real-hwid" }, real.toString())
+        val none = subscriptionRequests(
+            org.olcbox.app.data.model.AppBehaviorSettings(sendDeviceInfoToSubscriptions = false)
+        )
+        assertTrue(none.isNotEmpty() && none.all { it.second == null }, none.toString())
+    }
+
+    // #71: a subscription can be re-pointed at another URL without losing its servers.
+    @Test
+    fun subscriptionUrlCanBeChanged() = runTest {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(link) }), StaticIdentityProvider("hwid-test"))
+        repo.importText("https://one.test/sub")
+        repo.importText("https://two.test/sub")
+        val before = source.stored!!.locations.map { it.storageId }.toSet()
+
+        assertTrue(repo.changeSubscriptionUrl("https://one.test/sub", "https://moved.test/sub"))
+        val urls = source.stored!!.locations.mapNotNull { it.subscriptionUrl }.toSet()
+        assertTrue("https://moved.test/sub" in urls && "https://one.test/sub" !in urls && "https://two.test/sub" in urls, urls.toString())
+        assertEquals(before, source.stored!!.locations.map { it.storageId }.toSet())
+
+        // Refused: not http(s), unchanged, already another subscription's, or unknown.
+        assertTrue(!repo.changeSubscriptionUrl("https://moved.test/sub", "ftp://x.test/sub"))
+        assertTrue(!repo.changeSubscriptionUrl("https://moved.test/sub", "https://moved.test/sub"))
+        assertTrue(!repo.changeSubscriptionUrl("https://moved.test/sub", "https://two.test/sub"))
+        assertTrue(!repo.changeSubscriptionUrl("https://nowhere.test/sub", "https://new.test/sub"))
+    }
+
+    // #72: a location can be pinned (a pinned free server survives the next free-servers search).
+    @Test
+    fun locationPinSurvivesAndClears() = runTest {
+        val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
+        val source = FakeLocationsDataSource()
+        val repo = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(link) }), StaticIdentityProvider("hwid-test"))
+        repo.importText("https://one.test/sub")
+        val id = source.stored!!.locations.single().storageId
+
+        repo.setLocationPinned(id, true)
+        assertTrue(source.stored!!.locations.single().metadata?.pinned == true)
+        repo.setLocationPinned(id, false)
+        assertTrue(source.stored!!.locations.single().metadata?.pinned != true)
+        // An unknown id changes nothing.
+        repo.setLocationPinned("nope", true)
+        assertTrue(source.stored!!.locations.none { it.metadata?.pinned == true })
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),
@@ -1091,6 +1206,9 @@ class LocationsRepositoryImplTest {
         override suspend fun loadLegacyLocations(): List<Pair<String, String>> = legacy
 
         override suspend fun loadLegacyActiveLocationId(): String? = legacyActive
+
+        var behavior = org.olcbox.app.data.model.AppBehaviorSettings()
+        override suspend fun appBehavior(): org.olcbox.app.data.model.AppBehaviorSettings = behavior
     }
 
     private class StaticIdentityProvider(

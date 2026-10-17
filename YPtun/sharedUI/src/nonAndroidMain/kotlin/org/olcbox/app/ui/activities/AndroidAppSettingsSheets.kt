@@ -83,6 +83,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LightMode
 import org.olcbox.app.ui.components.SupportProjectSection
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -200,6 +201,7 @@ fun AppSettingsSheet(
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
     onSecuredProxyChanged: (Boolean) -> Unit,
+    onUnsecuredPortSaved: (Int) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
@@ -233,6 +235,9 @@ fun AppSettingsSheet(
             else -> AppSettingsRoute.Hub
         }
     }
+
+    // Outside AnimatedContent: the Hub is disposed while a section is open, and its scroll position must outlive that.
+    val hubScroll = androidx.compose.foundation.rememberScrollState()
 
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
@@ -271,6 +276,7 @@ fun AppSettingsSheet(
         ) { currentRoute ->
             when (currentRoute) {
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
+                    scrollState = hubScroll,
                     selectedMode = selectedMode,
                     dynamicThemeEnabled = dynamicThemeEnabled,
                     lightThemeEnabled = lightThemeEnabled,
@@ -293,8 +299,15 @@ fun AppSettingsSheet(
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
+                    onPrivacyClick = { route = AppSettingsRoute.Privacy },
                     experimentalUnlocked = appBehavior.experimentalUnlocked,
                     onExperimentalClick = { route = AppSettingsRoute.Experimental }
+                )
+
+                AppSettingsRoute.Privacy -> PrivacyContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.Experimental -> ExperimentalContent(
@@ -374,7 +387,8 @@ fun AppSettingsSheet(
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onProxySettingsSaved = onProxySettingsSaved,
                     onProxyPasswordRegenerated = onProxyPasswordRegenerated,
-                    onSecuredProxyChanged = onSecuredProxyChanged
+                    onSecuredProxyChanged = onSecuredProxyChanged,
+                    onUnsecuredPortSaved = onUnsecuredPortSaved
                 )
 
                 AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
@@ -695,14 +709,16 @@ private fun AppSettingsHubContent(
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
     onApplicationLogsClick: () -> Unit,
+    onPrivacyClick: () -> Unit = {},
     experimentalUnlocked: Boolean = false,
-    onExperimentalClick: () -> Unit = {}
+    onExperimentalClick: () -> Unit = {},
+    scrollState: androidx.compose.foundation.ScrollState
 ) {
     val s = LocalStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -819,6 +835,14 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = onApplicationLogsClick
             )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.privacy,
+                subtitle = s.privacySubtitle,
+                icon = Icons.Outlined.Lock,
+                enabled = true,
+                onClick = onPrivacyClick
+            )
             if (experimentalUnlocked) {
                 SettingsGroupDivider()
                 SettingsGroupRow(
@@ -909,7 +933,7 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
-                title = s.coreVersion("snolc", org.olcbox.app.vpn.CoreVersions.SNOLC),
+                title = s.coreVersion("Snolc", org.olcbox.app.vpn.CoreVersions.SNOLC),
                 icon = Icons.Outlined.Tune,
                 enabled = true,
                 showChevron = false
@@ -1225,7 +1249,8 @@ private fun SocksProxySettingsContent(
     onBack: () -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
-    onSecuredProxyChanged: (Boolean) -> Unit
+    onSecuredProxyChanged: (Boolean) -> Unit,
+    onUnsecuredPortSaved: (Int) -> Unit
 ) {
     var editedHost by remember(proxySettings.host) { mutableStateOf(proxySettings.host) }
     var editedPort by remember(proxySettings.port) { mutableStateOf(proxySettings.port.toString()) }
@@ -1277,7 +1302,38 @@ private fun SocksProxySettingsContent(
             onCheckedChange = onSecuredProxyChanged
         )
 
-        if (!proxySettings.secured) return@Column
+        if (!proxySettings.secured) {
+            // No credentials, but the listener port is still the user's to pick.
+            Spacer(Modifier.height(20.dp))
+            val s = LocalStrings.current
+            val canSavePort = portValid && portChanged && enabled
+            SocksProxyTextField(
+                value = editedPort,
+                onValueChange = { value -> editedPort = value.filter { it.isDigit() }.take(MAX_PROXY_PORT_LENGTH) },
+                label = s.port,
+                placeholder = proxySettings.port.toString(),
+                enabled = enabled,
+                isError = editedPort.isBlank() || !portValid,
+                leadingIcon = Icons.Rounded.Public,
+                supportingText = when {
+                    editedPort.isBlank() -> s.portRequired
+                    !portValid -> "Use ${AndroidSocksProxySettings.MIN_PORT}-${AndroidSocksProxySettings.MAX_PORT}"
+                    portChanged && isConnectionActive -> s.savingRestarts
+                    portChanged -> s.unsavedChange
+                    else -> null
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(enabled = canSavePort, onClick = { parsedPort?.let(onUnsecuredPortSaved) }) {
+                    Icon(Icons.Rounded.Check, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.save)
+                }
+            }
+            return@Column
+        }
 
         Spacer(Modifier.height(20.dp))
 
@@ -1719,7 +1775,7 @@ private fun ApplicationLogsSettingsContent(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun UpdatesSettingsContent(
     settings: AppUpdateSettings,
@@ -1747,7 +1803,10 @@ private fun UpdatesSettingsContent(
 
         SettingsSectionLabel(LocalStrings.current.checkInterval)
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             AppUpdateSettings.INTERVAL_PRESETS.forEach { hours ->
                 FilterChip(
                     selected = settings.intervalHours == hours,
@@ -3712,6 +3771,12 @@ private fun ApplicationBehaviorContent(
             checked = settings.confirmBeforeDelete
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
+        RoutingToggleRow(
+            title = s.allowConfigEditingTitle,
+            subtitle = s.allowConfigEditingSubtitle,
+            checked = settings.allowConfigEditing
+        ) { onChanged(settings.copy(allowConfigEditing = it)) }
+
         // NOTE: no "speed in the notification" row here — the desktop build has no notifications,
         // so the toggle had nothing to drive. AppBehaviorSettings.showSpeedInNotification stays in
         // the model for Android, which does show it.
@@ -3798,11 +3863,6 @@ private fun ApplicationBehaviorContent(
             }
         }
 
-        // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
-        // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
-        // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be
-        // dropped back into this screen if it ever needs to be exposed again.
-
         SettingsSectionLabel(s.language)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val options = listOf(
@@ -3819,40 +3879,6 @@ private fun ApplicationBehaviorContent(
                     label = { Text(title) }
                 )
             }
-        }
-    }
-}
-
-/**
- * Subscription User-Agent selector. PRESERVED but intentionally NOT shown anywhere (no UI). The fetch
- * defaults to YPtun + automatic FakeDNS enrichment from a Happ-UA request, which is right for everyone;
- * this lets the choice be re-exposed later (drop a call into AppBehaviorSettingsContent) without
- * rewriting it. Suppress the "unused" lint since keeping it is deliberate.
- */
-@Suppress("unused")
-@Composable
-private fun SubscriptionUserAgentSelector(
-    settings: AppBehaviorSettings,
-    onChanged: (AppBehaviorSettings) -> Unit
-) {
-    val s = LocalStrings.current
-    SettingsSectionLabel(s.subscriptionUserAgentLabel)
-    Text(
-        text = s.subscriptionUserAgentSubtitle,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val uaOptions = listOf(
-            AppBehaviorSettings.SUB_UA_HAPP to "Happ/1.0",
-            AppBehaviorSettings.SUB_UA_YPTUN to "YPtun",
-        )
-        uaOptions.forEach { (mode, title) ->
-            FilterChip(
-                selected = settings.subscriptionUserAgent == mode,
-                onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
-                label = { Text(title) }
-            )
         }
     }
 }
@@ -3944,6 +3970,12 @@ private fun PingSettingsContent(
             checked = settings.showSubscriptionAliveCount
         ) { onChanged(settings.copy(showSubscriptionAliveCount = it)) }
 
+        RoutingToggleRow(
+            title = s.showPingControlsTitle,
+            subtitle = s.showPingControlsSubtitle,
+            checked = settings.showPingControls
+        ) { onChanged(settings.copy(showPingControls = it)) }
+
         PingParallelismRow(
             value = settings.effectivePingParallelism(),
             onChange = { onChanged(settings.copy(pingParallelism = it)) }
@@ -3985,6 +4017,12 @@ private fun PingSettingsContent(
                 )
             }
         }
+
+        RoutingToggleRow(
+            title = s.freeServersPagesTitle,
+            subtitle = s.freeServersPagesSubtitle,
+            checked = settings.freeServersFromPages
+        ) { onChanged(settings.copy(freeServersFromPages = it)) }
     }
 }
 
@@ -4064,6 +4102,74 @@ private fun PingParallelismRow(value: Int, onChange: (Int) -> Unit) {
             contentPadding = PaddingValues(0.dp),
             modifier = Modifier.size(40.dp)
         ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+    }
+}
+
+/** Settings -> Privacy: what the app sends out on its own, and the switches for it. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PrivacyContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.privacy,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        RoutingToggleRow(
+            title = s.providerReportTitle,
+            subtitle = s.providerReportSubtitle,
+            checked = settings.providerReportEnabled
+        ) { onChanged(settings.copy(providerReportEnabled = it)) }
+        Text(
+            text = s.providerReportDetails,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SettingsSectionLabel(s.subscriptionUserAgentLabel)
+        Text(
+            text = s.subscriptionUserAgentSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val uaOptions = listOf(
+                AppBehaviorSettings.SUB_UA_BOTH to s.uaModeBoth,
+                AppBehaviorSettings.SUB_UA_HAPP to s.uaModeHapp,
+                AppBehaviorSettings.SUB_UA_YPTUN_ONLY to s.uaModeYptun,
+                AppBehaviorSettings.SUB_UA_V2RAYTUN to s.uaModeV2raytun,
+            )
+            uaOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.effectiveSubscriptionUa() == mode,
+                    onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+
+        RoutingToggleRow(
+            title = s.sendDeviceInfoTitle,
+            subtitle = s.sendDeviceInfoSubtitle,
+            checked = settings.sendDeviceInfoToSubscriptions
+        ) { onChanged(settings.copy(sendDeviceInfoToSubscriptions = it)) }
     }
 }
 
@@ -4229,6 +4335,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
+    object Privacy : AppSettingsRoute(1)
     object Experimental : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
 }

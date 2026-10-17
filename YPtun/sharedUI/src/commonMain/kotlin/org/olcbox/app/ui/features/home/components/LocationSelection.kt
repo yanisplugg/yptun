@@ -7,11 +7,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import org.olcbox.app.ui.features.home.subscriptionJson
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,6 +31,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -116,6 +122,15 @@ fun LazyListScope.locationSelectorContent(
     onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
     // Give a subscription (keyed by its URL) the user's own name; blank restores the panel's.
     onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
+    // (old URL, new URL, the group's key before the change) — see [SubscriptionGroupMenu].
+    onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
+    // Writes one proxy link as the cascade of every server of the subscription (blank removes it).
+    onSetSubscriptionCascade: (url: String, link: String) -> Unit = { _, _ -> },
+    // Pin / unpin one server of the free-servers list (a pinned one survives the next search).
+    onToggleFreeServerPinned: (storageId: String, pinned: Boolean) -> Unit = { _, _ -> },
+    // Servers a stopped free search has not checked yet; > 0 adds "continue the search" to that group's menu.
+    freeSearchRemaining: Int = 0,
+    onContinueFreeSearch: () -> Unit = {},
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -219,7 +234,9 @@ fun LazyListScope.locationSelectorContent(
         val isPingDescending = groupKey in pingSortDescendingGroups
         // Free-servers list: drawn like a folder — one green-tinted container holding header AND rows.
         val isFree = group.firstOrNull()?.subscriptionUrl?.trim() == org.olcbox.app.ui.features.home.FREE_SERVERS_URL
-        val orderedGroup = if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group
+        val orderedGroup = (if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group)
+            // Free servers: the pinned ones stay on top (stable sort keeps the rest in their order).
+            .let { list -> if (isFree) list.sortedByDescending { it.metadata?.pinned == true } else list }
 
         item(key = "group-header-$groupKey") {
             Surface(
@@ -294,14 +311,22 @@ fun LazyListScope.locationSelectorContent(
                                 groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
                             },
                             onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                            onContinueSearch = if (isFree && freeSearchRemaining > 0) onContinueFreeSearch else null,
+                            continueSearchLabel = org.olcbox.app.ui.i18n.LocalStrings.current.freeServersContinueLeft(freeSearchRemaining),
                             currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
                             onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
+                            subscriptionUrl = groupSubUrl?.takeIf { !isFree },
+                            onChangeUrl = groupSubUrl?.takeIf { !isFree }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, groupKey) } },
+                            cascadeLink = group.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink },
+                            onSetCascade = groupSubUrl?.takeIf { !isFree }?.let { url -> { link -> onSetSubscriptionCascade(url, link) } },
+                            onCopyJson = { subscriptionJson(group) },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) },
                             subscriptionPageUrl = groupWebPageUrl
                         )
                     }
 
+                    GroupPingProgress(groupIds = groupIds, pingsState = pingsState)
                     if (!isCollapsed) {
                         Spacer(modifier = Modifier.height(8.dp))
                         TrafficProgressBar(location = group.firstOrNull())
@@ -309,12 +334,15 @@ fun LazyListScope.locationSelectorContent(
                     if (isFree && !isCollapsed) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
+                                val serverPinned = location.metadata?.pinned == true
                                 LocationSelectorRow(
                                     location = location,
                                     selectedLocationId = selectedLocationId,
                                     pingsState = pingsState,
                                     onLocationSelected = onLocationSelected,
                                     onLocationSettingsClick = onLocationSettingsClick,
+                                    isPinned = serverPinned,
+                                    onTogglePinned = { onToggleFreeServerPinned(location.storageId, !serverPinned) },
                                     selectionMode = selectionMode,
                                     isChecked = location.storageId in selectedIds,
                                     onToggleSelect = onToggleSelect,
@@ -470,6 +498,11 @@ fun LazyListScope.locationSelectorContent(
                                                 onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
                                                 currentName = mGroup.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
                                                 onRename = mSubUrl?.let { url -> { name -> onRenameSubscription(url, name) } },
+                                                subscriptionUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL },
+                                                onChangeUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, mKey) } },
+                                                cascadeLink = mGroup.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink },
+                                                onSetCascade = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { link -> onSetSubscriptionCascade(url, link) } },
+                                                onCopyJson = { subscriptionJson(mGroup) },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -956,6 +989,39 @@ private fun parseTrafficBytes(raw: String?): Long? {
     return (number * multiplier).toLong()
 }
 
+/**
+ * While a ping pass runs over this group: "Tested: 12 of 40 · available: 3 · ~40 s left" and a progress line,
+ * or "paused". Nothing is drawn when the group is not being pinged.
+ */
+@Composable
+private fun GroupPingProgress(groupIds: List<String>, pingsState: PingsState) {
+    if (!org.olcbox.app.ui.features.locations.components.LocalShowPingControls.current) return
+    val loading = pingsState as? PingsState.Loading ?: return
+    val pending = groupIds.count { it in loading.pendingLocationIds }
+    if (pending == 0 || groupIds.isEmpty()) return
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val total = groupIds.size
+    val done = total - pending
+    val alive = groupIds.count { loading.currentPings[it] != null }
+    val tail = when {
+        loading.paused -> s.pingPausedLabel
+        loading.etaSeconds != null -> s.etaLeft(loading.etaSeconds)
+        else -> null
+    }
+    Column(modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)) {
+        Text(
+            text = s.pingProgress(done, total, alive) + (tail?.let { " · $it" } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(3.dp)
+        )
+    }
+}
+
 @Composable
 private fun SubscriptionGroupMenu(
     isPinned: Boolean,
@@ -967,15 +1033,27 @@ private fun SubscriptionGroupMenu(
     onToggleAutoUpdate: () -> Unit,
     // Non-null only when this group is backed by a subscription URL we can re-download.
     onRefreshSubscription: (() -> Unit)? = null,
+    // Free servers only: carry on a stopped search over the servers it has not checked yet.
+    onContinueSearch: (() -> Unit)? = null,
+    continueSearchLabel: String = "",
     // Current visible name (prefills the dialog) and the rename action; null hides the menu entry.
     currentName: String = "",
     onRename: ((String) -> Unit)? = null,
+    // The subscription's link, shown (and copyable) in the menu; [onChangeUrl] non-null makes it editable.
+    subscriptionUrl: String? = null,
+    onChangeUrl: ((String) -> Unit)? = null,
+    // Cascade for the whole subscription: the saved link and the action that writes it into every server.
+    cascadeLink: String? = null,
+    onSetCascade: ((String) -> Unit)? = null,
+    // The subscription's servers as one JSON array (null when none can be expressed as JSON).
+    onCopyJson: (() -> String?)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var showingUrl by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
@@ -1001,6 +1079,79 @@ private fun SubscriptionGroupMenu(
         )
     }
 
+    if (showingUrl && subscriptionUrl != null) {
+        var draft by remember(subscriptionUrl) { mutableStateOf(subscriptionUrl) }
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        val trimmed = draft.trim()
+        val valid = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
+        var cascadeDraft by remember(cascadeLink) { mutableStateOf(cascadeLink.orEmpty()) }
+        var jsonCopied by remember { mutableStateOf<Boolean?>(null) }
+        val cascadeTrimmed = cascadeDraft.trim()
+        AlertDialog(
+            onDismissRequest = { showingUrl = false },
+            title = { Text(s.subscriptionLink) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        readOnly = onChangeUrl == null,
+                        isError = onChangeUrl != null && !valid,
+                        minLines = 2,
+                        supportingText = { Text(if (onChangeUrl != null) s.subscriptionLinkHint else s.subscriptionLinkReadOnlyHint) }
+                    )
+                    if (onSetCascade != null) {
+                        OutlinedTextField(
+                            value = cascadeDraft,
+                            onValueChange = { cascadeDraft = it },
+                            label = { Text(s.subscriptionCascadeTitle) },
+                            minLines = 2,
+                            supportingText = { Text(s.subscriptionCascadeHint) }
+                        )
+                        TextButton(
+                            enabled = cascadeTrimmed != cascadeLink.orEmpty().trim(),
+                            onClick = { onSetCascade(cascadeTrimmed); showingUrl = false }
+                        ) { Text(if (cascadeTrimmed.isEmpty()) s.subscriptionCascadeRemove else s.subscriptionCascadeApply) }
+                    }
+                    if (onCopyJson != null) {
+                        TextButton(onClick = {
+                            val json = onCopyJson()
+                            if (json != null) clipboard.setText(androidx.compose.ui.text.AnnotatedString(json))
+                            jsonCopied = json != null
+                        }) {
+                            Text(
+                                when (jsonCopied) {
+                                    true -> s.subscriptionJsonCopied
+                                    false -> s.subscriptionJsonEmpty
+                                    null -> s.subscriptionCopyJson
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (onChangeUrl != null) {
+                    TextButton(
+                        enabled = valid && trimmed != subscriptionUrl.trim(),
+                        onClick = { onChangeUrl(trimmed); showingUrl = false }
+                    ) { Text(s.save) }
+                } else {
+                    TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(subscriptionUrl)) }) { Text(s.copy) }
+                    if (onChangeUrl != null) TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
+                }
+            }
+        )
+    }
+
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(
@@ -1010,10 +1161,39 @@ private fun SubscriptionGroupMenu(
             )
         }
 
+        val menuScroll = androidx.compose.foundation.rememberScrollState()
+        val thumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            scrollState = menuScroll,
+            // Nine entries do not fit a phone screen: cap the height; the menu scrolls inside it, with a
+            // visible scrollbar so it is clear that there is more.
+            modifier = Modifier.heightIn(max = 340.dp).drawWithContent {
+                drawContent()
+                if (menuScroll.maxValue > 0) {
+                    val track = size.height
+                    val thumb = (track * track / (track + menuScroll.maxValue)).coerceAtLeast(24.dp.toPx())
+                    val top = (track - thumb) * menuScroll.value / menuScroll.maxValue
+                    drawRoundRect(
+                        color = thumbColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(size.width - 6.dp.toPx(), top),
+                        size = androidx.compose.ui.geometry.Size(4.dp.toPx(), thumb),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                    )
+                }
+            }
         ) {
+            if (subscriptionUrl != null) {
+                DropdownMenuItem(
+                    text = { Text(s.subscriptionLink) },
+                    leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        showingUrl = true
+                    }
+                )
+            }
             // Remnawave `profile-web-page-url` — the panel's subscription/management page.
             if (!subscriptionPageUrl.isNullOrBlank()) {
                 DropdownMenuItem(
@@ -1032,6 +1212,16 @@ private fun SubscriptionGroupMenu(
                     onClick = {
                         expanded = false
                         renaming = true
+                    }
+                )
+            }
+            if (onContinueSearch != null) {
+                DropdownMenuItem(
+                    text = { Text(continueSearchLabel) },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                    onClick = {
+                        onContinueSearch()
+                        expanded = false
                     }
                 )
             }

@@ -69,4 +69,15 @@ class XrayRoutingTest {
         assertEquals("AsIs", XrayRouting.domainStrategy(RoutingProfile(domainStrategy = "weird")))
         assertEquals("IPIfNonMatch", XrayRouting.domainStrategy(RoutingProfile(domainStrategy = "ipv4_only")))
     }
+
+    @Test
+    fun geositeTelegramBringsGeoipTelegramAlong() {
+        val p = RoutingProfile(proxySites = listOf("geosite:telegram"), globalProxy = false)
+        val rules = XrayRouting.rules(p).map { it.jsonObject }
+        val ipRule = rules.single { it.containsKey("ip") }
+        assertEquals(listOf("geoip:telegram"), ipRule["ip"]!!.jsonArray.map { it.jsonPrimitive.content })
+        // Not duplicated when the profile already names it.
+        val both = RoutingProfile(proxySites = listOf("geosite:telegram"), proxyIp = listOf("geoip:telegram"))
+        assertEquals(1, XrayRouting.rules(both).map { it.jsonObject }.single { it.containsKey("ip") }["ip"]!!.jsonArray.size)
+    }
 }

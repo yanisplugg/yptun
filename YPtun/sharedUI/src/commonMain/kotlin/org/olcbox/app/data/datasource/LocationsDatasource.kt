@@ -36,6 +36,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.CsqttUriParser
+import org.olcbox.app.data.importer.MasterDnsUriParser
 import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
@@ -44,7 +45,6 @@ import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.AppBehaviorSettings
-import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyCore
@@ -54,6 +54,7 @@ import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.LocationViewIndex
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
@@ -99,6 +100,12 @@ interface LocationsDataSource {
      */
     suspend fun loadProviderReportState(): String? = null
     suspend fun saveProviderReportState(value: String) = Unit
+
+    /**
+     * The persisted app-behavior settings, read fresh by the subscription code so a background worker (no UI,
+     * no shared state) sees the same Privacy choices as the screen. Null = defaults (platform without a store).
+     */
+    suspend fun appBehavior(): AppBehaviorSettings? = null
 
     /**
      * A platform-stable device id (e.g. Android ANDROID_ID) used to seed the HWID so it
@@ -416,6 +423,9 @@ class LocationsRepositoryImpl(
             val previousInterval = previousEntries.subscriptionUpdateIntervalHours()
             val previousAutoUpdate = previousEntries.subscriptionAutoUpdateEnabled()
             val previousCustomName = previousEntries.firstNotNullOfOrNull { it.metadata?.subscription?.customName }
+            // The cascade the user set for the whole subscription: the panel knows nothing about it.
+            val previousCascadeLink = previousEntries.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink }
+            val previousCascade = previousCascadeLink?.let { ShareLinkParser.parse(it) }?.takeIf { it.isComplete() }
             val resolved = resolveParsedImport(
                 text = url,
                 fallbackSubscriptionInterval = previousInterval,
@@ -480,9 +490,10 @@ class LocationsRepositoryImpl(
                         lastRefreshAtEpochMs = attemptTimestamp,
                         lastAttemptAtEpochMs = attemptTimestamp,
                         autoUpdateEnabled = previousAutoUpdate,
-                        customName = previousCustomName
+                        customName = previousCustomName,
+                        cascadeLink = previousCascadeLink
                     )
-                ).normalized()
+                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }.normalized()
             }
 
             // Only reset the selection when the selected server actually vanished from this
@@ -576,6 +587,8 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun reportProviderUsage() {
+        val privacy = privacySettings()
+        if (!privacy.providerReportEnabled) return
         val ids = runCatching {
             getBundle().locations
                 .mapNotNull { it.metadata?.subscription?.providerId?.trim()?.takeIf { id -> id.isNotBlank() } }
@@ -588,8 +601,9 @@ class LocationsRepositoryImpl(
         // id across restarts and shared with the background worker.
         val state = loadProviderReportDays().toMutableMap()
         // Identity + device descriptors, exactly like the subscription fetch sends to the panel.
-        val hwid = runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty()
-        val appId = runCatching { deviceIdentityProvider.appId() }.getOrNull().orEmpty()
+        val sendDevice = privacy.sendDeviceInfoToSubscriptions
+        val hwid = if (sendDevice) runCatching { deviceIdentityProvider.hwid() }.getOrNull().orEmpty() else ""
+        val appId = if (sendDevice) runCatching { deviceIdentityProvider.appId() }.getOrNull().orEmpty() else ""
         val appVersion = CurrentAppInfo.value.version
 
         var changed = false
@@ -598,12 +612,14 @@ class LocationsRepositoryImpl(
             val ok = runCatching {
                 val response = httpClient.get(PROVIDER_CHECK_URL + id.encodeURLParameter()) {
                     headers {
-                        append(HttpHeaders.UserAgent, subscriptionUserAgent())
+                        append(HttpHeaders.UserAgent, subscriptionUserAgent(privacy))
                         if (hwid.isNotBlank()) append("x-hwid", hwid)
                         if (appId.isNotBlank()) append(HEADER_APP_ID, appId)
-                        append("x-device-os", DeviceInfo.os)
-                        append("x-ver-os", DeviceInfo.osVersion)
-                        append("x-device-model", DeviceInfo.model)
+                        if (sendDevice) {
+                            append("x-device-os", DeviceInfo.os)
+                            append("x-ver-os", DeviceInfo.osVersion)
+                            append("x-device-model", DeviceInfo.model)
+                        }
                         append("x-app-version", appVersion)
                     }
                 }
@@ -698,6 +714,70 @@ class LocationsRepositoryImpl(
             }
 
             saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    override suspend fun setSubscriptionCascade(subscriptionUrl: String, link: String): Boolean {
+        val url = subscriptionUrl.trim()
+        if (url.isBlank()) return false
+        val trimmed = link.trim()
+        val cascade = if (trimmed.isEmpty()) null else {
+            ShareLinkParser.parse(trimmed)?.takeIf { it.isComplete() } ?: return false
+        }
+
+        return mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            val group = bundle.locations.filter { it.subscriptionUrl?.trim() == url }
+            if (group.isEmpty()) return@withLock false
+            // Clearing only undoes a cascade set here: proxy2 entered by hand on single servers stays.
+            if (cascade == null && group.none { !it.metadata?.subscription?.cascadeLink.isNullOrBlank() }) {
+                return@withLock true
+            }
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() != url) entry
+                else entry.withCascade(cascade)
+                    .copy(metadata = entry.metadata.withSubscriptionCascadeLink(trimmed.ifEmpty { null }))
+                    .normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+            true
+        }
+    }
+
+    /** [cascade] as the second proxy of this server; only Standard/Chain servers with a main proxy take one, and never their own node. */
+    private fun LocationEntry.withCascade(cascade: ProxyProfile?): LocationEntry {
+        val main = proxy ?: return this
+        if (location.engine != EngineType.Standard && location.engine != EngineType.Chain) return this
+        return copy(proxy2 = cascade?.takeUnless { main.isSameNodeAs(it) })
+    }
+
+    override suspend fun setLocationPinned(storageId: String, pinned: Boolean) {
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.storageId == storageId }) return@withLock
+            val updated = bundle.locations.map { entry ->
+                if (entry.storageId != storageId) entry
+                else entry.copy(metadata = (entry.metadata ?: LocationMetadata()).copy(pinned = pinned)).normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    override suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String): Boolean {
+        val old = oldUrl.trim()
+        val new = newUrl.trim()
+        if (old.isBlank() || new == old || !new.isHttpUrl() || new.any { it.isWhitespace() }) return false
+
+        return mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.subscriptionUrl?.trim() == old }) return@withLock false
+            // One URL, one subscription: pointing two at the same URL would merge their server lists.
+            if (bundle.locations.any { it.subscriptionUrl?.trim() == new }) return@withLock false
+            val updated = bundle.locations.map { entry ->
+                if (entry.subscriptionUrl?.trim() == old) entry.copy(subscriptionUrl = new).normalized() else entry
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+            true
         }
     }
 
@@ -833,7 +913,9 @@ class LocationsRepositoryImpl(
 
         // Panels answer an unknown UA ("YPtun/x") with a stub / 4xx ("client not supported"), so as the last
         // resort re-fetch pretending to be a full Happ client (Happ UA + HWID/device headers).
-        if (parsed == null && input.isHttpUrl() && subscriptionUserAgent() != AppBehaviorSettings.HAPP_USER_AGENT) {
+        if (parsed == null && input.isHttpUrl() &&
+            privacySettings().effectiveSubscriptionUa() == AppBehaviorSettings.SUB_UA_BOTH
+        ) {
             val happSource = resolveImportSource(
                 text = input,
                 requestMode = SubscriptionRequestMode.Identity,
@@ -1066,12 +1148,16 @@ class LocationsRepositoryImpl(
             }
     }
 
-    /** Resolves the user's subscription User-Agent choice ([SubscriptionUserAgentHolder]) to a string. */
-    private fun subscriptionUserAgent(): String =
-        if (SubscriptionUserAgentHolder.mode == AppBehaviorSettings.SUB_UA_YPTUN) {
-            CurrentAppInfo.userAgent
-        } else {
-            AppBehaviorSettings.HAPP_USER_AGENT
+    /** The persisted Settings -> Privacy choices (defaults when the platform keeps none). */
+    private suspend fun privacySettings(): AppBehaviorSettings =
+        runCatching { dataSource.appBehavior() }.getOrNull() ?: AppBehaviorSettings()
+
+    /** Resolves the user's subscription User-Agent choice to the string the main requests send. */
+    private fun subscriptionUserAgent(settings: AppBehaviorSettings): String =
+        when (settings.effectiveSubscriptionUa()) {
+            AppBehaviorSettings.SUB_UA_HAPP -> AppBehaviorSettings.HAPP_USER_AGENT
+            AppBehaviorSettings.SUB_UA_V2RAYTUN -> AppBehaviorSettings.V2RAYTUN_UA_PREFIX + DeviceInfo.os.lowercase()
+            else -> CurrentAppInfo.userAgent // both, yptun_only
         }
 
     private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1082,13 +1168,17 @@ class LocationsRepositoryImpl(
         subscriptionProxy: SubscriptionFetchProxy?,
         forceHapp: Boolean = false
     ): DownloadedSubscription? {
-        val userAgent = if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent()
-        val hwid = if (requestMode == SubscriptionRequestMode.Identity) {
+        val privacy = privacySettings()
+        val userAgent = if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent(privacy)
+        // Identity headers (HWID + device descriptors) only when the request mode wants them AND the user
+        // has not switched them off in Settings -> Privacy.
+        val identity = requestMode == SubscriptionRequestMode.Identity && privacy.sendDeviceInfoToSubscriptions
+        val hwid = if (identity) {
             deviceIdentityProvider.hwid()
         } else {
             null
         }
-        val appId = if (requestMode == SubscriptionRequestMode.Identity) {
+        val appId = if (identity) {
             runCatching { deviceIdentityProvider.appId() }.getOrNull()
         } else {
             null
@@ -1117,7 +1207,7 @@ class LocationsRepositoryImpl(
                             // that JSON (parseRawXray), and it's the only way to receive the server's
                             // FakeDNS config — so always present as Happ, the de-facto "full config" UA.
                             append(HttpHeaders.UserAgent, userAgent)
-                            if (requestMode == SubscriptionRequestMode.Identity) {
+                            if (identity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 // Remnawave HWID device-limit descriptors.
@@ -1146,7 +1236,7 @@ class LocationsRepositoryImpl(
                         headers {
                             append(HttpHeaders.Accept, "application/json")
                             append(HttpHeaders.UserAgent, userAgent)
-                            if (requestMode == SubscriptionRequestMode.Identity) {
+                            if (identity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                             }
@@ -1162,13 +1252,16 @@ class LocationsRepositoryImpl(
                 // already is Happ. Best-effort: any failure just means no FakeDNS.
                 val fakednsJson = if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT) {
                     content
+                } else if (privacy.effectiveSubscriptionUa() != AppBehaviorSettings.SUB_UA_BOTH) {
+                    // YPtun-only / v2rayTun: nothing is ever requested as Happ.
+                    null
                 } else {
                     runCatching {
                         val happResponse = client.get(url) {
                             headers {
                                 append(HttpHeaders.Accept, "application/json, text/plain, */*")
                                 append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
-                                if (requestMode == SubscriptionRequestMode.Identity) {
+                                if (identity) {
                                     append("x-hwid", hwid.orEmpty())
                                     if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 }
@@ -1321,6 +1414,10 @@ class LocationsRepositoryImpl(
         parseCsqttText(linkText, subscriptionUrl)?.let { linkBundles += it }
         // OpenFlux client links (openflux://v1/…): OpenFlux-engine locations.
         parseOpenFluxText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        // MasterDNS links (masterdns://v1?…) and snolc nodes (snolc://host:port?key=…): the panel's
+        // personal subscription carries both, so a mixed list must not lose them.
+        parseMasterDnsText(linkText, subscriptionUrl)?.let { linkBundles += it }
+        parseSnolcText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
@@ -2065,6 +2162,51 @@ class LocationsRepositoryImpl(
         return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
+    /** Parses every [MasterDnsUriParser.SCHEME] link into an [EngineType.MasterDns] location. */
+    private fun parseMasterDnsText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(MasterDnsUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { MasterDnsUriParser.parse(it) }
+            .map { link ->
+                val domain = link.config.domainList().first()
+                val location = LocationConfig(
+                    name = link.name.ifBlank { "MasterDNS $domain" },
+                    engine = EngineType.MasterDns,
+                    masterDns = link.config,
+                ).normalized()
+                val base = domain.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_masterdns_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
+    /** Parses every `snolc://host:port?key=<hex>#name` link into an [EngineType.Snolc] location. */
+    private fun parseSnolcText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("snolc://", ignoreCase = true) }
+            .mapNotNull { SnolcConfig.parseUri(it) }
+            .map { (config, name) ->
+                val location = LocationConfig(
+                    name = name.ifBlank { config.summary() },
+                    engine = EngineType.Snolc,
+                    snolc = config,
+                ).normalized()
+                val base = "${config.host}_${config.port}".lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_snolc_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
     /** Parses a whole AmneziaWG wg-quick .conf into a [EngineType.Standard] location. */
     private fun parseAmneziaWgText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
         val trimmed = text.trim()
@@ -2787,7 +2929,10 @@ class LocationsRepositoryImpl(
             // match by endpoint in the fallback pass below.
             normalized.vkturn?.let { "${it.outbound}@${it.uri.substringBefore('$').ifBlank { it.outboundProxyLink }}" }.orEmpty(),
             normalized.masterDns?.let { "${it.domains}@${it.resolvers}" }.orEmpty(),
-            normalized.openFlux?.let { "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}" }.orEmpty(),
+            normalized.openFlux?.let {
+                if (it.isSession()) "session@" + it.carriers.joinToString(",") { c -> "${c.type}=${c.url}${c.dial}" }
+                else "${it.transport}@${if (it.usesMax()) it.maxUid else it.docUrl}"
+            }.orEmpty(),
             normalized.snolc?.let { "snolc@${it.host}:${it.port}" }.orEmpty(),
         ).joinToString("|")
     }
@@ -2896,7 +3041,8 @@ class LocationsRepositoryImpl(
         lastRefreshAtEpochMs: Long?,
         lastAttemptAtEpochMs: Long? = lastRefreshAtEpochMs,
         autoUpdateEnabled: Boolean = this?.subscription?.autoUpdateEnabled ?: true,
-        customName: String? = this?.subscription?.customName
+        customName: String? = this?.subscription?.customName,
+        cascadeLink: String? = this?.subscription?.cascadeLink
     ): LocationMetadata {
         val subscription = this?.subscription ?: SubscriptionMetadata()
         return (this ?: LocationMetadata()).copy(
@@ -2905,8 +3051,17 @@ class LocationsRepositoryImpl(
                 lastRefreshAtEpochMs = lastRefreshAtEpochMs,
                 lastAttemptAtEpochMs = lastAttemptAtEpochMs,
                 autoUpdateEnabled = autoUpdateEnabled,
-                customName = customName
+                customName = customName,
+                cascadeLink = cascadeLink
             )
+        ).normalized()
+    }
+
+    /** Stores the subscription-wide cascade link (null clears it), keeping the rest of the metadata intact. */
+    private fun LocationMetadata?.withSubscriptionCascadeLink(link: String?): LocationMetadata {
+        val subscription = this?.subscription ?: SubscriptionMetadata()
+        return (this ?: LocationMetadata()).copy(
+            subscription = subscription.copy(cascadeLink = link)
         ).normalized()
     }
 

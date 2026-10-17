@@ -12,6 +12,10 @@ type TransportConfig struct {
 	ReconnectMultiplier  float64
 	MaxQueueSize         int
 	KeepAliveInterval    time.Duration
+	// Network the carrier dials through (netbind): "" is the default
+	// route, or netbind.NetworkCellular, NetworkWiFi, NetworkEthernet, so
+	// a Session's carriers may leave through different networks.
+	Network string
 }
 
 type Transport interface {
@@ -29,8 +33,21 @@ type TransportStats struct {
 	PacketsSent   uint64
 	PacketsRecv   uint64
 	Reconnects    uint64
+	QueueWaits    uint64
+	SendRetries   uint64
 	Connected     bool
 	Uptime        time.Duration
+}
+
+// BatchSizeHinter is an optional interface a transport implements to raise the
+// default coalescing batch size for its carrier. A carrier capped by the number
+// of messages per connection rather than by bytes wants each message as large
+// as possible: the Mail.ru docs chat channel, for instance, is cut by the
+// server's anti-abuse after ~12 messages regardless of their size, so a small
+// batch wastes most of the per-connection budget. newLink passes the hint to
+// NewBatchedTransport; OPENFLUX_BATCH_BYTES still overrides it.
+type BatchSizeHinter interface {
+	PreferredBatchBytes() int
 }
 
 func DefaultConfig() TransportConfig {

@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
+import org.olcbox.app.data.model.OpenFluxCarrier
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.share.inflateOrNull
 
@@ -16,10 +17,12 @@ import org.olcbox.app.data.share.inflateOrNull
  * `openflux://v1/<base64url(raw DEFLATE(JSON))>`, JSON = `{name, negotiate, codec, secret, context, mode,
  * transports:[{type, name, url, priority, dial}]}`.
  *
- * The client runs one carrier (`--transport T --url U`), optionally encrypted with the link's `secret`
- * (AES-256-GCM, KDF `context`) and `negotiate` (Session-only; without it the Classic-compatible mode), so a
- * link is importable when it names exactly one Yandex/Mail.ru/cups.online transport with a URL and no stream
- * mode; anything else yields null rather than a location that cannot connect.
+ * One transport runs as a single carrier (`--transport T --url U`); several (or a direct one) become a
+ * multi-transport session (`--transports`, needs the link's `secret`). Optionally encrypted with the link's
+ * `secret` (AES-256-GCM, KDF `context`) and `negotiate` (Session-only; without it the Classic-compatible
+ * mode). A link is importable when every transport is a Yandex/Mail.ru/cups.online/Avito/direct one with
+ * its coordinate and there is no stream mode; anything else yields null rather than a location that
+ * cannot connect.
  */
 object OpenFluxUriParser {
 
@@ -45,15 +48,35 @@ object OpenFluxUriParser {
         val negotiate = (root["negotiate"] as? JsonPrimitive)?.booleanOrNull == true
         if (negotiate && secret.isEmpty()) return null
         val transports = root["transports"] as? JsonArray ?: return null
-        val tr = transports.singleOrNull() as? JsonObject ?: return null
-        val type = tr.str("type")
-        if (type !in OpenFluxConfig.TRANSPORTS || type == OpenFluxConfig.TRANSPORT_MAX) return null
-        val url = tr.str("url")
-        if (!url.startsWith("http", ignoreCase = true)) return null
+        val items = transports.map { it as? JsonObject ?: return null }
+        if (items.isEmpty()) return null
+        val single = items.singleOrNull()
+        if (single != null && single.str("type") != OpenFluxConfig.TRANSPORT_DIRECT) {
+            val type = single.str("type")
+            if (type !in OpenFluxConfig.TRANSPORTS || type == OpenFluxConfig.TRANSPORT_MAX) return null
+            val url = single.str("url")
+            if (!(url.startsWith("http", ignoreCase = true) || (type in ROOM_CARRIERS && url.length >= 16))) return null
+            return OpenFluxLink(root.str("name"), OpenFluxConfig(
+                transport = type, docUrl = url, secret = secret, context = root.str("context"), negotiate = negotiate,
+            ).normalized())
+        }
+        // A session: the core only runs one without an encryption key.
+        if (secret.isEmpty()) return null
+        val carriers = items.map { tr ->
+            val type = tr.str("type")
+            if (type !in OpenFluxConfig.SESSION_CARRIERS) return null
+            OpenFluxCarrier(
+                type = type, url = tr.str("url"), dial = tr.str("dial"),
+                priority = tr.str("priority").toIntOrNull() ?: OpenFluxConfig.DEFAULT_PRIORITY,
+            ).also { if (!it.isComplete()) return null }
+        }
+        if (carriers.map { it.type }.toSet().size != carriers.size) return null
         return OpenFluxLink(root.str("name"), OpenFluxConfig(
-            transport = type, docUrl = url, secret = secret, context = root.str("context"), negotiate = negotiate,
+            carriers = carriers, secret = secret, context = root.str("context"), negotiate = negotiate,
         ).normalized())
     }
+
+    private val ROOM_CARRIERS = setOf(OpenFluxConfig.TRANSPORT_CUPS, OpenFluxConfig.TRANSPORT_AVITO)
 
     private fun JsonObject.str(key: String): String = (this[key] as? JsonPrimitive)?.content.orEmpty().trim()
 }

@@ -51,4 +51,41 @@ class OpenFluxUriParserTest {
         assertNull(OpenFluxUriParser.parse(link("""{"transports":[{"type":"direct","dial":"1.2.3.4:5"}]}""")))
         assertNull(OpenFluxUriParser.parse("openflux://v1/!!!"))
     }
+
+    @Test
+    fun sessionLinkImportsAsMultiTransportAndBuildsCoreArgs() {
+        val c = OpenFluxUriParser.parse(
+            link(
+                """{"secret":"abcdefghijklmnop","transports":[
+                {"type":"direct","dial":"203.0.113.5:8445","priority":100},
+                {"type":"yandex","url":"https://docs.yandex.ru/d/1","priority":50},
+                {"type":"mailru","url":"https://cloud.mail.ru/public/x","priority":10}]}"""
+            )
+        )!!.config
+        assertEquals(true, c.isSession())
+        assertEquals(true, c.isComplete())
+        assertEquals(
+            listOf(
+                "--transports", "direct:100,yandex:50,mailru:10",
+                "--direct-dial", "203.0.113.5:8445", "--yandex-url", "https://docs.yandex.ru/d/1",
+                "--mailru-url", "https://cloud.mail.ru/public/x",
+            ),
+            c.carrierArgs(),
+        )
+        // Same type twice, a session without a key, or a direct carrier without a port are refused.
+        val y = """{"type":"yandex","url":"https://x"}"""
+        assertNull(OpenFluxUriParser.parse(link("""{"secret":"abcdefghijklmnop","transports":[$y,$y]}""")))
+        assertNull(OpenFluxUriParser.parse(link("""{"secret":"abcdefghijklmnop","transports":[$y,{"type":"direct","dial":"host"}]}""")))
+    }
+
+    @Test
+    fun singleCarrierArgsAndAvitoNeedCookies() {
+        val single = OpenFluxConfig(transport = OpenFluxConfig.TRANSPORT_VYANDEX, docUrl = "https://d").normalized()
+        assertEquals(listOf("--transport", "vyandex", "--url", "https://d"), single.carrierArgs())
+        val avito = OpenFluxConfig(transport = OpenFluxConfig.TRANSPORT_AVITO, docUrl = "eyJ2IjoyLCJyb29tcyI6WyJhIl19")
+        assertEquals(false, avito.isComplete())
+        assertEquals(true, avito.copy(avitoCookies = "a=b").isComplete())
+        assertEquals(true, avito.copy(avitoCookies = "a=b").withSession(true).copy(secret = "k").isComplete())
+        assertEquals(avito.transport, avito.withSession(true).withSession(false).transport)
+    }
 }

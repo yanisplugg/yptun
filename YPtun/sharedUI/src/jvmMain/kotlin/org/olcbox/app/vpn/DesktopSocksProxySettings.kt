@@ -16,22 +16,29 @@ data class DesktopSocksProxySettings(
      * proxy then listens on [UNSECURED_PORT] with no credentials, which is what the Windows system
      * proxy and browsers can actually talk to — neither can answer a SOCKS auth challenge.
      */
-    val secured: Boolean = false
+    val secured: Boolean = false,
+    /**
+     * Port the user picked for the credential-less listener; null = the standard [unsecuredPort].
+     * Kept apart from [port] (which belongs to the secured shape) so an untouched install never moves.
+     */
+    val customPort: Int? = null
 ) {
     val isConfigured: Boolean
         get() = username.isNotBlank() && password.isNotBlank()
 
     fun normalized(): DesktopSocksProxySettings {
-        // Unsecured is the default shape: no credentials, standard proxy port (see unsecuredPort).
+        // Unsecured is the default shape: no credentials, standard proxy port unless the user chose one.
         if (!secured) return copy(
             host = host.ifBlank { PacServer.LOCAL_SOCKS_HOST },
-            port = unsecuredPort(),
+            port = customPort?.takeIf { isValidPort(it) } ?: unsecuredPort(),
+            customPort = customPort?.takeIf { isValidPort(it) },
             username = "",
             password = ""
         )
         return copy(
             host = host.ifBlank { PacServer.LOCAL_SOCKS_HOST },
             port = sanitizePort(port),
+            customPort = customPort?.takeIf { isValidPort(it) },
             username = username.take(MAX_CREDENTIAL_LENGTH),
             password = password.take(MAX_CREDENTIAL_LENGTH)
         )

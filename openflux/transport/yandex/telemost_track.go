@@ -33,6 +33,7 @@ package yandex
 // the same DTLS/SRTP session.
 
 import (
+	cryptorand "crypto/rand"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -103,9 +104,21 @@ func NewTelemostTrack(codec webrtc.RTPCodecCapability, kind webrtc.RTPCodecType,
 		kind:     kind,
 		id:       id,
 		streamID: streamID,
-		cname:    "openflux-" + id[:8],
+		cname:    randomCNAME(),
 		bound:    make(chan struct{}),
 	}
+}
+
+// randomCNAME is an RTCP CNAME the way a browser makes one: 16 random
+// base64 characters, the same for every stream of the sender.
+func randomCNAME() string {
+	const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	b := make([]byte, 16)
+	_, _ = cryptorand.Read(b)
+	for i := range b {
+		b[i] = abc[b[i]&63]
+	}
+	return string(b)
 }
 
 // ---- webrtc.TrackLocal ----

@@ -95,7 +95,6 @@ type TelemostTransport struct {
 	sharingTrack *TelemostTrack
 	rtxMu        sync.Mutex
 	uplinkLoss   atomic.Uint32 // last RR fraction lost, /256
-	sfuGot       atomic.Uint64 // packets the SFU says it received (RR ext seq - lost)
 	rtxRing      [rtxRingSize]rtxEntry
 	rtxStats     struct{ asked, resent, missed atomic.Int64 }
 	publishPlan  *videoTrackPlan
@@ -204,6 +203,11 @@ type TelemostTransport struct {
 	lastSendTime atomic.Int64
 	lastRecvTime atomic.Int64
 	videoAt      atomic.Int64 // last RTP on the subscribed video track
+
+	// laneName is the participant name of a striped lane: participantName
+	// with the lane's tag hidden after it (telemost_stripe.go); empty
+	// outside a group.
+	laneName string
 }
 
 type TelemostConnectionResponse struct {
@@ -663,6 +667,18 @@ func (t *TelemostTransport) pubDescKeepaliveLoop(sec int) {
 	}
 }
 
+// participantName is the name every lane shows in the room: what an
+// anonymous guest is called, nothing that names the program.
+const participantName = "Гость"
+
+// name is the participant name this lane joins under.
+func (t *TelemostTransport) name() string {
+	if t.laneName != "" {
+		return t.laneName
+	}
+	return participantName
+}
+
 func (t *TelemostTransport) sendHello() error {
 	msg := TelemostHello{
 		UID: uuid.New().String(),
@@ -684,10 +700,10 @@ func (t *TelemostTransport) sendHello() error {
 			// created a video slot - videoSlots stayed [].
 			SendSharing: true,
 			ParticipantAttributes: map[string]interface{}{
-				"name": "OpenFlux", "role": "SPEAKER", "description": "",
+				"name": t.name(), "role": "SPEAKER", "description": "",
 			},
 			ParticipantMeta: map[string]interface{}{
-				"name":        "Гость",
+				"name":        t.name(),
 				"role":        "SPEAKER",
 				"description": "",
 				"sendAudio":   t.shareCarrier == "audio",
@@ -750,7 +766,7 @@ func (t *TelemostTransport) sendUpdateMe() error {
 		"uid": uuid.New().String(),
 		"updateMe": map[string]interface{}{
 			"participantMeta": map[string]interface{}{
-				"name":        "OpenFlux",
+				"name":        t.name(),
 				"role":        "SPEAKER",
 				"description": "",
 				"sendAudio":   t.shareCarrier == "audio",
@@ -758,7 +774,7 @@ func (t *TelemostTransport) sendUpdateMe() error {
 				"sendSharing": t.publishKind.sendsSharing(),
 			},
 			"participantAttributes": map[string]interface{}{
-				"name":        "OpenFlux",
+				"name":        t.name(),
 				"role":        "SPEAKER",
 				"description": "",
 			},
@@ -1202,6 +1218,41 @@ func newTelemostSubscriberAPI() (*webrtc.API, error) {
 	return webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(ir)), nil
 }
 
+// logSelectedPair logs the candidate pair ICE settled on, and every later
+// switch: which network a lane's media really takes - Wi-Fi, mobile data, a
+// TURN relay, a VPN's own interface - shows nowhere else.
+func (t *TelemostTransport) logSelectedPair(pc *webrtc.PeerConnection, role string) {
+	var it *webrtc.ICETransport
+	for _, s := range pc.GetSenders() {
+		if tr := s.Transport(); tr != nil {
+			it = tr.ICETransport()
+			break
+		}
+	}
+	if it == nil {
+		for _, r := range pc.GetReceivers() {
+			if tr := r.Transport(); tr != nil {
+				it = tr.ICETransport()
+				break
+			}
+		}
+	}
+	if it == nil {
+		return
+	}
+	show := func(p *webrtc.ICECandidatePair) {
+		if p == nil || p.Local == nil || p.Remote == nil {
+			return
+		}
+		utils.Infof("[Telemost] lane %d %s path: %s %s:%d -> %s %s:%d [%s]", t.laneIndex(), role,
+			p.Local.Typ, p.Local.Address, p.Local.Port, p.Remote.Typ, p.Remote.Address, p.Remote.Port, roleStr(t.isExitNode))
+	}
+	if p, err := it.GetSelectedCandidatePair(); err == nil {
+		show(p)
+	}
+	it.OnSelectedCandidatePairChange(show)
+}
+
 func (t *TelemostTransport) initPublisherPC() error {
 	iceServers := t.serverConfig.iceServers
 	if len(iceServers) == 0 {
@@ -1256,6 +1307,9 @@ func (t *TelemostTransport) initPublisherPC() error {
 	})
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		utils.Debugf("[Telemost] publisher ICE state=%s [%s]", state, roleStr(t.isExitNode))
+		if state == webrtc.ICEConnectionStateConnected {
+			t.logSelectedPair(pc, "publisher")
+		}
 	})
 	pc.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
 		utils.Debugf("[Telemost] publisher ICE gathering=%s [%s]", state, roleStr(t.isExitNode))
@@ -1722,10 +1776,18 @@ func (t *TelemostTransport) runPublisherKeepalive() {
 		// aggregate rate this tick unchanged while making that reordering,
 		// and the costly stall-and-retransmit cycle it was triggering, far
 		// less likely.
+		// Each frame has its slot in the tick, kept against the tick's
+		// start: a sleep that overshoots (a millisecond is common on a
+		// phone) is made up by the next frames instead of piling up until
+		// the tick overruns and the ticker drops ticks - which cut a lane
+		// well below its clock's rate.
 		gap := frameInterval / time.Duration(len(frames))
+		tickStart := time.Now()
 		for i, payload := range frames {
 			if i > 0 && publishPace {
-				time.Sleep(gap)
+				if d := time.Until(tickStart.Add(time.Duration(i) * gap)); d > 0 {
+					time.Sleep(d)
+				}
 			}
 			// Hand over the raw wire frame, not a VP8 frame: sendFrame does
 			// the wrapping. Passing an already-wrapped frame in here wrapped
@@ -1902,7 +1964,6 @@ func (t *TelemostTransport) answerNACKs(b []byte) {
 		if rr, ok := p.(*rtcp.ReceiverReport); ok {
 			for _, rep := range rr.Reports {
 				t.uplinkLoss.Store(uint32(rep.FractionLost))
-				t.sfuGot.Store(uint64(rep.LastSequenceNumber) - uint64(rep.TotalLost))
 			}
 			continue
 		}
@@ -2091,6 +2152,9 @@ func (t *TelemostTransport) initWebRTC() error {
 	})
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		utils.Debugf("[Telemost] subscriber ICE state=%s [%s]", state, roleStr(t.isExitNode))
+		if state == webrtc.ICEConnectionStateConnected {
+			t.logSelectedPair(pc, "subscriber")
+		}
 	})
 	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		utils.Debugf("[Telemost] 🎥 remote track: kind=%s id=%s codec=%s [%s]",

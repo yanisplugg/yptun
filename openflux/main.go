@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	godebug "runtime/debug"
 	"strconv"
@@ -105,14 +106,63 @@ const (
 	codecLegacy  = "legacy"
 )
 
-// transportHasCookies reports whether the given transport uses HTTP cookies
-// that can be refreshed via the NegotiatedTransport control channel.
+// transportHasCookies reports whether the given transport keeps state in the
+// cookie store: HTTP cookies that can be refreshed via the
+// NegotiatedTransport control channel, or - a script - what its setup page
+// was given (see sessionCookieKey).
 func transportHasCookies(t string) bool {
 	switch t {
-	case "yandex", "vyandex", "boards", "mailru", "cupsonline":
+	case "yandex", "vyandex", "boards", "mailru", "cupsonline", "avito", "script":
 		return true
 	}
 	return false
+}
+
+func loadAvitoCookies(s string) string {
+	if strings.ContainsAny(s, "/\\.") {
+		data, err := os.ReadFile(s)
+		if err == nil {
+			var parts []string
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.Replace(line, "#HttpOnly_", "", 1)
+				if !strings.Contains(line, "\t") {
+					continue
+				}
+				fields := strings.Split(line, "\t")
+				if len(fields) >= 7 {
+					parts = append(parts, fields[5]+"="+fields[6])
+				}
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, "; ")
+			}
+		}
+	}
+	return s
+}
+
+// defaultCookieStorePath is the jar used without --cookie-store: one per
+// transport type in the current directory, and one per script - two scripts
+// must not share a jar. A script is named by --script-name, else by its
+// file.
+func defaultCookieStorePath(transportType, scriptName, scriptPath string) string {
+	if transportType == "script" {
+		name := scriptName
+		if name == "" && scriptPath != "" {
+			name = strings.TrimSuffix(filepath.Base(scriptPath), filepath.Ext(scriptPath))
+		}
+		name = strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+				return r
+			}
+			return '_'
+		}, name)
+		if name = strings.Trim(name, "."); name != "" {
+			return "./cookies-script-" + name + ".json"
+		}
+	}
+	return fmt.Sprintf("./cookies-%s.json", transportType)
 }
 
 // sessionCookieKey is cookieKey for a transport of a Session. A script
@@ -220,13 +270,15 @@ func main() {
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
 	inbound := flag.String("inbound", "", "tun | socks5 (client only; default: tun on macOS, socks5 elsewhere)")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme, cupsonline, mailru, telemost)")
+	lanesFlag := flag.Int("lanes", 0, "Exit with no --url: run N carriers of this transport as lanes of one stripe, each creating its own rooms (cupsonline, avito); with --url, a comma-separated list of links is striped the same way")
 	mode := flag.String("mode", "", "Exit-node mode: l3 (default; Linux as root, or Windows as Administrator with WinDivert) or l4 (works everywhere)")
 
 	codec := flag.String("codec", codecBatched, "batched (default, zstd+coalescing) or legacy (per-packet LZ4)")
 	negotiate := flag.Bool("negotiate", false, "Require encrypted, session-bound IPv4 capability negotiation on both peers (no legacy fallback)")
 	maxPacket := flag.Int("max-packet-size", transport.MaxNegotiatedPacket, "Maximum IPv4 packet in negotiated mode (1280..65000); not the Internet path MTU")
 	cookieStorePath := flag.String("cookie-store", "",
-		"Path to the cookie jar file. Default: ./cookies-<transport>.json in the current directory. "+
+		"Path to the cookie jar file. Default: ./cookies-<transport>.json in the current directory "+
+			"(./cookies-script-<name>.json for a script). "+
 			"Ignored for transports without cookies (direct, oneme).")
 	encryptionKeyFile := flag.String("encryption-key-file", "",
 		"Optional: encrypt the transport with AES-256-GCM using a shared secret read from this file. "+
@@ -237,6 +289,7 @@ func main() {
 			"from --config), falling back to --transport. Only set this to override that derivation.")
 
 	flag.StringVar(&globalDocUrl, "url", "http://#", "Document URL. If u use Yandex.Docs transport")
+	urlFile := flag.String("url-file", "", "Read --url from this file, so the document URL stays out of the process list and shell history")
 	flag.StringVar(&maxToken, "maxToken", "", "MAX Web token. If u use MAX transport")
 	flag.StringVar(&maxUid, "maxUid", "", "MAX call user id. If u use MAX transport")
 	directDial := flag.String("direct-dial", "", "DirectTransport: exit address to dial (client). Requires --encryption-key-file")
@@ -250,11 +303,15 @@ func main() {
 	boardsURL := flag.String("boards-url", "", "URL for the boards transport")
 	mailruURL := flag.String("mailru-url", "", "URL (weblink) for the mailru transport")
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
+	avitoURL := flag.String("avito-url", "", "URL for the avito transport")
+	avitoCookies := flag.String("avito-cookies", "", "Raw cookie string for code.avito.ru (or path to Netscape cookies.txt)")
 	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
 	scriptPath := flag.String("script-path", "", "Path to the script transport's <name>.flux or <name>.js (needs <name>.js.sig beside a bare .js)")
 	scriptPubkey := flag.String("script-pubkey", "", "Hex-encoded ed25519 public key the script transport's signature is checked against")
 	scriptName := flag.String("script-name", "", "Carrier name for the script transport (default: the name in its own info())")
+	scriptAutoUpdate := flag.Bool("script-auto-update", false, "Node: keep .flux transports current and self-heal (check/apply auto-OK updates, roll back, hot-swap without a restart)")
+	scriptUpdateChannel := flag.String("script-update-channel", "stable", "Node: update channel for --script-auto-update (stable | nightly)")
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
 	shareFlag := flag.Bool("share", false,
@@ -265,6 +322,7 @@ func main() {
 		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
 			"Empty = no IPC server.")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
+	upstreamProxy := flag.String("upstream-proxy", "", "Exit (l4): open TCP connections through this SOCKS5 proxy, e.g. 127.0.0.1:10808 or socks5://user:pass@host:port")
 	httpProxyAddr := flag.String("http-proxy", "", "Client: also serve an HTTP proxy (CONNECT and plain requests) on this address, through the same tunnel")
 	flag.StringVar(&localIP, "local-ip", "", "Egress IP for exit node (l3 mode only, scoped RST drop)")
 
@@ -310,6 +368,7 @@ TRANSPORT  (single-transport mode)
   -t, --transport=vyandex      Yandex.Volga over HTTP relay + WS.
   -t, --transport=oneme        MAX (VK) over WebRTC.
   -t, --transport=cupsonline   Cups.online interview rooms.
+  -t, --transport=avito        code.avito.ru ShareDB rooms.
   -t, --transport=telemost     Yandex Telemost conference (--url <link>), striped over several participants.
   -t, --transport=mailru       Mail.ru Docs over WebSocket.
   -t, --transport=direct       Plain TCP to a self-hosted exit.
@@ -332,6 +391,9 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
       --boards-url=<URL>       URL for the boards transport.
       --mailru-url=<WEBLINK>   Weblink for the mailru transport.
       --cupsonline-url=<URL>   URL for the cupsonline transport.
+      --avito-url=<URL>        URL for the avito transport.
+      --avito-cookies=<str>    Raw cookie string or path to Netscape
+                               cookies.txt for code.avito.ru.
       --oneme-token=<token>    MAX auth token for the oneme transport.
       --oneme-uid=<uid>        MAX user id for the oneme transport.
       --direct-dial=<addr>     DirectTransport: exit host:port (client).
@@ -375,7 +437,8 @@ TRANSPORT MODIFIERS
                                on both peers. No legacy fallback.
       --max-packet-size=N      Max IPv4 packet in negotiated mode
                                (1280..65000). Default 65000.
-      --cookie-store=<path>    Cookie jar file. Default: ./cookies-<transport>.json.
+      --cookie-store=<path>    Cookie jar file. Default: ./cookies-<transport>.json
+                               (./cookies-script-<name>.json for a script).
       --ipc-socket=<path>      Unix domain socket for the mobile bridge.
                                Empty = no IPC server.
       --share                  Exit: print an openflux:// link and QR code for
@@ -482,6 +545,13 @@ DEPRECATED (removed in v2)
 				*debug = 1
 			}
 		}
+		if v, ok := confValue(conf.Interface, "Bonding"); ok && confBool(v, false) {
+			log.Printf("Bonding = %s: bonding is no longer supported, the carriers fail over by priority", v)
+		}
+		// A node channel with .flux carriers keeps them current (node-install.sh writes it).
+		if v, ok := confValue(conf.Interface, "ScriptAutoUpdate"); ok && !setFlags["script-auto-update"] {
+			*scriptAutoUpdate = confBool(v, false)
+		}
 		if v, ok := confValue(conf.Interface, "Sensitive"); ok && !setFlags["sensitive"] && !setFlags["sensetive"] {
 			*sensitive = confBool(v, *sensitive)
 		}
@@ -529,6 +599,24 @@ DEPRECATED (removed in v2)
 					spec.Params["settings"] = settings
 				}
 			}
+			if n := t.Values["Network"]; n != "" {
+				if !validNetwork(n) {
+					log.Fatalf("--config: [Transport %s] Network = %q: cellular, wifi or ethernet", t.Name, n)
+				}
+				if spec.Params == nil {
+					spec.Params = map[string]interface{}{}
+				}
+				spec.Params["network"] = n
+			}
+			if spec.Type == "cupsonline" {
+				spec.Params = map[string]interface{}{"exit": isExit}
+			}
+			if n := confInt(t.Values["Lanes"], 0); n >= 2 {
+				if spec.Params == nil {
+					spec.Params = map[string]interface{}{}
+				}
+				spec.Params["lanes"] = n
+			}
 			confTransports = append(confTransports, spec)
 		}
 	}
@@ -574,6 +662,17 @@ DEPRECATED (removed in v2)
 	}
 
 	// Platform defaults. The recommended client path is utun on macOS and
+	if *urlFile != "" {
+		if globalDocUrl != "http://#" {
+			log.Fatal("--url-file and --url are exclusive")
+		}
+		u, err := readURLFile(*urlFile)
+		if err != nil {
+			log.Fatalf("--url-file: %v", err)
+		}
+		globalDocUrl = u
+	}
+
 	// SOCKS5 everywhere else (see README for details). Stream mode keeps
 	// SOCKS5 unless the full tunnel is asked for by name: it was a proxy
 	// first, and the apps' proxy profiles do not pass --inbound.
@@ -587,6 +686,25 @@ DEPRECATED (removed in v2)
 	}
 	if *mode == "" {
 		*mode = "l3"
+		// Only the l4 exit dials its own connections, so only it can use
+		// an upstream proxy.
+		if *role == roleExit && *upstreamProxy != "" {
+			*mode = "l4"
+		}
+	}
+	if *upstreamProxy != "" {
+		if *role != roleExit {
+			log.Fatal("--upstream-proxy applies to --role=exit only")
+		}
+		if *mode != "l4" {
+			log.Fatal("--upstream-proxy needs --mode=l4: an l3 exit forwards packets and dials nothing itself")
+		}
+		if err := tunnel.SetExitUpstream(*upstreamProxy); err != nil {
+			log.Fatalf("--upstream-proxy: %v", err)
+		}
+		if addr := tunnel.ExitUpstream(); addr != "" {
+			log.Printf("Exit TCP goes through SOCKS5 %s", addr)
+		}
 	}
 
 	if *codec != codecBatched && *codec != codecLegacy {
@@ -694,7 +812,7 @@ DEPRECATED (removed in v2)
 	if transportHasCookies(*transportType) {
 		path := *cookieStorePath
 		if path == "" {
-			path = fmt.Sprintf("./cookies-%s.json", *transportType)
+			path = defaultCookieStorePath(*transportType, *scriptName, *scriptPath)
 		}
 		s, err := transport.NewCookieStore(path)
 		if err != nil {
@@ -702,6 +820,12 @@ DEPRECATED (removed in v2)
 		}
 		store = s
 		log.Printf("Cookie store: %s", path)
+	}
+
+	// Avito cookies: load from file or use as raw string. The apps pass them in the environment (YPtun patch).
+	*avitoCookies = envOr(*avitoCookies, envAvitoCookies)
+	if *avitoCookies != "" {
+		avitoCookiesStr = loadAvitoCookies(*avitoCookies)
 	}
 
 	// Build the list of transports to run. Two modes:
@@ -720,6 +844,7 @@ DEPRECATED (removed in v2)
 			"boards":     *boardsURL,
 			"mailru":     *mailruURL,
 			"cupsonline": *cupsonlineURL,
+			"avito":      *avitoURL,
 		}
 		specs = buildTransportSpecs(specs, urls, nil)
 	} else if *transportsFlag != "" {
@@ -733,12 +858,14 @@ DEPRECATED (removed in v2)
 			"boards":     *boardsURL,
 			"mailru":     *mailruURL,
 			"cupsonline": *cupsonlineURL,
+			"avito":      *avitoURL,
 		}
 		if globalDocUrl != "" && globalDocUrl != "http://#" && urls["yandex"] == "" {
 			urls["yandex"] = globalDocUrl
 		}
 		extra := map[string]map[string]interface{}{
-			"oneme": {"token": *onemeToken, "uid": *onemeUID, "exit": isExit},
+			"oneme":      {"token": *onemeToken, "uid": *onemeUID, "exit": isExit},
+			"cupsonline": {"exit": isExit},
 			"direct": {
 				"dial":    *directDial,
 				"listen":  *directListen,
@@ -770,6 +897,15 @@ DEPRECATED (removed in v2)
 			specs[0].Params = map[string]interface{}{
 				"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName,
 			}
+		}
+		if *transportType == "cupsonline" {
+			specs[0].Params = map[string]interface{}{"exit": isExit}
+		}
+		if *lanesFlag >= 2 {
+			if specs[0].Params == nil {
+				specs[0].Params = map[string]interface{}{}
+			}
+			specs[0].Params["lanes"] = *lanesFlag
 		}
 	}
 
@@ -834,19 +970,9 @@ DEPRECATED (removed in v2)
 	// sections in a .conf describe one just like --transports.
 	//
 	// A classic setup (--transport=X) with a key runs as a Session too,
-	// with classic compatibility: a client falls back to the classic
-	// layering while the exit does not answer the handshake and upgrades
-	// once it does; an exit serves classic clients and Session clients.
-	// Only --negotiate is strict. Without a key only classic is possible.
+	// with classic compatibility (see classicCompatible).
 	configuredSession := *negotiate || *transportsFlag != "" || len(confTransports) > 0
-	classicCompat := false
-	switch {
-	case *role != roleClient && *role != roleExit:
-	case !configuredSession && secret != "":
-		classicCompat = true
-	case configuredSession && !*negotiate && *role == roleClient && len(specs) == 1:
-		classicCompat = true
-	}
+	classicCompat := classicCompatible(*role, configuredSession, *negotiate, secret != "", len(specs))
 	if configuredSession || classicCompat {
 		if secret == "" {
 			log.Fatal("--transports/--negotiate/.conf transports require --encryption-key-file")
@@ -886,11 +1012,18 @@ DEPRECATED (removed in v2)
 			log.Fatalf("bootstrap transports: %v", err)
 		}
 
+		// Headless auto-update for .flux carriers (the app's ScriptUpdater has
+		// no equivalent on a CLI/exit node): keep them current and self-heal by
+		// hot-swapping a reloaded package into the live Session.
+		if *scriptAutoUpdate {
+			startNodeScriptUpdater(context.Background(), managerInst, specs, config, *scriptUpdateChannel)
+		}
+
 		// Persist each cookie-carrying transport's jar and replay what was
 		// saved; the Manager routes cookie control messages by name.
 		if store != nil {
 			for _, spec := range specs {
-				if !transportHasCookies(spec.Type) && spec.Type != "script" {
+				if !transportHasCookies(spec.Type) {
 					continue
 				}
 				if err := managerInst.UseCookieStore(store, spec.Name, sessionCookieKey(spec, maxUid)); err != nil {
@@ -948,13 +1081,13 @@ DEPRECATED (removed in v2)
 		// Session needs one), or a bench role.
 		// The types the classic path serves; the registry builds them.
 		switch *transportType {
-		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "mailru", "telemost":
+		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "avito", "mailru", "telemost", "mixed":
 		default:
 			log.Fatalf("Unknown transport type: %s", *transportType)
 		}
 		inner, err := registry.New(*transportType, globalDocUrl,
-			map[string]interface{}{"token": maxToken, "uid": maxUid, "exit": isExit},
-			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile})
+			classicParams(maxToken, maxUid, isExit, *lanesFlag),
+			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile, AvitoCookies: avitoCookiesStr})
 		if err != nil {
 			log.Fatalf("%s: %v", *transportType, err)
 		}
@@ -968,7 +1101,9 @@ DEPRECATED (removed in v2)
 		// Persist cookie exchanger for the legacy path.
 		if store != nil {
 			if ce, ok := inner.(transport.CookieExchanger); ok {
-				key := cookieKey(*transportType, globalDocUrl, maxUid)
+				// The key the Session path uses too, so a jar carries over
+				// when a key is added or removed.
+				key := sessionCookieKey(specs[0], maxUid)
 				if jar := store.Load(key); jar != nil {
 					_ = ce.ApplyCookies(jar)
 				}
@@ -1203,7 +1338,7 @@ func streamCarrier(transportType, url string) phpbox.Carrier {
 		log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
 	}
 	t, err := registry.New(transportType, url, nil, registry.Options{
-		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile,
+		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile, AvitoCookies: avitoCookiesStr,
 	})
 	if err != nil {
 		log.Fatalf("--mode=stream %s: %v", transportType, err)
@@ -1283,6 +1418,9 @@ func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr stri
 		// for platforms without a tun client (see README).
 		log.Printf("Running as CLIENT (SOCKS5 on %s, legacy gVisor path)", socksAddr)
 		tun := tunnel.NewTCPTunnelMode(trans, false, exitMode)
+		if err := tun.Err(); err != nil {
+			log.Fatal(err)
+		}
 		if httpProxyAddr != "" {
 			ln, err := net.Listen("tcp", httpProxyAddr)
 			if err != nil {
@@ -1347,4 +1485,13 @@ func hasTelemost(specs []transportSpec) bool {
 		}
 	}
 	return false
+}
+
+// classicParams are the registry params of the single-transport path.
+func classicParams(token string, uid string, isExit bool, lanes int) map[string]interface{} {
+	p := map[string]interface{}{"token": token, "uid": uid, "exit": isExit}
+	if lanes >= 2 {
+		p["lanes"] = lanes
+	}
+	return p
 }

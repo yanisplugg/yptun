@@ -10,3 +10,9 @@ plugins {
     alias(libs.plugins.kotlinx.serialization).apply(false)
     alias(libs.plugins.metro).apply(false)
 }
+
+// Compose's downloadWix/unzipWix (pulled into every desktop jpackage task on Windows) read Task.project while
+// running, which the configuration cache rejects and fails the whole build. Such a build just runs without the cache.
+tasks.matching { it.name == "downloadWix" || it.name == "unzipWix" }.configureEach {
+    notCompatibleWithConfigurationCache("Compose downloadWix/unzipWix use Task.project at execution time")
+}

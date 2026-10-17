@@ -389,7 +389,8 @@ private fun runApp(args: Array<String>) = application {
             // dropped (and persisted away below).
             val previousSettings = updateSettings.copy(lastDownloadedUpdateVersion = null)
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
+            // Automatic checks only when the interval has passed (never at all for «Никогда»): a launch alone is no reason.
+            if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             val s = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
             updateMessage = s.checkingChannel(s.releaseChannelLabel.lowercase())
@@ -986,6 +987,10 @@ private fun runApp(args: Array<String>) = application {
                     appBehavior.showSubscriptionExpiry,
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides
                     appBehavior.showSubscriptionAliveCount,
+                org.olcbox.app.ui.features.locations.components.LocalShowPingControls provides
+                    appBehavior.showPingControls,
+                org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing provides
+                    appBehavior.allowConfigEditing,
                 org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription provides
                     appBehavior.showSubscriptionDescription,
                 org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines provides
@@ -1106,6 +1111,9 @@ private fun runApp(args: Array<String>) = application {
                         dependencies.settings.setAppBehavior(
                             appBehavior.copy(collapsedSubscriptionGroups = updated)
                         )
+                    },
+                    onSubscriptionKeyChanged = { oldKey, newKey ->
+                        dependencies.settings.setAppBehavior(appBehavior.withSubscriptionKeyRenamed(oldKey, newKey))
                     },
                     onToggleGroupPinned = { key ->
                         val current = appBehavior.pinnedSubscriptionGroups
@@ -1372,6 +1380,17 @@ private fun runApp(args: Array<String>) = application {
                             scope.launch {
                                 dependencies.socksProxySettingsStore.save(newSettings)
                             }
+                            if (homeState.isVpnConnected) {
+                                dependencies.homeViewModel.restartVpnIfRunning()
+                            }
+                        },
+                        onUnsecuredPortSaved = { port ->
+                            val newSettings = socksProxySettings.copy(customPort = port).normalized()
+                            dependencies.vpnManager.updateSocksProxySettings(newSettings)
+                            scope.launch {
+                                dependencies.socksProxySettingsStore.save(newSettings)
+                            }
+                            desktopNotice = "SOCKS port saved"
                             if (homeState.isVpnConnected) {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }

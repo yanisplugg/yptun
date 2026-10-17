@@ -243,7 +243,8 @@ fun AndroidMainScreen(
         scope.launch {
             val previousSettings = updateSettings
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
-            if (!manual && updateCheckedThisLaunch && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
+            // Automatic checks only when the interval has passed (never at all for «Никогда»): a launch alone is no reason.
+            if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             updateStatusText = s.checkingChannel(s.releaseChannelLabel.lowercase())
             val result = service.check(
@@ -449,6 +450,8 @@ fun AndroidMainScreen(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount provides appBehavior.showSubscriptionAliveCount,
+        org.olcbox.app.ui.features.locations.components.LocalShowPingControls provides appBehavior.showPingControls,
+        org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing provides appBehavior.allowConfigEditing,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription provides appBehavior.showSubscriptionDescription,
         org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines provides appBehavior.subscriptionDescriptionLines,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionIcons provides appBehavior.showSubscriptionIcons,
@@ -548,6 +551,9 @@ fun AndroidMainScreen(
             val current = appBehavior.collapsedSubscriptionGroups
             val updated = if (key in current) current - key else current + key
             vpnManager.setAppBehavior(appBehavior.copy(collapsedSubscriptionGroups = updated))
+        },
+        onSubscriptionKeyChanged = { oldKey, newKey ->
+            vpnManager.setAppBehavior(appBehavior.withSubscriptionKeyRenamed(oldKey, newKey))
         },
         onToggleGroupPinned = { key ->
             val current = appBehavior.pinnedSubscriptionGroups

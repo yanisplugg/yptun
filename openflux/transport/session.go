@@ -189,12 +189,16 @@ func (s *Session) newLink(name string, raw Transport, secret, context string, pr
 	classic, codec := s.classic, s.classicCodec
 	s.mu.Unlock()
 	enc.SetAlternateContexts(alternates)
+	batchHint := 0
+	if h, ok := raw.(BatchSizeHinter); ok {
+		batchHint = h.PreferredBatchBytes()
+	}
 	link := &transportLink{
 		name:      name,
 		raw:       raw,
 		demux:     d,
 		encrypted: enc,
-		batched:   NewBatchedTransport(enc),
+		batched:   NewBatchedTransport(enc, batchHint),
 		priority:  priority,
 	}
 	if classic != ClassicOff {
@@ -282,14 +286,71 @@ func (s *Session) RemoveTransport(name string) error {
 		return fmt.Errorf("session: transport %q not found", name)
 	}
 	delete(s.links, name)
-	for i, n := range s.order {
-		if n == name {
-			s.order = append(s.order[:i], s.order[i+1:]...)
-			break
-		}
-	}
+	s.order = dropFromOrder(s.order, name)
 	_ = link.batched.Stop()
 	return nil
+}
+
+// ReplaceTransport hot-swaps the carrier named `name` for a freshly built one
+// - a transport reloaded from an updated .flux - without disturbing the rest
+// of the session: the handshake, the other carriers and the packet flow all
+// stay up, and only this one link blinks while it reconnects. The new
+// transport is built first, so a build failure leaves the running link
+// untouched; only then is the old link torn down (its raw transport Stop()ed
+// through the demux→enc→batched chain) and the new one started in its place,
+// supervised into the background if it does not come up at once. Unlike
+// AddTransport it is meant to run on a started session. If no carrier by that
+// name exists it just adds the new one.
+func (s *Session) ReplaceTransport(name string, raw Transport, secret, context string, priority int) error {
+	if raw == nil {
+		return errors.New("session: nil transport")
+	}
+	if name == "" {
+		return errors.New("session: empty transport name")
+	}
+	link, err := s.newLink(name, raw, secret, context, priority)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		link.stop()
+		return errors.New("session: stopped")
+	}
+	old := s.links[name]
+	started := s.started
+	s.links[name] = link
+	s.order = dropFromOrder(s.order, name)
+	s.order = insertByPriority(s.order, name, priority, s.links)
+	s.mu.Unlock()
+
+	// Tear the old pipeline down after the new link is in place, so a packet
+	// arriving mid-swap is never routed to a half-stopped carrier.
+	if old != nil {
+		old.stop()
+	}
+
+	if !started {
+		return nil // Start() will bring it up with the rest
+	}
+	if err := s.startLink(link); err != nil {
+		utils.Infof("[SESSION] replaced carrier %q did not start: %v; retrying in the background", name, err)
+		s.superviseLink(link)
+	} else {
+		utils.Infof("[SESSION] carrier %q hot-swapped to a new build", name)
+	}
+	return nil
+}
+
+func dropFromOrder(order []string, name string) []string {
+	for i, n := range order {
+		if n == name {
+			return append(order[:i], order[i+1:]...)
+		}
+	}
+	return order
 }
 
 func insertByPriority(order []string, name string, priority int, links map[string]*transportLink) []string {
@@ -1565,12 +1626,14 @@ func (s *Session) Stats() TransportStats {
 
 	var out TransportStats
 	for _, l := range links {
-		st := l.raw.Stats()
+		st := l.batched.Stats()
 		out.BytesSent += st.BytesSent
 		out.BytesReceived += st.BytesReceived
 		out.PacketsSent += st.PacketsSent
 		out.PacketsRecv += st.PacketsRecv
 		out.Reconnects += st.Reconnects
+		out.QueueWaits += st.QueueWaits
+		out.SendRetries += st.SendRetries
 	}
 	out.Connected = s.IsConnected()
 	return out

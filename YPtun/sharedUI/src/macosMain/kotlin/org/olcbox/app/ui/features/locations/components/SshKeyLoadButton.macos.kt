@@ -4,5 +4,5 @@ import androidx.compose.runtime.Composable
 
 /** macOS has no VPS installer UI — render nothing. */
 @Composable
-actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit) {
+actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit, label: String?) {
 }

@@ -117,6 +117,11 @@ import org.olcbox.app.vpn.geo.AsnResolver
 import org.olcbox.app.vpn.geo.GeoAssetManager
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
+import org.olcbox.app.vpn.warp.WarpRelay
+import org.olcbox.app.vpn.warp.WarpHelper
+import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -1313,8 +1318,8 @@ class OlcboxVpnService : VpnService() {
                 java.io.File(noBackupFilesDir, "openflux-key.txt").also { f -> f.writeText(it) }
             }
             val cmd = buildList {
-                addAll(listOf(exe.absolutePath, "--role=client", "--inbound=socks5", "--transport", openFlux.transport, "--socks5", listen))
-                if (openFlux.usesMax()) addAll(listOf("--maxUid", openFlux.maxUid)) else addAll(listOf("--url", openFlux.docUrl))
+                addAll(listOf(exe.absolutePath, "--role=client", "--inbound=socks5", "--socks5", listen))
+                addAll(openFlux.carrierArgs())
                 if (openFlux.dnsServer.isNotBlank()) addAll(listOf("--dns", openFlux.dnsServer))
                 if (keyFile != null) addAll(openFlux.encryptionArgs(keyFile.absolutePath))
                 if (openFlux.debug) add("--debug")
@@ -1324,6 +1329,7 @@ class OlcboxVpnService : VpnService() {
             val process = ProcessBuilder(cmd).redirectErrorStream(true).apply {
                 // Secrets via the environment, never argv.
                 environment()["OPENFLUX_MAX_TOKEN"] = openFlux.maxToken
+                environment()["OPENFLUX_AVITO_COOKIES"] = openFlux.avitoCookies
                 environment()["OPENFLUX_SOCKS_USER"] = if (proxy != null) "" else socksUsername
                 environment()["OPENFLUX_SOCKS_PASS"] = if (proxy != null) "" else socksPassword
             }.start()
@@ -1671,13 +1677,71 @@ class OlcboxVpnService : VpnService() {
         // through the main (→ olcRTC for Chain). Null = single hop (main is the exit).
         // Foolproofing/defense-in-depth: drop a 2nd proxy that points at the SAME node as the main
         // (a proxy-into-itself can't work) — covers a bad import/subscription, not just manual entry.
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+        val configuredSecondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
             val main = config.proxy
             if (main != null && main.isComplete() && main.isSameNodeAs(second)) {
                 addLog("ВНИМАНИЕ: 2-й (каскадный) прокси совпадает с основным — каскад сам в себя невозможен, игнорирую (выход через основной)")
                 null
             } else second
         }
+
+        // ---- Cloudflare WARP (WireGuard or AmneziaWG) on the client or the server side ----
+        // Both protocols run in the awgproxy engine (plain WG = the INI without obfuscation):
+        //  Client side: awgproxy SOCKS on awgLocalPort; the main proxy dials through it (olcRTC-style chain).
+        //  Server side: awgproxy SOCKS is the exit; its UDP rides the main proxy through a core relay (warpRelay).
+        var wireguardBaseDraft: ProxyProfile? = null
+        var secondProfileDraft: ProxyProfile? = configuredSecondProfile
+        var warpAwgIniDraft: String? = null
+        var warpChainPortDraft: Int? = null
+        var warpRelayDraft: WarpRelay? = null
+        if (config.warpEnabled) {
+            val serverSide = config.warpMode == WarpMode.Server
+            val awg = config.warpProtocol == WarpProtocol.Awg
+            addLog("WARP: включён — ${if (serverSide) "на сервере (VLESS → WARP)" else "на клиенте (WARP → VLESS)"}, протокол ${if (awg) "AmneziaWG" else "WireGuard"}")
+            if (!serverSide && !awg) {
+                addLog("WARP: WireGuard без обфускации в режиме клиента идёт к Cloudflare напрямую по UDP — многие провайдеры его режут; если рукопожатие не проходит («handshake никогда»), выбери AmneziaWG")
+            }
+            // A JSON subscription (verbatim Xray config) gets WARP too: prepareRaw puts it in the config.
+            val isRawXray = !profile.rawXrayConfig.isNullOrBlank()
+            val skipReason = when {
+                chained -> "режим olcRTC-цепочки уже занимает базовый туннель"
+                !isRawXray && profile.type !in setOf(
+                    ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS, ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
+                ) -> "WARP поддержан для VLESS/VMess/Trojan/Shadowsocks, а тут ${profile.type}"
+                else -> null
+            }
+            if (skipReason != null) {
+                addLog("ВНИМАНИЕ: WARP пропущен: $skipReason")
+            } else {
+                val ini = obtainWarpIni(officialFirst = !awg)
+                if (ini == null) {
+                    addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю БЕЗ WARP")
+                } else {
+                    // Both protocols run in the awgproxy engine ("WireGuard" = the same INI without the
+                    // obfuscation knobs): xray's built-in WireGuard needs ~30 s before its first byte through a
+                    // proxy hop and resolves its endpoint through a DNS that is itself routed via this tunnel.
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide)
+                    if (serverSide) {
+                        // An IP, never a domain: the core would resolve a domain through its own DNS, which is
+                        // routed through this very tunnel.
+                        val (rawHost, port) = WarpHelper.endpointOf(ini)
+                        val host = WarpHelper.pinnedHost(rawHost)
+                        val relay = WarpRelay(listenPort = socksListenPort + 3, targetHost = host, targetPort = port)
+                        warpRelayDraft = relay
+                        warpAwgIniDraft = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
+                        secondProfileDraft = localSocksProfile("WARP", awgLocalPort)
+                    } else {
+                        warpAwgIniDraft = engineIni
+                        warpChainPortDraft = awgLocalPort
+                    }
+                }
+            }
+        }
+        val wireguardBase = wireguardBaseDraft
+        val secondProfile = secondProfileDraft
+        val warpAwgIni = warpAwgIniDraft
+        val warpChainPort = warpChainPortDraft
+        val warpRelay = warpRelayDraft
         return try {
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
 
@@ -1710,6 +1774,9 @@ class OlcboxVpnService : VpnService() {
             // outbound since the 1.13 upgrade (with_quic builds alongside xray now), so it no longer
             // needs the old hysteria2proxy SOCKS bridge — but like AWG it's a full UDP/QUIC tunnel,
             // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
+            // WARP over AmneziaWG on the CLIENT side: raise awgproxy first — the main proxy dials through its
+            // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
+            if (warpAwgIni != null && warpRelay == null) startWarpAwg(warpAwgIni)
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
             // Naive (NaïveProxy) is a native sing-box outbound (cronet) — xray has no equivalent.
@@ -1811,6 +1878,8 @@ class OlcboxVpnService : VpnService() {
                 ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
             )
             when {
+                // WARP on the server side rides in as the "second proxy" (awgproxy's SOCKS) — not a cascade.
+                warpRelay != null -> addLog("WARP: выход через awgproxy поверх ${if (effectiveProfile.rawXrayConfig.isNullOrBlank()) "основного прокси" else "кастомного Xray-конфига"}")
                 secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() && !secondChainableOnRaw ->
                     addLog("ВНИМАНИЕ: 2-й прокси типа '${secondProfile.type}' (например AmneziaWG/WireGuard/Hysteria2) — это клиентский ТУННЕЛЬ, а не выходной Xray-outbound, поэтому НЕ может быть каскадом поверх кастомного Xray-конфига и игнорируется. Для каскада поверх xhttp используйте vless/vmess/trojan/ss.")
                 secondProfile != null && !effectiveProfile.rawXrayConfig.isNullOrBlank() ->
@@ -1867,6 +1936,10 @@ class OlcboxVpnService : VpnService() {
                         // Chain a standard second proxy over the verbatim config (xhttp main + vless/etc.
                         // second). Non-chainable seconds (AmneziaWG…) are ignored by prepareRaw.
                         secondProfile = secondProfile,
+                        // WARP over the JSON config (client: its proxies dial through awgproxy; server: awgproxy is the exit).
+                        warpChainPort = warpChainPort,
+                        warpExitPort = if (warpRelay != null) awgLocalPort else null,
+                        warpRelay = warpRelay,
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
@@ -1877,7 +1950,7 @@ class OlcboxVpnService : VpnService() {
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
-                        olcrtcChainPort = if (chained) chainPort else null,
+                        olcrtcChainPort = if (chained) chainPort else warpChainPort,
                         olcrtcChainUser = if (chained) socksUsername else "",
                         olcrtcChainPass = if (chained) socksPassword else "",
                         // Per-location advanced (mux / TLS fragment) override the global traffic knobs.
@@ -1891,6 +1964,10 @@ class OlcboxVpnService : VpnService() {
                                 )
                             } ?: t
                         },
+                        wireguardBase = wireguardBase,
+                        chainViaDialerProxy = wireguardBase != null || warpChainPort != null,
+                        keepFlowOnChain = wireguardBase != null || warpChainPort != null,
+                        warpRelay = warpRelay,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                         secondProfile = secondProfile,
                         bypassLan = loadRouting(expandAsn = false).bypassLan,
@@ -1919,9 +1996,11 @@ class OlcboxVpnService : VpnService() {
                     listenHost = socksListenHost,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
-                    olcrtcChainPort = if (chained) chainPort else null,
+                    olcrtcChainPort = if (chained) chainPort else warpChainPort,
                     olcrtcChainUser = if (chained) socksUsername else "",
                     olcrtcChainPass = if (chained) socksPassword else "",
+                    wireguardBase = wireguardBase,
+                    warpRelay = warpRelay,
                     autoDetectInterface = true,
                     routing = loadRouting(),
                     traffic = loadTrafficSettings(),
@@ -1960,6 +2039,8 @@ class OlcboxVpnService : VpnService() {
             if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
                 throw IllegalStateException("sing-box SOCKS port $socksListenPort did not open")
             }
+            // WARP over AmneziaWG on the SERVER side: the core (and its UDP relay) is up — now start awgproxy.
+            if (warpRelay != null && warpAwgIni != null) startWarpAwg(warpAwgIni)
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) {
                 addLog("sing-box start superseded")
@@ -2234,10 +2315,7 @@ class OlcboxVpnService : VpnService() {
             val wdttSignal = wdttConfigSignal
             if (csqttStarted) {
                 val up = csqttBridge.awaitReady(VKTURN_RELAY_READY_TIMEOUT_MS)
-                    ?: throw IllegalStateException(
-                        "csqtt: нет адреса туннеля от сервера — проверь IP/порт/пароль сервера и ссылки на звонки VK" +
-                            csqttBridge.lastError().takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
-                    )
+                    ?: throw IllegalStateException(CsqttBridge.noTunnelMessage(csqttBridge.lastError()))
                 profile = localSocksProfile("csqtt", awgLocalPort)
                 addLog("VK-TURN csqtt up (${up.ip}, DNS ${up.dns.joinToString(",")}, MTU ${up.mtu}); SOCKS on $awgLocalPort")
             } else if (wdttSignal != null) {
@@ -3481,6 +3559,31 @@ class OlcboxVpnService : VpnService() {
     /** The tproxy inbound port to emit in the sing-box config — only in Tproxy mode, else null. */
     private val tproxyPortOrNull: Int?
         get() = if (connectionMode == AndroidConnectionMode.Tproxy) tproxyPort else null
+
+    /**
+     * The cached WARP account (shared with the Telegram-over-WARP proxy) as an AmneziaWG-style INI, or a
+     * fresh one: [officialFirst] registers straight with Cloudflare (plain WireGuard, "the official way")
+     * before the third-party generators. Null — and a log line saying why — when nothing could be obtained.
+     */
+    private suspend fun obtainWarpIni(officialFirst: Boolean): String? {
+        val ds = LocationsDataSourceImpl(applicationContext)
+        var ini = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
+        if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+        if (ini.isNullOrBlank()) {
+            addLog("WARP: генерирую конфиг Cloudflare WARP…")
+            ini = runCatching { WarpConfigGenerator.generate(officialFirst) }
+                .onFailure { addLog("WARP: генерация не удалась: ${it.message}") }
+                .getOrNull()
+            if (ini != null) runCatching { ds.saveTelegramWarpConfig(ini) }
+        }
+        return ini?.takeIf { it.isNotBlank() }
+    }
+
+    /** Raises awgproxy for the WARP INI on [awgLocalPort] (the same engine as a standalone AmneziaWG). */
+    private suspend fun startWarpAwg(ini: String) {
+        addLog("WARP: запускаю AmneziaWG на 127.0.0.1:$awgLocalPort")
+        prepareAmneziaWgProxy(ProxyProfile(tag = "WARP", type = ProxyProfile.TYPE_AMNEZIAWG, awgConfig = ini))
+    }
 
     /**
      * If [profile] is AmneziaWG, raise the awgproxy SOCKS5 from its config and return a SOCKS proxy

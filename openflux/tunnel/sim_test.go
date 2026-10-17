@@ -29,7 +29,10 @@ import (
 //
 // SIM=1 go test ./tunnel -run TestSimTCP -v
 // knobs: SIM_LANES, SIM_SECS, SIM_OUTAGES (per second per lane), SIM_LOSS
-// (random loss %), SIM_DELAY_MS (one way), SIM_PER_TICK.
+// (random loss %), SIM_DELAY_MS (one way), SIM_PER_TICK, SIM_ALLOW and
+// SIM_RAMP_S (per-lane allowance and its ramp), SIM_TOTAL (packets/s all
+// lanes of one direction get through, e.g. the phone's radio), SIM_AUTO=1
+// (autoscale from SIM_LANES up to SIM_MAX lanes, mirrored on both sides).
 
 type simLink struct {
 	outagesPerSec float64
@@ -37,14 +40,42 @@ type simLink struct {
 	delay         time.Duration
 	perTick       int
 	allowance     float64       // packets/s the "SFU" forwards per lane, 0 = all
-	ramp          time.Duration // the allowance grows from a fifth to full over this
+	ramp          time.Duration // a lane's allowance grows from a fifth to full over this
 	start         time.Time
+
+	total   float64 // packets/s per direction over all lanes, 0 = no limit
+	totalMu sync.Mutex
+	tBucket [2]float64
+	tAt     [2]time.Time
+}
+
+// overTotal takes a packet from direction dir's shared bucket.
+func (k *simLink) overTotal(dir int, now time.Time) bool {
+	if k.total <= 0 {
+		return false
+	}
+	k.totalMu.Lock()
+	defer k.totalMu.Unlock()
+	if !k.tAt[dir].IsZero() {
+		k.tBucket[dir] += k.total * now.Sub(k.tAt[dir]).Seconds()
+	}
+	k.tAt[dir] = now
+	if k.tBucket[dir] > k.total*0.03 {
+		k.tBucket[dir] = k.total * 0.03
+	}
+	if k.tBucket[dir] < 1 {
+		return true
+	}
+	k.tBucket[dir]--
+	return false
 }
 
 type simLane struct {
-	link *simLink
-	peer *simLane
-	rnd  *rand.Rand
+	link  *simLink
+	peer  *simLane
+	rnd   *rand.Rand
+	dir   int       // 0: the client side's lane, 1: the server side's
+	start time.Time // the allowance ramps from here
 
 	mu       sync.Mutex
 	cb       func([]byte)
@@ -65,11 +96,56 @@ type simPkt struct {
 }
 
 func newSimLanePair(link *simLink, seed int64) (*simLane, *simLane) {
-	a := &simLane{link: link, rnd: rand.New(rand.NewSource(seed)), wire: make(chan simPkt, 1<<16), done: make(chan struct{})}
-	b := &simLane{link: link, rnd: rand.New(rand.NewSource(seed + 1000)), wire: make(chan simPkt, 1<<16), done: make(chan struct{})}
+	now := time.Now()
+	a := &simLane{link: link, rnd: rand.New(rand.NewSource(seed)), start: now, wire: make(chan simPkt, 1<<16), done: make(chan struct{})}
+	b := &simLane{link: link, rnd: rand.New(rand.NewSource(seed + 1000)), dir: 1, start: now, wire: make(chan simPkt, 1<<16), done: make(chan struct{})}
 	a.peer, b.peer = b, a
 	return a, b
 }
+
+// simGroup is one side's transport.LaneSource: a lane it adds gets a twin on
+// the other side, which then grows to match - the way a Telemost node mirrors
+// a lane its peer adds.
+type simGroup struct {
+	link  *simLink
+	peer  *simGroup
+	dir   int
+	seed  *atomic.Int64
+	mu    sync.Mutex
+	grow  func()
+	spare []*simLane // twins of the lanes the other side added
+	all   *[]*simLane
+	allMu *sync.Mutex
+}
+
+func (g *simGroup) NewLane() transport.Transport {
+	g.mu.Lock()
+	if len(g.spare) > 0 {
+		l := g.spare[0]
+		g.spare = g.spare[1:]
+		g.mu.Unlock()
+		return l
+	}
+	g.mu.Unlock()
+	a, b := newSimLanePair(g.link, 100+g.seed.Add(1))
+	mine, twin := a, b
+	if g.dir == 1 {
+		mine, twin = b, a
+	}
+	g.allMu.Lock()
+	*g.all = append(*g.all, a, b)
+	g.allMu.Unlock()
+	g.peer.mu.Lock()
+	g.peer.spare = append(g.peer.spare, twin)
+	grow := g.peer.grow
+	g.peer.mu.Unlock()
+	if grow != nil {
+		grow()
+	}
+	return mine
+}
+
+func (g *simGroup) SetGrowHook(f func()) { g.mu.Lock(); g.grow = f; g.mu.Unlock() }
 
 func (l *simLane) Start() error {
 	go l.clock()
@@ -132,7 +208,7 @@ func (l *simLane) clock() {
 // random (Poisson) and lasts 40, 80 or 120 ms, or random loss.
 func (l *simLane) dropped(now time.Time) bool {
 	if a := l.link.allowance; a > 0 {
-		if el := now.Sub(l.link.start); el < l.link.ramp {
+		if el := now.Sub(l.start); el < l.link.ramp {
 			a *= 0.2 + 0.8*float64(el)/float64(l.link.ramp)
 		}
 		if !l.bucketAt.IsZero() {
@@ -146,6 +222,9 @@ func (l *simLane) dropped(now time.Time) bool {
 			return true
 		}
 		l.bucket--
+	}
+	if l.link.overTotal(l.dir, now) {
+		return true
 	}
 	if now.Before(l.outUntil) {
 		return true
@@ -216,17 +295,28 @@ func TestSimTCP(t *testing.T) {
 		allowance:     envF("SIM_ALLOW", 0),
 		ramp:          time.Duration(envF("SIM_RAMP_S", 0) * float64(time.Second)),
 		start:         time.Now(),
+		total:         envF("SIM_TOTAL", 0),
 	}
 	lanes := int(envF("SIM_LANES", 1))
 	secs := int(envF("SIM_SECS", 20))
 	var aL, bL []transport.Transport
 	var all []*simLane
+	var allMu sync.Mutex
 	for i := 0; i < lanes; i++ {
 		a, b := newSimLanePair(link, int64(i+1))
 		aL, bL = append(aL, a), append(bL, b)
 		all = append(all, a, b)
 	}
 	sa, sb := transport.NewStripedTransport(aL), transport.NewStripedTransport(bL)
+	if os.Getenv("SIM_AUTO") != "" {
+		var seed atomic.Int64
+		ga := &simGroup{link: link, seed: &seed, all: &all, allMu: &allMu}
+		gb := &simGroup{link: link, dir: 1, seed: &seed, all: &all, allMu: &allMu}
+		ga.peer, gb.peer = gb, ga
+		maxL := int(envF("SIM_MAX", 6))
+		sa = transport.NewStripedTransportAuto(aL, ga, maxL, true)
+		sb = transport.NewStripedTransportAuto(bL, gb, maxL, true)
+	}
 	ca := transport.NewCodecTransport(sa, transport.CodecBatched, true)
 	cb := transport.NewCodecTransport(sb, transport.CodecBatched, false)
 	client := NewTCPTunnelMode(ca, false, ExitModeL4)
@@ -303,6 +393,10 @@ func TestSimTCP(t *testing.T) {
 			}
 		}
 		series += fmt.Sprintf(" %d", (g-last)/1000)
+		if n := sb.LaneCount(); n != lanes && os.Getenv("SIM_AUTO") != "" {
+			series += fmt.Sprintf("[%d]", n)
+			lanes = n
+		}
 		if i > secs/2 {
 			lateHalf += g - last
 		}
@@ -310,6 +404,8 @@ func TestSimTCP(t *testing.T) {
 	}
 	total := got.Load()
 	var sent, lost uint64
+	allMu.Lock()
+	defer allMu.Unlock()
 	for _, l := range all {
 		sent += l.sent.Load()
 		lost += l.lost.Load()

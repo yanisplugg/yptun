@@ -24,6 +24,10 @@ internal class SshOpenFluxServerInstaller(private val binaries: ServerBinarySour
             require(options.sshKey.isNotBlank() || options.sshPassword.isNotBlank()) {
                 "Укажи пароль SSH или SSH-ключ"
             }
+            require(options.transport != OpenFluxConfig.TRANSPORT_AVITO) {
+                "Для Avito Code нода ставится вручную (ей нужны cookie аккаунта и она сама печатает список комнат): " +
+                    "по инструкции OpenFlux, потом вставь список комнат в приложение"
+            }
             if (options.transport == OpenFluxConfig.TRANSPORT_MAX) {
                 require(options.exitMaxToken.isNotBlank()) { "Не указан токен MAX выходной ноды" }
             } else {

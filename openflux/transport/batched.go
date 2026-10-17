@@ -45,6 +45,7 @@ type BatchedTransport struct {
 	stopOnce   sync.Once
 	stopCh     chan struct{}
 	sendErrors atomic.Uint64
+	queueWaits atomic.Uint64
 
 	mu     sync.RWMutex
 	userCb func([]byte)
@@ -59,18 +60,34 @@ func envInt(name string, def int) int {
 	return def
 }
 
-func NewBatchedTransport(inner Transport) *BatchedTransport {
+// NewBatchedTransport wraps inner with the coalescing layer. An optional
+// batchBytesHint (the first variadic value, when > 0) raises the default batch
+// size for a carrier whose per-connection limit is on message COUNT, not bytes
+// — see BatchSizeHinter. OPENFLUX_BATCH_BYTES still overrides it.
+func NewBatchedTransport(inner Transport, batchBytesHint ...int) *BatchedTransport {
+	defBatchBytes := defaultMaxBatchBytes
+	if len(batchBytesHint) > 0 && batchBytesHint[0] > 0 {
+		defBatchBytes = batchBytesHint[0]
+	}
 	b := &BatchedTransport{
 		Transport:     inner,
 		queue:         make(chan []byte, batchQueueDepth),
 		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
-		maxBatchBytes: min(envInt("OPENFLUX_BATCH_BYTES", defaultMaxBatchBytes), maxFrameBytes-65537),
+		maxBatchBytes: min(envInt("OPENFLUX_BATCH_BYTES", defBatchBytes), maxFrameBytes-65537),
 		maxBatchCount: min(envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount), maxFrameRecords-1),
 		stopCh:        make(chan struct{}),
 	}
 	utils.Debugf("[BATCH] created: lingerMs=%d maxBatchBytes=%d maxBatchCount=%d queueCap=%d",
 		b.lingerMs, b.maxBatchBytes, b.maxBatchCount, batchQueueDepth)
 	return b
+}
+
+// SetLinger sets how long a partial batch waits for more frames (ms), unless
+// OPENFLUX_BATCH_LINGER_MS overrides it; call before Start.
+func (b *BatchedTransport) SetLinger(ms int) {
+	if os.Getenv("OPENFLUX_BATCH_LINGER_MS") == "" && ms > 0 {
+		b.lingerMs = ms
+	}
 }
 
 func (b *BatchedTransport) Start() error {
@@ -115,11 +132,9 @@ func (b *BatchedTransport) Stop() error {
 }
 
 // Send copies the packet (the caller's buffer may be reused) and enqueues it
-// for batching. A full queue returns an explicit error; TCP may retransmit,
-// while UDP callers must treat it as datagram loss.
+// for batching. When the finite queue is full, it waits for capacity so the
+// caller applies backpressure instead of losing the packet.
 func (b *BatchedTransport) Send(data []byte) error {
-	b.lifecycle.Lock()
-	defer b.lifecycle.Unlock()
 	if !b.running.Load() {
 		utils.Debugf("[BATCH] Send: not running, dropping %d bytes", len(data))
 		return fmt.Errorf("batched transport is not running")
@@ -131,14 +146,30 @@ func (b *BatchedTransport) Send(data []byte) error {
 	p := make([]byte, len(data))
 	copy(p, data)
 	select {
+	case <-b.stopCh:
+		return fmt.Errorf("batched transport is stopped")
 	case b.queue <- p:
-		utils.Debugf("[BATCH] Send: enqueued %d bytes (queue %d/%d)",
-			len(p), len(b.queue), cap(b.queue))
-		return nil
 	default:
-		utils.Debugf("[BATCH] Send: QUEUE FULL, dropped %d bytes", len(p))
-		return fmt.Errorf("batch queue full")
+		b.queueWaits.Add(1)
+		select {
+		case <-b.stopCh:
+			return fmt.Errorf("batched transport is stopped")
+		case b.queue <- p:
+		}
 	}
+	if !b.running.Load() {
+		return fmt.Errorf("batched transport is stopped")
+	}
+	utils.Debugf("[BATCH] Send: enqueued %d bytes (queue %d/%d)",
+		len(p), len(b.queue), cap(b.queue))
+	return nil
+}
+
+func (b *BatchedTransport) Stats() TransportStats {
+	stats := b.Transport.Stats()
+	stats.QueueWaits += b.queueWaits.Load()
+	stats.SendRetries += b.sendErrors.Load()
+	return stats
 }
 
 func (b *BatchedTransport) Receive(callback func([]byte)) {
@@ -157,6 +188,7 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 		pkts, err := decodeBatch(data)
 		if err != nil {
 			utils.Debugf("[BATCH] decode error (%d bytes): %v", len(data), err)
+			hintCodecMismatch(data, false)
 			if utils.IsVerbose() && utils.Sensitive() {
 				utils.Debugf("[BATCH] bad frame hexdump:\n%s", hex.Dump(data))
 			}
@@ -247,10 +279,22 @@ func (b *BatchedTransport) flushLoop() {
 		if utils.IsVerbose() && utils.Sensitive() {
 			utils.Debugf("[BATCH] flushLoop: batch hexdump:\n%s", hex.Dump(encoded))
 		}
-		if err := b.Transport.Send(encoded); err != nil {
-			b.recordSendError(err)
-		} else {
-			utils.Debugf("[BATCH] flushLoop: batch sent OK")
+		for b.running.Load() {
+			if err := b.Transport.Send(encoded); err == nil {
+				utils.Debugf("[BATCH] flushLoop: batch sent OK")
+				break
+			} else {
+				b.recordSendError(err)
+			}
+			// Keep this batch ahead of later ones while the carrier is full or
+			// reconnecting. A finite wait avoids spinning on a nonblocking Send.
+			timer := time.NewTimer(10 * time.Millisecond)
+			select {
+			case <-b.stopCh:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 	}
 	utils.Debugf("[BATCH] flushLoop: exit (running=false)")

@@ -234,4 +234,20 @@ class SingBoxRoutingTest {
         val r = SingBoxRouting.manualRules(listOf(expanded)).single().jsonObject
         assertTrue(r["package_name"]!!.jsonArray.map { it.jsonPrimitive.content }.contains("com.google.maps"))
     }
+
+    // Telegram dials its data centres by IP (SOCKS5 CONNECT has no domain): geosite:telegram alone sent them to
+    // the final outbound — direct for an "only these through the proxy" profile — and Telegram never connected.
+    @Test
+    fun geositeTelegramBringsGeoipTelegramAlong() {
+        val p = RoutingProfile(proxySites = listOf("geosite:google", "geosite:telegram"), globalProxy = false)
+        val tags = SingBoxRouting.ruleSets(p).map { it.jsonObject["tag"]!!.jsonPrimitive.content }
+        assertTrue("geoip-telegram" in tags && "geosite-telegram" in tags)
+        val rule = SingBoxRouting.rules(p).map { it.jsonObject }.first { it.containsKey("rule_set") }
+        val used = rule["rule_set"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue("geoip-telegram" in used && "geosite-google" in used)
+        assertEquals("direct", SingBoxRouting.finalOutbound(p))
+        // Only Telegram gets the pairing.
+        val google = SingBoxRouting.ruleSets(RoutingProfile(proxySites = listOf("geosite:google")))
+        assertTrue(google.none { it.jsonObject["tag"]!!.jsonPrimitive.content.startsWith("geoip-") })
+    }
 }

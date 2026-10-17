@@ -127,6 +127,22 @@ class CsqttBridge(private val onLog: (String) -> Unit) {
         /** Completes [ready] when the process ends before the tunnel came up. */
         private val NOT_READY = CsqttReady("", emptyList(), 0)
 
+        /**
+         * Why the tunnel did not come up. A handshake timeout means the server never answered: VK and the TURN
+         * relay were fine (they are logged before it), so it is NOT a TURN problem — either the server does not
+         * recognise this profile's password (inactive, expired, typo, or a server build that rejects it silently)
+         * or the VK call itself does not carry data. The two are told apart by swapping one thing at a time.
+         */
+        fun noTunnelMessage(lastError: String): String {
+            val base = "csqtt: нет адреса туннеля от сервера — проверь IP/порт/пароль сервера и ссылки на звонки VK"
+            val hint = if (lastError.contains("handshake_timeout")) {
+                ". Сервер не ответил вовсе (TURN при этом поднялся). Проверь: пароль этого профиля активен и не истёк " +
+                    "в панели; пароль с рабочим звонком + этот хеш, и наоборот — так видно, виноват пароль или звонок; " +
+                    "на сервере `journalctl -u csqtt | grep -i rejected` (\"no active credential\" = пароль не принят)"
+            } else ""
+            return base + hint + lastError.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+        }
+
         /** `ip|dns,dns|mtu` as the bridge prints it. */
         internal fun parseReady(text: String): CsqttReady? {
             val parts = text.trim().split('|')
