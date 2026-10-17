@@ -45,17 +45,19 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 
 ---
 
-## 3.6.0 新功能
+## 3.7.0 新功能
 
 | | |
 |---|---|
-| ⚠️ **olcRTC 成为旧版内核** | 目前照常可用，但不再开发，并将在未来版本中移除。请提前准备替代方案：VK-TURN、OpenFlux、MasterDNS 或 Xray/sing-box。 |
-| **免费服务器目录** | Android 和桌面端：一键获取，自动检测可用性并剔除失效服务器，显示检测进度；Windows 和 Linux 可直接从托盘打开。感谢 @Zamotashka (#49, #50)。 |
-| **桌面端双栏界面** | 左侧为连接按钮、计时和状态，右侧为订阅和服务器；窗口默认宽屏。 |
-| **OpenFlux 0.0.3** | 新增 Mail.ru 和 cups.online 传输，默认启用压缩。⚠️ 旧节点请在应用内重新安装。 |
-| **服务器自动安装** | MasterDNS 会检查端口占用和服务是否真正运行，自动放行防火墙端口，并新增设置；OpenFlux 可在启用 ufw 的节点上工作，并提示 Yandex 验证码。 |
-| **修复** | AmneziaWG `RandomTrailers = on`（#51）；开启 VPN 时的免费服务器；无网络时误报"已更新"；桌面端"我的 IP"不再依赖 2ip。 |
-| **Linux AppImage** | 除 `.deb` 外提供 x64 和 arm64 的 AppImage，任意发行版免安装运行。 |
+| **适用于 JSON 订阅的 Cloudflare WARP** | 客户端：订阅中的每个代理都经由 WARP；服务端：出口经 WARP 并带 UDP 中继。支持 Android 与桌面端、WireGuard 与 AmneziaWG。 |
+| **免费服务器 + WARP** | 可为每个找到的服务器或全部启用 WARP：俄罗斯服务器用 AmneziaWG，其余用 WireGuard。 |
+| **AmneziaWG / WireGuard 引擎** | 可选协议，支持 wg-quick 配置或文件；开启“允许编辑配置”后，所有参数（Jc、S1–S4、H1–H4、I1–I5、MTU、DNS…）以独立字段显示。 |
+| **后台搜索免费服务器** | “转入后台”按钮、定时自动更新、停止并保留已找到的结果（#72）、固定服务器、2500 与 5000 的上限。 |
+| **Ping 与订阅** | Ping 可暂停、继续、重启并显示进度；可查看并更换订阅链接，固定项和文件夹随之迁移（#71）；整个订阅可设置级联。 |
+| **隐私** | 新页面：ProviderID 报告（#69）、订阅 User-Agent、设备数据与自定义 HWID（#70）；检查更新时不会向 GitHub 发送 HWID。 |
+| **路由与内核** | `geosite:telegram` 包含 Telegram 数据中心地址（#68）；OpenFlux 0.13.0（Avito、单会话多传输，#66）；csqtt 错误提示更清晰（#67）；桌面端可修改 SOCKS5 端口。 |
+| **更省电** | 免费服务器自动更新仅在窗口打开时进行，Go 内核设置软内存上限，VPN 工作线程固定在较慢的 CPU 核心上。 |
+| **修复** | Cloudflare WARP API 不可用时使用镜像；服务端 WARP AmneziaWG 不再发送 I1–I5 包；桌面端增量更新；列表不再跳回顶部。 |
 
 ---
 
