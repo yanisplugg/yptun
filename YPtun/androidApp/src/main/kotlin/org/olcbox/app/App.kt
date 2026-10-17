@@ -26,6 +26,14 @@ class App : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // The Go cores (xray/sing-box/awg/...) share one runtime that is loaded lazily AFTER this point and
+        // reads these at start-up. Default GOGC=100 with no limit let its heap grow to several hundred MB
+        // (ping/free-server searches spin up many core instances) and keep it. GOGC=50 collects sooner; the
+        // memory limit is SOFT (the GC just works harder near it), so it never kills a core.
+        runCatching {
+            android.system.Os.setenv("GOGC", "50", false)
+            android.system.Os.setenv("GOMEMLIMIT", "400MiB", false)
+        }
         appContext = applicationContext
         // Переезд со старого applicationId: копируем состояние из прошлой установки ДО того, как
         // что-либо тронет DataStore (иначе он закеширует пустые настройки, и подложенный файл
