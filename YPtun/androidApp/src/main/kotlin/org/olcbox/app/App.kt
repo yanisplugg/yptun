@@ -49,11 +49,12 @@ class App : Application(), Configuration.Provider {
     }
 
     /**
-     * Keeps every thread of the app (UI, VPN service and the Go cores, which inherit it) off the fastest
-     * cores: the prime cores (e.g. 2 x 4.7 GHz on a Snapdragon 8 Elite) burn far more power per cycle, and a
-     * tunnel does not need them. Mask = every CPU slower than the fastest one; nothing happens on chips
-     * with identical cores or when sysfs is unreadable. Done twice (`taskset -a` covers existing threads,
-     * and threads created later inherit the mask) once the libraries have spawned their threads.
+     * Keeps the NON-UI threads of the app (the VPN service work and the Go cores) off the fastest cores:
+     * the prime cores (e.g. 2 x 4.7 GHz on a Snapdragon 8 Elite) burn far more power per cycle and a tunnel
+     * does not need them. The main thread and the render threads stay unpinned so animations stay smooth.
+     * Mask = every CPU slower than the fastest one; nothing happens on chips with identical cores or when
+     * sysfs is unreadable. Threads are pinned one by one (`taskset -p <mask> <tid>`) and the sweep repeats,
+     * because the Go runtime and Kotlin pools keep creating threads after start-up.
      */
     private fun keepOffPrimeCores() {
         Thread {
@@ -64,10 +65,21 @@ class App : Application(), Configuration.Provider {
                 val fastest = freqs.max()
                 val mask = freqs.indices.filter { freqs[it] < fastest }.fold(0L) { m, i -> m or (1L shl i) }
                 if (mask == 0L) return@runCatching
-                repeat(2) {
-                    Thread.sleep(if (it == 0) 3_000L else 30_000L)
-                    ProcessBuilder("taskset", "-ap", mask.toString(16), android.os.Process.myPid().toString())
-                        .redirectErrorStream(true).start().also { p -> p.inputStream.readBytes(); p.waitFor() }
+                val pid = android.os.Process.myPid()
+                var waited = 0L
+                for (at in listOf(3L, 15L, 45L, 120L, 300L, 600L, 900L)) {
+                    Thread.sleep((at - waited) * 1_000L)
+                    waited = at
+                    val tids = java.io.File("/proc/self/task").listFiles().orEmpty().mapNotNull { dir ->
+                        val tid = dir.name.toIntOrNull() ?: return@mapNotNull null
+                        val name = runCatching { java.io.File(dir, "comm").readText().trim() }.getOrDefault("")
+                        // main = the UI thread; RenderThread / hwuiTask = hardware-accelerated drawing.
+                        tid.takeUnless { it == pid || name == "RenderThread" || name.startsWith("hwuiTask") }
+                    }
+                    if (tids.isEmpty()) continue
+                    val script = tids.joinToString("; ") { "taskset -p ${mask.toString(16)} $it" }
+                    ProcessBuilder("sh", "-c", script).redirectErrorStream(true).start()
+                        .also { it.inputStream.readBytes(); it.waitFor() }
                 }
             }
         }.apply { isDaemon = true }.start()
