@@ -5,6 +5,7 @@ import awg.Awg
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
@@ -136,9 +137,9 @@ object WarpConfigGenerator {
         val client = HttpClient(OkHttp) {
             expectSuccess = false
             install(HttpTimeout) {
-                connectTimeoutMillis = 8_000
-                requestTimeoutMillis = 10_000
-                socketTimeoutMillis = 10_000
+                connectTimeoutMillis = 4_000
+                requestTimeoutMillis = 6_000
+                socketTimeoutMillis = 6_000
             }
         }
         try {
@@ -203,6 +204,8 @@ object WarpConfigGenerator {
             for (url in listOf(REG_URL, REG_MIRROR_URL)) {
                 text = runCatching {
                     val response = client.post(url) {
+                        // Official API unanswered -> give up fast, the mirror is next.
+                        if (url == REG_URL) timeout { connectTimeoutMillis = 3_000; requestTimeoutMillis = 5_000; socketTimeoutMillis = 5_000 }
                         contentType(ContentType.Application.Json)
                         headers {
                             append(HttpHeaders.UserAgent, CF_USER_AGENT)
