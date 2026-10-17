@@ -223,10 +223,13 @@ fun HomeScreen(
     }
 
     // Free servers auto-update (the group menu's switch): checked every few minutes while the app lives.
+    // Only with the window in focus: a search checks thousands of servers on several threads, and run
+    // behind the screen / from the background it heats the phone (Samsung "uses a lot of resources").
+    val windowInfo = androidx.compose.ui.platform.LocalWindowInfo.current
     LaunchedEffect(pingParallelism, freeServersLimit) {
         delay(60_000L)
         while (true) {
-            viewModel.autoUpdateFreeServersIfDue(pingParallelism, freeServersLimit)
+            if (windowInfo.isWindowFocused) viewModel.autoUpdateFreeServersIfDue(pingParallelism, freeServersLimit)
             delay(10 * 60_000L)
         }
     }
