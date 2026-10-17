@@ -1,16 +1,34 @@
 package org.olcbox.app.ui.features.locations.components
 
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+
+/**
+ * Hold / resume / drop the running ping pass. Provided by the Home screen; while a group is being pinged its
+ * [RefreshButton] turns into these controls. Pause and cancel apply to the whole pass.
+ */
+class PingControls(
+    val paused: Boolean,
+    val onPause: () -> Unit,
+    val onResume: () -> Unit,
+    val onCancel: () -> Unit
+)
+
+val LocalPingControls = compositionLocalOf<PingControls?> { null }
 
 /**
  * Manual "ping all" action shown in a group header. Rendered as a static speedometer (gauge) icon —
@@ -23,6 +41,29 @@ fun RefreshButton(
     onClick: () -> Unit,
     tint: Color
 ) {
+    val controls = LocalPingControls.current
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    if (isRefreshing && controls != null) {
+        if (!controls.paused) {
+            IconButton(onClick = controls.onPause, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Outlined.Pause, contentDescription = s.pingPause, tint = tint, modifier = Modifier.size(22.dp))
+            }
+        } else {
+            // Paused: carry on, or start the group's pass over.
+            Row {
+                IconButton(onClick = controls.onResume, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Outlined.PlayArrow, contentDescription = s.pingResume, tint = tint, modifier = Modifier.size(24.dp))
+                }
+                IconButton(
+                    onClick = { controls.onCancel(); onClick() },
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = s.pingRestart, tint = tint, modifier = Modifier.size(22.dp))
+                }
+            }
+        }
+        return
+    }
     IconButton(
         onClick = onClick,
         modifier = Modifier.size(48.dp)

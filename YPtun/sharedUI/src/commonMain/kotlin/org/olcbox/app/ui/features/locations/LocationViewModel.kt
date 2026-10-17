@@ -13,7 +13,9 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -23,6 +25,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.importer.VkTurnDraft
@@ -38,6 +41,8 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.ShareLinkComposer
@@ -64,8 +69,13 @@ sealed class PingsState {
         val lastPings: Map<String, Int?>? = null,
         val currentPings: Map<String, Int?> = emptyMap(),
         val pendingLocationIds: Set<String> = emptySet(),
+        /** Servers of the whole pass that are done / the pass's size (all groups pinged at once together). */
         val completed: Int = 0,
-        val total: Int = 0
+        val total: Int = 0,
+        /** The pass is paused: servers in flight finish, no new one starts until [LocationViewModel.resumePings]. */
+        val paused: Boolean = false,
+        /** Estimated seconds to the end of the pass; null while paused or before there are enough samples. */
+        val etaSeconds: Int? = null
     ) : PingsState()
 
     data class Success(
@@ -106,6 +116,15 @@ class LocationViewModel(
     var onPingsCompleted: ((Map<String, Int?>) -> Unit)? = null
 
     private val activePingJobs = mutableMapOf<String, Job>()
+
+    // Pause / progress of the running ping pass (every group pinged together is one pass).
+    private val pingPaused = MutableStateFlow(false)
+    private var passTotal = 0
+    private var passDone = 0
+    private var passStartMs = 0L
+    private var pausedAccumMs = 0L
+    private var pausedSinceMs = 0L
+    private fun nowMs() = kotlin.time.Clock.System.now().toEpochMilliseconds()
     // Source-of-truth ping map during a refresh pass. Each completion updates this in place (O(1))
     // instead of copying the whole map; the UI state is then refreshed on a throttled cadence (see
     // [schedulePingEmit]) so 300+ completions no longer trigger 300 full-list recompositions + 300
@@ -153,7 +172,6 @@ class LocationViewModel(
 
     /** Editable OpenFlux fields for the [EngineType.OpenFlux] engine. */
     var editingOpenFlux by mutableStateOf(OpenFluxConfig())
-        private set
 
     /** Editable snolc fields for the [EngineType.Snolc] engine. */
     var editingSnolc by mutableStateOf(SnolcConfig())
@@ -186,6 +204,11 @@ class LocationViewModel(
                 return@with wdttPeer.isNotBlank() &&
                     (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
             }
+            // csqtt, same: the server IP[:port] is the only thing to enter.
+            if (core.equals(VkTurnConfig.CORE_CSQTT, ignoreCase = true)) {
+                return@with csqttPeer.isNotBlank() &&
+                    (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
+            }
             val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
                 (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
@@ -208,7 +231,7 @@ class LocationViewModel(
             EngineType.Stealth -> olcrtcFieldsValid
             // The main proxy is always the primary outbound, so it must be valid. The optional second
             // (cascade) proxy is either parsed-and-complete or null, so it never blocks saving.
-            EngineType.Standard -> editingConfig.proxy?.isComplete() == true
+            EngineType.Standard -> editingConfig.proxy?.isComplete() == true && wireguardConfigUsable
             EngineType.Chain -> editingConfig.proxy?.isComplete() == true && olcrtcFieldsValid
             EngineType.VkTurn -> vkTurnFieldsValid
             EngineType.MasterDns -> masterDnsFieldsValid
@@ -336,6 +359,7 @@ class LocationViewModel(
     fun refreshPings(
         targetLocationIds: List<String>? = null,
         parallelism: Int = LOCATION_PING_PARALLELISM,
+        budgetMs: Long = LOCATION_PING_TIMEOUT_MS,
         performPing: suspend (LocationConfig) -> Long?,
         onComplete: (onlineCount: Int, totalCount: Int) -> Unit = { _, _ -> },
         onError: (String) -> Unit = {}
@@ -377,6 +401,14 @@ class LocationViewModel(
         var completedForThisRequest = 0
         var onlineForThisRequest = 0
         val totalForThisRequest = pingableLocations.size
+        if (activePingJobs.isEmpty()) {
+            passTotal = 0
+            passDone = 0
+            passStartMs = nowMs()
+            pausedAccumMs = 0L
+            pausedSinceMs = 0L
+        }
+        passTotal += totalForThisRequest
         val jobsToStart = mutableListOf<Job>()
 
         pingableLocations.forEach { location ->
@@ -384,7 +416,9 @@ class LocationViewModel(
                 try {
                     val ping = try {
                         semaphore.withPermit {
-                            checkLocationPing(location, performPing)?.toInt()
+                            // Paused: wait here, holding no ping — the ones already in flight finish on their own.
+                            pingPaused.first { !it }
+                            checkLocationPing(location, budgetMs, performPing)?.toInt()
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -401,6 +435,7 @@ class LocationViewModel(
                     }
 
                     completedForThisRequest++
+                    passDone++
 
                     if (completedForThisRequest == totalForThisRequest) {
                         // Final result of this pass: emit immediately (and cancel any pending throttle).
@@ -457,16 +492,58 @@ class LocationViewModel(
         val pendingIds = activePingJobs.keys.toSet()
 
         pingsState = if (pendingIds.isEmpty()) {
+            pingPaused.value = false
+            pausedSinceMs = 0L
             PingsState.Success(pings)
         } else {
             PingsState.Loading(
                 lastPings = pings,
                 currentPings = pings,
                 pendingLocationIds = pendingIds,
-                completed = 0,
-                total = pendingIds.size
+                completed = passDone.coerceAtMost(passTotal),
+                total = passTotal.coerceAtLeast(pendingIds.size),
+                paused = pingPaused.value,
+                etaSeconds = pingEtaSeconds()
             )
         }
+    }
+
+    /** Seconds to the end of the pass at the pace so far (time spent paused does not count); null if unknown. */
+    private fun pingEtaSeconds(): Int? {
+        if (pingPaused.value || passDone < PING_ETA_MIN_SAMPLES) return null
+        val activeMs = nowMs() - passStartMs - pausedAccumMs
+        if (activeMs <= 0L) return null
+        val remaining = (passTotal - passDone).coerceAtLeast(0)
+        return (activeMs.toDouble() / passDone * remaining / 1000.0).toInt()
+    }
+
+    /** Holds the running ping pass: pings in flight finish, no new one starts until [resumePings]. */
+    fun pausePings() {
+        if (activePingJobs.isEmpty() || pingPaused.value) return
+        pausedSinceMs = nowMs()
+        pingPaused.value = true
+        emitPingState()
+    }
+
+    fun resumePings() {
+        if (!pingPaused.value) return
+        pausedAccumMs += nowMs() - pausedSinceMs
+        pausedSinceMs = 0L
+        pingPaused.value = false
+        emitPingState()
+    }
+
+    /**
+     * Drops every ping that has not finished (results already in stay). The jobs leave the map at once, so a
+     * new pass started right after (the "restart" button) is not skipped as "already running".
+     */
+    fun cancelPings() {
+        pingPaused.value = false
+        pausedSinceMs = 0L
+        val jobs = activePingJobs.values.toList()
+        activePingJobs.clear()
+        jobs.forEach { it.cancel() }
+        emitPingState()
     }
 
     /**
@@ -505,11 +582,12 @@ class LocationViewModel(
 
     private suspend fun checkLocationPing(
         location: LocationItem,
+        budgetMs: Long,
         performPing: suspend (LocationConfig) -> Long?
     ): Long? {
         val config = location.config?.takeIf { it.isComplete() } ?: return null
 
-        return withTimeoutOrNull(LOCATION_PING_TIMEOUT_MS) {
+        return withTimeoutOrNull(budgetMs) {
             repeat(LOCATION_PING_ATTEMPTS) { attempt ->
                 val result = try {
                     performPing(config)
@@ -542,6 +620,9 @@ class LocationViewModel(
         editingProxy2Link = ""
         isSaving = false
         providerDrafts.clear()
+        wgStashedProxy = null
+        wgStashedLink = ""
+        awgBackup = emptyList()
 
         if (id == null) {
             editingId = null
@@ -684,6 +765,21 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(proxyEnabled = enabled)
     }
 
+    /** Enables/disables Cloudflare WARP chaining for VLESS connections. */
+    fun onWarpEnabledChanged(enabled: Boolean) {
+        editingConfig = editingConfig.copy(warpEnabled = enabled)
+    }
+
+    /** Changes whether WARP runs on client side (WARP -> VLESS) or server side (VLESS -> WARP). */
+    fun onWarpModeChanged(mode: WarpMode) {
+        editingConfig = editingConfig.copy(warpMode = mode)
+    }
+
+    /** Picks the WARP tunnel protocol (WireGuard or AmneziaWG); independent of the client/server side. */
+    fun onWarpProtocolChanged(protocol: WarpProtocol) {
+        editingConfig = editingConfig.copy(warpProtocol = protocol)
+    }
+
     /** Sets this location's routing profile id ("" = global default, NONE_ID = no profile). */
     fun onRoutingProfileChanged(id: String) {
         editingConfig = editingConfig.copy(routingProfileId = id)
@@ -733,6 +829,14 @@ class LocationViewModel(
     }
 
     fun onEngineChanged(engine: EngineType) {
+        if (isWireguardEngine) {
+            // Leaving AmneziaWG/WG: hand back the proxy it replaced (nothing for a location that was always WG).
+            editingConfig = editingConfig.copy(proxy = wgStashedProxy)
+            editingProxyLink = wgStashedLink
+            wgStashedProxy = null
+            wgStashedLink = ""
+            proxyError = null
+        }
         val previous = editingConfig.engine
         editingConfig = editingConfig.copy(engine = engine)
         // Clear olcRTC field errors when they are no longer required.
@@ -779,10 +883,7 @@ class LocationViewModel(
             proxyError = null
             return
         }
-        val profile = (ShareLinkParser.parse(trimmed)
-            ?: rawOutboundProfile(trimmed)
-            ?: ShareLinkParser.parseSubscription(trimmed).firstOrNull())
-            ?.enrichedFromRaw()
+        val profile = ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed)
         if (profile != null && profile.isComplete()) {
             editingConfig = editingConfig.copy(proxy = profile)
             proxyError = null
@@ -790,6 +891,80 @@ class LocationViewModel(
             editingConfig = editingConfig.copy(proxy = null)
             proxyError = "Unrecognized proxy link or sing-box config"
         }
+    }
+
+    /**
+     * The «AmneziaWG/WG» engine is a Standard location whose main proxy is a wg-quick INI that the awgproxy engine
+     * runs — with obfuscation parameters it is AmneziaWG, without them plain WireGuard. Same connect path as before.
+     */
+    val isWireguardEngine: Boolean
+        get() = editingConfig.engine == EngineType.Standard && editingConfig.proxy?.type == ProxyProfile.TYPE_AMNEZIAWG
+
+    /** True when the INI has every parameter the engine refuses to start without (an empty template does not). */
+    private val wireguardConfigUsable: Boolean
+        get() = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG }
+            ?.let { AwgIniEditor.missing(it.awgConfig).isEmpty() } ?: true
+
+    /** What the INI still lacks, for the editor's hint. */
+    val wireguardMissing: List<String>
+        get() = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG }
+            ?.let { AwgIniEditor.missing(it.awgConfig) }.orEmpty()
+
+    // What the engine pushed aside when it was picked, and the obfuscation removed by switching to plain WireGuard.
+    private var wgStashedProxy: ProxyProfile? = null
+    private var wgStashedLink: String = ""
+    private var awgBackup: List<Pair<String, String>> = emptyList()
+
+    /** Picks the AmneziaWG/WG engine: an empty AmneziaWG template to fill in or paste over. */
+    fun onWireguardEngineSelected() {
+        if (isWireguardEngine) return
+        onEngineChanged(EngineType.Standard)
+        wgStashedProxy = editingConfig.proxy
+        wgStashedLink = editingProxyLink
+        editingProxyLink = ""
+        proxyError = null
+        applyWireguardIni(AwgIniEditor.skeleton(awg = true))
+    }
+
+    /** AmneziaWG (obfuscation parameters) or plain WireGuard (none); the removed parameters come back on the way back. */
+    fun onWireguardProtocolChanged(awg: Boolean) {
+        val proxy = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG } ?: return
+        val ini = proxy.awgConfig
+        if (awg == AwgIniEditor.isAwg(ini)) return
+        if (awg) {
+            val restored = awgBackup.fold(ini) { acc, (key, value) -> AwgIniEditor.set(acc, key, value) }
+            applyWireguardIni(AwgIniEditor.toAmneziaWg(restored))
+        } else {
+            awgBackup = AwgIniEditor.obfuscation(ini)
+            applyWireguardIni(AwgIniEditor.toWireGuard(ini))
+        }
+    }
+
+    /** The whole INI typed or pasted into the text field. */
+    fun onWireguardIniChanged(text: String) {
+        applyWireguardIni(text.replace("\r\n", "\n").replace('\r', '\n'))
+    }
+
+    /** Stores [ini] as the main proxy, keeping its tag; server/port follow the Endpoint for the list and de-duplication. */
+    private fun applyWireguardIni(ini: String) {
+        val previous = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_AMNEZIAWG }
+        val (host, port) = AwgIniEditor.endpoint(ini)
+        val profile = (previous ?: ProxyProfile(tag = "AmneziaWG", type = ProxyProfile.TYPE_AMNEZIAWG)).copy(
+            server = host.ifBlank { "amneziawg" },
+            serverPort = port,
+            awgConfig = ini,
+        )
+        editingConfig = editingConfig.copy(proxy = profile)
+    }
+
+    /**
+     * Fine-tuning editor (Settings → «Разрешить редактирование конфигураций»): sets one parameter in the
+     * AmneziaWG INI of the main proxy; a blank value removes it. Everything else in the INI stays as it was.
+     */
+    fun onAwgKnobChanged(knob: AwgIniEditor.Knob, value: String) {
+        val proxy = editingConfig.proxy ?: return
+        if (proxy.type != ProxyProfile.TYPE_AMNEZIAWG) return
+        applyWireguardIni(AwgIniEditor.set(proxy.awgConfig, knob.key, AwgIniEditor.filter(value, knob.kind), knob.section))
     }
 
     /** Parses a pasted link for the optional SECOND (cascade) proxy into [editingConfig].proxy2. */
@@ -839,13 +1014,11 @@ class LocationViewModel(
      * (or second proxy) is used as the cascade hop.
      */
     private fun proxyFromAnyLink(trimmed: String): ProxyProfile? {
-        ShareLinkParser.parse(trimmed)?.enrichedFromRaw()?.let { return it }
-        rawOutboundProfile(trimmed)?.enrichedFromRaw()?.let { return it }
+        ShareLinkParser.parse(trimmed)?.let { return it }
+        rawOutboundProfile(trimmed)?.let { return it }
         // When the pasted yptun://inbound is itself a 2-hop cascade, chain through its EXIT (proxy2)
         // so my hop's public IP matches the shared location's exit; fall back to its main proxy.
-        YptunInboundCodec.parse(trimmed)?.let { config -> return (config.proxy2 ?: config.proxy)?.enrichedFromRaw() }
-        // If the user pasted a multi-link subscription body or base64 list, pick the first valid proxy
-        ShareLinkParser.parseSubscription(trimmed).firstOrNull()?.enrichedFromRaw()?.let { return it }
+        YptunInboundCodec.parse(trimmed)?.let { config -> return config.proxy2 ?: config.proxy }
         return null
     }
 
@@ -856,36 +1029,11 @@ class LocationViewModel(
         val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: return null
         val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: 0
         val tag = obj["tag"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: server
-        val uuid = obj["uuid"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val password = obj["password"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val flow = obj["flow"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val network = when (obj["network"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
-            "ws" -> ProxyProfile.NETWORK_WS
-            "grpc" -> ProxyProfile.NETWORK_GRPC
-            "http", "h2" -> ProxyProfile.NETWORK_HTTP
-            "httpupgrade" -> ProxyProfile.NETWORK_HTTPUPGRADE
-            "xhttp", "splithttp" -> ProxyProfile.NETWORK_XHTTP
-            else -> ProxyProfile.NETWORK_TCP
-        }
-        val security = when (obj["security"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
-            "tls" -> ProxyProfile.SECURITY_TLS
-            "reality" -> ProxyProfile.SECURITY_REALITY
-            else -> ProxyProfile.SECURITY_NONE
-        }
-        val sni = obj["sni"]?.jsonPrimitive?.contentOrNull
-            ?: obj["server_name"]?.jsonPrimitive?.contentOrNull
-            ?: ""
         return ProxyProfile(
             tag = tag,
             type = type,
             server = server,
             serverPort = port,
-            uuid = uuid,
-            password = password,
-            flow = flow,
-            network = network,
-            security = security,
-            sni = sni,
             rawOutbound = text
         )
     }
@@ -1043,6 +1191,32 @@ class LocationViewModel(
         }
     }
 
+    /** Pins / unpins a location, then reloads the list. */
+    fun setLocationPinned(storageId: String, pinned: Boolean) {
+        viewModelScope.launch {
+            locationsRepository.setLocationPinned(storageId, pinned)
+            loadLocations()
+        }
+    }
+
+    /** Re-points a subscription (by URL) at [newUrl], then reloads the list. [onResult] gets false when refused. */
+    fun changeSubscriptionUrl(oldUrl: String, newUrl: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val changed = locationsRepository.changeSubscriptionUrl(oldUrl, newUrl)
+            if (changed) loadLocations()
+            onResult(changed)
+        }
+    }
+
+    /** Writes [link] as the cascade of EVERY server of a subscription (blank removes it), then reloads. [onResult] gets false when refused. */
+    fun setSubscriptionCascade(subscriptionUrl: String, link: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = locationsRepository.setSubscriptionCascade(subscriptionUrl, link)
+            if (ok) loadLocations()
+            onResult(ok)
+        }
+    }
+
     /** Deletes several locations at once (e.g. all configs of one subscription) in a single rewrite. */
     fun deleteLocations(ids: List<String>, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
@@ -1138,6 +1312,8 @@ class LocationViewModel(
         const val LOCATION_PING_RETRY_DELAY_MS = 150L
         const val LOCATION_PING_PARALLELISM = 5
         const val PING_EMIT_THROTTLE_MS = 150L
+        /** Completed pings needed before the pass shows an estimated time to the end. */
+        const val PING_ETA_MIN_SAMPLES = 5
     }
 
     private data class ProviderDraft(

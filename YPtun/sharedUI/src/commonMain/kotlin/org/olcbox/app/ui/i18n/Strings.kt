@@ -6,6 +6,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /** Russian plural picker: (one, few, many) by the standard ru pluralization rules. */
+/** "40 s", "8 min", "1 h 5 min" from [sec], with the language's unit words. */
+internal fun etaText(sec: Int, s: String, m: String, h: String): String = when {
+    sec < 90 -> "${sec.coerceAtLeast(1)} $s"
+    sec < 90 * 60 -> "${(sec + 30) / 60} $m"
+    else -> "${sec / 3600} $h ${(sec % 3600) / 60} $m"
+}
+
 internal fun ruPlural(n: Int, one: String, few: String, many: String): String {
     val mod100 = n % 100
     val mod10 = n % 10
@@ -52,6 +59,12 @@ fun stringsFor(language: AppLanguage): Strings = when (language) {
 
 /** All localized UI strings used by the migrated screens. */
 interface Strings {
+    val clearLogs: String
+    val liveActivityTitle: String
+    val liveActivitySubtitle: String
+    val privacyPolicy: String
+    val termsOfService: String
+    val supportPage: String
     val languageName: String
 
     // Bottom navigation
@@ -76,6 +89,18 @@ interface Strings {
     val refreshThisSubscription: String
     val renameSubscription: String
     val renameSubscriptionHint: String
+    val subscriptionLink: String
+    val subscriptionLinkHint: String
+    val subscriptionLinkReadOnlyHint: String
+    val subscriptionLinkRejected: String
+    val subscriptionCascadeTitle: String
+    val subscriptionCascadeHint: String
+    val subscriptionCascadeApply: String
+    val subscriptionCascadeRemove: String
+    val subscriptionCascadeRejected: String
+    val subscriptionCopyJson: String
+    val subscriptionJsonCopied: String
+    val subscriptionJsonEmpty: String
     val exitApp: String
     val visitSubscriptionPage: String
     // VPS installer SSH auth (password vs key).
@@ -166,7 +191,6 @@ interface Strings {
     val urlSchemesSubtitle: String
     val logs: String
     val logsSubtitle: String
-    val clearLogs: String
     val info: String
     fun version(v: String): String
     fun xrayVersion(v: String): String
@@ -175,6 +199,7 @@ interface Strings {
     fun wdttVersion(v: String): String
     fun awgVersion(v: String): String
     fun olcrtcVersion(v: String): String
+    fun coreVersion(name: String, v: String): String = "$name: $v"
     /** Localized label for a TrafficSettings domain strategy (prefer_ipv4/prefer_ipv6/ipv4_only/ipv6_only). */
     fun domainStrategyName(v: String): String
     fun hwid(v: String): String
@@ -195,10 +220,10 @@ interface Strings {
     // Application behavior
     val autoConnectTitle: String
     val autoConnectSubtitle: String
-    val liveActivityTitle: String
-    val liveActivitySubtitle: String
     val showAutoButtonTitle: String
     val showAutoButtonSubtitle: String
+    val showGroupAutoPickTitle: String
+    val showGroupAutoPickSubtitle: String
     val energySaverTitle: String
     val energySaverSubtitle: String
     val batteryOptTitle: String
@@ -206,6 +231,16 @@ interface Strings {
     val batteryOptDone: String
     val confirmDeleteTitle: String
     val confirmDeleteSubtitle: String
+    val allowConfigEditingTitle: String
+    val allowConfigEditingSubtitle: String
+    val awgTuningTitle: String
+    val awgTuningHint: String
+    val wgProtocolTitle: String
+    val wgLoadFile: String
+    val wgLoaded: String
+    val wgReplaceFile: String
+    val wgMissingPrefix: String
+    val wgConnectionTitle: String
     val language: String
 
     // Traffic settings
@@ -377,9 +412,23 @@ interface Strings {
     val selectAll: String
     val deselectAll: String
     val freeServersDisclaimer: String
+    val freeServersSourceNotice: String
+    val freeServersWarpAll: String
+    val freeServersWarpAllHint: String
     fun addSelectedServers(count: Int): String
     fun freeServersImported(working: Int, total: Int): String
     fun freeServersProgressText(checked: Int, total: Int, found: Int): String
+    val freeServersStopKeep: String
+    val freeServersToBackground: String
+    val pingPause: String
+    val pingResume: String
+    val pingRestart: String
+    val pingPausedLabel: String
+    fun pingProgress(done: Int, total: Int, alive: Int): String
+    fun etaLeft(sec: Int): String
+    val freeServersContinue: String
+    fun freeServersContinueLeft(n: Int): String
+    val freeServersNothingYet: String
     val updateSubscriptionsAction: String
     val updateSubscriptionsSubtitle: String
     val createCustomLocation: String
@@ -483,6 +532,12 @@ interface Strings {
     // Update download status
     val releaseChannelLabel: String
     fun downloadingAsset(name: String): String
+    fun updateStage(step: Int, total: Int, title: String): String
+    val updateStageDownloadPatch: String
+    val updateStageDownloadInstaller: String
+    val updateStageApplyPatch: String
+    val updateStageInstall: String
+    val updateStageRestart: String
     fun downloadFailed(error: String): String
     fun installingAsset(name: String): String
     /** Short hours label, e.g. "6 ч" / "6h" / "۶ ساعت". */
@@ -504,9 +559,21 @@ interface Strings {
     // Experimental section
     val experimental: String
     val experimentalSubtitle: String
+    val privacy: String
+    val privacySubtitle: String
+    val providerReportTitle: String
+    val providerReportSubtitle: String
+    val providerReportDetails: String
     val experimentalUnlocked: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
+    val notifPingTitle: String
+    val notifPingSubtitle: String
+    val notifPingWord: String
+    val notifPingSourceTitle: String
+    val notifPingSourceLast: String
+    val notifPingSourceAuto: String
+    val notifPingIntervalLabel: String
     val speedOnHomeTitle: String
     val speedOnHomeSubtitle: String
     val roomsInNotifTitle: String
@@ -531,6 +598,12 @@ interface Strings {
     val showSubscriptionIconsSubtitle: String
     val subscriptionUserAgentLabel: String
     val subscriptionUserAgentSubtitle: String
+    val uaModeBoth: String
+    val uaModeHapp: String
+    val uaModeYptun: String
+    val uaModeV2raytun: String
+    val sendDeviceInfoTitle: String
+    val sendDeviceInfoSubtitle: String
     val globalEngineLabel: String
     val globalEngineSubtitle: String
     val globalEngineAuto: String
@@ -643,6 +716,17 @@ interface Strings {
     val additionalProxySubtitle: String
     val enableAdditionalProxy: String
     val secondProxySameAsMain: String
+    val enableWarp: String
+    val warpModeSection: String
+    val warpModeClient: String
+    val warpModeServer: String
+    val warpModeClientSubtitle: String
+    val warpModeServerSubtitle: String
+    val warpProtocolSection: String
+    val warpProtocolWg: String
+    val warpProtocolAwg: String
+    val warpProtocolWgSubtitle: String
+    val warpProtocolAwgSubtitle: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -691,8 +775,29 @@ interface Strings {
     val savePingResultsSubtitle: String
     val showAliveCountTitle: String
     val showAliveCountSubtitle: String
+    val showPingControlsTitle: String
+    val showPingControlsSubtitle: String
     val pingThreadsTitle: String
     val pingThreadsSubtitle: String
+    val appearanceTitle: String
+    val appearanceSubtitle: String
+    val appIconHint: String
+    val appIconWithCat: String
+    val appIconNoCat: String
+    val appIconNames: List<String>
+    val pingTimeoutTitle: String
+    val pingTimeoutSubtitle: String
+    val pingPrecisionTitle: String
+    val pingPrecisionSubtitle: String
+    val pingPrecisionSingle: String
+    val pingPrecisionDouble: String
+    val pingPrecisionTriple: String
+    fun secondsShort(n: Int): String
+    val freeServersLimitTitle: String
+    val freeServersLimitSubtitle: String
+    val freeServersPagesTitle: String
+    val freeServersPagesSubtitle: String
+    val freeServersLimitUnlimited: String
     val pingModeAuto: String
     val pingModeTcp: String
     val pingModeIcmp: String
@@ -765,12 +870,15 @@ interface Strings {
     val tlsFragmentXray: String
     val coreAuto: String
     fun advancedCoreSettings(core: String): String
-    val privacyPolicy: String
-    val termsOfService: String
-    val supportPage: String
 }
 
 object RuStrings : Strings {
+    override val clearLogs = "Очистить"
+    override val liveActivityTitle = "Dynamic Island и Live Activity"
+    override val liveActivitySubtitle = "Отображать статус подключения на экране блокировки и в Dynamic Island"
+    override val privacyPolicy = "Политика конфиденциальности"
+    override val termsOfService = "Условия использования"
+    override val supportPage = "Поддержка и контакты"
     override val languageName = "Русский"
     override val navConnection = "Подключение"
     override val navSettings = "Настройки"
@@ -788,7 +896,19 @@ object RuStrings : Strings {
     override val groupAutoUpdate = "Автообновление"
     override val refreshThisSubscription = "Обновить подписку"
     override val renameSubscription = "Переименовать"
-    override val renameSubscriptionHint = "Оставьте пустым, чтобы вернуть исходное название"
+    override val renameSubscriptionHint = "Пустое название вернёт исходное"
+    override val subscriptionLink = "Ссылка подписки"
+    override val subscriptionLinkHint = "Новая ссылка (http/https). Серверы, названия и настройки сохранятся, подписка сразу обновится по ней."
+    override val subscriptionLinkReadOnlyHint = "Ссылку этой подписки нельзя изменить"
+    override val subscriptionLinkRejected = "Ссылка не принята: нужен адрес http/https, не совпадающий с адресом другой подписки"
+    override val subscriptionCascadeTitle = "Каскад для всей подписки"
+    override val subscriptionCascadeHint = "Ссылка прокси (vless://, vmess://, trojan://, ss://). Впишется вторым прокси во все серверы подписки и сохранится при обновлении. Пусто — убрать"
+    override val subscriptionCascadeApply = "Применить ко всем"
+    override val subscriptionCascadeRemove = "Убрать каскад"
+    override val subscriptionCascadeRejected = "Каскад не принят: нужна рабочая ссылка прокси (vless://, vmess://, trojan://, ss://)"
+    override val subscriptionCopyJson = "Скопировать JSON подписки"
+    override val subscriptionJsonCopied = "JSON скопирован ✓"
+    override val subscriptionJsonEmpty = "Нечего копировать: серверы подписки нельзя выразить в JSON"
     override val exitApp = "Выход"
     override val visitSubscriptionPage = "Посетить страницу подписки"
     override val sshAuthUseKey = "Вход по SSH-ключу"
@@ -878,7 +998,6 @@ object RuStrings : Strings {
     override val urlSchemesSubtitle = "Deep-link импорт и управление"
     override val logs = "Журнал"
     override val logsSubtitle = "Диагностика и экспорт"
-    override val clearLogs = "Очистить"
     override val info = "ИНФОРМАЦИЯ"
     override fun version(v: String) = "Версия: $v"
     override fun xrayVersion(v: String) = "Xray: $v"
@@ -904,16 +1023,16 @@ object RuStrings : Strings {
     override val supportProjectThanks = "Проект живёт на вашей поддержке — спасибо!"
     override val supportCrypto = "Криптовалюта"
     override val supportDonationAlertsHint = "Карты РФ, СБП · для России"
-    override val supportVpnSub = "VPN-подписка разработчика"
-    override val supportVpnSubHint = "Купить VPN у автора в поддержку проекта · Telegram @quofortpostbot"
+    override val supportVpnSub = "VPN-подписка от разработчика"
+    override val supportVpnSubHint = "Купите VPN у автора и поддержите проект · Telegram @quofortpostbot"
     override val supportGithubStar = "Поставить звезду на GitHub"
-    override val supportGithubStarHint = "Бесплатный способ поддержать проект"
+    override val supportGithubStarHint = "Бесплатный способ помочь проекту"
     override val autoConnectTitle = "Автоподключение при запуске"
     override val autoConnectSubtitle = "Подключаться к выбранному конфигу при открытии приложения"
-    override val liveActivityTitle = "Dynamic Island и Live Activity"
-    override val liveActivitySubtitle = "Отображать статус подключения на экране блокировки и в Dynamic Island"
     override val showAutoButtonTitle = "Кнопка «Авто» на главном"
     override val showAutoButtonSubtitle = "Круглая кнопка рядом с кнопкой подключения — пингует все серверы и подключает к самому быстрому"
+    override val showGroupAutoPickTitle = "Кнопка быстрого сервера у подписок и групп"
+    override val showGroupAutoPickSubtitle = "Значок у подписки, папки и «Своих серверов» — пингует их серверы и подключает к самому быстрому"
     override val energySaverTitle = "Режим энергоэффективности"
     override val energySaverSubtitle = "Меньше расход батареи: реже проверки соединения, без журнала. Может замедлить авто-восстановление; применяется при следующем подключении"
     override val batteryOptTitle = "Отключить оптимизацию батареи"
@@ -921,6 +1040,16 @@ object RuStrings : Strings {
     override val batteryOptDone = "Оптимизация батареи уже отключена ✓"
     override val confirmDeleteTitle = "Подтверждение удаления"
     override val confirmDeleteSubtitle = "Запрашивать подтверждение перед удалением подписок и конфигураций"
+    override val allowConfigEditingTitle = "Разрешить редактирование конфигураций"
+    override val allowConfigEditingSubtitle = "В редакторе локации появятся все параметры конфигурации для тонкой настройки (AmneziaWG: Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5 и другие). Неверное значение ломает туннель"
+    override val awgTuningTitle = "AmneziaWG: тонкая настройка"
+    override val awgTuningHint = "Значения должны совпадать с сервером. Пустое поле — параметр не задан. Каждое изменение применяется при сохранении локации"
+    override val wgProtocolTitle = "Протокол"
+    override val wgLoadFile = "Загрузить файл конфигурации AWG/WG"
+    override val wgLoaded = "Конфигурация загружена"
+    override val wgReplaceFile = "Заменить файл конфигурации"
+    override val wgMissingPrefix = "Не хватает: "
+    override val wgConnectionTitle = "Параметры подключения (ключи, адреса, пир)"
     override val language = "Язык"
     override val dns = "DNS"
     override val remoteDnsLabel = "Удалённый DNS (через прокси)"
@@ -1076,15 +1205,28 @@ object RuStrings : Strings {
     override val importFile = "Импорт из файла"
     override val importFileSubtitle = "Подписка, olcrtc или конфигурация sing-box"
     override val freeServers = "Бесплатные серверы"
-    override val freeServersSubtitle = "Публичный список VLESS — скачать и отсеять нерабочие"
+    override val freeServersSubtitle = "Публичные списки серверов — скачать и отсеять нерабочие"
     override val freeServersLoading = "Загрузка и проверка бесплатных серверов…"
     override val freeServersWaitNotice = "Поиск и проверка серверов может занять некоторое время, пожалуйста, подождите…"
     override val selectAll = "Выбрать все"
     override val deselectAll = "Снять все"
     override val freeServersDisclaimer = "Публичные серверы быстро устаревают. Рекомендуется периодически очищать старые и добавлять новые."
+    override val freeServersSourceNotice = "Серверы берутся из открытых списков на GitHub и не имеют отношения к разработчикам YPtun — мы их не создаём и не контролируем. Используйте на свой риск."
+    override val freeServersWarpAll = "WARP на сервере для всех"
+    override val freeServersWarpAllHint = "Рекомендуется для бесплатных серверов: трафик выходит в интернет через Cloudflare WARP, а не напрямую с чужого сервера (безопаснее). AmneziaWG для российских серверов, WireGuard для остальных. Облачком у сервера можно выключить."
     override fun addSelectedServers(count: Int) = "Добавить выбранные ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Проверено: $checked из $total (найдено: $found)"
+    override val freeServersStopKeep = "Остановить и показать найденные"
+    override val pingPause = "Пауза"
+    override val pingResume = "Продолжить"
+    override val pingRestart = "Заново"
+    override val pingPausedLabel = "на паузе"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "Проверено: $done из $total · доступно: $alive"
+    override fun etaLeft(sec: Int) = "осталось ~" + etaText(sec, "с", "мин", "ч")
+    override val freeServersContinue = "Продолжить поиск"
+    override fun freeServersContinueLeft(n: Int) = "Продолжить поиск · осталось $n"
+    override val freeServersNothingYet = "Пока не найдено ни одного работающего сервера"
     override val updateSubscriptionsAction = "Обновить подписки"
     override val updateSubscriptionsSubtitle = "Обновить локации импортированных подписок"
     override val createCustomLocation = "Создать собственную локацию"
@@ -1095,8 +1237,8 @@ object RuStrings : Strings {
     override val securedSocksProxySubtitle = "Логин и пароль на своём порту"
     override val securedSocksProxyOff = "Выключен · 127.0.0.1:8080 без авторизации"
     override val setSystemProxyTitle = "Системный прокси (режим Proxy)"
-    override val setSystemProxyOn = "Прокси прописывается в систему — браузеры и программы подхватывают сами"
-    override val setSystemProxyOff = "Система не трогается — только программы, где прокси вписан вручную"
+    override val setSystemProxyOn = "Прокси прописывается в систему — браузеры и приложения идут через него сами"
+    override val setSystemProxyOff = "Система не затрагивается — укажите адрес прокси только в нужных приложениях"
     override val splitTunneling = "Раздельное туннелирование"
     override val routingBehavior = "Поведение маршрутизации"
     override val appsUsingYptun = "Приложения через YPtun"
@@ -1173,9 +1315,15 @@ object RuStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto авто · $manual вручную"
     override val releaseChannelLabel = "Релиз"
     override fun downloadingAsset(name: String) = "Загрузка $name…"
+    override fun updateStage(step: Int, total: Int, title: String) = "Этап $step из $total: $title"
+    override val updateStageDownloadPatch = "Загрузка патча"
+    override val updateStageDownloadInstaller = "Загрузка установщика"
+    override val updateStageApplyPatch = "Применение патча"
+    override val updateStageInstall = "Установка и перезапуск"
+    override val updateStageRestart = "Перезапуск"
     override fun downloadFailed(error: String) = "Ошибка загрузки: $error"
     override fun installingAsset(name: String) = "Установка $name"
-    override fun hoursShort(n: Int) = "$n ч"
+    override fun hoursShort(n: Int) = if (n == 0) "Никогда" else "$n ч"
     override val themeColor = "Цвет темы"
     override val elementColor = "Цвет элементов"
     override val textColor = "Цвет текста"
@@ -1186,9 +1334,28 @@ object RuStrings : Strings {
     override val subscriptionSupport = "Поддержка"
     override val experimental = "Экспериментальные"
     override val experimentalSubtitle = "Cookies Telemost и прочее"
+    override val privacy = "Конфиденциальность"
+    override val privacySubtitle = "Что приложение отправляет наружу"
+    override val providerReportTitle = "Отчёт провайдеру подписки (ProviderID)"
+    override val providerReportSubtitle = "Раз в сутки сообщать провайдеру, что подписка используется"
+    override val providerReportDetails = "Если провайдер добавил к подписке заголовок providerid (так делают панели Remnawave и Happ), приложение раз в сутки отправляет запрос на check.happ-proxy.com/provider. В нём уходят: ID провайдера, идентификатор устройства (HWID), ID приложения, ОС и её версия, модель устройства и версия приложения. Подписки работают и без этого отчёта. Выключено — этот запрос не отправляется вообще. Обновляя подписку, приложение по-прежнему передаёт панели данные об устройстве: они нужны ей для лимита устройств."
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+
+    override val notifPingTitle = "Отображение пинга в уведомлении"
+
+    override val notifPingSubtitle = "Включено: пинг отдельной строкой над скоростью. Выключено: после названия сервера"
+
+    override val notifPingWord = "Пинг"
+
+    override val notifPingSourceTitle = "Откуда брать пинг"
+
+    override val notifPingSourceLast = "Последний (замеренный вручную)"
+
+    override val notifPingSourceAuto = "Автоматически в туннеле"
+
+    override val notifPingIntervalLabel = "Раз в сколько минут"
     override val speedOnHomeTitle = "Скорость на главном экране"
     override val speedOnHomeSubtitle = "Под выбранной конфигурацией показывать ↓ и ↑"
     override val roomsInNotifTitle = "Комнаты / серверы в уведомлении"
@@ -1197,7 +1364,7 @@ object RuStrings : Strings {
     override val notifySubExpirySubtitle = "Локальное уведомление за несколько дней до конца подписки."
     override val panelAnnouncementsTitle = "Уведомления от панели"
     override val panelAnnouncementsSubtitle = "Показывать системное уведомление, когда владелец панели присылает объявление."
-    override val vpsAutoInstallTitle = "Автоустановка на VPS (Beta)"
+    override val vpsAutoInstallTitle = "Автоустановка на VPS"
     override val vpsAutoInstallSubtitle = "Выполняет развёртывание движка на VPS."
     override val hideEndpointWhenDescriptionTitle = "Скрывать IP и протокол при описании"
     override val hideEndpointWhenDescriptionSubtitle = "Если у локации есть описание — показывать его вместо протокола и IP в точке подключения."
@@ -1212,7 +1379,13 @@ object RuStrings : Strings {
     override val showSubscriptionIconsTitle = "Показывать иконки подписок"
     override val showSubscriptionIconsSubtitle = "Иконка от панели слева от названия подписки"
     override val subscriptionUserAgentLabel = "User-Agent подписки"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 запрашивает полный конфиг (FakeDNS, dns.hosts); YPtun — обычно только ссылки"
+    override val subscriptionUserAgentSubtitle = "Что приложение называет себе в запросах к панели подписки. По умолчанию — два запроса: основной как YPtun (чистые имена и ссылки) и второй как Happ/1.0 (FakeDNS-конфиг сервера, а также запасной вариант, если панель отказала YPtun). «Happ» — один запрос как Happ/1.0. «YPtun» — один запрос как YPtun, под Happ приложение не представляется вовсе (FakeDNS от панели не придёт). «v2rayTun» — один запрос как v2raytun/<платформа>."
+    override val uaModeBoth = "Happ + YPtun (по умолчанию)"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "Отправлять данные устройства подпискам"
+    override val sendDeviceInfoSubtitle = "HWID, ID приложения, ОС и модель устройства. Выключено — ничего из этого не отправляется, но подписка с лимитом устройств может не выдаться"
     override val globalEngineLabel = "Движок для VLESS (глобально)"
     override val globalEngineSubtitle = "Ядро для VLESS и похожих транспортов, когда в настройках сервера выбрано «Авто». Настройка сервера важнее этой. xhttp всегда использует Xray."
     override val globalEngineAuto = "Авто"
@@ -1322,6 +1495,17 @@ object RuStrings : Strings {
     override val enableAdditionalProxy = "Дополнительный прокси (каскад)"
     override val secondProxySameAsMain =
         "Это тот же сервер, что и основной прокси — каскад сам в себя не имеет смысла"
+    override val enableWarp = "Включить WARP"
+    override val warpModeSection = "Сторона подключения WARP"
+    override val warpModeClient = "На клиенте"
+    override val warpModeServer = "На сервере"
+    override val warpModeClientSubtitle = "Сначала WARP → затем VLESS"
+    override val warpModeServerSubtitle = "Сначала VLESS → на выходе WARP"
+    override val warpProtocolSection = "Протокол WARP"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "Обычный WireGuard (официальная регистрация Cloudflare). Режется DPI у части провайдеров"
+    override val warpProtocolAwgSubtitle = "AmneziaWG с обфускацией — проходит там, где WireGuard блокируют"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -1367,6 +1551,29 @@ object RuStrings : Strings {
     override val showAliveCountTitle = "Счётчик доступных серверов"
     override val showAliveCountSubtitle =
         "В шапке подписки показывать «живые/всего» по последнему пингу"
+    override val showPingControlsTitle = "Пауза пинга и его процесс"
+    override val showPingControlsSubtitle =
+        "Кнопки паузы/остановки при пинге и строка «Проверено N из M» под подпиской"
+    override val appearanceTitle = "Оформление"
+    override val appearanceSubtitle = "Иконка приложения"
+    override val appIconHint = "Иконка на рабочем столе сменится через пару секунд. Если лаунчер оставил старую или убрал значок — добавьте приложение на экран заново."
+    override val appIconWithCat = "С котом"
+    override val appIconNoCat = "Без кота"
+    override val appIconNames = listOf("Классика", "Океан", "Закат", "Мята", "Фиалка", "Золото", "Небо", "Неон", "Солнце", "Светлая")
+    override val pingTimeoutTitle = "Таймаут пинга"
+    override val pingTimeoutSubtitle = "Сколько ждать ответа сервера (2–15 с)"
+    override val pingPrecisionTitle = "Точность пинга"
+    override val pingPrecisionSubtitle = "Сколько раз измерять: показывается лучшее время. Если сервер не ответил с первого раза, он не перепроверяется."
+    override val pingPrecisionSingle = "Одинарный"
+    override val pingPrecisionDouble = "Двойной"
+    override val pingPrecisionTriple = "Тройной"
+    override fun secondsShort(n: Int) = "$n с"
+    override val freeServersLimitTitle = "Лимит бесплатных серверов"
+    override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
+    override val freeServersLimitUnlimited = "Без лимита"
+    override val freeServersToBackground = "В фон"
+    override val freeServersPagesTitle = "Источник: GitHub Page"
+    override val freeServersPagesSubtitle = "Бесплатные серверы брать из единого списка (до 20 000 vless-ссылок со всего GitHub, обновляется раз в час). Выкл — прежние источники"
     override val pingThreadsTitle = "Потоки пинга"
     override val pingThreadsSubtitle = "Сколько локаций проверять одновременно (1–30) — и для пинга, и для кнопки Авто"
     override val pingModeAuto = "Авто"
@@ -1430,12 +1637,15 @@ object RuStrings : Strings {
     override val tlsFragmentXray = "Фрагментация TLS (анти-DPI, Xray)"
     override val coreAuto = "Авто"
     override fun advancedCoreSettings(core: String) = "Дополнительные настройки $core"
-    override val privacyPolicy = "Политика конфиденциальности"
-    override val termsOfService = "Условия использования"
-    override val supportPage = "Поддержка и контакты"
 }
 
 object EnStrings : Strings {
+    override val clearLogs = "Clear"
+    override val liveActivityTitle = "Dynamic Island & Live Activity"
+    override val liveActivitySubtitle = "Show connection status on Lock Screen and Dynamic Island"
+    override val privacyPolicy = "Privacy Policy"
+    override val termsOfService = "Terms of Service"
+    override val supportPage = "Support & Help"
     override val languageName = "English"
     override val navConnection = "Connection"
     override val navSettings = "Settings"
@@ -1453,8 +1663,20 @@ object EnStrings : Strings {
     override val groupAutoUpdate = "Auto-update"
     override val refreshThisSubscription = "Update subscription"
     override val renameSubscription = "Rename"
-    override val renameSubscriptionHint = "Leave empty to restore the original name"
-    override val exitApp = "Exit"
+    override val renameSubscriptionHint = "An empty name restores the original"
+    override val subscriptionLink = "Subscription link"
+    override val subscriptionLinkHint = "New link (http/https). Servers, names and settings are kept and the subscription refreshes from it right away."
+    override val subscriptionLinkReadOnlyHint = "This subscription's link cannot be changed"
+    override val subscriptionLinkRejected = "Link rejected: it must be an http/https address that no other subscription uses"
+    override val subscriptionCascadeTitle = "Cascade for the whole subscription"
+    override val subscriptionCascadeHint = "Proxy link (vless://, vmess://, trojan://, ss://). It becomes the second proxy of every server in the subscription and survives refreshes. Empty — remove"
+    override val subscriptionCascadeApply = "Apply to all"
+    override val subscriptionCascadeRemove = "Remove cascade"
+    override val subscriptionCascadeRejected = "Cascade rejected: a working proxy link is needed (vless://, vmess://, trojan://, ss://)"
+    override val subscriptionCopyJson = "Copy subscription JSON"
+    override val subscriptionJsonCopied = "JSON copied ✓"
+    override val subscriptionJsonEmpty = "Nothing to copy: the subscription servers cannot be expressed as JSON"
+    override val exitApp = "Quit"
     override val visitSubscriptionPage = "Visit subscription page"
     override val sshAuthUseKey = "Sign in with SSH key"
     override val sshPasswordLabel = "SSH password"
@@ -1543,7 +1765,6 @@ object EnStrings : Strings {
     override val urlSchemesSubtitle = "Deep-link import and control"
     override val logs = "Logs"
     override val logsSubtitle = "Diagnostics and export"
-    override val clearLogs = "Clear"
     override val info = "INFORMATION"
     override fun version(v: String) = "Version: $v"
     override fun xrayVersion(v: String) = "Xray: $v"
@@ -1569,16 +1790,16 @@ object EnStrings : Strings {
     override val supportProjectThanks = "The project lives on your support — thank you!"
     override val supportCrypto = "Crypto"
     override val supportDonationAlertsHint = "Cards, SBP · for Russia"
-    override val supportVpnSub = "Developer's VPN subscription"
-    override val supportVpnSubHint = "Buy a VPN from the author to support the project · Telegram @quofortpostbot"
-    override val supportGithubStar = "Star on GitHub"
-    override val supportGithubStarHint = "A free way to support the project"
+    override val supportVpnSub = "VPN subscription from the developer"
+    override val supportVpnSubHint = "Buy VPN from the author and support the project · Telegram @quofortpostbot"
+    override val supportGithubStar = "Star the project on GitHub"
+    override val supportGithubStarHint = "A free way to help the project"
     override val autoConnectTitle = "Auto-connect on launch"
     override val autoConnectSubtitle = "Connect to the selected config when the app opens"
-    override val liveActivityTitle = "Dynamic Island & Live Activity"
-    override val liveActivitySubtitle = "Show connection status on Lock Screen and Dynamic Island"
     override val showAutoButtonTitle = "\"Auto\" button on Home"
     override val showAutoButtonSubtitle = "Round button next to Connect — pings all servers and connects to the fastest"
+    override val showGroupAutoPickTitle = "Fastest-server button on subscriptions and groups"
+    override val showGroupAutoPickSubtitle = "Button on a subscription, folder or custom list — pings its servers and connects to the fastest"
     override val energySaverTitle = "Energy-saver mode"
     override val energySaverSubtitle = "Lower battery use: less frequent health checks, no journal. May slow auto-recovery; applied on next connect"
     override val batteryOptTitle = "Disable battery optimization"
@@ -1586,6 +1807,16 @@ object EnStrings : Strings {
     override val batteryOptDone = "Battery optimization already disabled ✓"
     override val confirmDeleteTitle = "Delete confirmation"
     override val confirmDeleteSubtitle = "Ask before deleting subscriptions and configs"
+    override val allowConfigEditingTitle = "Allow editing configurations"
+    override val allowConfigEditingSubtitle = "The location editor shows every configuration parameter for fine-tuning (AmneziaWG: Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5 and more). A wrong value breaks the tunnel"
+    override val awgTuningTitle = "AmneziaWG: fine-tuning"
+    override val awgTuningHint = "Values must match the server. An empty field means the parameter is not set. Changes apply when the location is saved"
+    override val wgProtocolTitle = "Protocol"
+    override val wgLoadFile = "Load AWG/WG configuration file"
+    override val wgLoaded = "Configuration loaded"
+    override val wgReplaceFile = "Replace configuration file"
+    override val wgMissingPrefix = "Missing: "
+    override val wgConnectionTitle = "Connection (keys, addresses, peer)"
     override val language = "Language"
     override val dns = "DNS"
     override val remoteDnsLabel = "Remote DNS (via proxy)"
@@ -1741,15 +1972,28 @@ object EnStrings : Strings {
     override val importFile = "Import from file"
     override val importFileSubtitle = "Subscription, olcrtc or sing-box config"
     override val freeServers = "Free servers"
-    override val freeServersSubtitle = "Public VLESS list — download & filter working"
+    override val freeServersSubtitle = "Public server lists — download & filter working"
     override val freeServersLoading = "Downloading and testing free servers…"
     override val freeServersWaitNotice = "Searching and testing servers may take some time, please wait…"
     override val selectAll = "Select all"
     override val deselectAll = "Deselect all"
     override val freeServersDisclaimer = "Public servers expire quickly. It is recommended to periodically clean old ones and add fresh servers."
+    override val freeServersSourceNotice = "Servers come from public lists on GitHub and have nothing to do with the YPtun developers — we neither create nor control them. Use at your own risk."
+    override val freeServersWarpAll = "Server-side WARP for all"
+    override val freeServersWarpAllHint = "Recommended for free servers: traffic leaves through Cloudflare WARP instead of straight from a stranger's server (safer). AmneziaWG for Russian servers, WireGuard for the rest. Use a row's cloud to turn it off."
     override fun addSelectedServers(count: Int) = "Add selected ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Tested: $checked of $total (working: $found)"
+    override val freeServersStopKeep = "Stop and show what was found"
+    override val pingPause = "Pause"
+    override val pingResume = "Resume"
+    override val pingRestart = "Restart"
+    override val pingPausedLabel = "paused"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "Tested: $done of $total · available: $alive"
+    override fun etaLeft(sec: Int) = "~" + etaText(sec, "s", "min", "h") + " left"
+    override val freeServersContinue = "Continue search"
+    override fun freeServersContinueLeft(n: Int) = "Continue search · $n left"
+    override val freeServersNothingYet = "No working server found yet"
     override val updateSubscriptionsAction = "Update subscriptions"
     override val updateSubscriptionsSubtitle = "Refresh imported subscription locations"
     override val createCustomLocation = "Create custom location"
@@ -1760,8 +2004,8 @@ object EnStrings : Strings {
     override val securedSocksProxySubtitle = "Username and password on a port of your choosing"
     override val securedSocksProxyOff = "Off · 127.0.0.1:8080, no authentication"
     override val setSystemProxyTitle = "System proxy (Proxy mode)"
-    override val setSystemProxyOn = "Proxy configured in OS settings — browsers and apps pick it up"
-    override val setSystemProxyOff = "OS settings left untouched — only apps configured by hand will use it"
+    override val setSystemProxyOn = "The proxy is set system-wide — browsers and apps use it automatically"
+    override val setSystemProxyOff = "System settings are left alone — point only the apps you want at the proxy address"
     override val splitTunneling = "Split Tunneling"
     override val routingBehavior = "Routing Behavior"
     override val appsUsingYptun = "Apps Using YPtun"
@@ -1838,9 +2082,15 @@ object EnStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto auto · $manual manual"
     override val releaseChannelLabel = "Release"
     override fun downloadingAsset(name: String) = "Downloading $name…"
+    override fun updateStage(step: Int, total: Int, title: String) = "Step $step of $total: $title"
+    override val updateStageDownloadPatch = "Downloading the patch"
+    override val updateStageDownloadInstaller = "Downloading the installer"
+    override val updateStageApplyPatch = "Applying the patch"
+    override val updateStageInstall = "Installing and restarting"
+    override val updateStageRestart = "Restarting"
     override fun downloadFailed(error: String) = "Download failed: $error"
     override fun installingAsset(name: String) = "Installing $name"
-    override fun hoursShort(n: Int) = "${n}h"
+    override fun hoursShort(n: Int) = if (n == 0) "Never" else "${n}h"
     override val themeColor = "Theme color"
     override val elementColor = "Element color"
     override val textColor = "Text color"
@@ -1851,9 +2101,28 @@ object EnStrings : Strings {
     override val subscriptionSupport = "Support"
     override val experimental = "Experimental"
     override val experimentalSubtitle = "Telemost cookies and more"
+    override val privacy = "Privacy"
+    override val privacySubtitle = "What the app sends out"
+    override val providerReportTitle = "Report to the subscription provider (ProviderID)"
+    override val providerReportSubtitle = "Tell the provider once a day that the subscription is in use"
+    override val providerReportDetails = "If a provider adds a providerid header to a subscription (Remnawave and Happ panels do), the app sends a request to check.happ-proxy.com/provider once a day. It carries: the provider ID, the device identifier (HWID), the app ID, the OS and its version, the device model and the app version. Subscriptions work without this report. When off, that request is never sent. Refreshing a subscription still passes device details to the panel: it needs them for its device limit."
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+
+    override val notifPingTitle = "Ping in notification"
+
+    override val notifPingSubtitle = "On: ping on its own line above the speed. Off: after the server name"
+
+    override val notifPingWord = "Ping"
+
+    override val notifPingSourceTitle = "Ping source"
+
+    override val notifPingSourceLast = "Last one (measured by hand)"
+
+    override val notifPingSourceAuto = "Automatic, through the tunnel"
+
+    override val notifPingIntervalLabel = "Every how many minutes"
     override val speedOnHomeTitle = "Speed on home screen"
     override val speedOnHomeSubtitle = "Show ↓ and ↑ under the selected configuration"
     override val roomsInNotifTitle = "Rooms / servers in notification"
@@ -1862,7 +2131,7 @@ object EnStrings : Strings {
     override val notifySubExpirySubtitle = "Local notification a few days before the subscription ends."
     override val panelAnnouncementsTitle = "Panel announcements"
     override val panelAnnouncementsSubtitle = "Show a system notification when the panel owner sends an announcement."
-    override val vpsAutoInstallTitle = "Auto-install on VPS (Beta)"
+    override val vpsAutoInstallTitle = "Auto-install on VPS"
     override val vpsAutoInstallSubtitle = "Deploys the engine onto a VPS."
     override val hideEndpointWhenDescriptionTitle = "Hide IP & protocol when described"
     override val hideEndpointWhenDescriptionSubtitle = "If a location has a description, show it instead of the protocol and IP at the connection point."
@@ -1871,13 +2140,19 @@ object EnStrings : Strings {
     override val showSubscriptionExpiryTitle = "Show subscription expiry"
     override val showSubscriptionExpirySubtitle = "Show \"until dd.mm.yyyy\" under the refresh date"
     override val showSubscriptionDescriptionTitle = "Show subscription description"
-    override val showSubscriptionDescriptionSubtitle = "The panel's announce text under the subscription name"
+    override val showSubscriptionDescriptionSubtitle = "Show the panel's text (announce) under the subscription name"
     override val subscriptionDescriptionLinesTitle = "Subscription description lines"
     override val subscriptionDescriptionLinesUnlimited = "Unlimited"
     override val showSubscriptionIconsTitle = "Show subscription icons"
     override val showSubscriptionIconsSubtitle = "The panel's icon to the left of the subscription name"
     override val subscriptionUserAgentLabel = "Subscription User-Agent"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 fetches the full config (FakeDNS, dns.hosts); YPtun usually returns only links"
+    override val subscriptionUserAgentSubtitle = "What the app calls itself in requests to the subscription panel. By default there are two requests: the main one as YPtun (clean names and links) and a second as Happ/1.0 (the server's FakeDNS config, and the fallback when a panel refuses YPtun). “Happ” is one request as Happ/1.0. “YPtun” is one request as YPtun, the app never presents as Happ (no FakeDNS from the panel). “v2rayTun” is one request as v2raytun/<platform>."
+    override val uaModeBoth = "Happ + YPtun (default)"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "Send device data to subscriptions"
+    override val sendDeviceInfoSubtitle = "HWID, app ID, OS and device model. Off: none of it is sent, but a subscription with a device limit may be refused"
     override val globalEngineLabel = "VLESS engine (global)"
     override val globalEngineSubtitle = "Core for VLESS-like transports when a server's setting is \"Auto\". The per-server choice overrides this. xhttp always uses Xray."
     override val globalEngineAuto = "Auto"
@@ -1987,6 +2262,17 @@ object EnStrings : Strings {
     override val enableAdditionalProxy = "Additional proxy (cascade)"
     override val secondProxySameAsMain =
         "This is the same server as the main proxy — a cascade into itself makes no sense"
+    override val enableWarp = "Enable WARP"
+    override val warpModeSection = "WARP connection side"
+    override val warpModeClient = "Client side"
+    override val warpModeServer = "Server side"
+    override val warpModeClientSubtitle = "First WARP → then VLESS"
+    override val warpModeServerSubtitle = "First VLESS → egress via WARP"
+    override val warpProtocolSection = "WARP protocol"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "Plain WireGuard (official Cloudflare registration). Some ISPs' DPI blocks it"
+    override val warpProtocolAwgSubtitle = "AmneziaWG with obfuscation — works where WireGuard is blocked"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -2008,7 +2294,7 @@ object EnStrings : Strings {
     override val vp8OptionsSubtitle = "Fine-tune stream performance"
     override fun subscriptionsUpdatedCount(n: Int) = "Subscriptions updated: $n"
     override val subscriptionsUpdated = "Subscriptions updated"
-    override val subscriptionsUpdateFailed = "Failed to update subscriptions — check your connection"
+    override val subscriptionsUpdateFailed = "Couldn't update subscriptions — check your connection"
     override val subscriptionDeleted = "Subscription deleted"
     override val subscriptionsDeleted = "Subscriptions deleted"
     override val configsDeleted = "Configurations deleted"
@@ -2032,6 +2318,29 @@ object EnStrings : Strings {
     override val showAliveCountTitle = "Reachable server counter"
     override val showAliveCountSubtitle =
         "Show \"live/total\" in the subscription header from the last ping pass"
+    override val showPingControlsTitle = "Ping pause and progress"
+    override val showPingControlsSubtitle =
+        "Show pause/stop buttons while pinging and the \"Tested N of M\" line under the subscription"
+    override val appearanceTitle = "Appearance"
+    override val appearanceSubtitle = "App icon"
+    override val appIconHint = "The home-screen icon changes in a couple of seconds. If your launcher keeps the old one or drops it, add the app to the home screen again."
+    override val appIconWithCat = "With the cat"
+    override val appIconNoCat = "Without the cat"
+    override val appIconNames = listOf("Classic", "Ocean", "Sunset", "Mint", "Violet", "Gold", "Sky", "Neon", "Sun", "Light")
+    override val pingTimeoutTitle = "Ping timeout"
+    override val pingTimeoutSubtitle = "How long to wait for a server's answer (2–15 s)"
+    override val pingPrecisionTitle = "Ping precision"
+    override val pingPrecisionSubtitle = "How many times to measure: the best time is shown. A server that does not answer the first time is not re-measured."
+    override val pingPrecisionSingle = "Single"
+    override val pingPrecisionDouble = "Double"
+    override val pingPrecisionTriple = "Triple"
+    override fun secondsShort(n: Int) = "${n} s"
+    override val freeServersLimitTitle = "Free servers limit"
+    override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
+    override val freeServersLimitUnlimited = "Unlimited"
+    override val freeServersToBackground = "Background"
+    override val freeServersPagesTitle = "Source: GitHub Page"
+    override val freeServersPagesSubtitle = "Take free servers from one combined list (up to 20,000 vless links harvested from GitHub, refreshed hourly). Off — the built-in sources"
     override val pingThreadsTitle = "Ping threads"
     override val pingThreadsSubtitle = "How many locations to probe at once (1–30) — for ping and the Auto button"
     override val pingModeAuto = "Auto"
@@ -2042,7 +2351,7 @@ object EnStrings : Strings {
     override val pingResultLabel = "Ping result"
     override val pingResultTime = "Time"
     override val pingResultIcon = "Icon"
-    override val pingResultBoth = "Icon and value"
+    override val pingResultBoth = "Icon + value"
     override val scanQrTitle = "Scan QR"
     override val readyToScan = "Ready to scan"
     override val subscriptionOrLocationUri = "Subscription or location URI"
@@ -2095,12 +2404,15 @@ object EnStrings : Strings {
     override val tlsFragmentXray = "TLS fragment (anti-DPI, Xray)"
     override val coreAuto = "Auto"
     override fun advancedCoreSettings(core: String) = "Advanced $core settings"
-    override val privacyPolicy = "Privacy Policy"
-    override val termsOfService = "Terms of Service"
-    override val supportPage = "Support & Help"
 }
 
 object FaStrings : Strings {
+    override val clearLogs = "پاک کردن"
+    override val liveActivityTitle = "داینامیک آیلند و فعالیت زنده"
+    override val liveActivitySubtitle = "نمایش وضعیت اتصال در صفحه قفل و داینامیک آیلند"
+    override val privacyPolicy = "سیاست حفظ حریم خصوصی"
+    override val termsOfService = "شرایط استفاده"
+    override val supportPage = "پشتیبانی و ارتباط"
     override val languageName = "فارسی"
     override val navConnection = "اتصال"
     override val navSettings = "تنظیمات"
@@ -2118,7 +2430,19 @@ object FaStrings : Strings {
     override val groupAutoUpdate = "به‌روزرسانی خودکار"
     override val refreshThisSubscription = "به‌روزرسانی اشتراک"
     override val renameSubscription = "تغییر نام"
-    override val renameSubscriptionHint = "برای بازگرداندن نام اصلی خالی بگذارید"
+    override val renameSubscriptionHint = "نام خالی، نام اصلی را بازمی‌گرداند"
+    override val subscriptionLink = "لینک اشتراک"
+    override val subscriptionLinkHint = "لینک جدید (http/https). سرورها، نام‌ها و تنظیمات حفظ می‌شوند و اشتراک بلافاصله از آن به‌روز می‌شود."
+    override val subscriptionLinkReadOnlyHint = "لینک این اشتراک قابل تغییر نیست"
+    override val subscriptionLinkRejected = "لینک پذیرفته نشد: باید آدرس http/https باشد و اشتراک دیگری از آن استفاده نکند"
+    override val subscriptionCascadeTitle = "کاسکید برای کل اشتراک"
+    override val subscriptionCascadeHint = "لینک پروکسی (vless://‎، vmess://‎، trojan://‎، ss://‎). به‌عنوان پروکسی دوم در همه سرورهای اشتراک نوشته می‌شود و پس از به‌روزرسانی می‌ماند. خالی — حذف"
+    override val subscriptionCascadeApply = "اعمال روی همه"
+    override val subscriptionCascadeRemove = "حذف کاسکید"
+    override val subscriptionCascadeRejected = "کاسکید پذیرفته نشد: لینک پروکسی معتبر لازم است"
+    override val subscriptionCopyJson = "کپی JSON اشتراک"
+    override val subscriptionJsonCopied = "JSON کپی شد ✓"
+    override val subscriptionJsonEmpty = "چیزی برای کپی نیست: سرورهای اشتراک را نمی‌توان به JSON تبدیل کرد"
     override val exitApp = "خروج"
     override val visitSubscriptionPage = "مشاهده صفحه اشتراک"
     override val sshAuthUseKey = "ورود با کلید SSH"
@@ -2208,7 +2532,6 @@ object FaStrings : Strings {
     override val urlSchemesSubtitle = "ورود و کنترل از طریق پیوند عمیق"
     override val logs = "گزارش‌ها"
     override val logsSubtitle = "عیب‌یابی و برون‌بری"
-    override val clearLogs = "پاک کردن"
     override val info = "اطلاعات"
     override fun domainStrategyName(v: String) = when (v) {
         "prefer_ipv4" -> "ترجیح IPv4"
@@ -2234,16 +2557,16 @@ object FaStrings : Strings {
     override val supportProjectThanks = "این پروژه با حمایت شما زنده است — سپاس!"
     override val supportCrypto = "ارز دیجیتال"
     override val supportDonationAlertsHint = "کارت و SBP · برای روسیه"
-    override val supportVpnSub = "اشتراک VPN توسعه‌دهنده"
-    override val supportVpnSubHint = "برای حمایت از پروژه از سازنده VPN بخرید · تلگرام @quofortpostbot"
-    override val supportGithubStar = "ستاره در گیت‌هاب"
-    override val supportGithubStarHint = "راهی رایگان برای حمایت از پروژه"
+    override val supportVpnSub = "اشتراک VPN از توسعه‌دهنده"
+    override val supportVpnSubHint = "VPN را از سازنده بخرید و از پروژه حمایت کنید · تلگرام @quofortpostbot"
+    override val supportGithubStar = "ستاره‌ی GitHub بدهید"
+    override val supportGithubStarHint = "راهی رایگان برای کمک به پروژه"
     override val autoConnectTitle = "اتصال خودکار هنگام اجرا"
     override val autoConnectSubtitle = "هنگام باز شدن برنامه به پیکربندی انتخاب‌شده متصل شود"
-    override val liveActivityTitle = "داینامیک آیلند و فعالیت زنده"
-    override val liveActivitySubtitle = "نمایش وضعیت اتصال در صفحه قفل و داینامیک آیلند"
     override val showAutoButtonTitle = "دکمه «خودکار» در خانه"
     override val showAutoButtonSubtitle = "دکمه گرد کنار دکمه اتصال — همه سرورها را پینگ می‌کند و به سریع‌ترین وصل می‌شود"
+    override val showGroupAutoPickTitle = "دکمه سریع‌ترین سرور در اشتراک‌ها و گروه‌ها"
+    override val showGroupAutoPickSubtitle = "دکمه کنار اشتراک، پوشه یا فهرست سفارشی — سرورهای آن را پینگ می‌کند و به سریع‌ترین وصل می‌شود"
     override val energySaverTitle = "حالت صرفه‌جویی در انرژی"
     override val energySaverSubtitle = "مصرف باتری کمتر: بررسی‌های کمتر اتصال، بدون گزارش. ممکن است بازیابی خودکار را کند کند؛ در اتصال بعدی اعمال می‌شود"
     override val batteryOptTitle = "غیرفعال‌کردن بهینه‌سازی باتری"
@@ -2251,6 +2574,16 @@ object FaStrings : Strings {
     override val batteryOptDone = "بهینه‌سازی باتری قبلاً غیرفعال شده ✓"
     override val confirmDeleteTitle = "تأیید حذف"
     override val confirmDeleteSubtitle = "پیش از حذف اشتراک‌ها و پیکربندی‌ها پرسیده شود"
+    override val allowConfigEditingTitle = "اجازهٔ ویرایش پیکربندی‌ها"
+    override val allowConfigEditingSubtitle = "ویرایشگر موقعیت همهٔ پارامترهای پیکربندی را برای تنظیم دقیق نشان می‌دهد (AmneziaWG: ‏Jc، Jmin، Jmax، S1–S4، H1–H4، I1–I5 و بیشتر). مقدار نادرست تونل را خراب می‌کند"
+    override val awgTuningTitle = "AmneziaWG: تنظیم دقیق"
+    override val awgTuningHint = "مقادیر باید با سرور یکی باشند. فیلد خالی یعنی پارامتر تنظیم نشده. تغییرات هنگام ذخیرهٔ موقعیت اعمال می‌شوند"
+    override val wgProtocolTitle = "پروتکل"
+    override val wgLoadFile = "بارگذاری فایل پیکربندی AWG/WG"
+    override val wgLoaded = "پیکربندی بارگذاری شد"
+    override val wgReplaceFile = "جایگزینی فایل پیکربندی"
+    override val wgMissingPrefix = "کم است: "
+    override val wgConnectionTitle = "اتصال (کلیدها، آدرس‌ها، همتا)"
     override val language = "زبان"
     override val dns = "DNS"
     override val remoteDnsLabel = "DNS راه‌دور (از طریق پراکسی)"
@@ -2406,15 +2739,28 @@ object FaStrings : Strings {
     override val importFile = "ورود از پرونده"
     override val importFileSubtitle = "اشتراک، olcrtc یا پیکربندی sing-box"
     override val freeServers = "سرورهای رایگان"
-    override val freeServersSubtitle = "فهرست عمومی VLESS — دریافت و غربال سرورها"
+    override val freeServersSubtitle = "فهرست‌های عمومی سرور — دریافت و غربال سرورها"
     override val freeServersLoading = "در حال بارگیری و آزمایش سرورهای رایگان…"
     override val freeServersWaitNotice = "جستجو و آزمایش سرورها ممکن است مدتی طول بکشد، لطفاً شکیبا باشید…"
     override val selectAll = "انتخاب همه"
     override val deselectAll = "لغو انتخاب همه"
     override val freeServersDisclaimer = "سرورهای عمومی سریعاً منقضی می‌شوند. توصیه می‌شود سرورهای قدیمی را پاک کرده و سرورهای جدید اضافه کنید."
+    override val freeServersSourceNotice = "این سرورها از فهرست‌های عمومی GitHub گرفته می‌شوند و ارتباطی با توسعه‌دهندگان YPtun ندارند — ما آن‌ها را نمی‌سازیم و کنترل نمی‌کنیم. با مسئولیت خودتان استفاده کنید."
+    override val freeServersWarpAll = "WARP سمت سرور برای همه"
+    override val freeServersWarpAllHint = "برای سرورهای رایگان توصیه می‌شود: ترافیک از طریق Cloudflare WARP خارج می‌شود، نه مستقیم از سرور یک غریبه (امن‌تر). AmneziaWG برای سرورهای روسیه، WireGuard برای بقیه. با ابر کنار هر سرور خاموش می‌شود."
     override fun addSelectedServers(count: Int) = "افزودن موارد انتخاب‌شده ($count)"
     override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "بررسی شد: $checked از $total (فعال: $found)"
+    override val freeServersStopKeep = "توقف و نمایش موارد یافت‌شده"
+    override val pingPause = "مکث"
+    override val pingResume = "ادامه"
+    override val pingRestart = "از نو"
+    override val pingPausedLabel = "متوقف"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "بررسی شد: $done از $total · در دسترس: $alive"
+    override fun etaLeft(sec: Int) = "حدود " + etaText(sec, "ثانیه", "دقیقه", "ساعت") + " مانده"
+    override val freeServersContinue = "ادامه جستجو"
+    override fun freeServersContinueLeft(n: Int) = "ادامه جستجو · $n مانده"
+    override val freeServersNothingYet = "هنوز سرور فعالی پیدا نشده است"
     override val updateSubscriptionsAction = "به‌روزرسانی اشتراک‌ها"
     override val updateSubscriptionsSubtitle = "بازآوری موقعیت‌های اشتراک‌های واردشده"
     override val createCustomLocation = "ساخت موقعیت سفارشی"
@@ -2424,9 +2770,9 @@ object FaStrings : Strings {
     override val securedSocksProxy = "پراکسی SOCKS محافظت‌شده"
     override val securedSocksProxySubtitle = "نام کاربری و رمز عبور روی پورت دلخواه"
     override val securedSocksProxyOff = "خاموش · 127.0.0.1:8080 بدون احراز هویت"
-    override val setSystemProxyTitle = "پروکسی سیستم (حالت Proxy)"
-    override val setSystemProxyOn = "پروکسی در تنظیمات سیستم اعمال می‌شود — مرورگرها و برنامه‌ها خودکار استفاده می‌کنند"
-    override val setSystemProxyOff = "تنظیمات سیستم دست‌نخورده می‌ماند — فقط برنامه‌های تنظیم‌شده دستی استفاده می‌کنند"
+    override val setSystemProxyTitle = "پروکسی سیستمی (حالت Proxy)"
+    override val setSystemProxyOn = "پروکسی در کل سیستم تنظیم می‌شود — مرورگرها و برنامه‌ها خودکار از آن استفاده می‌کنند"
+    override val setSystemProxyOff = "تنظیمات سیستم دست‌نخورده می‌ماند — آدرس پروکسی را فقط در برنامه‌های دلخواه وارد کنید"
     override val splitTunneling = "تونل‌سازی تفکیکی"
     override val routingBehavior = "رفتار مسیریابی"
     override val appsUsingYptun = "برنامه‌های استفاده‌کننده از YPtun"
@@ -2503,9 +2849,15 @@ object FaStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "$auto خودکار · $manual دستی"
     override val releaseChannelLabel = "نسخه"
     override fun downloadingAsset(name: String) = "در حال دانلود $name…"
+    override fun updateStage(step: Int, total: Int, title: String) = "مرحله $step از $total: $title"
+    override val updateStageDownloadPatch = "دانلود وصله"
+    override val updateStageDownloadInstaller = "دانلود نصب‌کننده"
+    override val updateStageApplyPatch = "اعمال وصله"
+    override val updateStageInstall = "نصب و راه‌اندازی مجدد"
+    override val updateStageRestart = "راه‌اندازی مجدد"
     override fun downloadFailed(error: String) = "دانلود ناموفق بود: $error"
     override fun installingAsset(name: String) = "در حال نصب $name"
-    override fun hoursShort(n: Int) = "$n ساعت"
+    override fun hoursShort(n: Int) = if (n == 0) "هرگز" else "$n ساعت"
     override val themeColor = "رنگ پوسته"
     override val elementColor = "رنگ عناصر"
     override val textColor = "رنگ متن"
@@ -2532,9 +2884,28 @@ object FaStrings : Strings {
     override val rootDenied = "دسترسی روت رد شد"
     override val experimental = "آزمایشی"
     override val experimentalSubtitle = "کوکی‌های Telemost و موارد دیگر"
+    override val privacy = "حریم خصوصی"
+    override val privacySubtitle = "برنامه چه چیزی ارسال می‌کند"
+    override val providerReportTitle = "گزارش به ارائه‌دهنده اشتراک (ProviderID)"
+    override val providerReportSubtitle = "روزی یک بار به ارائه‌دهنده اطلاع بده که اشتراک در حال استفاده است"
+    override val providerReportDetails = "اگر ارائه‌دهنده به اشتراک هدر providerid اضافه کند (پنل‌های Remnawave و Happ این کار را می‌کنند)، برنامه روزی یک بار درخواستی به check.happ-proxy.com/provider می‌فرستد. این درخواست شامل شناسه ارائه‌دهنده، شناسه دستگاه (HWID)، شناسه برنامه، سیستم‌عامل و نسخه آن، مدل دستگاه و نسخه برنامه است. اشتراک‌ها بدون این گزارش هم کار می‌کنند. وقتی خاموش باشد این درخواست اصلاً ارسال نمی‌شود. هنگام به‌روزرسانی اشتراک، مشخصات دستگاه همچنان به پنل داده می‌شود، چون پنل برای محدودیت تعداد دستگاه به آن نیاز دارد."
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+
+    override val notifPingTitle = "نمایش پینگ در اعلان"
+
+    override val notifPingSubtitle = "روشن: پینگ در خط جداگانه بالای سرعت. خاموش: بعد از نام سرور"
+
+    override val notifPingWord = "پینگ"
+
+    override val notifPingSourceTitle = "منبع پینگ"
+
+    override val notifPingSourceLast = "آخرین (اندازه‌گیری دستی)"
+
+    override val notifPingSourceAuto = "خودکار، از طریق تونل"
+
+    override val notifPingIntervalLabel = "هر چند دقیقه"
     override val speedOnHomeTitle = "سرعت در صفحه اصلی"
     override val speedOnHomeSubtitle = "نمایش ↓ و ↑ زیر پیکربندی انتخاب‌شده"
     override val roomsInNotifTitle = "اتاق‌ها / سرورها در اعلان"
@@ -2543,7 +2914,7 @@ object FaStrings : Strings {
     override val notifySubExpirySubtitle = "اعلان محلی چند روز پیش از پایان اشتراک."
     override val panelAnnouncementsTitle = "اعلان‌های پنل"
     override val panelAnnouncementsSubtitle = "نمایش اعلان سیستمی هنگامی که مالک پنل اطلاعیه‌ای می‌فرستد."
-    override val vpsAutoInstallTitle = "نصب خودکار روی VPS (Beta)"
+    override val vpsAutoInstallTitle = "نصب خودکار روی VPS"
     override val vpsAutoInstallSubtitle = "موتور را روی یک VPS مستقر می‌کند."
     override val hideEndpointWhenDescriptionTitle = "پنهان کردن IP و پروتکل هنگام وجود توضیح"
     override val hideEndpointWhenDescriptionSubtitle = "اگر مکان توضیح دارد، به جای پروتکل و IP در نقطه اتصال نمایش داده شود."
@@ -2558,7 +2929,13 @@ object FaStrings : Strings {
     override val showSubscriptionIconsTitle = "نمایش آیکون اشتراک‌ها"
     override val showSubscriptionIconsSubtitle = "آیکون پنل در سمت چپ نام اشتراک"
     override val subscriptionUserAgentLabel = "User-Agent اشتراک"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 پیکربندی کامل (FakeDNS، dns.hosts) را می‌گیرد؛ YPtun معمولاً فقط لینک‌ها"
+    override val subscriptionUserAgentSubtitle = "برنامه در درخواست به پنل اشتراک خود را چه بنامد. به‌طور پیش‌فرض دو درخواست است: اصلی با نام YPtun (نام‌ها و لینک‌های تمیز) و دومی با نام Happ/1.0 (پیکربندی FakeDNS سرور و راه جایگزین وقتی پنل YPtun را رد کند). «Happ» یک درخواست با Happ/1.0 است. «YPtun» یک درخواست با YPtun است و برنامه هرگز خود را Happ معرفی نمی‌کند (FakeDNS از پنل نمی‌آید). «v2rayTun» یک درخواست با v2raytun/<پلتفرم> است."
+    override val uaModeBoth = "Happ + YPtun (پیش‌فرض)"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "ارسال اطلاعات دستگاه به اشتراک‌ها"
+    override val sendDeviceInfoSubtitle = "HWID، شناسه برنامه، سیستم‌عامل و مدل دستگاه: پنل‌ها برای محدودیت دستگاه به آن‌ها نیاز دارند"
     override val globalEngineLabel = "موتور VLESS (سراسری)"
     override val globalEngineSubtitle = "هسته برای ترنسپورت‌های مشابه VLESS وقتی تنظیم سرور روی «خودکار» است. تنظیم هر سرور بر این اولویت دارد. xhttp همیشه از Xray استفاده می‌کند."
     override val globalEngineAuto = "خودکار"
@@ -2652,6 +3029,17 @@ object FaStrings : Strings {
     override val enableAdditionalProxy = "پراکسی اضافی (آبشاری)"
     override val secondProxySameAsMain =
         "این همان سرور پراکسی اصلی است — آبشار به خودش بی‌معناست"
+    override val enableWarp = "فعال‌سازی WARP"
+    override val warpModeSection = "سمت اتصال WARP"
+    override val warpModeClient = "در سمت کلاینت"
+    override val warpModeServer = "در سمت سرور"
+    override val warpModeClientSubtitle = "ابتدا WARP ← سپس VLESS"
+    override val warpModeServerSubtitle = "ابتدا VLESS ← خروج از طریق WARP"
+    override val warpProtocolSection = "پروتکل WARP"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "WireGuard ساده (ثبت رسمی Cloudflare). ممکن است DPI آن را مسدود کند"
+    override val warpProtocolAwgSubtitle = "AmneziaWG با مبهم‌سازی — در جاهایی که WireGuard مسدود است کار می‌کند"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
@@ -2697,6 +3085,29 @@ object FaStrings : Strings {
     override val showAliveCountTitle = "شمارندهٔ سرورهای در دسترس"
     override val showAliveCountSubtitle =
         "نمایش «فعال/کل» در سربرگ اشتراک بر اساس آخرین پینگ"
+    override val showPingControlsTitle = "مکث پینگ و پیشرفت آن"
+    override val showPingControlsSubtitle =
+        "نمایش دکمه‌های مکث/توقف هنگام پینگ و نوار پیشرفت زیر اشتراک"
+    override val appearanceTitle = "ظاهر"
+    override val appearanceSubtitle = "نماد برنامه"
+    override val appIconHint = "نماد صفحهٔ اصلی چند ثانیه بعد تغییر می‌کند. اگر لانچر نماد قبلی را نگه داشت یا حذف کرد، برنامه را دوباره به صفحهٔ اصلی اضافه کنید."
+    override val appIconWithCat = "با گربه"
+    override val appIconNoCat = "بدون گربه"
+    override val appIconNames = listOf("کلاسیک", "اقیانوس", "غروب", "نعنا", "بنفش", "طلایی", "آسمان", "نئون", "خورشید", "روشن")
+    override val pingTimeoutTitle = "مهلت پینگ"
+    override val pingTimeoutSubtitle = "حداکثر زمان انتظار برای پاسخ سرور (۲ تا ۱۵ ثانیه)"
+    override val pingPrecisionTitle = "دقت پینگ"
+    override val pingPrecisionSubtitle = "تعداد دفعات اندازه‌گیری: بهترین زمان نمایش داده می‌شود. سروری که بار اول پاسخ ندهد دوباره بررسی نمی‌شود."
+    override val pingPrecisionSingle = "تکی"
+    override val pingPrecisionDouble = "دوبل"
+    override val pingPrecisionTriple = "سه‌گانه"
+    override fun secondsShort(n: Int) = "$n ثانیه"
+    override val freeServersLimitTitle = "سقف سرورهای رایگان"
+    override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
+    override val freeServersLimitUnlimited = "نامحدود"
+    override val freeServersToBackground = "پس‌زمینه"
+    override val freeServersPagesTitle = "منبع: GitHub Page"
+    override val freeServersPagesSubtitle = "سرورهای رایگان از یک فهرست واحد گرفته شوند (تا ۲۰٬۰۰۰ لینک vless از سراسر GitHub، هر ساعت به‌روز می‌شود). خاموش — منابع قبلی"
     override val pingThreadsTitle = "رشته‌های پینگ"
     override val pingThreadsSubtitle = "چند موقعیت هم‌زمان بررسی شوند (۱ تا ۳۰) — برای پینگ و دکمه خودکار"
     override val pingModeAuto = "خودکار"
@@ -2760,12 +3171,15 @@ object FaStrings : Strings {
     override val tlsFragmentXray = "تکه‌تکه‌سازی TLS (ضد DPI، Xray)"
     override val coreAuto = "خودکار"
     override fun advancedCoreSettings(core: String) = "تنظیمات پیشرفتهٔ $core"
-    override val privacyPolicy = "سیاست حفظ حریم خصوصی"
-    override val termsOfService = "شرایط استفاده"
-    override val supportPage = "پشتیبانی و ارتباط"
 }
 
 object ZhStrings : Strings {
+    override val clearLogs = "清空"
+    override val liveActivityTitle = "灵动岛与实时活动"
+    override val liveActivitySubtitle = "在锁屏和灵动岛上显示连接状态"
+    override val privacyPolicy = "隐私政策"
+    override val termsOfService = "服务条款"
+    override val supportPage = "支持与联系"
     override val languageName = "中文"
     override val navConnection = "连接"
     override val navSettings = "设置"
@@ -2784,6 +3198,18 @@ object ZhStrings : Strings {
     override val refreshThisSubscription = "更新订阅"
     override val renameSubscription = "重命名"
     override val renameSubscriptionHint = "留空则恢复原名称"
+    override val subscriptionLink = "订阅链接"
+    override val subscriptionLinkHint = "新链接（http/https）。服务器、名称和设置会保留，订阅会立即从新链接刷新。"
+    override val subscriptionLinkReadOnlyHint = "无法修改此订阅的链接"
+    override val subscriptionLinkRejected = "链接被拒绝：必须是 http/https 地址，且不能与其他订阅相同"
+    override val subscriptionCascadeTitle = "整个订阅的级联"
+    override val subscriptionCascadeHint = "代理链接（vless://、vmess://、trojan://、ss://）。将作为第二代理写入订阅的所有服务器，刷新后保留。留空 — 移除"
+    override val subscriptionCascadeApply = "应用到全部"
+    override val subscriptionCascadeRemove = "移除级联"
+    override val subscriptionCascadeRejected = "级联被拒绝：需要可用的代理链接"
+    override val subscriptionCopyJson = "复制订阅 JSON"
+    override val subscriptionJsonCopied = "JSON 已复制 ✓"
+    override val subscriptionJsonEmpty = "无可复制内容：订阅服务器无法表示为 JSON"
     override val exitApp = "退出"
     override val visitSubscriptionPage = "打开订阅页面"
     override val sshAuthUseKey = "使用 SSH 密钥登录"
@@ -2873,7 +3299,6 @@ object ZhStrings : Strings {
     override val urlSchemesSubtitle = "深度链接导入与控制"
     override val logs = "日志"
     override val logsSubtitle = "诊断与导出"
-    override val clearLogs = "清空"
     override val info = "信息"
     override fun version(v: String) = "版本：$v"
     override fun xrayVersion(v: String) = "Xray：$v"
@@ -2905,10 +3330,10 @@ object ZhStrings : Strings {
     override val supportGithubStarHint = "免费支持项目的方式"
     override val autoConnectTitle = "启动时自动连接"
     override val autoConnectSubtitle = "打开应用时连接到选定的配置"
-    override val liveActivityTitle = "灵动岛与实时活动"
-    override val liveActivitySubtitle = "在锁屏和灵动岛上显示连接状态"
     override val showAutoButtonTitle = "主屏“自动”按钮"
     override val showAutoButtonSubtitle = "连接按钮旁的圆形按钮 — ping 所有服务器并连接到最快的"
+    override val showGroupAutoPickTitle = "订阅和分组的最快服务器按钮"
+    override val showGroupAutoPickSubtitle = "订阅、文件夹或自定义列表上的按钮 — ping 其中的服务器并连接到最快的"
     override val energySaverTitle = "省电模式"
     override val energySaverSubtitle = "降低电量消耗：减少健康检查频率、不记录日志。可能减慢自动恢复；下次连接时生效"
     override val batteryOptTitle = "关闭电池优化"
@@ -2916,6 +3341,16 @@ object ZhStrings : Strings {
     override val batteryOptDone = "电池优化已关闭 ✓"
     override val confirmDeleteTitle = "删除确认"
     override val confirmDeleteSubtitle = "删除订阅和配置前先询问"
+    override val allowConfigEditingTitle = "允许编辑配置"
+    override val allowConfigEditingSubtitle = "位置编辑器会显示配置的全部参数用于精细调整（AmneziaWG：Jc、Jmin、Jmax、S1–S4、H1–H4、I1–I5 等）。错误的值会使隧道失效"
+    override val awgTuningTitle = "AmneziaWG：精细调整"
+    override val awgTuningHint = "数值必须与服务器一致。留空表示不设置该参数。更改在保存位置时生效"
+    override val wgProtocolTitle = "协议"
+    override val wgLoadFile = "加载 AWG/WG 配置文件"
+    override val wgLoaded = "配置已加载"
+    override val wgReplaceFile = "替换配置文件"
+    override val wgMissingPrefix = "缺少："
+    override val wgConnectionTitle = "连接（密钥、地址、对端）"
     override val language = "语言"
     override val dns = "DNS"
     override val remoteDnsLabel = "远程 DNS（经代理）"
@@ -3071,15 +3506,28 @@ object ZhStrings : Strings {
     override val importFile = "从文件导入"
     override val importFileSubtitle = "订阅、olcrtc 或 sing-box 配置"
     override val freeServers = "免费节点"
-    override val freeServersSubtitle = "公共 VLESS 列表 — 下载并过滤可用节点"
+    override val freeServersSubtitle = "公共服务器列表 — 下载并过滤可用节点"
     override val freeServersLoading = "正在下载并测试免费节点…"
     override val freeServersWaitNotice = "搜索并测试服务器可能需要一些时间，请稍候…"
     override val selectAll = "全选"
     override val deselectAll = "取消全选"
     override val freeServersDisclaimer = "公共免费节点时效性较短，建议定期清理旧节点并重新添加。"
+    override val freeServersSourceNotice = "节点来自 GitHub 上的公开列表，与 YPtun 开发者无关——我们不创建也不控制它们。请自行承担风险。"
+    override val freeServersWarpAll = "为所有节点启用服务端 WARP"
+    override val freeServersWarpAllHint = "建议为免费节点开启：流量经 Cloudflare WARP 出口，而不是直接从陌生服务器出去（更安全）。俄罗斯节点用 AmneziaWG，其余用 WireGuard；可用节点右侧云图标单独关闭。"
     override fun addSelectedServers(count: Int) = "添加所选节点 ($count)"
     override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "已测试：$checked / $total（可用：$found）"
+    override val freeServersStopKeep = "停止并显示已找到的"
+    override val pingPause = "暂停"
+    override val pingResume = "继续"
+    override val pingRestart = "重新开始"
+    override val pingPausedLabel = "已暂停"
+    override fun pingProgress(done: Int, total: Int, alive: Int) = "已测试：$done / $total · 可用：$alive"
+    override fun etaLeft(sec: Int) = "剩余约 " + etaText(sec, "秒", "分钟", "小时")
+    override val freeServersContinue = "继续搜索"
+    override fun freeServersContinueLeft(n: Int) = "继续搜索 · 剩余 $n"
+    override val freeServersNothingYet = "尚未找到可用服务器"
     override val updateSubscriptionsAction = "更新订阅"
     override val updateSubscriptionsSubtitle = "刷新已导入的订阅节点"
     override val createCustomLocation = "创建自定义节点"
@@ -3168,9 +3616,15 @@ object ZhStrings : Strings {
     override fun ruBypassAutoManual(auto: Int, manual: Int) = "自动 $auto · 手动 $manual"
     override val releaseChannelLabel = "发布渠道"
     override fun downloadingAsset(name: String) = "正在下载 $name……"
+    override fun updateStage(step: Int, total: Int, title: String) = "第 $step/$total 步：$title"
+    override val updateStageDownloadPatch = "下载补丁"
+    override val updateStageDownloadInstaller = "下载安装程序"
+    override val updateStageApplyPatch = "应用补丁"
+    override val updateStageInstall = "安装并重启"
+    override val updateStageRestart = "重启"
     override fun downloadFailed(error: String) = "下载失败：$error"
     override fun installingAsset(name: String) = "正在安装 $name"
-    override fun hoursShort(n: Int) = "${n} 小时"
+    override fun hoursShort(n: Int) = if (n == 0) "从不" else "${n} 小时"
     override val themeColor = "主题色"
     override val elementColor = "元素颜色"
     override val textColor = "文字颜色"
@@ -3181,9 +3635,28 @@ object ZhStrings : Strings {
     override val subscriptionSupport = "支持"
     override val experimental = "实验性"
     override val experimentalSubtitle = "Telemost cookies 等"
+    override val privacy = "隐私"
+    override val privacySubtitle = "应用向外发送的内容"
+    override val providerReportTitle = "向订阅提供商报告（ProviderID）"
+    override val providerReportSubtitle = "每天告知提供商该订阅正在使用"
+    override val providerReportDetails = "如果提供商在订阅中添加了 providerid 响应头（Remnawave 和 Happ 面板会这样做），应用每天会向 check.happ-proxy.com/provider 发送一次请求，其中包含：提供商 ID、设备标识（HWID）、应用 ID、系统及其版本、设备型号和应用版本。没有此报告订阅也能正常使用。关闭后根本不会发送该请求。刷新订阅时，应用仍会向面板提供设备信息，面板需要这些信息来限制设备数量。"
     override val experimentalUnlocked = "已解锁实验性设置"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
+
+    override val notifPingTitle = "通知栏显示延迟"
+
+    override val notifPingSubtitle = "开启：延迟单独一行显示在速度上方。关闭：显示在服务器名称之后"
+
+    override val notifPingWord = "延迟"
+
+    override val notifPingSourceTitle = "延迟来源"
+
+    override val notifPingSourceLast = "最近一次（手动测得）"
+
+    override val notifPingSourceAuto = "通过隧道自动测量"
+
+    override val notifPingIntervalLabel = "每隔多少分钟"
     override val speedOnHomeTitle = "主屏幕显示速度"
     override val speedOnHomeSubtitle = "在所选配置下方显示 ↓ 和 ↑"
     override val roomsInNotifTitle = "通知中显示房间 / 服务器"
@@ -3192,7 +3665,7 @@ object ZhStrings : Strings {
     override val notifySubExpirySubtitle = "在订阅结束前几天发送本地通知。"
     override val panelAnnouncementsTitle = "面板公告"
     override val panelAnnouncementsSubtitle = "当面板所有者发送公告时显示系统通知。"
-    override val vpsAutoInstallTitle = "在 VPS 上自动安装 (Beta)"
+    override val vpsAutoInstallTitle = "在 VPS 上自动安装"
     override val vpsAutoInstallSubtitle = "将引擎部署到 VPS。"
     override val hideEndpointWhenDescriptionTitle = "有描述时隐藏 IP 和协议"
     override val hideEndpointWhenDescriptionSubtitle = "如果位置有描述，则在连接点显示描述而非协议和 IP。"
@@ -3207,7 +3680,13 @@ object ZhStrings : Strings {
     override val showSubscriptionIconsTitle = "显示订阅图标"
     override val showSubscriptionIconsSubtitle = "在订阅名称左侧显示面板图标"
     override val subscriptionUserAgentLabel = "订阅 User-Agent"
-    override val subscriptionUserAgentSubtitle = "Happ/1.0 会获取完整配置（FakeDNS、dns.hosts）；YPtun 通常只返回链接"
+    override val subscriptionUserAgentSubtitle = "应用向订阅面板请求时自称什么。默认发两次请求：主请求以 YPtun 身份（名称和链接更干净），第二次以 Happ/1.0 身份（获取服务器的 FakeDNS 配置，并在面板拒绝 YPtun 时作为备用）。“Happ”只发一次请求，身份为 Happ/1.0。“YPtun”只发一次请求，应用完全不冒充 Happ（面板不会提供 FakeDNS）。“v2rayTun”只发一次请求，身份为 v2raytun/<平台>。"
+    override val uaModeBoth = "Happ + YPtun（默认）"
+    override val uaModeHapp = "Happ"
+    override val uaModeYptun = "YPtun"
+    override val uaModeV2raytun = "v2rayTun"
+    override val sendDeviceInfoTitle = "向订阅发送设备数据"
+    override val sendDeviceInfoSubtitle = "HWID、应用 ID、系统和设备型号：面板需要它们来限制设备数量"
     override val globalEngineLabel = "VLESS 内核（全局）"
     override val globalEngineSubtitle = "当服务器设置为“自动”时，VLESS 类传输使用的内核。每服务器的选择会覆盖此项。xhttp 始终使用 Xray。"
     override val globalEngineAuto = "自动"
@@ -3317,6 +3796,17 @@ object ZhStrings : Strings {
     override val enableAdditionalProxy = "附加代理（级联）"
     override val secondProxySameAsMain =
         "这与主代理是同一台服务器——级联到自身没有意义"
+    override val enableWarp = "启用 WARP"
+    override val warpModeSection = "WARP 连接端"
+    override val warpModeClient = "客户端"
+    override val warpModeServer = "服务端"
+    override val warpModeClientSubtitle = "先连接 WARP → 再连接 VLESS"
+    override val warpModeServerSubtitle = "先连接 VLESS → 通过 WARP 出口"
+    override val warpProtocolSection = "WARP 协议"
+    override val warpProtocolWg = "WireGuard"
+    override val warpProtocolAwg = "AmneziaWG"
+    override val warpProtocolWgSubtitle = "普通 WireGuard（Cloudflare 官方注册），部分运营商 DPI 会拦截"
+    override val warpProtocolAwgSubtitle = "带混淆的 AmneziaWG，WireGuard 被封锁时仍可用"
     override val freeturnTransportSection = "Freeturn 传输"
     override val freeturnTransportSubtitle = "VK TURN 中继端点与混淆"
     override val wireguardSubtitle = "sing-box 经本地 freeturn 监听器拨号的隧道"
@@ -3362,6 +3852,29 @@ object ZhStrings : Strings {
     override val showAliveCountTitle = "可达服务器计数"
     override val showAliveCountSubtitle =
         "在订阅标题中显示上次测试的“可用/总数”"
+    override val showPingControlsTitle = "测试暂停与进度"
+    override val showPingControlsSubtitle =
+        "测试时显示暂停/停止按钮，并在订阅下方显示“已测试 N / M”"
+    override val appearanceTitle = "外观"
+    override val appearanceSubtitle = "应用图标"
+    override val appIconHint = "桌面图标会在几秒后更换。如果启动器保留了旧图标或图标消失，请重新把应用添加到桌面。"
+    override val appIconWithCat = "有猫"
+    override val appIconNoCat = "无猫"
+    override val appIconNames = listOf("经典", "海洋", "日落", "薄荷", "紫罗兰", "金色", "天空", "霓虹", "阳光", "浅色")
+    override val pingTimeoutTitle = "测试超时"
+    override val pingTimeoutSubtitle = "等待服务器响应的最长时间（2–15 秒）"
+    override val pingPrecisionTitle = "测试精度"
+    override val pingPrecisionSubtitle = "测量次数：显示其中最快的时间。首次无响应的服务器不会重复测量。"
+    override val pingPrecisionSingle = "单次"
+    override val pingPrecisionDouble = "双次"
+    override val pingPrecisionTriple = "三次"
+    override fun secondsShort(n: Int) = "${n} 秒"
+    override val freeServersLimitTitle = "免费节点上限"
+    override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
+    override val freeServersLimitUnlimited = "不限"
+    override val freeServersToBackground = "转后台"
+    override val freeServersPagesTitle = "来源：GitHub Page"
+    override val freeServersPagesSubtitle = "免费节点取自统一列表（从 GitHub 汇总最多 20000 条 vless 链接，每小时更新）。关闭 — 使用内置来源"
     override val pingThreadsTitle = "测试线程"
     override val pingThreadsSubtitle = "同时测试多少个节点（1–30）— 测速和自动连接共用"
     override val pingModeAuto = "自动"
@@ -3372,7 +3885,7 @@ object ZhStrings : Strings {
     override val pingResultLabel = "测试结果"
     override val pingResultTime = "时间"
     override val pingResultIcon = "图标"
-    override val pingResultBoth = "图标与数值"
+    override val pingResultBoth = "图标和数值"
     override val scanQrTitle = "扫描二维码"
     override val readyToScan = "准备扫描"
     override val subscriptionOrLocationUri = "订阅或节点 URI"
@@ -3425,7 +3938,4 @@ object ZhStrings : Strings {
     override val tlsFragmentXray = "TLS 分片（反 DPI，Xray）"
     override val coreAuto = "自动"
     override fun advancedCoreSettings(core: String) = "$core 高级设置"
-    override val privacyPolicy = "隐私政策"
-    override val termsOfService = "服务条款"
-    override val supportPage = "支持与联系"
 }

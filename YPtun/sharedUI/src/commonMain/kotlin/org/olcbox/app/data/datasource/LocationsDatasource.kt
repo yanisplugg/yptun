@@ -33,6 +33,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.importer.AmneziaWgParser
+import org.olcbox.app.data.importer.CsqttUriParser
 import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
@@ -767,6 +768,18 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun setLocationPinned(storageId: String, pinned: Boolean) {
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.storageId == storageId }) return@withLock
+            val updated = bundle.locations.map { entry ->
+                if (entry.storageId != storageId) entry
+                else entry.copy(metadata = (entry.metadata ?: LocationMetadata()).copy(pinned = pinned)).normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
     override suspend fun deleteLocations(storageIds: Collection<String>) {
         if (storageIds.isEmpty()) return
         val ids = storageIds.toHashSet()
@@ -1339,6 +1352,9 @@ class LocationsRepositoryImpl(
 
         // VK-TURN qWDTT share links and configs (qwdtt://, wdtt://, or JSON profile/array/subscription):
         parseQwdttText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
+        // VK-TURN csqtt connection links (csqtt://connect?v=2&...):
+        parseCsqttText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
         // snolc share links (snolc://):
         parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
@@ -2188,6 +2204,42 @@ class LocationsRepositoryImpl(
             subscriptionUrl = subscriptionUrl,
             metadata = metadata
         )
+    }
+
+    /**
+     * Parses every [CsqttUriParser.SCHEME] link into a csqtt-core [EngineType.VkTurn] location. Like
+     * qWDTT there is no proxy profile: the server hands the tunnel address over at runtime.
+     */
+    private fun parseCsqttText(
+        text: String,
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(CsqttUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { CsqttUriParser.parse(it) }
+            .map { link ->
+                val location = LocationConfig(
+                    name = "csqtt ${link.host}",
+                    engine = EngineType.VkTurn,
+                    vkturn = VkTurnConfig(
+                        core = VkTurnConfig.CORE_CSQTT,
+                        csqttPeer = link.host,
+                        csqttPort = link.port,
+                        csqttPassword = link.password,
+                        vkLink = link.hashes,
+                    ),
+                ).normalized()
+                val base = link.host.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val storageId = uniqueStorageId("imported_csqtt_$base", usedStorageIds)
+                LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl, metadata = locationMetadata)
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
     private fun parseOpenFluxText(

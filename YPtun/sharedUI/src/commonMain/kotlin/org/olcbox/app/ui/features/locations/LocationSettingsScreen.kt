@@ -7,9 +7,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -83,6 +80,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.ui.features.locations.components.SshAuthFields
+import org.olcbox.app.ui.features.locations.components.SshKeyLoadButton
+import org.olcbox.app.vpn.csqtt.CsqttInstallOptions
+import org.olcbox.app.vpn.csqtt.rememberCsqttServerInstaller
 import org.olcbox.app.vpn.wdtt.WdttInstallOptions
 import org.olcbox.app.vpn.wdtt.rememberWdttServerInstaller
 import org.olcbox.app.vpn.freeturn.FreeturnExit
@@ -91,9 +91,9 @@ import org.olcbox.app.vpn.freeturn.rememberFreeturnServerInstaller
 import org.olcbox.app.vpn.masterdns.MasterDnsInstallOptions
 import org.olcbox.app.vpn.masterdns.rememberMasterDnsServerInstaller
 import org.olcbox.app.vpn.openflux.OpenFluxInstallOptions
-import org.olcbox.app.vpn.openflux.rememberOpenFluxServerInstaller
 import org.olcbox.app.vpn.snolc.SnolcInstallOptions
 import org.olcbox.app.vpn.snolc.rememberSnolcServerInstaller
+import org.olcbox.app.vpn.openflux.rememberOpenFluxServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,6 +112,7 @@ import androidx.compose.ui.unit.dp
 import org.olcbox.app.data.importer.VkTurnDraft
 import org.olcbox.app.data.model.AdvancedCoreConfig
 import org.olcbox.app.data.model.MasterDnsConfig
+import org.olcbox.app.data.model.OpenFluxCarrier
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.EngineType
@@ -119,8 +120,13 @@ import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
+import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.ui.components.PingButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
@@ -175,6 +181,8 @@ fun LocationSettingsScreen(
 ) {
     val s = LocalStrings.current
     val config = viewModel.editingConfig
+    // Settings → «Разрешить редактирование конфигураций»: every AmneziaWG parameter becomes a field.
+    val allowConfigEditing = LocalAllowConfigEditing.current
     val name = viewModel.editingName
     val isSaving = viewModel.isSaving
     val normalizedTransport = LocationConfig.normalizeTransport(
@@ -192,6 +200,15 @@ fun LocationSettingsScreen(
             draft = viewModel.editingVkTurn,
             onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
             onDismiss = { showWdttInstall = false }
+        )
+    }
+
+    var showCsqttInstall by remember { mutableStateOf(false) }
+    if (showCsqttInstall) {
+        CsqttInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
+            onDismiss = { showCsqttInstall = false }
         )
     }
 
@@ -241,7 +258,6 @@ fun LocationSettingsScreen(
             onDismiss = { showSnolcInstall = false }
         )
     }
-
     var showOpenFluxInstall by remember { mutableStateOf(false) }
     if (showOpenFluxInstall) {
         OpenFluxInstallDialog(
@@ -290,16 +306,10 @@ fun LocationSettingsScreen(
             }
         }
     ) { innerPadding ->
-        val focusManager = LocalFocusManager.current
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = {
-                        focusManager.clearFocus()
-                    })
-                },
+                .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -321,8 +331,10 @@ fun LocationSettingsScreen(
             item {
                 EngineSelector(
                     selected = config.engine,
+                    wireguard = viewModel.isWireguardEngine,
                     enabled = !isSaving,
-                    onSelected = viewModel::onEngineChanged
+                    onSelected = viewModel::onEngineChanged,
+                    onWireguard = viewModel::onWireguardEngineSelected
                 )
             }
 
@@ -339,11 +351,36 @@ fun LocationSettingsScreen(
                 }
             }
 
+            if (viewModel.isWireguardEngine) {
+                item {
+                    WireguardEngineSection(
+                        ini = config.proxy?.awgConfig.orEmpty(),
+                        missing = viewModel.wireguardMissing,
+                        allowEditing = allowConfigEditing,
+                        enabled = !isSaving,
+                        onProtocol = viewModel::onWireguardProtocolChanged,
+                        onIni = viewModel::onWireguardIniChanged,
+                        onKnob = viewModel::onAwgKnobChanged
+                    )
+                }
+            } else if (allowConfigEditing && config.proxy?.type == ProxyProfile.TYPE_AMNEZIAWG &&
+                config.engine == EngineType.Chain
+            ) {
+                item {
+                    AwgTuningSection(
+                        ini = config.proxy?.awgConfig.orEmpty(),
+                        enabled = !isSaving,
+                        onChange = viewModel::onAwgKnobChanged
+                    )
+                }
+            }
+
             if (config.engine == EngineType.Standard || config.engine == EngineType.Chain) {
                 // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
-                item {
+                // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
+                if (!viewModel.isWireguardEngine) item {
                     CoreSelector(
                         selected = config.core,
                         enabled = !isSaving,
@@ -353,7 +390,7 @@ fun LocationSettingsScreen(
                     )
                 }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
-                if (config.core != ProxyCore.Auto) {
+                if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
                     item {
                         AdvancedCoreSection(
                             core = config.core,
@@ -395,6 +432,100 @@ fun LocationSettingsScreen(
                         }
                     }
                 }
+
+                // Cloudflare WARP chaining for VLESS: toggle + side selector (client vs server)
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VkTurnSwitchRow(
+                            label = LocalStrings.current.enableWarp,
+                            checked = config.warpEnabled,
+                            enabled = !isSaving,
+                            onCheckedChange = viewModel::onWarpEnabledChanged
+                        )
+                        if (config.warpEnabled) {
+                            val modes = listOf(WarpMode.Client, WarpMode.Server)
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = LocalStrings.current.warpModeSection,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    modes.forEachIndexed { index, mode ->
+                                        SegmentedButton(
+                                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                                            selected = config.warpMode == mode,
+                                            onClick = { viewModel.onWarpModeChanged(mode) },
+                                            enabled = !isSaving,
+                                            label = {
+                                                Text(
+                                                    text = if (mode == WarpMode.Client) {
+                                                        LocalStrings.current.warpModeClient
+                                                    } else {
+                                                        LocalStrings.current.warpModeServer
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (config.warpMode == WarpMode.Client) {
+                                        LocalStrings.current.warpModeClientSubtitle
+                                    } else {
+                                        LocalStrings.current.warpModeServerSubtitle
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = LocalStrings.current.warpProtocolSection,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                val protocols = listOf(WarpProtocol.Wg, WarpProtocol.Awg)
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    protocols.forEachIndexed { index, protocol ->
+                                        SegmentedButton(
+                                            shape = SegmentedButtonDefaults.itemShape(index = index, count = protocols.size),
+                                            selected = config.warpProtocol == protocol,
+                                            onClick = { viewModel.onWarpProtocolChanged(protocol) },
+                                            enabled = !isSaving,
+                                            label = {
+                                                Text(
+                                                    text = if (protocol == WarpProtocol.Wg) {
+                                                        LocalStrings.current.warpProtocolWg
+                                                    } else {
+                                                        LocalStrings.current.warpProtocolAwg
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (config.warpProtocol == WarpProtocol.Wg) {
+                                        LocalStrings.current.warpProtocolWgSubtitle
+                                    } else {
+                                        LocalStrings.current.warpProtocolAwgSubtitle
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             if (config.engine == EngineType.VkTurn) {
@@ -404,6 +535,7 @@ fun LocationSettingsScreen(
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true },
+                    onCsqttAutoInstall = { showCsqttInstall = true },
                     onFreeturnAutoInstall = { showFreeturnInstall = true }
                 )
             }
@@ -418,16 +550,6 @@ fun LocationSettingsScreen(
                 )
             }
 
-            if (config.engine == EngineType.OpenFlux) {
-                openFluxSection(
-                    config = viewModel.editingOpenFlux,
-                    enabled = !isSaving,
-                    showAutoInstall = allowVpsAutoInstall,
-                    onChange = viewModel::updateOpenFlux,
-                    onAutoInstall = { showOpenFluxInstall = true }
-                )
-            }
-
             if (config.engine == EngineType.Snolc) {
                 snolcSection(
                     config = viewModel.editingSnolc,
@@ -435,6 +557,16 @@ fun LocationSettingsScreen(
                     showAutoInstall = allowVpsAutoInstall,
                     onChange = viewModel::updateSnolc,
                     onAutoInstall = { showSnolcInstall = true }
+                )
+            }
+
+            if (config.engine == EngineType.OpenFlux) {
+                openFluxSection(
+                    config = viewModel.editingOpenFlux,
+                    enabled = !isSaving,
+                    showAutoInstall = allowVpsAutoInstall,
+                    onChange = viewModel::updateOpenFlux,
+                    onAutoInstall = { showOpenFluxInstall = true }
                 )
             }
 
@@ -717,10 +849,15 @@ private fun SectionTitle(
 @Composable
 private fun EngineSelector(
     selected: EngineType,
+    wireguard: Boolean,
     enabled: Boolean,
-    onSelected: (EngineType) -> Unit
+    onSelected: (EngineType) -> Unit,
+    onWireguard: () -> Unit
 ) {
+    // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
+    // "iPadOS" on an iPad, which a check for "iOS" would miss.
     val options = remember {
+        val ios = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
         listOf(
             EngineType.Stealth,
             EngineType.Standard,
@@ -729,13 +866,16 @@ private fun EngineSelector(
             EngineType.MasterDns,
             EngineType.OpenFlux,
             EngineType.Snolc
-        )
+        ).filterNot { ios && (it == EngineType.OpenFlux || it == EngineType.Snolc) }
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        SectionTitle(title = LocalStrings.current.engineSection, subtitle = engineSubtitle(selected))
+        SectionTitle(
+            title = LocalStrings.current.engineSection,
+            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE else engineSubtitle(selected)
+        )
 
         // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
         // inner dividers between the cells. Two equal-width cells per row; the row height tracks the
@@ -748,20 +888,25 @@ private fun EngineSelector(
                 .clip(shape)
                 .border(BorderStroke(1.dp, outline), shape)
         ) {
-            options.chunked(2).forEachIndexed { rowIndex, rowOptions ->
+            // AmneziaWG/WG sits right after Standard: it IS a Standard location (see LocationViewModel.isWireguardEngine).
+            val cells = options.flatMap { engine ->
+                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && wireguard)) { onSelected(engine) }
+                if (engine == EngineType.Standard) listOf(cell, EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)) else listOf(cell)
+            }
+            cells.chunked(2).forEachIndexed { rowIndex, rowOptions ->
                 if (rowIndex > 0) HorizontalDivider(color = outline)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(IntrinsicSize.Min)
                 ) {
-                    rowOptions.forEachIndexed { colIndex, engine ->
+                    rowOptions.forEachIndexed { colIndex, cell ->
                         if (colIndex > 0) VerticalDivider(color = outline)
                         EngineCell(
-                            label = engineLabel(engine),
-                            selected = selected == engine,
+                            label = cell.label,
+                            selected = cell.selected,
                             enabled = enabled,
-                            onClick = { onSelected(engine) },
+                            onClick = cell.onClick,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -775,7 +920,87 @@ private fun EngineSelector(
     }
 }
 
-/** A single segment of the 2×2 engine block: fills its half, highlights (filled + check) when selected. */
+private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
+private const val WIREGUARD_NEEDS_EDITING = "Загрузите файл конфигурации или включите в настройках «Разрешить редактирование конфигураций», чтобы ввести ключи и параметры вручную"
+private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
+
+private class EngineCellSpec(val label: String, val selected: Boolean, val onClick: () -> Unit)
+
+/**
+ * The AmneziaWG/WG engine page: the protocol (AmneziaWG has obfuscation parameters, WireGuard none) and, with the
+ * "allow editing configurations" setting, every parameter of the wg-quick config as its own field, keys included.
+ */
+@Composable
+private fun WireguardEngineSection(
+    ini: String,
+    missing: List<String>,
+    allowEditing: Boolean,
+    enabled: Boolean,
+    onProtocol: (Boolean) -> Unit,
+    onIni: (String) -> Unit,
+    onKnob: (AwgIniEditor.Knob, String) -> Unit
+) {
+    val s = LocalStrings.current
+    val isAwg = AwgIniEditor.isAwg(ini)
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(s.wgProtocolTitle, style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = isAwg, onClick = { onProtocol(true) }, enabled = enabled, label = { Text("AmneziaWG") })
+            FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
+        }
+        if (!allowEditing) {
+            val loaded = missing.isEmpty()
+            if (loaded) {
+                Text(
+                    "✓ ${s.wgLoaded}: ${if (isAwg) "AmneziaWG" else "WireGuard"} · ${AwgIniEditor.get(ini, "Endpoint", AwgIniEditor.Section.Peer)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                // The parameters are fields, and fields are what "allow editing configurations" turns on.
+                Text(WIREGUARD_NEEDS_EDITING, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            SshKeyLoadButton(enabled = enabled, onKeyLoaded = onIni, label = if (loaded) s.wgReplaceFile else s.wgLoadFile)
+        } else if (missing.isNotEmpty()) {
+            Text(
+                s.wgMissingPrefix + missing.joinToString(", "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        if (allowEditing) {
+            Text(s.wgConnectionTitle, style = MaterialTheme.typography.titleSmall)
+            AwgIniEditor.CONNECTION.forEach { knob ->
+                VkTurnField(
+                    value = AwgIniEditor.get(ini, knob.key, knob.section),
+                    onValueChange = { onKnob(knob, it) },
+                    label = knob.key,
+                    placeholder = knob.hint,
+                    enabled = enabled
+                )
+            }
+            if (isAwg) {
+                AwgTuningSection(ini = ini, enabled = enabled, onChange = onKnob)
+            } else {
+                // Plain WireGuard has no obfuscation, only the tunnel itself.
+                listOf("MTU", "PersistentKeepalive", "DNS")
+                    .mapNotNull { key -> AwgIniEditor.KNOBS.firstOrNull { it.key == key } }
+                    .forEach { knob ->
+                        VkTurnField(
+                            value = AwgIniEditor.get(ini, knob.key, knob.section),
+                            onValueChange = { onKnob(knob, it) },
+                            label = knob.key,
+                            placeholder = knob.hint,
+                            enabled = enabled,
+                            keyboardType = if (knob.kind == AwgIniEditor.Kind.Number) KeyboardType.Number else KeyboardType.Text
+                        )
+                    }
+            }
+        }
+    }
+}
+
+/** A single segment of the 2x2 engine block: fills its half, highlights (filled + check) when selected. */
 @Composable
 private fun EngineCell(
     label: String,
@@ -829,7 +1054,6 @@ private fun ProxyField(
     enabled: Boolean,
     onChange: (String) -> Unit
 ) {
-    val focusManager = LocalFocusManager.current
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -851,16 +1075,7 @@ private fun ProxyField(
                 if (text != null) Text(text)
             },
             minLines = 2,
-            modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-            trailingIcon = {
-                if (link.isNotEmpty() && enabled) {
-                    IconButton(onClick = { onChange("") }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear")
-                    }
-                }
-            }
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -936,7 +1151,7 @@ private fun LazyListScope.masterDnsSection(
                 ) {
                     Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Автоустановка на VPS (Beta)")
+                    Text("Автоустановка на VPS")
                 }
             }
         }
@@ -991,7 +1206,6 @@ private fun LazyListScope.proxyOverTunnelSection(
                 }
             )
             if (proxyOn) {
-                val focusManager = LocalFocusManager.current
                 OutlinedTextField(
                     value = proxyLink,
                     onValueChange = onLinkChange,
@@ -999,16 +1213,7 @@ private fun LazyListScope.proxyOverTunnelSection(
                     placeholder = { Text("vless://… / trojan://… / ss://…") },
                     enabled = enabled,
                     minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                    trailingIcon = {
-                        if (proxyLink.isNotEmpty() && enabled) {
-                            IconButton(onClick = { onLinkChange("") }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear")
-                            }
-                        }
-                    }
+                    modifier = Modifier.fillMaxWidth()
                 )
                 CoreSelector(
                     selected = proxyCore,
@@ -1030,6 +1235,7 @@ private fun LazyListScope.vkTurnSection(
     showAutoInstall: Boolean,
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
     onWdttAutoInstall: () -> Unit,
+    onCsqttAutoInstall: () -> Unit,
     onFreeturnAutoInstall: () -> Unit
 ) {
     item {
@@ -1049,16 +1255,79 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео"
+                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео; csqtt — туннель поверх TURN/RTP (Rust), только Android и ПК"
             )
             SettingsDropdown(
                 label = "Ядро",
                 selectedValue = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
-                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT),
+                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT, VkTurnConfig.CORE_CSQTT),
                 enabled = enabled,
                 onValueSelected = { v -> onChange { it.copy(core = v) } },
-                valueLabel = { if (it == VkTurnConfig.CORE_WDTT) "qWDTT (агрегация по звонкам)" else "freeturn (стандарт)" }
+                valueLabel = {
+                    when (it) {
+                        VkTurnConfig.CORE_WDTT -> "qWDTT (агрегация по звонкам)"
+                        VkTurnConfig.CORE_CSQTT -> "csqtt (TURN/RTP, Rust)"
+                        else -> "freeturn (стандарт)"
+                    }
+                }
             )
+            if (draft.core == VkTurnConfig.CORE_CSQTT) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    VkTurnField(
+                        value = draft.csqttPeer,
+                        onValueChange = { v -> onChange { it.copy(csqttPeer = v.trim()) } },
+                        label = "IP сервера csqtt",
+                        placeholder = "203.0.113.7",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Uri,
+                        modifier = Modifier.weight(2f)
+                    )
+                    VkTurnField(
+                        value = draft.csqttPort,
+                        onValueChange = { v -> onChange { it.copy(csqttPort = v.filter(Char::isDigit)) } },
+                        label = "Порт",
+                        placeholder = "46000",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                VkTurnField(
+                    value = draft.csqttPassword,
+                    onValueChange = { v -> onChange { it.copy(csqttPassword = v) } },
+                    label = "Пароль csqtt",
+                    placeholder = "ключ WRAP выводится из пароля",
+                    enabled = enabled
+                )
+                // Auto-install the csqtt server on a VPS (opens an SSH connect dialog); same gate as qWDTT.
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onCsqttAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Автоустановка на VPS")
+                    }
+                }
+                VkTurnField(
+                    value = draft.csqttWorkers,
+                    onValueChange = { v -> onChange { it.copy(csqttWorkers = v.filter(Char::isDigit)) } },
+                    label = "Воркеры csqtt (0 — по умолчанию)",
+                    placeholder = "0 — авто (27 на звонок, до 72); кратно 9, максимум 126",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+                CsqttAdvanced(
+                    options = draft.csqtt,
+                    enabled = enabled,
+                    onChange = { transform -> onChange { it.copy(csqtt = transform(it.csqtt)) } }
+                )
+            }
             if (draft.core == VkTurnConfig.CORE_WDTT) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1100,7 +1369,7 @@ private fun LazyListScope.vkTurnSection(
                     ) {
                         Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Автоустановка на VPS (Beta)")
+                        Text("Автоустановка на VPS")
                     }
                 }
                 VkTurnField(
@@ -1122,7 +1391,7 @@ private fun LazyListScope.vkTurnSection(
 
     // freeturn-only transport/exit section — entirely hidden for the WDTT core (it connects purely by the
     // wdtt-server IP[:port] above and fetches its WireGuard config from the server).
-    if (draft.core != VkTurnConfig.CORE_WDTT) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT) item {
         val isWdtt = false
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1269,7 +1538,8 @@ private fun LazyListScope.vkTurnSection(
     }
 
     // WireGuard/AmneziaWG key block — hidden for the WDTT core (keys come from the server, not the user).
-    if (draft.core != VkTurnConfig.CORE_WDTT && draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT &&
+        draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
         val isAwg = draft.outbound == VkTurnConfig.OUTBOUND_AMNEZIAWG
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1395,7 +1665,6 @@ private fun LazyListScope.vkTurnSection(
     // Proxy exit (vless/vmess/trojan/ss) — used when outbound == proxy; dialled THROUGH the
     // freeturn TCP listener (mode=tcp).
     if (draft.outbound == VkTurnConfig.OUTBOUND_PROXY) item {
-        val focusManager = LocalFocusManager.current
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1411,16 +1680,7 @@ private fun LazyListScope.vkTurnSection(
                 placeholder = { Text("vless://… / trojan://… / ss://…") },
                 enabled = enabled,
                 minLines = 2,
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                trailingIcon = {
-                    if (draft.outboundProxyLink.isNotEmpty() && enabled) {
-                        IconButton(onClick = { onChange { it.copy(outboundProxyLink = "") } }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear")
-                        }
-                    }
-                }
+                modifier = Modifier.fillMaxWidth()
             )
             CoreSelector(
                 selected = draft.proxyCore,
@@ -1434,7 +1694,6 @@ private fun LazyListScope.vkTurnSection(
     // second hop). A toggle enables or disables it; turning it off clears the link so the composer
     // falls back to the plain tunnel.
     if (draft.outbound != VkTurnConfig.OUTBOUND_PROXY) item {
-        val focusManager = LocalFocusManager.current
         var proxyEnabled by remember(draft.chainProxyLink.isNotBlank()) {
             mutableStateOf(draft.chainProxyLink.isNotBlank())
         }
@@ -1463,16 +1722,7 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = { Text("vless://… / trojan://… / ss://…") },
                     enabled = enabled,
                     minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                    trailingIcon = {
-                        if (draft.chainProxyLink.isNotEmpty() && enabled) {
-                            IconButton(onClick = { onChange { it.copy(chainProxyLink = "") } }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear")
-                            }
-                        }
-                    }
+                    modifier = Modifier.fillMaxWidth()
                 )
                 CoreSelector(
                     selected = draft.proxyCore,
@@ -1525,6 +1775,316 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
                     color = LocalContentColor.current
                 )
             }
+        }
+    }
+}
+
+/**
+ * OpenFlux editor: the carrier (Yandex Docs or a MAX call) with its coordinates, the DNS server reached
+ * through the tunnel, and the exit-node auto-install. The client serves a local SOCKS5 the TUN bridge
+ * consumes directly; the exit node on the VPS is the internet exit.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+private fun LazyListScope.openFluxSection(
+    config: OpenFluxConfig,
+    enabled: Boolean,
+    showAutoInstall: Boolean,
+    onChange: ((OpenFluxConfig) -> OpenFluxConfig) -> Unit,
+    onAutoInstall: () -> Unit
+) {
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "OpenFlux — туннель через сервисы",
+                subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
+            )
+            VkTurnSwitchRow("Мультитранспорт: несколько каналов, при сбое — запасной", config.isSession(), enabled) { v ->
+                onChange { it.withSession(v) }
+            }
+            if (config.isSession()) {
+                OpenFluxCarriersEditor(config, enabled, onChange)
+            } else {
+                // All three carriers on screen at once: behind a dropdown the new-editor one went unnoticed.
+                Text(
+                    text = "Транспорт",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OpenFluxConfig.TRANSPORTS.forEach { transport ->
+                        FilterChip(
+                            selected = config.transport == transport,
+                            onClick = { onChange { it.copy(transport = transport) } },
+                            enabled = enabled,
+                            label = {
+                                Text(
+                                    when (transport) {
+                                        OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
+                                        OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
+                                        OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
+                                        OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
+                                        OpenFluxConfig.TRANSPORT_AVITO -> "Avito Code (комнаты)"
+                                        OpenFluxConfig.TRANSPORT_TELEMOST -> "Яндекс Телемост (экспериментально)"
+                                        else -> "Яндекс Документы · старый редактор"
+                                    }
+                                )
+                            }
+                        )
+                    }
+                }
+                if (config.usesMax()) {
+                    VkTurnField(
+                        value = config.maxToken,
+                        onValueChange = { v -> onChange { it.copy(maxToken = v.trim()) } },
+                        label = "Твой токен MAX (веб)",
+                        placeholder = "токен аккаунта, с которого звонит клиент",
+                        enabled = enabled
+                    )
+                    VkTurnField(
+                        value = config.maxUid,
+                        onValueChange = { v -> onChange { it.copy(maxUid = v.filter(Char::isDigit)) } },
+                        label = "ID аккаунта выходной ноды в MAX",
+                        placeholder = "кому звонить; у ноды свой токен",
+                        enabled = enabled,
+                        isError = config.maxUid.isNotBlank() && config.maxUid.toLongOrNull() == null,
+                        keyboardType = KeyboardType.Number
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = config.docUrl,
+                        onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
+                        label = {
+                            Text(
+                                when (config.transport) {
+                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
+                                    OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
+                                    OpenFluxConfig.TRANSPORT_AVITO -> "Список комнат Avito Code"
+                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "Ссылка на конференцию Телемоста"
+                                    else -> "Ссылка на Яндекс Документ"
+                                }
+                            )
+                        },
+                        placeholder = {
+                            Text(
+                                when (config.transport) {
+                                    OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
+                                    OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
+                                    OpenFluxConfig.TRANSPORT_AVITO -> "строка, которую напечатала выходная нода"
+                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/…"
+                                    else -> "https://docs.yandex.ru/…"
+                                }
+                            )
+                        },
+                        supportingText = {
+                            Text(
+                                if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
+                                    "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
+                                    "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_AVITO) {
+                                    "Выходная нода сама создаёт комнаты на code.avito.ru и печатает их список — вставь его сюда. Нужны cookie аккаунта (поле ниже) на клиенте и на ноде; скорость складывается по комнатам."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_TELEMOST) {
+                                    "Конференция Яндекс Телемоста: туннель идёт видео через SFU, пять линий (до ~1,5 МБ/с). Одна конференция — один клиент и одна нода; ссылку получает и нода (ей нужна версия с Телемостом — переустанови)."
+                                } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
+                                    "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
+                                } else {
+                                    "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
+                                }
+                            )
+                        },
+                        enabled = enabled,
+                        minLines = 1,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            if (config.usesCarrier(OpenFluxConfig.TRANSPORT_AVITO)) {
+                VkTurnField(
+                    value = config.avitoCookies,
+                    onValueChange = { v -> onChange { it.copy(avitoCookies = v.trim()) } },
+                    label = "Cookie аккаунта Avito (code.avito.ru)",
+                    placeholder = "name=value; name2=value2 — из браузера, где ты вошёл на code.avito.ru",
+                    enabled = enabled,
+                    isError = config.avitoCookies.isBlank()
+                )
+            }
+            VkTurnField(
+                value = config.secret,
+                onValueChange = { v -> onChange { it.copy(secret = v.trim()) } },
+                label = "Ключ шифрования (AES-256-GCM)",
+                placeholder = "секрет выходной ноды (--encryption-key-file); пусто — без шифрования",
+                enabled = enabled
+            )
+            if (config.secret.isNotBlank()) {
+                VkTurnField(
+                    value = config.context,
+                    onValueChange = { v -> onChange { it.copy(context = v.trim()) } },
+                    label = "Контекст сессии",
+                    placeholder = "пусто — из ссылки на документ, как у ноды",
+                    enabled = enabled
+                )
+                VkTurnSwitchRow("Только Session (обязательный negotiate)", config.negotiate, enabled) { v ->
+                    onChange { it.copy(negotiate = v) }
+                }
+            }
+            VkTurnField(
+                value = config.dnsServer,
+                onValueChange = { v -> onChange { it.copy(dnsServer = v.trim()) } },
+                label = "DNS через туннель",
+                placeholder = "1.1.1.1:53; пусто — DNS устройства (утекает провайдеру)",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri
+            )
+            VkTurnSwitchRow("Подробный журнал ядра", config.debug, enabled) { v ->
+                onChange { it.copy(debug = v) }
+            }
+            Text(
+                "OpenFlux сам трафик не шифрует — остаётся только шифрование сайтов (HTTPS); для полного " +
+                    "шифрования включи прокси поверх OpenFlux ниже. Скорость невысокая: это исследовательский " +
+                    "туннель на случай, когда остальное заблокировано.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (showAutoInstall && !config.isSession() && config.transport != OpenFluxConfig.TRANSPORT_AVITO) {
+                OutlinedButton(
+                    onClick = onAutoInstall,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Автоустановка выходной ноды на VPS")
+                }
+            }
+        }
+    }
+
+    // Proxy over OpenFlux — also the way to get encryption end to end: OpenFlux itself carries plain packets.
+    proxyOverTunnelSection(
+        tunnel = "OpenFlux",
+        exitName = "выходная нода OpenFlux",
+        proxyLink = config.proxyLink,
+        proxyCore = config.proxyCore,
+        enabled = enabled,
+        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
+        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
+    )
+}
+
+/**
+ * The members of a multi-transport session: type, coordinate (link / room list, or host:port for direct) and
+ * priority. The highest priority that reaches the exit carries the traffic; the rest are the fallback.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun OpenFluxCarriersEditor(
+    config: OpenFluxConfig,
+    enabled: Boolean,
+    onChange: ((OpenFluxConfig) -> OpenFluxConfig) -> Unit,
+) {
+    fun update(index: Int, transform: (OpenFluxCarrier) -> OpenFluxCarrier) =
+        onChange { c -> c.copy(carriers = c.carriers.mapIndexed { i, m -> if (i == index) transform(m) else m }) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        config.carriers.forEachIndexed { index, carrier ->
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Канал ${index + 1}: ${OpenFluxConfig.carrierLabel(carrier.type)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = { onChange { c -> c.copy(carriers = c.carriers.filterIndexed { i, _ -> i != index }) } },
+                        enabled = enabled
+                    ) {
+                        Icon(Icons.Outlined.Delete, contentDescription = "Убрать канал")
+                    }
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OpenFluxConfig.SESSION_CARRIERS.forEach { type ->
+                        FilterChip(
+                            selected = carrier.type == type,
+                            // A type is used once: the core names a carrier after its type.
+                            enabled = enabled && (carrier.type == type || config.carriers.none { it.type == type }),
+                            onClick = { update(index) { it.copy(type = type) } },
+                            label = { Text(OpenFluxConfig.carrierLabel(type)) }
+                        )
+                    }
+                }
+                if (carrier.type == OpenFluxConfig.TRANSPORT_DIRECT) {
+                    VkTurnField(
+                        value = carrier.dial,
+                        onValueChange = { v -> update(index) { it.copy(dial = v.trim()) } },
+                        label = "Адрес прямого порта ноды",
+                        placeholder = "203.0.113.5:8445 — порт должен быть открыт на VPS",
+                        enabled = enabled,
+                        isError = carrier.dial.isNotBlank() && !carrier.isComplete(),
+                        keyboardType = KeyboardType.Uri
+                    )
+                } else {
+                    VkTurnField(
+                        value = carrier.url,
+                        onValueChange = { v -> update(index) { it.copy(url = v.trim()) } },
+                        label = "Ссылка на документ / комнату",
+                        placeholder = "та же, что у выходной ноды (или список комнат Avito / cups)",
+                        enabled = enabled,
+                        isError = carrier.url.isNotBlank() && !carrier.isComplete(),
+                        keyboardType = KeyboardType.Uri
+                    )
+                }
+                VkTurnField(
+                    value = carrier.priority.toString(),
+                    onValueChange = { v ->
+                        update(index) { it.copy(priority = v.filter(Char::isDigit).take(4).toIntOrNull() ?: OpenFluxConfig.DEFAULT_PRIORITY) }
+                    },
+                    label = "Приоритет",
+                    placeholder = "больше — раньше; равные делят трафик",
+                    enabled = enabled,
+                    keyboardType = KeyboardType.Number
+                )
+            }
+        }
+        val free = OpenFluxConfig.SESSION_CARRIERS.firstOrNull { t -> config.carriers.none { it.type == t } }
+        OutlinedButton(
+            onClick = {
+                if (free != null) {
+                    onChange { c -> c.copy(carriers = c.carriers + OpenFluxCarrier(type = free, priority = (c.carriers.minOfOrNull { it.priority } ?: 100) - 10)) }
+                }
+            },
+            enabled = enabled && free != null,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Добавить канал")
+        }
+        Text(
+            "Все каналы стартуют сразу, трафик идёт по самому приоритетному из тех, что достучались до ноды. " +
+                "Нужен ключ шифрования (ниже), а выходная нода должна быть поднята с теми же каналами " +
+                "(--transports) — проще всего импортировать её ссылку openflux://. Автоустановка из приложения " +
+                "ставит ноду с одним каналом.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (config.secret.isBlank()) {
+            Text(
+                "Без ключа шифрования мультитранспорт не запустится.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
@@ -1607,171 +2167,6 @@ private fun LazyListScope.snolcSection(
     proxyOverTunnelSection(
         tunnel = "snolc",
         exitName = "нода snolc",
-        proxyLink = config.proxyLink,
-        proxyCore = config.proxyCore,
-        enabled = enabled,
-        onLinkChange = { v -> onChange { it.copy(proxyLink = v) } },
-        onCoreChange = { v -> onChange { it.copy(proxyCore = v) } },
-    )
-}
-
-/**
- * OpenFlux editor: the carrier (Yandex Docs or a MAX call) with its coordinates, the DNS server reached
- * through the tunnel, and the exit-node auto-install. The client serves a local SOCKS5 the TUN bridge
- * consumes directly; the exit node on the VPS is the internet exit.
- */
-@OptIn(ExperimentalLayoutApi::class)
-private fun LazyListScope.openFluxSection(
-    config: OpenFluxConfig,
-    enabled: Boolean,
-    showAutoInstall: Boolean,
-    onChange: ((OpenFluxConfig) -> OpenFluxConfig) -> Unit,
-    onAutoInstall: () -> Unit
-) {
-    item {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            SectionTitle(
-                title = "OpenFlux — туннель через сервисы",
-                subtitle = "TCP-туннель до твоей выходной ноды на VPS: пакеты идут через Яндекс Документы или звонок в MAX"
-            )
-            VkTurnField(
-                value = "",
-                onValueChange = { v ->
-                    OpenFluxConfig.parseUri(v)?.let { (c, _) ->
-                        onChange { c }
-                    }
-                },
-                label = "Ссылка openflux://",
-                placeholder = "openflux://config?transport=…  (вставь — поля ниже заполнятся)",
-                enabled = enabled,
-                keyboardType = KeyboardType.Uri
-            )
-            // All three carriers on screen at once: behind a dropdown the new-editor one went unnoticed.
-            Text(
-                text = "Транспорт",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OpenFluxConfig.TRANSPORTS.forEach { transport ->
-                    FilterChip(
-                        selected = config.transport == transport,
-                        onClick = { onChange { it.copy(transport = transport) } },
-                        enabled = enabled,
-                        label = {
-                            Text(
-                                when (transport) {
-                                    OpenFluxConfig.TRANSPORT_MAX -> "MAX (звонок)"
-                                    OpenFluxConfig.TRANSPORT_VYANDEX -> "Яндекс Документы · новый редактор"
-                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Mail.ru Документы"
-                                    OpenFluxConfig.TRANSPORT_CUPS -> "cups.online (комната собеседования)"
-                                    else -> "Яндекс Документы · старый редактор"
-                                }
-                            )
-                        }
-                    )
-                }
-            }
-            if (config.usesMax()) {
-                VkTurnField(
-                    value = config.maxToken,
-                    onValueChange = { v -> onChange { it.copy(maxToken = v.trim()) } },
-                    label = "Твой токен MAX (веб)",
-                    placeholder = "токен аккаунта, с которого звонит клиент",
-                    enabled = enabled
-                )
-                VkTurnField(
-                    value = config.maxUid,
-                    onValueChange = { v -> onChange { it.copy(maxUid = v.filter(Char::isDigit)) } },
-                    label = "ID аккаунта выходной ноды в MAX",
-                    placeholder = "кому звонить; у ноды свой токен",
-                    enabled = enabled,
-                    isError = config.maxUid.isNotBlank() && config.maxUid.toLongOrNull() == null,
-                    keyboardType = KeyboardType.Number
-                )
-            } else {
-                OutlinedTextField(
-                    value = config.docUrl,
-                    onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
-                    label = {
-                        Text(
-                            when (config.transport) {
-                                OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
-                                OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
-                                else -> "Ссылка на Яндекс Документ"
-                            }
-                        )
-                    },
-                    placeholder = {
-                        Text(
-                            when (config.transport) {
-                                OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
-                                OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
-                                else -> "https://docs.yandex.ru/…"
-                            }
-                        )
-                    },
-                    supportingText = {
-                        Text(
-                            if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
-                                "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
-                            } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
-                                "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
-                            } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
-                                "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
-                            } else {
-                                "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
-                            }
-                        )
-                    },
-                    enabled = enabled,
-                    minLines = 1,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            VkTurnField(
-                value = config.dnsServer,
-                onValueChange = { v -> onChange { it.copy(dnsServer = v.trim()) } },
-                label = "DNS через туннель",
-                placeholder = "1.1.1.1:53; пусто — DNS устройства (утекает провайдеру)",
-                enabled = enabled,
-                keyboardType = KeyboardType.Uri
-            )
-            VkTurnSwitchRow("Подробный журнал ядра", config.debug, enabled) { v ->
-                onChange { it.copy(debug = v) }
-            }
-            Text(
-                "OpenFlux сам трафик не шифрует — остаётся только шифрование сайтов (HTTPS); для полного " +
-                    "шифрования включи прокси поверх OpenFlux ниже. Скорость невысокая: это исследовательский " +
-                    "туннель на случай, когда остальное заблокировано.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (showAutoInstall) {
-                OutlinedButton(
-                    onClick = onAutoInstall,
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Автоустановка выходной ноды на VPS")
-                }
-            }
-        }
-    }
-
-    // Proxy over OpenFlux — also the way to get encryption end to end: OpenFlux itself carries plain packets.
-    proxyOverTunnelSection(
-        tunnel = "OpenFlux",
-        exitName = "выходная нода OpenFlux",
         proxyLink = config.proxyLink,
         proxyCore = config.proxyCore,
         enabled = enabled,
@@ -2329,6 +2724,279 @@ private fun WdttInstallDialog(
     )
 }
 
+/** csqtt core knobs ([CsqttOptions]), collapsed unless something differs from the defaults. */
+@Composable
+private fun CsqttAdvanced(
+    options: CsqttOptions,
+    enabled: Boolean,
+    onChange: ((CsqttOptions) -> CsqttOptions) -> Unit
+) {
+    var expanded by remember { mutableStateOf(options != CsqttOptions()) }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        VkTurnSwitchRow("Расширенные настройки csqtt", expanded, enabled) { expanded = it }
+        if (!expanded) return@Column
+
+        VkTurnSwitchRow("Маскировка под видео (иначе — под аудио)", options.obfsVideo, enabled) { v ->
+            onChange { it.copy(obfsVideo = v) }
+        }
+        VkTurnSwitchRow("TURN по TCP/TLS (если сеть режет UDP к VK, напр. Ростелеком)", options.turnTcp, enabled) { v ->
+            onChange { it.copy(turnTcp = v) }
+        }
+        SettingsDropdown(
+            label = "Отпечаток TLS для VK",
+            selectedValue = options.fingerprint.ifBlank { CsqttOptions.DEFAULT_FINGERPRINT },
+            options = CsqttOptions.FINGERPRINTS,
+            enabled = enabled,
+            onValueSelected = { v -> onChange { it.copy(fingerprint = v) } },
+            valueLabel = { it }
+        )
+        VkTurnSwitchRow("Старый анонимный путь VK (legacy, с капчей)", options.vkAuthLegacy, enabled) { v ->
+            onChange { it.copy(vkAuthLegacy = v) }
+        }
+        VkTurnSwitchRow("Больше воркеров, чем 27 на звонок", options.redistribute, enabled) { v ->
+            onChange { it.copy(redistribute = v) }
+        }
+        VkTurnField(
+            value = options.clientIds,
+            onValueChange = { v -> onChange { it.copy(clientIds = v.filter { c -> c.isDigit() || c == ',' }) } },
+            label = "VK client id (через запятую)",
+            placeholder = "пусто — 8202606,6287487",
+            enabled = enabled,
+            keyboardType = KeyboardType.Number
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            VkTurnField(
+                value = options.turnHost,
+                onValueChange = { v -> onChange { it.copy(turnHost = v.trim()) } },
+                label = "IP TURN (вручную)",
+                placeholder = "пусто — от VK",
+                enabled = enabled,
+                keyboardType = KeyboardType.Uri,
+                modifier = Modifier.weight(2f)
+            )
+            VkTurnField(
+                value = options.turnPort,
+                onValueChange = { v -> onChange { it.copy(turnPort = v.filter(Char::isDigit)) } },
+                label = "Порт",
+                placeholder = "авто",
+                enabled = enabled,
+                keyboardType = KeyboardType.Number,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Text(
+            text = "Капча VK решается автоматически (Rust-решатель); ручной WebView-режим csqtt в YPtun пока не поддержан.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * One-tap csqtt server installer. Collects SSH access to the VPS and, on confirm, connects over SSH,
+ * uploads the bundled csqtt server for the VPS architecture plus the project's own deploy.sh and runs
+ * it ([rememberCsqttServerInstaller]). Progress streams live into a log area. The connection password
+ * and the ports come from the location draft and are written back on success (the password MUST match
+ * on both sides — the WRAP key derives from it); the web panel login is shown once, in the result.
+ */
+@Composable
+private fun CsqttInstallDialog(
+    draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installer = rememberCsqttServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(draft.csqttPeer) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var peerPortText by remember { mutableStateOf(draft.csqttPort.ifBlank { "46000" }) }
+    var webPortText by remember { mutableStateOf("46002") }
+    var csqttPass by remember { mutableStateOf(draft.csqttPassword) }
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.csqtt.CsqttInstallResult>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+
+    val peerPort = peerPortText.ifBlank { "46000" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 46000
+    val webPort = webPortText.ifBlank { "46002" }.toIntOrNull()?.takeIf { it in 1..65535 } ?: 46002
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка csqtt на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    "Подключусь к VPS по SSH и поставлю сервер csqtt его штатным установщиком (порт $peerPort/udp, " +
+                        "веб-панель $webPort/tcp). Занятый порт заменю свободным. Пароль и порт сохранятся в настройки локации.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { v -> sshPort = v.filter(Char::isDigit) },
+                        label = { Text("Порт") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                OutlinedTextField(
+                    value = csqttPass,
+                    onValueChange = { csqttPass = it.filterNot(Char::isWhitespace) },
+                    label = { Text("Пароль csqtt") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = peerPortText,
+                        onValueChange = { v -> peerPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт csqtt (udp)") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = webPortText,
+                        onValueChange = { v -> webPortText = v.filter(Char::isDigit) },
+                        label = { Text("Порт веб-панели") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (csqttPass.isBlank()) {
+                    Text(
+                        "Укажи «Пароль csqtt» — он должен совпадать с паролем локации.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let { err ->
+                    Text(
+                        err.message ?: "Ошибка установки",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull()?.message.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = !running && ip.isNotBlank() &&
+                        (if (useKey) sshKey.isNotBlank() else password.isNotBlank()) && csqttPass.isNotBlank(),
+                    onClick = {
+                        running = true
+                        result = null
+                        log.clear()
+                        // Persist the edited server params into the location draft so the client connects
+                        // with the exact port/password the server was just launched with.
+                        onApplyDraft { d ->
+                            d.copy(csqttPeer = ip.trim(), csqttPort = peerPort.toString(), csqttPassword = csqttPass)
+                        }
+                        scope.launch {
+                            val res = installer.install(
+                                CsqttInstallOptions(
+                                    host = ip.trim(),
+                                    sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+                                    login = login.ifBlank { "root" },
+                                    sshPassword = if (useKey) "" else password,
+                                    sshKey = if (useKey) sshKey else "",
+                                    sshKeyPassphrase = if (useKey) keyPassphrase else "",
+                                    peerPort = peerPort,
+                                    webPort = webPort,
+                                    password = csqttPass,
+                                )
+                            ) { line -> log.add(line) }
+                            res.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            // The server moved to a free port: the location has to dial that one.
+                            res.getOrNull()?.peerPort?.takeIf { it != peerPort }?.let { actual ->
+                                peerPortText = actual.toString()
+                                onApplyDraft { d -> d.copy(csqttPort = actual.toString()) }
+                            }
+                            result = res
+                            running = false
+                        }
+                    }
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !running) {
+                Text(if (succeeded) "Закрыть" else "Отмена")
+            }
+        }
+    )
+}
+
 /**
  * One-tap free-turn-proxy server installer. Collects SSH access to the VPS + the public freeturn
  * port, and on confirm connects over SSH, uploads the bundled freeturn-server binary, provisions a
@@ -2624,6 +3292,11 @@ private fun MasterDnsInstallDialog(
         mutableStateOf(config.domainList().firstOrNull() ?: MasterDnsInstallOptions.DEFAULT_DOMAIN)
     }
     var encryptionMethod by remember { mutableStateOf(config.encryptionMethod) }
+    var regenerateKey by remember { mutableStateOf(false) }
+    var dnsUpstream by remember { mutableStateOf(MasterDnsInstallOptions.DEFAULT_DNS_UPSTREAM) }
+    var allowCompression by remember { mutableStateOf(true) }
+    var freePort by remember { mutableStateOf(false) }
+    var debugLog by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<org.olcbox.app.vpn.masterdns.MasterDnsInstallResult>?>(null) }
     val log = remember { mutableStateListOf<String>() }
@@ -2639,7 +3312,7 @@ private fun MasterDnsInstallDialog(
 
     AlertDialog(
         onDismissRequest = { if (!running) onDismiss() },
-        title = { Text("Автоустановка MasterDNS на VPS (Beta)") },
+        title = { Text("Автоустановка MasterDNS на VPS") },
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2709,6 +3382,24 @@ private fun MasterDnsInstallDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                MasterDnsEncryptionSelector(
+                    selected = encryptionMethod,
+                    enabled = !running,
+                    onSelected = { encryptionMethod = it }
+                )
+                OutlinedTextField(
+                    value = dnsUpstream,
+                    onValueChange = { dnsUpstream = it },
+                    label = { Text("DNS сервера на выходе") },
+                    supportingText = { Text("Куда VPS шлёт DNS-запросы из туннеля") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                VkTurnSwitchRow("Разрешить сжатие (ZSTD/LZ4/ZLIB)", allowCompression, !running) { allowCompression = it }
+                VkTurnSwitchRow("Новый ключ шифрования (старые клиенты отвалятся)", regenerateKey, !running) { regenerateKey = it }
+                VkTurnSwitchRow("Освободить порт, если занят другой службой", freePort, !running) { freePort = it }
+                VkTurnSwitchRow("Подробный журнал сервера (DEBUG)", debugLog, !running) { debugLog = it }
                 InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
@@ -2749,6 +3440,11 @@ private fun MasterDnsInstallDialog(
                                     udpPort = udpPort,
                                     domain = domain.trim(),
                                     encryptionMethod = encryptionMethod,
+                                    regenerateKey = regenerateKey,
+                                    dnsUpstream = dnsUpstream,
+                                    allowCompression = allowCompression,
+                                    freePort = freePort,
+                                    logLevel = if (debugLog) "DEBUG" else "INFO",
                                 )
                             ) { line -> log.add(line) }
                             // On success, write the key + domain + cipher + resolver into the location
@@ -2885,6 +3581,62 @@ private fun VkTurnField(
     )
 }
 
+/**
+ * Every tunable parameter of an AmneziaWG configuration as a field (Jc/Jmin/Jmax, S1..S4, H1..H4 as value OR range,
+ * the I1..I5 / J1..J3 packets, Itime, MTU, keepalive, DNS, RandomTrailers/DisableCookies switches). Each edit rewrites only its own line of the INI.
+ */
+@Composable
+private fun AwgTuningSection(
+    ini: String,
+    enabled: Boolean,
+    onChange: (AwgIniEditor.Knob, String) -> Unit
+) {
+    val s = LocalStrings.current
+    val byKey = AwgIniEditor.KNOBS.associateBy { it.key }
+    val numberRows = listOf(
+        listOf("Jc", "Jmin", "Jmax"),
+        listOf("S1", "S2", "S3", "S4"),
+        listOf("H1", "H2", "H3", "H4"),
+        listOf("Itime", "MTU", "PersistentKeepalive"),
+    )
+    val rowKeys = numberRows.flatten().toSet()
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(s.awgTuningTitle, style = MaterialTheme.typography.titleSmall)
+        Text(
+            s.awgTuningHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        @Composable
+        fun field(knob: AwgIniEditor.Knob, modifier: Modifier) {
+            if (knob.kind == AwgIniEditor.Kind.Switch) {
+                VkTurnSwitchRow(
+                    label = knob.key,
+                    checked = AwgIniEditor.get(ini, knob.key, knob.section).lowercase() in setOf("on", "true", "1", "yes"),
+                    enabled = enabled,
+                    onCheckedChange = { onChange(knob, if (it) "on" else "") }
+                )
+                return
+            }
+            VkTurnField(
+                value = AwgIniEditor.get(ini, knob.key, knob.section),
+                onValueChange = { onChange(knob, it) },
+                label = knob.key,
+                placeholder = knob.hint,
+                enabled = enabled,
+                keyboardType = if (knob.kind == AwgIniEditor.Kind.Number) KeyboardType.Number else KeyboardType.Text,
+                modifier = modifier
+            )
+        }
+        numberRows.forEach { keys ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                keys.mapNotNull { byKey[it] }.forEach { field(it, Modifier.weight(1f)) }
+            }
+        }
+        AwgIniEditor.KNOBS.filter { it.key !in rowKeys }.forEach { field(it, Modifier.fillMaxWidth()) }
+    }
+}
+
 @Composable
 private fun VkTurnSwitchRow(
     label: String,
@@ -2916,12 +3668,12 @@ private fun WdttPlusAdvanced(
     enabled: Boolean,
     onChange: ((WdttPlusOptions) -> WdttPlusOptions) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0, rawDirect = false) != WdttPlusOptions()) }
+    var expanded by remember { mutableStateOf(options.copy(rawMode = false, rawPort = 0) != WdttPlusOptions()) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // The primary choice: WG vs Raw
+        // The primary choice, so it sits outside the collapsible block.
         Text(
             text = "Режим подключения",
             style = MaterialTheme.typography.titleSmall,
@@ -3258,9 +4010,9 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.Standard -> "Standard"
     EngineType.Chain -> "Chain"
     EngineType.VkTurn -> "VK-TURN"
-    EngineType.MasterDns -> "MasterDNS (Beta)"
+    EngineType.MasterDns -> "MasterDNS"
     EngineType.OpenFlux -> "OpenFlux"
-    EngineType.Snolc -> "snolc"
+    EngineType.Snolc -> "Snolc"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {

@@ -308,6 +308,8 @@ private fun IosApp(
                     appBehavior.showSubscriptionIcons,
                 org.olcbox.app.ui.features.locations.components.LocalHideEndpointWhenDescription provides
                     appBehavior.hideEndpointWhenDescription,
+                org.olcbox.app.ui.features.locations.components.LocalShowPingControls provides
+                    appBehavior.showPingControls,
                 org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
                     (if (appBehavior.showSpeedOnHome && isVpnConnected) liveSpeed else null)
             ) {
@@ -377,6 +379,8 @@ private fun IosApp(
                 showAppSettingsButton = true,
                 showSplitTunnelingButton = false,
                 canScanQr = true,
+                pingParallelism = appBehavior.pingParallelism,
+                freeServersLimit = appBehavior.freeServersLimit,
                 onAppSettingsClick = { isAppSettingsOpen = true },
                 onSplitTunnelingClick = {},
                 collapsedGroups = appBehavior.collapsedSubscriptionGroups,

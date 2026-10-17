@@ -35,6 +35,26 @@ interface VpnManager {
     fun stopVpn()
     suspend fun ping(locationConfig: LocationConfig): Long?
     suspend fun checkConnection(locationConfig: LocationConfig): Long?
+
+    /**
+     * [ping] in the user's ping mode, but a server only counts as alive when a request actually goes
+     * THROUGH its proxy: TCP/ICMP/Auto prove just an open port, and free servers are full of hosts that
+     * accept TCP and pass nothing. Platforms without a via-proxy probe fall back to plain [ping].
+     */
+    suspend fun pingVerified(locationConfig: LocationConfig): Long? = ping(locationConfig)
+
+    /** One probe's timeout and how many times [ping] measures (settings «Пинг»); platforms without those settings keep the old numbers. */
+    val pingTimeoutMs: Long get() = 6_000L
+    val pingRounds: Int get() = 1
+
+    /** Settings «Пинг»: take the free-servers list from the aggregated GitHub Pages file instead of the built-in sources. */
+    val freeServersFromPages: Boolean get() = false
+
+    /** The whole-location budget callers wrap [ping] in (it used to be a fixed 12 s). */
+    val pingBudgetMs: Long get() = maxOf(12_000L, pingTimeoutMs * pingRounds + 3_000L)
+
+    /** Same for [pingVerified], which adds one more via-proxy request (it used to be a fixed 15 s). */
+    val pingVerifiedBudgetMs: Long get() = maxOf(15_000L, pingTimeoutMs * (pingRounds + 1) + 1_000L)
     fun subscriptionFetchProxy(): SubscriptionFetchProxy? = null
 
     /**

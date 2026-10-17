@@ -223,6 +223,28 @@ data class AppBehaviorSettings(
      * started and the system settings are never touched, so just the apps configured by hand use it.
      */
     val setSystemProxy: Boolean = true,
+    /**
+     * How many servers the «Бесплатные серверы» list may take in total: the first N by source priority.
+     * One of [FREE_SERVERS_LIMITS]; [FREE_SERVERS_UNLIMITED] (0) = no cap.
+     */
+    val freeServersLimit: Int = DEFAULT_FREE_SERVERS_LIMIT,
+    /** How long one ping probe may wait for an answer, in seconds: [MIN_PING_TIMEOUT_SEC]..[MAX_PING_TIMEOUT_SEC]. */
+    val pingTimeoutSec: Int = DEFAULT_PING_TIMEOUT_SEC,
+    /**
+     * How many times a location is measured per ping: 1 (single), 2 (double) or 3 (triple); the BEST
+     * (lowest) time is shown. A location that does not answer the first time is not measured again.
+     */
+    val pingPrecision: Int = DEFAULT_PING_PRECISION,
+    /**
+     * Pause / stop buttons for a running ping pass and the "Tested N of M" progress line under the
+     * subscription header. Off by default: the ping button then just starts a pass.
+     */
+    val showPingControls: Boolean = false,
+    /**
+     * Where the «Бесплатные серверы» list comes from: false = the built-in sources (default), true = the
+     * single hourly-refreshed file on a hidden GitHub Page (up to 20000 vless links harvested from GitHub).
+     */
+    val freeServersFromPages: Boolean = false,
 ) {
     companion object {
         const val SUB_UA_HAPP = "happ"
@@ -264,6 +286,19 @@ data class AppBehaviorSettings(
         /** How many days before expiry the subscription-expiry notification starts firing. */
         const val SUBSCRIPTION_EXPIRY_NOTIFY_DAYS = 3
 
+        const val MIN_PING_TIMEOUT_SEC = 2
+        const val MAX_PING_TIMEOUT_SEC = 15
+        const val DEFAULT_PING_TIMEOUT_SEC = 7
+        const val MIN_PING_PRECISION = 1
+        const val MAX_PING_PRECISION = 3
+        const val DEFAULT_PING_PRECISION = 1
+
+        const val FREE_SERVERS_UNLIMITED = 0
+        const val DEFAULT_FREE_SERVERS_LIMIT = FREE_SERVERS_UNLIMITED
+
+        /** Selectable free-server caps (single-choice chips in the UI). */
+        val FREE_SERVERS_LIMITS = listOf(500, 1000, 2500, 5000, FREE_SERVERS_UNLIMITED)
+
         /** Parallel ping streams: how many locations are probed at once. */
         const val DEFAULT_PING_PARALLELISM = 5
         const val MIN_PING_PARALLELISM = 1
@@ -286,6 +321,13 @@ data class AppBehaviorSettings(
     fun effectivePingUrl(): String = pingUrl.trim().let {
         if (it.isBlank() || it == LEGACY_PING_URL) DEFAULT_PING_URL else it
     }
+
+    /** [pingTimeoutSec] clamped to the supported range, in milliseconds. */
+    fun effectivePingTimeoutMs(): Int =
+        pingTimeoutSec.coerceIn(MIN_PING_TIMEOUT_SEC, MAX_PING_TIMEOUT_SEC) * 1_000
+
+    /** [pingPrecision] clamped to 1..3. */
+    fun effectivePingPrecision(): Int = pingPrecision.coerceIn(MIN_PING_PRECISION, MAX_PING_PRECISION)
 
     /** [pingParallelism] clamped to the supported range. */
     fun effectivePingParallelism(): Int =

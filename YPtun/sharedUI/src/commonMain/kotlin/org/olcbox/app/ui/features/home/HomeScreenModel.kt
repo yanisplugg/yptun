@@ -29,6 +29,7 @@ import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.ProxyProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import org.olcbox.app.data.model.LocationEntry
@@ -66,6 +67,7 @@ class HomeScreenViewModel(
     init {
         loadCurrentConfig()
         startSubscriptionAutoRefresh()
+        migrateFreeServersToXray()
 
         viewModelScope.launch {
             locationsRepository.changes
@@ -148,6 +150,9 @@ class HomeScreenViewModel(
     suspend fun performPingFor(config: LocationConfig): Long? {
         return vpnManager.ping(config)
     }
+
+    /** Budget for one location's whole ping (see [VpnManager.pingBudgetMs]). */
+    val pingBudgetMs: Long get() = vpnManager.pingBudgetMs
 
     suspend fun checkConnectionFor(config: LocationConfig): Long? {
         return vpnManager.checkConnection(config)
@@ -433,12 +438,175 @@ class HomeScreenViewModel(
         }
     }
 
+    /**
+     * Free servers are checked through xray-core (see pingVerified), but with the core on «Авто» they connect
+     * through sing-box, and plenty of public configs only work in xray — they showed a good ping and then
+     * Chrome got ERR_CONNECTION_CLOSED. Servers added before this fix get the same core they were checked with.
+     * Only «Авто» is touched: a core the user picked by hand stays.
+     */
+    private fun migrateFreeServersToXray() {
+        viewModelScope.launch {
+            runCatching {
+                val bundle = locationsRepository.getBundle()
+                val fixed = bundle.locations.map {
+                    val unset = it.core == null || it.core == org.olcbox.app.data.model.ProxyCore.Auto
+                    if (unset && it.subscriptionUrl?.trim() == FREE_SERVERS_URL) {
+                        it.copy(core = org.olcbox.app.data.model.ProxyCore.Xray)
+                    } else it
+                }
+                if (fixed != bundle.locations) locationsRepository.saveBundle(bundle.copy(locations = fixed))
+            }
+        }
+    }
+
     private var freeServersJob: Job? = null
 
-    fun cancelFreeServersLoad() {
+    /**
+     * Number of the current free-servers run. A cancelled run does not stop at once — its checks sit in
+     * blocking native calls for up to the ping timeout — and when it finally unwinds, its cleanup used to
+     * switch the loading flag off for the run the user had started in the meantime, so a search started
+     * right after «Отмена» seemed to do nothing. Every state write of a run is tagged with its number and
+     * dropped when it is no longer the current one.
+     */
+    private var freeServersRun = 0
+
+    private fun updateFreeServers(run: Int, transform: (HomeScreenState) -> HomeScreenState) {
+        _state.update { if (run == freeServersRun) transform(it) else it }
+    }
+
+    /** The working servers the current run has found so far (replaced, never mutated, so a stop can read it at once). */
+    @kotlin.concurrent.Volatile
+    private var freeServersFound: List<FreeServerItem> = emptyList()
+
+    // The list the last search drew up, and which of its servers are checked: what lets a stopped search carry on.
+    @kotlin.concurrent.Volatile
+    private var freeParsed: List<Pair<String, ProxyProfile>> = emptyList()
+    private val freeCheckedIdx = HashSet<Int>()
+
+    // Pause of the search: servers in flight finish, no new one starts. The pace is measured without the pause.
+    private val freeGate = MutableStateFlow(false)
+    private var freeRunStartMs = 0L
+    private var freePausedAccumMs = 0L
+    private var freePausedSinceMs = 0L
+    private var freeRunChecks = 0
+    private fun nowMs() = kotlin.time.Clock.System.now().toEpochMilliseconds()
+
+    /** Seconds to the end of the search at the pace so far; null while paused or with too few samples. */
+    private fun freeEta(total: Int, checked: Int): Int? {
+        if (freeGate.value || freeRunChecks < 5) return null
+        val activeMs = nowMs() - freeRunStartMs - freePausedAccumMs
+        if (activeMs <= 0L) return null
+        return (activeMs.toDouble() / freeRunChecks * (total - checked).coerceAtLeast(0) / 1000.0).toInt()
+    }
+
+    /** Servers of the last search that are not checked yet (what «Продолжить поиск» has to go through). */
+    private fun freeRemaining(): Int = (freeParsed.size - freeCheckedIdx.size).coerceAtLeast(0)
+
+    /**
+     * Ends the search NOW but keeps what it found: the servers checked so far go to the picker sheet instead of
+     * being thrown away (a full pass over a long list takes hours). The unchecked rest stays in the model so the
+     * search can be continued. [onNothingFound] when nothing worked yet.
+     */
+    fun stopFreeServersSearch(onNothingFound: () -> Unit = {}) {
+        val found = freeServersFound.sortedBy { it.pingMs }
+        freeServersRun++
         freeServersJob?.cancel()
         freeServersJob = null
-        _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+        freeGate.value = false
+        _state.update {
+            it.copy(
+                isFreeServersLoading = false,
+                freeServersBackground = false,
+                freeServersPaused = false,
+                freeServersProgress = null,
+                freeServersResumable = freeRemaining(),
+                availableFreeServers = found.takeIf { list -> list.isNotEmpty() },
+            )
+        }
+        if (found.isEmpty()) onNothingFound()
+    }
+
+    /** Holds the free-servers search: servers in flight finish, no new one starts until [resumeFreeServersPaused]. */
+    fun pauseFreeServersSearch() {
+        if (freeServersJob?.isActive != true || freeGate.value) return
+        freePausedSinceMs = nowMs()
+        freeGate.value = true
+        _state.update { it.copy(freeServersPaused = true) }
+    }
+
+    fun resumeFreeServersPaused() {
+        if (!freeGate.value) return
+        freePausedAccumMs += nowMs() - freePausedSinceMs
+        freePausedSinceMs = 0L
+        freeGate.value = false
+        _state.update { it.copy(freeServersPaused = false) }
+    }
+
+    // True while the running search is the silent one (auto-update, or a manual search sent to the background):
+    // its result is saved straight away instead of opening the picker. Read at the END of the run.
+    @kotlin.concurrent.Volatile
+    private var freeRunInBackground = false
+
+    /**
+     * Sends the running manual search to the background: the dialog closes, the strip under the toolbar shows the
+     * progress (same as the auto-update), and the found servers are saved without the picker when it ends.
+     */
+    fun sendFreeServersToBackground() {
+        if (freeServersJob?.isActive != true) return
+        freeRunInBackground = true
+        _state.update { it.copy(isFreeServersLoading = false, freeServersBackground = true) }
+    }
+
+    private var freeAutoAttemptMs = 0L
+
+    /**
+     * Auto-update of the free servers (the switch in the group's menu): a silent search every few hours whose
+     * result replaces the unpinned servers without the picker. The Home screen calls it periodically; it does
+     * nothing unless the switch is on, the group exists and the interval has passed — and never while a search
+     * runs, the picker is open, a stopped search waits to be continued, or the tunnel runs over a free server
+     * that the save would replace.
+     */
+    fun autoUpdateFreeServersIfDue(parallelism: Int, limit: Int) {
+        val st = _state.value
+        if (freeServersJob?.isActive == true || st.availableFreeServers != null || st.freeServersResumable > 0) return
+        val sel = st.selectedLocation
+        if (st.isVpnConnected && sel?.subscriptionUrl?.trim() == FREE_SERVERS_URL && sel.metadata?.pinned != true) return
+        viewModelScope.launch {
+            val subs = runCatching {
+                locationsRepository.getBundle().locations.filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+            }.getOrNull().orEmpty().mapNotNull { it.metadata?.subscription }
+            if (subs.isEmpty() || subs.any { !it.autoUpdateEnabled }) return@launch
+            val hours = subs.firstNotNullOfOrNull { it.updateIntervalHours?.takeIf { h -> h > 0 } } ?: FREE_AUTO_UPDATE_HOURS
+            val last = maxOf(
+                freeAutoAttemptMs,
+                subs.maxOf { maxOf(it.lastRefreshAtEpochMs ?: 0L, it.lastAttemptAtEpochMs ?: 0L) }
+            )
+            val now = nowMs()
+            if (now - last < hours * 3_600_000L) return@launch
+            if (freeServersJob?.isActive == true || _state.value.availableFreeServers != null) return@launch
+            freeAutoAttemptMs = now
+            loadFreeServers(parallelism = parallelism, limit = limit, background = true)
+        }
+    }
+
+    /** Throws the search away for good: found servers and the unchecked rest. */
+    fun cancelFreeServersLoad() {
+        freeServersRun++
+        freeServersJob?.cancel()
+        freeServersJob = null
+        freeGate.value = false
+        freeParsed = emptyList()
+        freeCheckedIdx.clear()
+        freeServersFound = emptyList()
+        _state.update {
+            it.copy(
+                isFreeServersLoading = false,
+                freeServersBackground = false,
+                freeServersPaused = false,
+                freeServersProgress = null,
+                freeServersResumable = 0
+            )
+        }
     }
 
     fun dismissFreeServersSheet() {
@@ -447,65 +615,87 @@ class HomeScreenViewModel(
 
     fun loadFreeServers(
         parallelism: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
+        limit: Int = org.olcbox.app.data.model.AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT,
         onError: (String) -> Unit = {},
+        // Auto-update: no dialog, and the result is saved straight away instead of opening the picker.
+        background: Boolean = false,
+        // Carry on a stopped search over the servers it has not checked yet: no new download, what it found stays.
+        resume: Boolean = false,
     ) {
+        if (resume && freeRemaining() == 0) return
         freeServersJob?.cancel()
-        _state.update { it.copy(isFreeServersLoading = true, availableFreeServers = null, freeServersProgress = null) }
+        val run = ++freeServersRun
+        freeGate.value = false
+        freeRunStartMs = nowMs()
+        freePausedAccumMs = 0L
+        freePausedSinceMs = 0L
+        freeRunChecks = 0
+        freeRunInBackground = background
+        if (!resume) freeServersFound = emptyList()
+        _state.update {
+            it.copy(
+                isFreeServersLoading = !background,
+                freeServersBackground = background,
+                freeServersPaused = false,
+                freeServersResumable = 0,
+                availableFreeServers = null,
+                freeServersProgress = null
+            )
+        }
         freeServersJob = viewModelScope.launch {
             try {
-                val rawText = withContext(Dispatchers.IO) {
-                    // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
-                    // without withProxyAuthentication the fetch died with a SOCKS auth error.
-                    val proxy = vpnManager.subscriptionFetchProxy()
-                    val client = createProxyHttpClient(proxy)
-                    try {
-                        // Все источники сразу; недоступный не мешает остальным.
-                        FREE_SERVERS_SOURCES.map { (url, maxLines) ->
-                            async {
-                                runCatching {
-                                    val text = org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(url).bodyAsText() }
-                                    // Огромный список (десятки тысяч) не проверить за разумное время — берём случайную выборку.
-                                    if (maxLines > 0) text.lines().shuffled().take(maxLines).joinToString("\n") else text
-                                }.getOrDefault("")
+                if (!resume) {
+                    val sourceTexts = withContext(Dispatchers.IO) {
+                        // With the VPN up this is the tunnel's local SOCKS, which wants the session login —
+                        // without withProxyAuthentication the fetch died with a SOCKS auth error.
+                        val proxy = vpnManager.subscriptionFetchProxy()
+                        val client = createProxyHttpClient(proxy)
+                        try {
+                            // Все источники сразу; недоступный не мешает остальным.
+                            // One shuffled slice of the Pages file as big as the limit asks (0 = all of it).
+                            val sources = if (vpnManager.freeServersFromPages) {
+                                listOf(FreeSource(FREE_SERVERS_PAGES_URL, maxCount = limit))
+                            } else {
+                                freeSourcesFor(org.olcbox.app.ui.i18n.LocalizationState.effective.id)
                             }
-                        }.awaitAll().joinToString("\n")
-                    } finally {
-                        client.close()
+                            sources.map { source ->
+                                async {
+                                    runCatching {
+                                        org.olcbox.app.data.datasource.withProxyAuthentication(proxy) { client.get(source.url).bodyAsText() }
+                                    }.getOrDefault("") to source.maxCount
+                                }
+                            }.awaitAll()
+                        } finally {
+                            client.close()
+                        }
                     }
+
+                    if (sourceTexts.all { (text, _) -> text.isBlank() }) {
+                        updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
+                        onError("Не удалось загрузить список серверов")
+                        return@launch
+                    }
+
+                    val picked = withContext(Dispatchers.Default) { pickFreeServers(sourceTexts, limit) }
+                    if (picked.isEmpty()) {
+                        updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
+                        onError("Не удалось распознать конфигурации серверов")
+                        return@launch
+                    }
+                    freeParsed = picked
+                    freeCheckedIdx.clear()
                 }
 
-                if (rawText.isBlank()) {
-                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
-                    onError("Не удалось загрузить список серверов")
-                    return@launch
-                }
-
-                val allLines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() && it.startsWith("vless://", ignoreCase = true) }.distinct()
-                if (allLines.isEmpty()) {
-                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
-                    onError("В списке не найдено серверов VLESS")
-                    return@launch
-                }
-
-                val parsedItems = allLines.mapNotNull { line ->
-                    val profile = ShareLinkParser.parse(line)
-                    if (profile != null && profile.isComplete()) {
-                        line to profile
-                    } else null
-                }
-
-                if (parsedItems.isEmpty()) {
-                    _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
-                    onError("Не удалось распознать конфигурации серверов")
-                    return@launch
-                }
-
+                val parsedItems = freeParsed
                 val total = parsedItems.size
-                _state.update { it.copy(freeServersProgress = FreeServersProgress(checked = 0, total = total, found = 0)) }
-
                 val mutex = Mutex()
-                var checkedCount = 0
-                val workingServers = mutableListOf<FreeServerItem>()
+                var checkedCount = freeCheckedIdx.size
+                // Empty for a fresh search, the earlier finds when the search is continued.
+                val workingServers = freeServersFound.toMutableList()
+                updateFreeServers(run) {
+                    it.copy(freeServersProgress = FreeServersProgress(checked = checkedCount, total = total, found = workingServers.size))
+                }
+                val todo = parsedItems.withIndex().filter { it.index !in freeCheckedIdx }
 
                 withContext(Dispatchers.IO) {
                     // Тот же ползунок «Потоки пинга» из настроек, что и у обычного пинга.
@@ -515,19 +705,23 @@ class HomeScreenViewModel(
                             org.olcbox.app.data.model.AppBehaviorSettings.MAX_PING_PARALLELISM,
                         )
                     )
-                    parsedItems.mapIndexed { index, (line, profile) ->
+                    todo.map { (index, entry) ->
+                        val (line, profile) = entry
                         async {
                             sem.withPermit {
+                                // Paused: wait here; servers already being pinged finish on their own.
+                                freeGate.first { !it }
                                 val config = LocationConfig(
                                     name = profile.displayName(),
                                     engine = EngineType.Standard,
                                     proxy = profile
                                 ).normalized()
-                                // Увеличиваем таймаут до 4.0с: серверы успевают ответить через TLS/VLESS
-                                // без случайных отсечек из-за миллисекундных колебаний мобильной сети
-                                val ping = withTimeoutOrNull(4000L) {
+                                // pingVerified берёт режим пинга из настроек (TCP / ICMP / GET / HEAD) и в режимах без прокси
+                                // ещё пропускает запрос через сервер: открытый порт у бесплатных ничего не значит, коннект
+                                // потом не шёл. Таймаут вмещает обе проверки, иначе живые серверы обрезались бы.
+                                val ping = withTimeoutOrNull(vpnManager.pingVerifiedBudgetMs) {
                                     try {
-                                        vpnManager.ping(config)
+                                        vpnManager.pingVerified(config)
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (_: Exception) {
@@ -544,44 +738,99 @@ class HomeScreenViewModel(
                                     )
                                 } else null
 
-                                val (curChecked, curFound) = mutex.withLock {
+                                val snapshot = mutex.withLock {
                                     checkedCount++
-                                    if (item != null) workingServers.add(item)
-                                    checkedCount to workingServers.size
+                                    // A superseded run must not mark servers of a list it no longer owns.
+                                    if (run == freeServersRun) {
+                                        freeCheckedIdx.add(index)
+                                        freeRunChecks++
+                                    }
+                                    if (item != null) {
+                                        workingServers.add(item)
+                                        if (run == freeServersRun) freeServersFound = workingServers.toList()
+                                    }
+                                    FreeServersProgress(checkedCount, total, workingServers.size, freeEta(total, checkedCount))
                                 }
-                                _state.update {
-                                    it.copy(
-                                        freeServersProgress = FreeServersProgress(
-                                            checked = curChecked,
-                                            total = total,
-                                            found = curFound
-                                        )
-                                    )
-                                }
+                                updateFreeServers(run) { it.copy(freeServersProgress = snapshot) }
                             }
                         }
                     }.awaitAll()
                 }
 
                 val sortedWorking = workingServers.sortedBy { it.pingMs }
-                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) {
+                    it.copy(
+                        isFreeServersLoading = false,
+                        freeServersBackground = false,
+                        freeServersPaused = false,
+                        freeServersProgress = null,
+                        freeServersResumable = 0
+                    )
+                }
 
                 if (sortedWorking.isEmpty()) {
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
+                } else if (freeRunInBackground) {
+                    if (run == freeServersRun) {
+                        // The cloud (server-side WARP) choice made when the list was first saved carries over.
+                        val hadWarp = runCatching {
+                            locationsRepository.getBundle().locations.any {
+                                it.subscriptionUrl?.trim() == FREE_SERVERS_URL && it.metadata?.pinned != true && it.warpEnabled
+                            }
+                        }.getOrDefault(false)
+                        saveSelectedFreeServers(
+                            selectedServers = sortedWorking,
+                            warpIds = if (hadWarp) sortedWorking.map { it.id }.toSet() else emptySet()
+                        )
+                    }
                 } else {
-                    _state.update { it.copy(availableFreeServers = sortedWorking) }
+                    updateFreeServers(run) { it.copy(availableFreeServers = sortedWorking) }
                 }
             } catch (e: CancellationException) {
-                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
             } catch (e: Exception) {
-                _state.update { it.copy(isFreeServersLoading = false, freeServersProgress = null) }
+                updateFreeServers(run) { it.copy(isFreeServersLoading = false, freeServersBackground = false, freeServersProgress = null) }
                 onError(e.message ?: "Ошибка загрузки бесплатных серверов")
             }
         }
     }
 
+    /**
+     * Turns the fetched lists into the servers to check, source by source in [FREE_SERVERS_SOURCES]
+     * order: every protocol the importer understands and xray can probe (VLESS, VMess, Trojan, Shadowsocks —
+     * VLESS alone threw away ~90% of the Freedom-V2Ray list), each server once (lists repeat the same
+     * node under different names — ~10% of ebrasha — and overlap each other), and a source's limit
+     * spent only on servers no earlier source already gave. Big lists are shuffled and parsed only
+     * until the limit is reached, not all 8k lines. [limit] caps the whole result (0 = no cap): the
+     * first [limit] servers in source order, so the sources of the app's language win.
+     */
+    private fun pickFreeServers(sourceTexts: List<Pair<String, Int>>, limit: Int): List<Pair<String, ProxyProfile>> {
+        val seen = HashSet<ProxyProfile>()
+        val picked = mutableListOf<Pair<String, ProxyProfile>>()
+        for ((body, maxCount) in sourceTexts) {
+            if (limit > 0 && picked.size >= limit) break
+            // Some lists (Epodonios, chengaopan) are one base64 blob, not a line per link.
+            val lines = org.olcbox.app.data.importer.SubscriptionDecoder.toLinkText(body).lines()
+                .map { it.trim() }
+                .filter { line -> FREE_SERVER_SCHEMES.any { line.startsWith(it, ignoreCase = true) } }
+                .let { if (maxCount > 0) it.shuffled() else it }
+            var taken = 0
+            for (line in lines) {
+                if (maxCount > 0 && taken >= maxCount) break
+                if (limit > 0 && picked.size >= limit) break
+                val profile = runCatching { ShareLinkParser.parse(line) }.getOrNull()
+                    ?.takeIf { it.isComplete() } ?: continue
+                if (!seen.add(profile.dedupNormalized())) continue
+                picked += line to profile
+                taken++
+            }
+        }
+        return picked
+    }
+
     fun saveSelectedFreeServers(
         selectedServers: List<FreeServerItem>,
+        warpIds: Set<String> = emptySet(),
         onComplete: (Int) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -591,12 +840,24 @@ class HomeScreenViewModel(
         viewModelScope.launch {
             try {
                 val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+                val previousSub = locationsRepository.getBundle().locations
+                    .filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+                    .firstNotNullOfOrNull { it.metadata?.subscription }
                 val newEntries = selectedServers.mapIndexed { index, item ->
                     val profile = item.profile
                     val location = LocationConfig(
                         name = item.displayName,
                         engine = EngineType.Standard,
-                        proxy = profile
+                        proxy = profile,
+                        // The same core that verified the server (pingVerified runs xray), not the sing-box default.
+                        core = org.olcbox.app.data.model.ProxyCore.Xray,
+                        // Cloud in the picker: WARP at the exit of this server.
+                        warpEnabled = item.id in warpIds,
+                        warpMode = org.olcbox.app.data.model.WarpMode.Server,
+                        // Russian servers (RU flag): AmneziaWG, plain WireGuard is cut there; the rest: WireGuard.
+                        warpProtocol = if (item.displayName.contains("\uD83C\uDDF7\uD83C\uDDFA")) {
+                            org.olcbox.app.data.model.WarpProtocol.Awg
+                        } else org.olcbox.app.data.model.WarpProtocol.Wg
                     ).normalized()
                     val base = "${profile.server}_${profile.serverPort}"
                         .lowercase()
@@ -610,9 +871,9 @@ class HomeScreenViewModel(
                         metadata = LocationMetadata(
                             subscription = SubscriptionMetadata(
                                 name = "Бесплатные серверы",
-                                announce = "Бесплатные серверы от сообщества могут быть нестабильны. Для быстрого личного VPN: @quofortpostbot",
-                                updateIntervalHours = 0,
-                                autoUpdateEnabled = false,
+                                announce = previousSub?.announce ?: "Бесплатные серверы от сообщества могут быть нестабильны. Для быстрого личного VPN: @quofortpostbot",
+                                updateIntervalHours = previousSub?.updateIntervalHours ?: 0,
+                                autoUpdateEnabled = previousSub?.autoUpdateEnabled ?: false,
                                 lastRefreshAtEpochMs = now,
                                 lastAttemptAtEpochMs = now
                             )
@@ -621,19 +882,21 @@ class HomeScreenViewModel(
                 }
 
                 val currentBundle = locationsRepository.getBundle()
-                // Убираем ТОЛЬКО старые бесплатные серверы, никогда не затрагивая остальные локации пользователя
+                // Убираем ТОЛЬКО старые бесплатные серверы, никогда не затрагивая остальные локации пользователя.
+                // Закреплённые остаются, а такой же сервер из нового поиска не дублируется.
+                val oldFree = currentBundle.locations.filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
+                val keptPinned = oldFree.filter { it.metadata?.pinned == true }
+                val pinnedProfiles = keptPinned.mapNotNull { it.proxy?.dedupNormalized() }.toSet()
+                val freshEntries = newEntries.filterNot { it.proxy?.dedupNormalized() in pinnedProfiles }
                 val nonFreeLocations = currentBundle.locations.filterNot {
                     it.subscriptionUrl?.trim() == FREE_SERVERS_URL
                 }
-                val updatedLocations = nonFreeLocations + newEntries
+                val updatedLocations = nonFreeLocations + keptPinned + freshEntries
 
-                val oldFreeIds = currentBundle.locations
-                    .filter { it.subscriptionUrl?.trim() == FREE_SERVERS_URL }
-                    .map { it.storageId }
-                    .toSet()
+                val droppedFreeIds = (oldFree - keptPinned.toSet()).map { it.storageId }.toSet()
 
-                val updatedActiveId = if (currentBundle.activeLocationId in oldFreeIds) {
-                    newEntries.firstOrNull()?.storageId ?: currentBundle.activeLocationId
+                val updatedActiveId = if (currentBundle.activeLocationId in droppedFreeIds) {
+                    freshEntries.firstOrNull()?.storageId ?: keptPinned.firstOrNull()?.storageId ?: currentBundle.activeLocationId
                 } else {
                     currentBundle.activeLocationId
                 }
@@ -646,7 +909,7 @@ class HomeScreenViewModel(
                 )
 
                 loadCurrentConfigNow()
-                onComplete(newEntries.size)
+                onComplete(freshEntries.size)
             } catch (e: Exception) {
                 onError(e.message ?: "Ошибка сохранения серверов")
             }
@@ -664,6 +927,10 @@ class HomeScreenViewModel(
         val text = rawText.trim()
         val isSingleInboundLink = text.startsWith(YptunInboundCodec.PREFIX) &&
             text.indexOf(YptunInboundCodec.PREFIX, startIndex = 1) < 0
+        if (text.startsWith("openflux://", ignoreCase = true)) {
+            return "This OpenFlux link can't be imported: only Yandex / Mail.ru / cups.online / Avito / direct " +
+                "transports are supported (a session needs a secret), or the link is damaged."
+        }
         return if (isSingleInboundLink && YptunInboundCodec.parse(text) == null) {
             "This YPtun link is damaged — characters were lost in transit. " +
                 "Scan the QR instead, or send the link as a file."
@@ -932,6 +1199,12 @@ data class HomeScreenState(
     /** Set after importing a VK-TURN link that still needs a per-client VK Calls link. */
     val vkTurnLinkPrompt: VkTurnLinkPrompt? = null,
     val isFreeServersLoading: Boolean = false,
+    /** A silent auto-update search of the free servers runs (no dialog; the strip near the toolbar shows it). */
+    val freeServersBackground: Boolean = false,
+    /** The free-servers search is held (servers in flight finish, no new one starts). */
+    val freeServersPaused: Boolean = false,
+    /** Servers a stopped search has not checked yet; > 0 offers «Продолжить поиск». */
+    val freeServersResumable: Int = 0,
     val freeServersProgress: FreeServersProgress? = null,
     val availableFreeServers: List<FreeServerItem>? = null
 )
@@ -939,18 +1212,70 @@ data class HomeScreenState(
 data class FreeServersProgress(
     val checked: Int = 0,
     val total: Int = 0,
-    val found: Int = 0
+    val found: Int = 0,
+    /** Estimated seconds to the end of the search; null while paused or before there are enough samples. */
+    val etaSeconds: Int? = null
 )
+
+/** How often the free servers auto-update when the group's switch is on. */
+const val FREE_AUTO_UPDATE_HOURS = 6
 
 const val FREE_SERVERS_URL = "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt"
-/** Список zieng2 небольшой (~120) и живой на ~40% — проверяем целиком; ebrasha огромный (~20k, живо ~7%) — случайная выборка. */
-const val FREE_SERVERS_PER_SOURCE = 250
 
-/** Источники бесплатных серверов (url, максимум строк; 0 = все); [FREE_SERVERS_URL] — идентификатор группы. */
+/**
+ * Hidden GitHub Page with one file of vless links (≤ 20000), rebuilt hourly by a workflow. Used instead of
+ * [FREE_SERVERS_SOURCES] when the «Пинг» setting is on; [FREE_SERVERS_URL] stays the group id either way.
+ */
+const val FREE_SERVERS_PAGES_URL = "https://breead1337.github.io/ws-cache-9e41/v.txt"
+
+/**
+ * Источник бесплатных серверов: [maxCount] — сколько уникальных серверов взять (0 = все, без
+ * перемешивания), [region] — для какого языка приложения он в приоритете ("" = для всех).
+ */
+class FreeSource(val url: String, val maxCount: Int = 0, val region: String = "")
+
+/**
+ * Источники бесплатных серверов в порядке приоритета; [FREE_SERVERS_URL] — ещё и идентификатор
+ * группы. Сколько всего взять, решает настройка «Лимит бесплатных серверов» (500 / 1000 / 2500 / 5000 / без
+ * лимита): берутся первые N по этому порядку, а источники языка приложения ([freeSourcesFor])
+ * идут вперёд. Проверка до 15 с на сервер — большие списки заметно удлиняют ожидание.
+ *  - zieng2 — маленький (~60) список под российские белые списки, целиком;
+ *  - igareck/vpn-configs-for-russia — обновляется каждые пару часов, конфиги заранее проверяет сервер
+ *    в России (в т.ч. под белые списки мобильного интернета); три VLESS-файла целиком (~100 уникальных);
+ *  - Freedom-V2Ray — агрегатор шести списков (~1600 серверов всех протоколов), раз в 2 часа
+ *    выкидывает хосты, не принимающие TCP (проверка из США, не через прокси — сами всё равно проверяем);
+ *  - ebrasha — огромный (~7 тыс. уникальных, только VLESS) и живой процентов на 7, только выборка;
+ *  - Иран: barry-far, hamedcode, Epodonios — сборщики Telegram-каналов, по 6–8 тыс. VLESS, выборка
+ *    (Epodonios отдаёт base64 — [SubscriptionDecoder.toLinkText] разворачивает);
+ *  - Китай: peasoft/NoMoreWalls и ermaozi/get_subscribe (раздача под китайские сети), chengaopan
+ *    (base64) — по 40–250 VLESS, берём целиком. Рабочие всё равно определяет пинг на устройстве.
+ */
 val FREE_SERVERS_SOURCES = listOf(
-    FREE_SERVERS_URL to 0,
-    "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt" to FREE_SERVERS_PER_SOURCE,
+    FreeSource(FREE_SERVERS_URL, region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt", region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt", region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-checked.txt", region = "ru"),
+    FreeSource("https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix.txt", 250),
+    FreeSource("https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/vless_configs.txt", 250),
+    FreeSource("https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", 250, "fa"),
+    FreeSource("https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vless.txt", 250, "fa"),
+    FreeSource("https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Splitted-By-Protocol/vless.txt", 250, "fa"),
+    FreeSource("https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list_raw.txt", region = "zh"),
+    FreeSource("https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt", region = "zh"),
+    FreeSource("https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.txt", region = "zh"),
 )
+
+/** [FREE_SERVERS_SOURCES] с источниками языка приложения впереди, затем общими, затем чужими; порядок внутри групп прежний. */
+fun freeSourcesFor(language: String): List<FreeSource> =
+    FREE_SERVERS_SOURCES.sortedBy { if (it.region == language) 0 else if (it.region.isEmpty()) 1 else 2 }
+
+
+/**
+ * Протоколы, которые берём из бесплатных списков: их разбирает [ShareLinkParser] и проверяет xray через
+ * прокси. Hysteria2 сюда не входит: проверка через прокси (режим пинга по умолчанию) её не умеет, и
+ * такой сервер всегда выглядел бы нерабочим.
+ */
+private val FREE_SERVER_SCHEMES = listOf("vless://", "vmess://", "trojan://", "ss://")
 
 /** Prompt to collect the per-client VK Calls link for a freshly imported VK-TURN location. */
 data class VkTurnLinkPrompt(

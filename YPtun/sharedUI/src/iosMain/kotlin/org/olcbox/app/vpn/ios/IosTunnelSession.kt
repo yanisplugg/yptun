@@ -70,6 +70,7 @@ class IosTunnelSession(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val engine = IosEngineController(core) { log(it) }
     private var watchdog: Job? = null
+    private var reloadJob: Job? = null
     private var engineType: EngineType? = null
 
     /** The hev-socks5-tunnel YAML running now; [reload] can only swap cores that fit the same bridge. */
@@ -140,6 +141,7 @@ class IosTunnelSession(
 
     fun stop() {
         log("Stopping (session #${IosSharedStore.readText(SESSION_COUNT_FILE)?.trim().orEmpty()})")
+        reloadJob?.cancel()
         watchdog?.cancel()
         engine.stopAll()
         scope.cancel()
@@ -151,7 +153,8 @@ class IosTunnelSession(
      */
     fun reload(completion: (error: String?) -> Unit) {
         log("Reloading tunnel session for new location...")
-        scope.launch {
+        reloadJob?.cancel()
+        reloadJob = scope.launch {
             val request = runCatching {
                 IosSharedStore.readText(REQUEST_FILE)
                     ?.let { json.decodeFromString(IosTunnelRequest.serializer(), it) }
@@ -179,7 +182,7 @@ class IosTunnelSession(
 
                 val user = ""
                 val pass = ""
-                withTimeout(28_000) {
+                withTimeout(5_000) {
                     engine.start(location, SOCKS_PORT, user, pass, next.deviceId)
                 }
                 engineType = location.engine
@@ -197,7 +200,7 @@ class IosTunnelSession(
             }.onFailure {
                 val rawMsg = it.message ?: "Не удалось переключить сервер"
                 val message = if (it is kotlinx.coroutines.TimeoutCancellationException) {
-                    "Таймаут подключения: сервер не ответил за 28 сек"
+                    "Таймаут подключения: сервер не ответил за 5 сек"
                 } else {
                     rawMsg
                 }

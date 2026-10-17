@@ -135,6 +135,7 @@ class IosVpnManager(
     private val vpnMutex = Mutex()
     private var connectJob: Job? = null
     private var connectWatchdogJob: Job? = null
+    private var connectGeneration = 0L
 
     init {
         scope.launch {
@@ -222,9 +223,13 @@ class IosVpnManager(
 
     override fun startVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
+        val requestedGeneration = ++connectGeneration
         connectJob?.cancel()
+        connectWatchdogJob?.cancel()
         connectJob = scope.launch {
             vpnMutex.withLock {
+                if (requestedGeneration != connectGeneration) return@withLock
+
                 val active = locationsRepository.getActiveLocation()?.location?.normalized()
                 if (active == null || !active.isComplete()) {
                     setStatus(VpnStatus.Error("No active location"))
@@ -240,9 +245,10 @@ class IosVpnManager(
                     publishRequest(active)
                     IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
                     addLog("Fast switching to ${active.displayName()}...")
-                    val reply = withTimeoutOrNull(30_000) {
+                    val reply = withTimeoutOrNull(4_000L) {
                         askExtension(currentSession, "reload")
                     }
+                    if (requestedGeneration != connectGeneration) return@withLock
                     if (reply == "ok") {
                         addLog("Connected to ${active.displayName()}")
                         setStatus(VpnStatus.Connected)
@@ -254,6 +260,7 @@ class IosVpnManager(
                     }
                 }
 
+                if (requestedGeneration != connectGeneration) return@withLock
                 setStatus(VpnStatus.Connecting)
                 wasConnecting = true
                 addLog("Connecting to ${active.displayName()}...")
@@ -264,7 +271,7 @@ class IosVpnManager(
                     // iOS invalidates the cached NETunnelProviderManager when the app is backgrounded,
                     // causing NEVPNErrorDomain error 2 on the next connect attempt.
                     manager = null
-                    val m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
+                    var m = loadManager(createIfMissing = true) ?: error("VPN profile unavailable")
                     var connection = m.connection
                     // A running tunnel keeps its old location; restart it on the new request.
                     if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
@@ -272,10 +279,13 @@ class IosVpnManager(
                     ) {
                         connection.stopVPNTunnel()
                         awaitDisconnected(m)
-                        connection = m.connection
+                        // Freshly reload manager after stopping to avoid NEVPNErrorDomain error 2
+                        m = loadManager(createIfMissing = true) ?: m
                     }
+                    if (requestedGeneration != connectGeneration) return@withLock
                     var started = false
                     for (attempt in 0..3) {
+                        if (requestedGeneration != connectGeneration) return@withLock
                         var waitCount = 0
                         while (m.connection.status == platform.NetworkExtension.NEVPNStatusDisconnecting && waitCount < 25) {
                             delay(200)
@@ -301,11 +311,13 @@ class IosVpnManager(
                         if (started) break
                     }
                 }
+                if (requestedGeneration != connectGeneration) return@withLock
                 result.onSuccess {
                     connectWatchdogJob?.cancel()
+                    val expectedGeneration = requestedGeneration
                     connectWatchdogJob = scope.launch {
                         delay(35_000)
-                        if (_status.value == VpnStatus.Connecting) {
+                        if (expectedGeneration == connectGeneration && _status.value == VpnStatus.Connecting) {
                             val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                             val msg = failure.ifEmpty { "Таймаут подключения: сервер не отвечает" }
                             addLog("Watchdog: connection timed out after 35s ($msg)")
@@ -315,6 +327,7 @@ class IosVpnManager(
                     }
                 }
                 result.onFailure {
+                    if (requestedGeneration != connectGeneration) return@withLock
                     if (it is kotlinx.coroutines.CancellationException || it.message?.contains("cancelled", ignoreCase = true) == true) {
                         return@launch
                     }
@@ -329,6 +342,7 @@ class IosVpnManager(
 
     override fun stopVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
+        connectGeneration++
         connectJob?.cancel()
         connectWatchdogJob?.cancel()
         scope.launch {
@@ -354,9 +368,27 @@ class IosVpnManager(
         return h.isEmpty() || h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "0.0.0.0"
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? = withContext(Dispatchers.Default) {
+    override val pingTimeoutMs: Long
+        get() = IosSharedStore.loadAppBehavior().effectivePingTimeoutMs().toLong()
+    override val pingRounds: Int
+        get() = IosSharedStore.loadAppBehavior().effectivePingPrecision()
+    override val freeServersFromPages: Boolean
+        get() = IosSharedStore.loadAppBehavior().freeServersFromPages
+
+    override suspend fun ping(locationConfig: LocationConfig): Long? {
+        var best: Long? = null
+        repeat(pingRounds) {
+            val ms = pingOnce(locationConfig)
+            if (ms == null) return best
+            if (best == null || ms < best!!) best = ms
+        }
+        return best
+    }
+
+    private suspend fun pingOnce(locationConfig: LocationConfig): Long? = withContext(Dispatchers.Default) {
         val config = locationConfig.normalized()
         val behavior = IosSharedStore.loadAppBehavior()
+        val timeoutMs = pingTimeoutMs.toInt()
         val profile = config.proxy
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
         val isActiveLocation = locationsRepository.getActiveLocationId() == locationConfig.id
@@ -390,7 +422,7 @@ class IosVpnManager(
                 else if (status.value == VpnStatus.Connected && isActiveLocation) {
                     tunnelPing() ?: run {
                         val url = behavior.effectivePingUrl()
-                        val ms = core.awgMeasureDelay(awgConfig, url, method, PING_TIMEOUT_MS)
+                        val ms = core.awgMeasureDelay(awgConfig, url, method, timeoutMs)
                         if (ms > 0) ms else {
                             val probeMs = core.awgProbe(awgConfig)
                             if (probeMs > 0) probeMs else null
@@ -398,7 +430,7 @@ class IosVpnManager(
                     }
                 } else {
                     val url = behavior.effectivePingUrl()
-                    val ms = core.awgMeasureDelay(awgConfig, url, method, PING_TIMEOUT_MS)
+                    val ms = core.awgMeasureDelay(awgConfig, url, method, timeoutMs)
                     if (ms > 0) ms else {
                         val probeMs = core.awgProbe(awgConfig)
                         if (probeMs > 0) probeMs else null
@@ -411,14 +443,14 @@ class IosVpnManager(
             behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
-                    val ms = core.tcpPing(profile.server, profile.serverPort, PING_TIMEOUT_MS)
+                    val ms = core.tcpPing(profile.server, profile.serverPort, timeoutMs)
                     if (ms > 0) ms else null
                 }
             }
             else -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
-                    proxyUrlTest(profile, behavior.effectivePingUrl(), method)?.takeIf { it > 0 }
+                    proxyUrlTest(profile, behavior.effectivePingUrl(), method, timeoutMs)?.takeIf { it > 0 }
                 }
             }
         }
@@ -519,7 +551,7 @@ class IosVpnManager(
      * Per-server URL test (à la v2rayNG / Happ) through a throwaway xray instance in this process —
      * works while disconnected. A verbatim config is probed through its own proxy outbound.
      */
-    private fun proxyUrlTest(profile: ProxyProfile, url: String, method: String): Long? {
+    private fun proxyUrlTest(profile: ProxyProfile, url: String, method: String, timeoutMs: Int = PING_TIMEOUT_MS): Long? {
         if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2) return null
         val listenPort = (20_000..60_000).random()
         val raw = profile.rawXrayConfig
@@ -536,7 +568,7 @@ class IosVpnManager(
                 )
             }.getOrNull()
         } ?: return null
-        return core.xrayMeasureDelay(configJson, url, method, PING_TIMEOUT_MS).takeIf { it >= 0 }
+        return core.xrayMeasureDelay(configJson, url, method, timeoutMs).takeIf { it >= 0 }
     }
 
     /**

@@ -34,7 +34,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LightMode
-import org.olcbox.app.DonationInfo
+import org.olcbox.app.ui.components.SupportProjectSection
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
 import org.olcbox.app.data.model.AppBehaviorSettings
@@ -48,7 +48,6 @@ import org.olcbox.app.ui.i18n.Strings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.TextStyle
 import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -79,7 +78,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ContentPaste
@@ -92,6 +90,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -135,6 +134,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -146,7 +146,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -206,7 +205,6 @@ internal fun AppSettingsSheet(
     onCopyConfigClick: () -> Unit,
     onSaveLogsClick: () -> Unit,
     onShareLogsClick: () -> Unit,
-    onClearLogsClick: () -> Unit = {},
     onUpdateIntervalSelected: (Int) -> Unit,
     onCheckUpdatesClick: () -> Unit,
     onSubscriptionShareClick: (String) -> Unit,
@@ -253,13 +251,15 @@ internal fun AppSettingsSheet(
         }
     }
 
+    // Outside AnimatedContent: the Hub is disposed while a section is open, and its scroll position must outlive that.
+    val hubScroll = androidx.compose.foundation.rememberScrollState()
+
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
-        dragHandle = null
+        dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
-        Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-            AnimatedContent(
+        AnimatedContent(
             targetState = route,
             transitionSpec = {
                 fadeIn(
@@ -291,6 +291,7 @@ internal fun AppSettingsSheet(
         ) { currentRoute ->
             when (currentRoute) {
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
+                    scrollState = hubScroll,
                     selectedMode = selectedMode,
                     dynamicThemeEnabled = dynamicThemeEnabled,
                     lightThemeEnabled = lightThemeEnabled,
@@ -313,9 +314,18 @@ internal fun AppSettingsSheet(
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
+                    onPrivacyClick = { route = AppSettingsRoute.Privacy },
                     experimentalUnlocked = appBehavior.experimentalUnlocked,
                     onExperimentalClick = { route = AppSettingsRoute.Experimental },
-                    onClose = { closeSheet() }
+                    onAppearanceClick = { route = AppSettingsRoute.Appearance }
+                )
+
+                AppSettingsRoute.Appearance -> AppearanceContent(onBack = { route = AppSettingsRoute.Hub })
+
+                AppSettingsRoute.Privacy -> PrivacyContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.Experimental -> ExperimentalContent(
@@ -425,8 +435,7 @@ internal fun AppSettingsSheet(
                     logs = logs,
                     onBack = { route = AppSettingsRoute.Hub },
                     onSaveClick = onSaveLogsClick,
-                    onShareClick = onShareLogsClick,
-                    onClearClick = onClearLogsClick
+                    onShareClick = onShareLogsClick
                 )
 
                 AppSettingsRoute.SubscriptionsSharing -> SubscriptionsSharingSettingsContent(
@@ -448,7 +457,6 @@ internal fun AppSettingsSheet(
             }
         }
     }
-}
 }
 
 internal enum class AppSettingsInitialRoute {
@@ -533,7 +541,7 @@ private fun ThemeColorSection(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val currentText = ThemeState.textColor
-                val isTextPreset = currentText == null || ThemeState.textPresets.contains(currentText)
+                val isTextPreset = ThemeState.textPresets.contains(currentText)
                 ThemeState.textPresets.forEach { color ->
                     val selected = currentText == color
                     ColorSwatch(
@@ -560,6 +568,17 @@ private fun ThemeColorSection(
         )
     }
 
+    if (showTextPicker) {
+        ColorPickerDialog(
+            initial = ThemeState.textColor ?: Color.White,
+            onDismiss = { showTextPicker = false },
+            onConfirm = {
+                onTextColorSelected(it)
+                showTextPicker = false
+            }
+        )
+    }
+
     if (showBackgroundPicker) {
         ColorPickerDialog(
             initial = ThemeState.background ?: ThemeState.backgroundPresets.first(),
@@ -567,17 +586,6 @@ private fun ThemeColorSection(
             onConfirm = {
                 onBackgroundColorSelected(it)
                 showBackgroundPicker = false
-            }
-        )
-    }
-
-    if (showTextPicker) {
-        ColorPickerDialog(
-            initial = ThemeState.textColor ?: Color(0xFFFFFFFF),
-            onDismiss = { showTextPicker = false },
-            onConfirm = {
-                onTextColorSelected(it)
-                showTextPicker = false
             }
         )
     }
@@ -717,15 +725,17 @@ private fun AppSettingsHubContent(
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
     onApplicationLogsClick: () -> Unit,
+    onPrivacyClick: () -> Unit = {},
     experimentalUnlocked: Boolean = false,
     onExperimentalClick: () -> Unit = {},
-    onClose: () -> Unit = {}
+    onAppearanceClick: () -> Unit = {},
+    scrollState: androidx.compose.foundation.ScrollState
 ) {
     val s = LocalStrings.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -733,8 +743,7 @@ private fun AppSettingsHubContent(
         SettingsSheetHeader(
             icon = Icons.Outlined.Settings,
             title = s.settings,
-            subtitle = selectedMode.shortLabel(),
-            onClose = onClose
+            subtitle = selectedMode.shortLabel()
         )
 
         Spacer(Modifier.height(8.dp))
@@ -763,6 +772,16 @@ private fun AppSettingsHubContent(
                 onAccentColorSelected = onAccentColorSelected,
                 onTextColorSelected = onTextColorSelected,
                 onBackgroundColorSelected = onBackgroundColorSelected
+            )
+        }
+
+        SettingsGroupCard {
+            SettingsGroupRow(
+                title = s.appearanceTitle,
+                subtitle = s.appearanceSubtitle,
+                icon = Icons.Outlined.Palette,
+                enabled = true,
+                onClick = onAppearanceClick
             )
         }
 
@@ -843,6 +862,14 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = onApplicationLogsClick
             )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.privacy,
+                subtitle = s.privacySubtitle,
+                icon = Icons.Outlined.Lock,
+                enabled = true,
+                onClick = onPrivacyClick
+            )
             if (experimentalUnlocked) {
                 SettingsGroupDivider()
                 SettingsGroupRow(
@@ -916,6 +943,34 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.coreVersion("OpenFlux", org.olcbox.app.vpn.CoreVersions.OPENFLUX),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.coreVersion("Trust Tunnel", org.olcbox.app.vpn.CoreVersions.TRUSTTUNNEL_ANDROID),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.coreVersion("Snolc", org.olcbox.app.vpn.CoreVersions.SNOLC),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.coreVersion("csqtt", org.olcbox.app.vpn.CoreVersions.CSQTT),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.hwid(hwid.ifBlank { "—" }),
                 icon = Icons.Rounded.Key,
                 enabled = hwid.isNotBlank(),
@@ -943,55 +998,20 @@ private fun AppSettingsHubContent(
                 enabled = true,
                 onClick = { communityUriHandler.openUri("https://t.me/YPtun") }
             )
-            SettingsGroupDivider()
-            // One TON wallet takes USDT, TON and GRAM alike. Tapping copies it — the address is far
-            // too long to retype from a screen, and it is shown in full so it can be checked.
-            SettingsGroupRow(
-                title = s.donate,
-                subtitle = s.donateSubtitle,
-                icon = Icons.Rounded.Favorite,
-                enabled = true,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show()
-                }
-            )
-            SettingsGroupRow(
-                title = DonationInfo.TON_ADDRESS,
-                icon = Icons.Outlined.ContentCopy,
-                enabled = true,
-                showChevron = false,
-                onClick = {
-                    hwidClipboard.setText(AnnotatedString(DonationInfo.TON_ADDRESS))
-                    Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show()
-                }
-            )
         }
 
-        // --- Документы и правила / Legal ---
+        SupportProjectSection(
+            onCopyAddress = { it -> hwidClipboard.setText(AnnotatedString(it)); Toast.makeText(donationContext, s.donateAddressCopied, Toast.LENGTH_SHORT).show() },
+            onOpenUrl = { it -> communityUriHandler.openUri(it) }
+        )
+
         SettingsGroupCard {
             SettingsGroupRow(
-                title = s.privacyPolicy,
-                subtitle = "yanisplugg.github.io/yptun/privacy.html",
+                title = s.termsOfUse,
+                subtitle = "yanisplugg.github.io/yptun/terms.html",
                 icon = Icons.Outlined.Shield,
                 enabled = true,
-                onClick = { communityUriHandler.openUri(DonationInfo.PRIVACY_URL) }
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.termsOfService,
-                subtitle = "yanisplugg.github.io/yptun/terms.html",
-                icon = Icons.Outlined.ContentPaste,
-                enabled = true,
-                onClick = { communityUriHandler.openUri(DonationInfo.TERMS_URL) }
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.supportPage,
-                subtitle = "yanisplugg.github.io/yptun/support.html",
-                icon = Icons.Outlined.History,
-                enabled = true,
-                onClick = { communityUriHandler.openUri(DonationInfo.SUPPORT_URL) }
+                onClick = { communityUriHandler.openUri("https://yanisplugg.github.io/yptun/terms.html") }
             )
         }
 
@@ -1714,88 +1734,34 @@ private fun ApplicationLogsSettingsContent(
     logs: List<String>,
     onBack: () -> Unit,
     onSaveClick: () -> Unit,
-    onShareClick: () -> Unit,
-    onClearClick: () -> Unit
+    onShareClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxHeight(0.8f)
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 24.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsDetailHeader(
                 title = LocalStrings.current.applicationLogsTitle,
                 subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
                 onBack = onBack,
-                titleStyle = MaterialTheme.typography.titleLarge,
-                subtitleMaxLines = 1,
                 modifier = Modifier.weight(1f)
             )
 
-            Spacer(Modifier.width(8.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onSaveClick
             ) {
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                ) {
-                    IconButton(
-                        enabled = logs.isNotEmpty(),
-                        onClick = onClearClick
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Delete,
-                            contentDescription = LocalStrings.current.clearLogs,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                ) {
-                    IconButton(
-                        enabled = logs.isNotEmpty(),
-                        onClick = onSaveClick
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Download,
-                            contentDescription = LocalStrings.current.save,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                ) {
-                    IconButton(
-                        enabled = logs.isNotEmpty(),
-                        onClick = onShareClick
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Share,
-                            contentDescription = LocalStrings.current.share,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
+                Text(LocalStrings.current.save)
+            }
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onShareClick
+            ) {
+                Text(LocalStrings.current.share)
             }
         }
 
@@ -1809,29 +1775,16 @@ private fun ApplicationLogsSettingsContent(
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            if (logs.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = LocalStrings.current.noLogEntries,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-                }
-            } else {
-                LogLines(
-                    logs = logs,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(14.dp)
-                )
-            }
+            LogLines(
+                logs = logs,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(14.dp)
+            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun UpdatesSettingsContent(
     settings: AppUpdateSettings,
@@ -1859,7 +1812,10 @@ private fun UpdatesSettingsContent(
 
         SettingsSectionLabel(LocalStrings.current.checkInterval)
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             AppUpdateSettings.INTERVAL_PRESETS.forEach { hours ->
                 FilterChip(
                     selected = settings.intervalHours == hours,
@@ -2281,18 +2237,14 @@ private fun SettingsSwitchRow(
 private fun SettingsSheetHeader(
     icon: ImageVector,
     title: String,
-    subtitle: String,
-    onClose: (() -> Unit)? = null
+    subtitle: String
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         HeaderIcon(icon = icon)
 
         Spacer(Modifier.width(14.dp))
 
-        Column(modifier = Modifier.weight(1f)) {
+        Column {
             Text(
                 text = title,
                 style = MaterialTheme.typography.headlineSmall,
@@ -2304,16 +2256,6 @@ private fun SettingsSheetHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-
-        if (onClose != null) {
-            IconButton(onClick = onClose) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Close",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
     }
 }
 
@@ -2322,9 +2264,7 @@ private fun SettingsDetailHeader(
     title: String,
     subtitle: String,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-    titleStyle: TextStyle = MaterialTheme.typography.headlineSmall,
-    subtitleMaxLines: Int = 2
+    modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier,
@@ -2344,12 +2284,12 @@ private fun SettingsDetailHeader(
             }
         }
 
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(14.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = titleStyle,
+                style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -2358,7 +2298,7 @@ private fun SettingsDetailHeader(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = subtitleMaxLines,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -3919,6 +3859,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(showAutoButton = it)) }
 
         RoutingToggleRow(
+            title = s.showGroupAutoPickTitle,
+            subtitle = s.showGroupAutoPickSubtitle,
+            checked = settings.showGroupAutoPick
+        ) { onChanged(settings.copy(showGroupAutoPick = it)) }
+
+        RoutingToggleRow(
             title = s.energySaverTitle,
             subtitle = s.energySaverSubtitle,
             checked = settings.energySaver
@@ -3933,10 +3879,54 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
         RoutingToggleRow(
+            title = s.allowConfigEditingTitle,
+            subtitle = s.allowConfigEditingSubtitle,
+            checked = settings.allowConfigEditing
+        ) { onChanged(settings.copy(allowConfigEditing = it)) }
+
+        RoutingToggleRow(
             title = s.notifSpeed,
             subtitle = s.notifSpeedSubtitle,
             checked = settings.showSpeedInNotification
         ) { onChanged(settings.copy(showSpeedInNotification = it)) }
+
+        RoutingToggleRow(
+            title = s.notifPingTitle,
+            subtitle = s.notifPingSubtitle,
+            checked = settings.pingOwnLineInNotification
+        ) { onChanged(settings.copy(pingOwnLineInNotification = it)) }
+
+        if (settings.pingOwnLineInNotification) {
+            Text(
+                text = s.notifPingSourceTitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(false to s.notifPingSourceLast, true to s.notifPingSourceAuto).forEach { (auto, label) ->
+                    FilterChip(
+                        selected = settings.notifPingAuto == auto,
+                        onClick = { onChanged(settings.copy(notifPingAuto = auto)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            if (settings.notifPingAuto) {
+                var minutes by remember { mutableStateOf(settings.notifPingIntervalMin.toString()) }
+                OutlinedTextField(
+                    value = minutes,
+                    onValueChange = { raw ->
+                        minutes = raw.filter { ch -> ch.isDigit() }.take(3)
+                        minutes.toIntOrNull()?.takeIf { it in 1..999 }
+                            ?.let { onChanged(settings.copy(notifPingIntervalMin = it)) }
+                    },
+                    label = { Text(s.notifPingIntervalLabel) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
 
         RoutingToggleRow(
             title = s.speedOnHomeTitle,
@@ -4015,11 +4005,6 @@ private fun ApplicationBehaviorContent(
             checked = settings.allowVpsAutoInstall
         ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
 
-        // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
-        // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
-        // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be
-        // dropped back into this screen if it ever needs to be exposed again.
-
         // App-wide engine for VLESS-like transports. Applies only when a server's own core is "Auto";
         // an explicit per-server choice overrides it (xhttp/raw-Xray always force Xray regardless).
         SettingsSectionLabel(s.globalEngineLabel)
@@ -4059,40 +4044,6 @@ private fun ApplicationBehaviorContent(
                     label = { Text(title) }
                 )
             }
-        }
-    }
-}
-
-/**
- * Subscription User-Agent selector. PRESERVED but intentionally NOT shown anywhere (no UI). The fetch
- * defaults to YPtun + automatic FakeDNS enrichment from a Happ-UA request, which is right for everyone;
- * this lets the choice be re-exposed later (drop a call into AppBehaviorSettingsContent) without
- * rewriting it. Suppress the "unused" lint since keeping it is deliberate.
- */
-@Suppress("unused")
-@Composable
-private fun SubscriptionUserAgentSelector(
-    settings: AppBehaviorSettings,
-    onChanged: (AppBehaviorSettings) -> Unit
-) {
-    val s = LocalStrings.current
-    SettingsSectionLabel(s.subscriptionUserAgentLabel)
-    Text(
-        text = s.subscriptionUserAgentSubtitle,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val uaOptions = listOf(
-            AppBehaviorSettings.SUB_UA_HAPP to "Happ/1.0",
-            AppBehaviorSettings.SUB_UA_YPTUN to "YPtun",
-        )
-        uaOptions.forEach { (mode, title) ->
-            FilterChip(
-                selected = settings.subscriptionUserAgent == mode,
-                onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
-                label = { Text(title) }
-            )
         }
     }
 }
@@ -4161,6 +4112,7 @@ private fun PingSettingsContent(
             val resultOptions = listOf(
                 AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
                 AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
+                AppBehaviorSettings.PING_RESULT_BOTH to s.pingResultBoth,
             )
             resultOptions.forEach { (mode, title) ->
                 FilterChip(
@@ -4183,9 +4135,93 @@ private fun PingSettingsContent(
             checked = settings.showSubscriptionAliveCount
         ) { onChanged(settings.copy(showSubscriptionAliveCount = it)) }
 
+        RoutingToggleRow(
+            title = s.showPingControlsTitle,
+            subtitle = s.showPingControlsSubtitle,
+            checked = settings.showPingControls
+        ) { onChanged(settings.copy(showPingControls = it)) }
+
         PingParallelismRow(
             value = settings.effectivePingParallelism(),
             onChange = { onChanged(settings.copy(pingParallelism = it)) }
+        )
+
+        PingTimeoutRow(
+            seconds = settings.pingTimeoutSec.coerceIn(AppBehaviorSettings.MIN_PING_TIMEOUT_SEC, AppBehaviorSettings.MAX_PING_TIMEOUT_SEC),
+            onChange = { onChanged(settings.copy(pingTimeoutSec = it)) }
+        )
+
+        SettingsSectionLabel(s.pingPrecisionTitle)
+        Text(
+            text = s.pingPrecisionSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(1 to s.pingPrecisionSingle, 2 to s.pingPrecisionDouble, 3 to s.pingPrecisionTriple).forEach { (rounds, title) ->
+                FilterChip(
+                    selected = settings.effectivePingPrecision() == rounds,
+                    onClick = { onChanged(settings.copy(pingPrecision = rounds)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+
+        SettingsSectionLabel(s.freeServersLimitTitle)
+        Text(
+            text = s.freeServersLimitSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppBehaviorSettings.FREE_SERVERS_LIMITS.forEach { limit ->
+                FilterChip(
+                    selected = settings.freeServersLimit == limit,
+                    onClick = { onChanged(settings.copy(freeServersLimit = limit)) },
+                    label = { Text(if (limit == AppBehaviorSettings.FREE_SERVERS_UNLIMITED) s.freeServersLimitUnlimited else limit.toString()) }
+                )
+            }
+        }
+
+        RoutingToggleRow(
+            title = s.freeServersPagesTitle,
+            subtitle = s.freeServersPagesSubtitle,
+            checked = settings.freeServersFromPages
+        ) { onChanged(settings.copy(freeServersFromPages = it)) }
+    }
+}
+
+/** Slider for the ping timeout: 2..15 s, default 7. */
+@Composable
+private fun PingTimeoutRow(seconds: Int, onChange: (Int) -> Unit) {
+    val s = LocalStrings.current
+    val min = AppBehaviorSettings.MIN_PING_TIMEOUT_SEC
+    val max = AppBehaviorSettings.MAX_PING_TIMEOUT_SEC
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = s.pingTimeoutTitle,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = s.pingTimeoutSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = s.secondsShort(seconds),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = seconds.toFloat(),
+            onValueChange = { onChange(it.toInt().coerceIn(min, max)) },
+            valueRange = min.toFloat()..max.toFloat(),
+            steps = max - min - 1
         )
     }
 }
@@ -4231,6 +4267,167 @@ private fun PingParallelismRow(value: Int, onChange: (Int) -> Unit) {
             contentPadding = PaddingValues(0.dp),
             modifier = Modifier.size(40.dp)
         ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+    }
+}
+
+/** «Оформление»: the launcher-icon picker (see [AppIcons]: one enabled `activity-alias` per icon). */
+@Composable
+private fun AppearanceContent(onBack: () -> Unit) {
+    val s = LocalStrings.current
+    val context = LocalContext.current
+    var selected by remember { mutableStateOf(AppIcons.current(context)) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.appearanceTitle,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Text(
+            text = s.appIconHint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        listOf(true to s.appIconWithCat, false to s.appIconNoCat).forEach { (cat, label) ->
+            SettingsSectionLabel(label)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                maxItemsInEachRow = 3
+            ) {
+                AppIcons.options.forEachIndexed { index, option ->
+                    if (option.cat != cat) return@forEachIndexed
+                    AppIconTile(
+                        option = option,
+                        name = s.appIconNames.getOrElse(index) { option.alias },
+                        selected = index == selected,
+                        onClick = {
+                            runCatching { AppIcons.select(context, index) }.onSuccess { selected = index }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppIconTile(option: AppIconOption, name: String, selected: Boolean, onClick: () -> Unit) {
+    val context = LocalContext.current
+    fun layer(res: String?): ImageBitmap? = res?.let {
+        runCatching {
+            val id = context.resources.getIdentifier(it, "mipmap", context.packageName)
+            android.graphics.BitmapFactory.decodeResource(context.resources, id)?.asImageBitmap()
+        }.getOrNull()
+    }
+    val bg = remember(option.bg) { layer(option.bg) }
+    val fg = remember(option.fg) { layer(option.fg) }
+    val shape = RoundedCornerShape(18.dp)
+    val ring = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    Column(
+        modifier = Modifier.width(88.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(shape)
+                .background(androidx.compose.ui.graphics.Color.Black)
+                .border(if (selected) 3.dp else 1.dp, ring, shape)
+        ) {
+            // The launcher shows the middle two thirds of an adaptive layer (the rest is the mask margin), so zoom in 1.5x.
+            val zoom = Modifier.fillMaxSize().graphicsLayer { scaleX = 1.5f; scaleY = 1.5f }
+            bg?.let { Image(it, null, zoom, contentScale = ContentScale.Crop) }
+            fg?.let { Image(it, null, zoom, contentScale = ContentScale.Crop) }
+        }
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+/** Settings -> Privacy: what the app sends out on its own, and the switches for it. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PrivacyContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit
+) {
+    val s = LocalStrings.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = s.privacy,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        RoutingToggleRow(
+            title = s.providerReportTitle,
+            subtitle = s.providerReportSubtitle,
+            checked = settings.providerReportEnabled
+        ) { onChanged(settings.copy(providerReportEnabled = it)) }
+        Text(
+            text = s.providerReportDetails,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SettingsSectionLabel(s.subscriptionUserAgentLabel)
+        Text(
+            text = s.subscriptionUserAgentSubtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val uaOptions = listOf(
+                AppBehaviorSettings.SUB_UA_BOTH to s.uaModeBoth,
+                AppBehaviorSettings.SUB_UA_HAPP to s.uaModeHapp,
+                AppBehaviorSettings.SUB_UA_YPTUN_ONLY to s.uaModeYptun,
+                AppBehaviorSettings.SUB_UA_V2RAYTUN to s.uaModeV2raytun,
+            )
+            uaOptions.forEach { (mode, title) ->
+                FilterChip(
+                    selected = settings.effectiveSubscriptionUa() == mode,
+                    onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
+                    label = { Text(title) }
+                )
+            }
+        }
+
+        RoutingToggleRow(
+            title = s.sendDeviceInfoTitle,
+            subtitle = s.sendDeviceInfoSubtitle,
+            checked = settings.sendDeviceInfoToSubscriptions
+        ) { onChanged(settings.copy(sendDeviceInfoToSubscriptions = it)) }
     }
 }
 
@@ -4479,7 +4676,9 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object UrlSchemes : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
+    object Privacy : AppSettingsRoute(1)
     object Experimental : AppSettingsRoute(1)
+    object Appearance : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
 }
 

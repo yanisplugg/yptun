@@ -3,20 +3,20 @@ package org.olcbox.app.ui.features.home.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import org.olcbox.app.ui.features.home.subscriptionJson
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -100,10 +101,10 @@ import org.olcbox.app.ui.features.locations.components.RefreshButton
  */
 fun LazyListScope.locationSelectorContent(
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
-    // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning] or in [autoPickTargetIds]).
+    // Ping a subscription's servers and connect to the best one (spinner while [autoPickRunning]).
     onAutoPickClick: (targetLocationIds: List<String>) -> Unit = {},
-    autoPickRunning: Boolean = false,
-    autoPickTargetIds: Set<String> = emptySet(),
+    autoPickTarget: List<String>? = null,
+    showGroupAutoPick: Boolean = true,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
     hasLoaded: Boolean = true,
@@ -121,6 +122,15 @@ fun LazyListScope.locationSelectorContent(
     onRefreshSubscription: (subscriptionUrl: String) -> Unit = {},
     // Give a subscription (keyed by its URL) the user's own name; blank restores the panel's.
     onRenameSubscription: (subscriptionUrl: String, name: String) -> Unit = { _, _ -> },
+    // (old URL, new URL, the group's key before the change) — see [SubscriptionGroupMenu].
+    onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
+    // Writes one proxy link as the cascade of every server of the subscription (blank removes it).
+    onSetSubscriptionCascade: (url: String, link: String) -> Unit = { _, _ -> },
+    // Pin / unpin one server of the free-servers list (a pinned one survives the next search).
+    onToggleFreeServerPinned: (storageId: String, pinned: Boolean) -> Unit = { _, _ -> },
+    // Servers a stopped free search has not checked yet; > 0 adds "continue the search" to that group's menu.
+    freeSearchRemaining: Int = 0,
+    onContinueFreeSearch: () -> Unit = {},
     // Bulk multi-select (long-press): hoisted to the host screen.
     selectionMode: Boolean = false,
     selectedIds: List<String> = emptyList(),
@@ -224,215 +234,144 @@ fun LazyListScope.locationSelectorContent(
         val isPingDescending = groupKey in pingSortDescendingGroups
         // Free-servers list: drawn like a folder — one green-tinted container holding header AND rows.
         val isFree = group.firstOrNull()?.subscriptionUrl?.trim() == org.olcbox.app.ui.features.home.FREE_SERVERS_URL
+        val orderedGroup = (if (isPingSorted) group.sortedWith(pingComparator(pingsState, isPingDescending)) else group)
+            // Free servers: the pinned ones stay on top (stable sort keeps the rest in their order).
+            .let { list -> if (isFree) list.sortedByDescending { it.metadata?.pinned == true } else list }
 
-        if (isCollapsed) {
-            item(key = "group-header-$groupKey") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = if (isFree) {
-                        androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.surfaceContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.22f)
-                    } else MaterialTheme.colorScheme.surfaceContainer
+        item(key = "group-header-$groupKey") {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = if (isFree) {
+                    androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.surfaceContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.22f)
+                } else MaterialTheme.colorScheme.surfaceContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Tapping the title (with its chevron) collapses/expands the list.
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onToggleGroupCollapsed(groupKey) },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Tapping the title (with its chevron) collapses/expands the list.
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { onToggleGroupCollapsed(groupKey) },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ExpandMore,
-                                    contentDescription = "Expand",
-                                    modifier = Modifier.size(22.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                SubscriptionGroupHeader(
-                                    locations = group,
-                                    pingsState = pingsState,
-                                    isPinned = isPinned,
-                                    onToggleCollapse = { onToggleGroupCollapsed(groupKey) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
+                            Icon(
+                                imageVector = if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                                contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            SubscriptionGroupHeader(
+                                locations = group,
+                                pingsState = pingsState,
+                                isPinned = isPinned,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
 
-                            val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                    pingsState.pendingLocationIds.any { it in groupIds }
+                        val isGroupRefreshing = pingsState is PingsState.Loading &&
+                                pingsState.pendingLocationIds.any { it in groupIds }
 
-                            val isGroupAutoPicking = groupIds.any { it in autoPickTargetIds } || (autoPickRunning && groupIds.isNotEmpty())
+                        if (showGroupAutoPick) {
                             AutoPickButton(
-                                isRunning = isGroupAutoPicking,
+                                isRunning = autoPickTarget == groupIds,
                                 onClick = { onAutoPickClick(groupIds) },
                                 tint = MaterialTheme.colorScheme.primary
                             )
-                            RefreshButton(
-                                isRefreshing = isGroupRefreshing,
-                                onClick = { onRefreshClick(groupIds) },
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                        }
+                        RefreshButton(
+                            isRefreshing = isGroupRefreshing,
+                            onClick = { onRefreshClick(groupIds) },
+                            tint = MaterialTheme.colorScheme.primary
+                        )
 
-                            // Overflow menu: pin, sort-by-ping, auto-update, delete.
-                            val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
-                            val groupSubUrl = group.firstOrNull()?.subscriptionUrl
-                            val groupWebPageUrl = group.firstNotNullOfOrNull {
-                                it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                        // Overflow menu: pin, sort-by-ping, auto-update, delete.
+                        val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                        val groupSubUrl = group.firstOrNull()?.subscriptionUrl
+                        val groupWebPageUrl = group.firstNotNullOfOrNull {
+                            it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
+                        }
+                        SubscriptionGroupMenu(
+                            isPinned = isPinned,
+                            isPingSorted = isPingSorted,
+                            isPingDescending = isPingDescending,
+                            autoUpdateEnabled = groupAutoUpdate,
+                            onTogglePin = { onToggleGroupPinned(groupKey) },
+                            onTogglePingSort = { onToggleGroupPingSort(groupKey) },
+                            onToggleAutoUpdate = {
+                                groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) }
+                            },
+                            onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
+                            onContinueSearch = if (isFree && freeSearchRemaining > 0) onContinueFreeSearch else null,
+                            continueSearchLabel = org.olcbox.app.ui.i18n.LocalStrings.current.freeServersContinueLeft(freeSearchRemaining),
+                            currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
+                            onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
+                            subscriptionUrl = groupSubUrl?.takeIf { !isFree },
+                            onChangeUrl = groupSubUrl?.takeIf { !isFree }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, groupKey) } },
+                            cascadeLink = group.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink },
+                            onSetCascade = groupSubUrl?.takeIf { !isFree }?.let { url -> { link -> onSetSubscriptionCascade(url, link) } },
+                            onCopyJson = { subscriptionJson(group) },
+                            onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
+                            onDelete = { onDeleteSubscription(groupIds) },
+                            subscriptionPageUrl = groupWebPageUrl
+                        )
+                    }
+
+                    GroupPingProgress(groupIds = groupIds, pingsState = pingsState)
+                    if (!isCollapsed) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TrafficProgressBar(location = group.firstOrNull())
+                    }
+                    if (isFree && !isCollapsed) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
+                                val serverPinned = location.metadata?.pinned == true
+                                LocationSelectorRow(
+                                    location = location,
+                                    selectedLocationId = selectedLocationId,
+                                    pingsState = pingsState,
+                                    onLocationSelected = onLocationSelected,
+                                    onLocationSettingsClick = onLocationSettingsClick,
+                                    isPinned = serverPinned,
+                                    onTogglePinned = { onToggleFreeServerPinned(location.storageId, !serverPinned) },
+                                    selectionMode = selectionMode,
+                                    isChecked = location.storageId in selectedIds,
+                                    onToggleSelect = onToggleSelect,
+                                    onStartSelection = onStartSelection,
+                                    twoColumns = twoColumns,
+                                    modifier = cellModifier
+                                )
                             }
-                            SubscriptionGroupMenu(
-                                isPinned = isPinned,
-                                isPingSorted = isPingSorted,
-                                isPingDescending = isPingDescending,
-                                autoUpdateEnabled = groupAutoUpdate,
-                                onTogglePin = { onToggleGroupPinned(groupKey) },
-                                onTogglePingSort = { onToggleGroupPingSort(groupKey) },
-                                onToggleAutoUpdate = if (!isFree) {
-                                    { groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) } }
-                                } else null,
-                                onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
-                                currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
-                                onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
-                                onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                                onDelete = { onDeleteSubscription(groupIds) },
-                                subscriptionPageUrl = groupWebPageUrl
-                            )
                         }
                     }
                 }
             }
-        } else {
-            val orderedGroup = if (isPingSorted) {
-                group.sortedWith(pingComparator(pingsState, isPingDescending))
-            } else {
-                group
-            }
+        }
 
-            // Expanded subscription is wrapped in a single container (secondaryContainer),
-            // giving it a continuous container background holding the header and all server cards together.
-            item(key = "group-$groupKey") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    color = if (isFree) {
-                        androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.secondaryContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.22f)
-                    } else MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isFree) {
-                                androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.surfaceContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.15f)
-                            } else MaterialTheme.colorScheme.surfaceContainer
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable { onToggleGroupCollapsed(groupKey) },
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.ExpandLess,
-                                            contentDescription = "Collapse",
-                                            modifier = Modifier.size(22.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        SubscriptionGroupHeader(
-                                            locations = group,
-                                            pingsState = pingsState,
-                                            isPinned = isPinned,
-                                            onToggleCollapse = { onToggleGroupCollapsed(groupKey) },
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-
-                                    val isGroupRefreshing = pingsState is PingsState.Loading &&
-                                            pingsState.pendingLocationIds.any { it in groupIds }
-
-                                    val isGroupAutoPicking = groupIds.any { it in autoPickTargetIds } || (autoPickRunning && groupIds.isNotEmpty())
-                                    AutoPickButton(
-                                        isRunning = isGroupAutoPicking,
-                                        onClick = { onAutoPickClick(groupIds) },
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                    RefreshButton(
-                                        isRefreshing = isGroupRefreshing,
-                                        onClick = { onRefreshClick(groupIds) },
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-
-                                    val groupAutoUpdate = group.none { it.metadata?.subscription?.autoUpdateEnabled == false }
-                                    val groupSubUrl = group.firstOrNull()?.subscriptionUrl
-                                    val groupWebPageUrl = group.firstNotNullOfOrNull {
-                                        it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
-                                    }
-                                    SubscriptionGroupMenu(
-                                        isPinned = isPinned,
-                                        isPingSorted = isPingSorted,
-                                        isPingDescending = isPingDescending,
-                                        autoUpdateEnabled = groupAutoUpdate,
-                                        onTogglePin = { onToggleGroupPinned(groupKey) },
-                                        onTogglePingSort = { onToggleGroupPingSort(groupKey) },
-                                        onToggleAutoUpdate = if (!isFree) {
-                                            { groupSubUrl?.let { onSetSubscriptionAutoUpdate(it, !groupAutoUpdate) } }
-                                        } else null,
-                                        onRefreshSubscription = groupSubUrl?.let { url -> { onRefreshSubscription(url) } },
-                                        currentName = group.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
-                                        onRename = groupSubUrl?.takeIf { !isFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
-                                        onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
-                                        onDelete = { onDeleteSubscription(groupIds) },
-                                        subscriptionPageUrl = groupWebPageUrl
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-                                val subLoc = group.firstOrNull { it.metadata?.subscription?.announce?.isNotBlank() == true } ?: group.firstOrNull()
-                                TrafficProgressBar(location = subLoc)
-                            }
-                        }
-
-                        LocationCardsColumn(orderedGroup, twoColumns) { location, cellModifier ->
-                            LocationSelectorRow(
-                                location = location,
-                                selectedLocationId = selectedLocationId,
-                                pingsState = pingsState,
-                                onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick,
-                                selectionMode = selectionMode,
-                                isChecked = location.storageId in selectedIds,
-                                onToggleSelect = onToggleSelect,
-                                onStartSelection = onStartSelection,
-                                twoColumns = twoColumns,
-                                modifier = cellModifier
-                            )
-                        }
-                    }
-                }
+        if (!isCollapsed && !isFree) {
+            locationCards(orderedGroup, twoColumns, keyPrefix = "row") { location, cellModifier ->
+                LocationSelectorRow(
+                    location = location,
+                    selectedLocationId = selectedLocationId,
+                    pingsState = pingsState,
+                    onLocationSelected = onLocationSelected,
+                    onLocationSettingsClick = onLocationSettingsClick,
+                    selectionMode = selectionMode,
+                    isChecked = location.storageId in selectedIds,
+                    onToggleSelect = onToggleSelect,
+                    onStartSelection = onStartSelection,
+                    twoColumns = twoColumns,
+                    modifier = cellModifier
+                )
             }
         }
     }
@@ -474,10 +413,11 @@ fun LazyListScope.locationSelectorContent(
                             folder = folder,
                             memberCount = memberSubGroups.size + memberCustom.size,
                             isRefreshing = isFolderRefreshing,
-                            autoPickRunning = memberIds.any { it in autoPickTargetIds } || (autoPickRunning && memberIds.isNotEmpty()),
+                            autoPickRunning = autoPickTarget == memberIds,
                             onToggleCollapsed = { onToggleFolderCollapsed(folder.id) },
                             onRefresh = { onRefreshClick(memberIds) },
                             onAutoPick = { onAutoPickClick(memberIds) },
+                            showAutoPick = showGroupAutoPick,
                             onTogglePin = { onToggleFolderPinned(folder.id) },
                             onRename = { onRenameFolder(folder) },
                             onDelete = { onDeleteFolder(folder.id) }
@@ -492,8 +432,6 @@ fun LazyListScope.locationSelectorContent(
                                 val mPinned = mKey in pinnedGroups
                                 val mPingSorted = mKey in pingSortedGroups
                                 val mPingDesc = mKey in pingSortDescendingGroups
-                                val mSubUrl = mGroup.firstOrNull()?.subscriptionUrl
-                                val mIsFree = mSubUrl?.trim() == org.olcbox.app.ui.features.home.FREE_SERVERS_URL
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(14.dp),
@@ -525,24 +463,25 @@ fun LazyListScope.locationSelectorContent(
                                                     locations = mGroup,
                                                     pingsState = pingsState,
                                                     isPinned = mPinned,
-                                                    onToggleCollapse = { onToggleGroupCollapsed(mKey) },
                                                     modifier = Modifier.weight(1f)
                                                 )
                                             }
                                             val mRefreshing = pingsState is PingsState.Loading &&
                                                     pingsState.pendingLocationIds.any { it in mIds }
-                                            val mAutoPicking = mIds.any { it in autoPickTargetIds } || (autoPickRunning && mIds.isNotEmpty())
-                                            AutoPickButton(
-                                                isRunning = mAutoPicking,
-                                                onClick = { onAutoPickClick(mIds) },
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
+                                            if (showGroupAutoPick) {
+                                                AutoPickButton(
+                                                    isRunning = autoPickTarget == mIds,
+                                                    onClick = { onAutoPickClick(mIds) },
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
                                             RefreshButton(
                                                 isRefreshing = mRefreshing,
                                                 onClick = { onRefreshClick(mIds) },
                                                 tint = MaterialTheme.colorScheme.primary
                                             )
                                             val mAutoUpdate = mGroup.none { it.metadata?.subscription?.autoUpdateEnabled == false }
+                                            val mSubUrl = mGroup.firstOrNull()?.subscriptionUrl
                                             val mWebPageUrl = mGroup.firstNotNullOfOrNull {
                                                 it.metadata?.subscription?.webPageUrl?.takeIf { url -> url.isNotBlank() }
                                             }
@@ -553,12 +492,17 @@ fun LazyListScope.locationSelectorContent(
                                                 autoUpdateEnabled = mAutoUpdate,
                                                 onTogglePin = { onToggleGroupPinned(mKey) },
                                                 onTogglePingSort = { onToggleGroupPingSort(mKey) },
-                                                onToggleAutoUpdate = if (!mIsFree) {
-                                                    { mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) } }
-                                                } else null,
+                                                onToggleAutoUpdate = {
+                                                    mSubUrl?.let { onSetSubscriptionAutoUpdate(it, !mAutoUpdate) }
+                                                },
                                                 onRefreshSubscription = mSubUrl?.let { url -> { onRefreshSubscription(url) } },
                                                 currentName = mGroup.firstOrNull()?.metadata?.subscription?.displayName().orEmpty(),
-                                                onRename = mSubUrl?.takeIf { !mIsFree }?.let { url -> { name -> onRenameSubscription(url, name) } },
+                                                onRename = mSubUrl?.let { url -> { name -> onRenameSubscription(url, name) } },
+                                                subscriptionUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL },
+                                                onChangeUrl = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { newUrl -> onChangeSubscriptionUrl(url, newUrl, mKey) } },
+                                                cascadeLink = mGroup.firstNotNullOfOrNull { it.metadata?.subscription?.cascadeLink },
+                                                onSetCascade = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }?.let { url -> { link -> onSetSubscriptionCascade(url, link) } },
+                                                onCopyJson = { subscriptionJson(mGroup) },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
                                                 subscriptionPageUrl = mWebPageUrl
@@ -651,12 +595,13 @@ fun LazyListScope.locationSelectorContent(
                 val isCustomRefreshing = pingsState is PingsState.Loading &&
                         pingsState.pendingLocationIds.any { it in customIds }
 
-                val isCustomAutoPicking = customIds.any { it in autoPickTargetIds } || (autoPickRunning && customIds.isNotEmpty())
-                AutoPickButton(
-                    isRunning = isCustomAutoPicking,
-                    onClick = { onAutoPickClick(customIds) },
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                if (showGroupAutoPick) {
+                    AutoPickButton(
+                        isRunning = autoPickTarget == customIds,
+                        onClick = { onAutoPickClick(customIds) },
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 RefreshButton(
                     isRefreshing = isCustomRefreshing,
                     onClick = { onRefreshClick(customIds) },
@@ -1044,26 +989,71 @@ private fun parseTrafficBytes(raw: String?): Long? {
     return (number * multiplier).toLong()
 }
 
+/**
+ * While a ping pass runs over this group: "Tested: 12 of 40 · available: 3 · ~40 s left" and a progress line,
+ * or "paused". Nothing is drawn when the group is not being pinged.
+ */
+@Composable
+private fun GroupPingProgress(groupIds: List<String>, pingsState: PingsState) {
+    if (!org.olcbox.app.ui.features.locations.components.LocalShowPingControls.current) return
+    val loading = pingsState as? PingsState.Loading ?: return
+    val pending = groupIds.count { it in loading.pendingLocationIds }
+    if (pending == 0 || groupIds.isEmpty()) return
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val total = groupIds.size
+    val done = total - pending
+    val alive = groupIds.count { loading.currentPings[it] != null }
+    val tail = when {
+        loading.paused -> s.pingPausedLabel
+        loading.etaSeconds != null -> s.etaLeft(loading.etaSeconds)
+        else -> null
+    }
+    Column(modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)) {
+        Text(
+            text = s.pingProgress(done, total, alive) + (tail?.let { " · $it" } ?: ""),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(3.dp)
+        )
+    }
+}
+
 @Composable
 private fun SubscriptionGroupMenu(
     isPinned: Boolean,
     isPingSorted: Boolean,
     isPingDescending: Boolean,
-    autoUpdateEnabled: Boolean = true,
+    autoUpdateEnabled: Boolean,
     onTogglePin: () -> Unit,
     onTogglePingSort: () -> Unit,
-    onToggleAutoUpdate: (() -> Unit)? = null,
+    onToggleAutoUpdate: () -> Unit,
     // Non-null only when this group is backed by a subscription URL we can re-download.
     onRefreshSubscription: (() -> Unit)? = null,
+    // Free servers only: carry on a stopped search over the servers it has not checked yet.
+    onContinueSearch: (() -> Unit)? = null,
+    continueSearchLabel: String = "",
     // Current visible name (prefills the dialog) and the rename action; null hides the menu entry.
     currentName: String = "",
     onRename: ((String) -> Unit)? = null,
+    // The subscription's link, shown (and copyable) in the menu; [onChangeUrl] non-null makes it editable.
+    subscriptionUrl: String? = null,
+    onChangeUrl: ((String) -> Unit)? = null,
+    // Cascade for the whole subscription: the saved link and the action that writes it into every server.
+    cascadeLink: String? = null,
+    onSetCascade: ((String) -> Unit)? = null,
+    // The subscription's servers as one JSON array (null when none can be expressed as JSON).
+    onCopyJson: (() -> String?)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
     subscriptionPageUrl: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var showingUrl by remember { mutableStateOf(false) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
@@ -1089,6 +1079,79 @@ private fun SubscriptionGroupMenu(
         )
     }
 
+    if (showingUrl && subscriptionUrl != null) {
+        var draft by remember(subscriptionUrl) { mutableStateOf(subscriptionUrl) }
+        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        val trimmed = draft.trim()
+        val valid = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
+        var cascadeDraft by remember(cascadeLink) { mutableStateOf(cascadeLink.orEmpty()) }
+        var jsonCopied by remember { mutableStateOf<Boolean?>(null) }
+        val cascadeTrimmed = cascadeDraft.trim()
+        AlertDialog(
+            onDismissRequest = { showingUrl = false },
+            title = { Text(s.subscriptionLink) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        readOnly = onChangeUrl == null,
+                        isError = onChangeUrl != null && !valid,
+                        minLines = 2,
+                        supportingText = { Text(if (onChangeUrl != null) s.subscriptionLinkHint else s.subscriptionLinkReadOnlyHint) }
+                    )
+                    if (onSetCascade != null) {
+                        OutlinedTextField(
+                            value = cascadeDraft,
+                            onValueChange = { cascadeDraft = it },
+                            label = { Text(s.subscriptionCascadeTitle) },
+                            minLines = 2,
+                            supportingText = { Text(s.subscriptionCascadeHint) }
+                        )
+                        TextButton(
+                            enabled = cascadeTrimmed != cascadeLink.orEmpty().trim(),
+                            onClick = { onSetCascade(cascadeTrimmed); showingUrl = false }
+                        ) { Text(if (cascadeTrimmed.isEmpty()) s.subscriptionCascadeRemove else s.subscriptionCascadeApply) }
+                    }
+                    if (onCopyJson != null) {
+                        TextButton(onClick = {
+                            val json = onCopyJson()
+                            if (json != null) clipboard.setText(androidx.compose.ui.text.AnnotatedString(json))
+                            jsonCopied = json != null
+                        }) {
+                            Text(
+                                when (jsonCopied) {
+                                    true -> s.subscriptionJsonCopied
+                                    false -> s.subscriptionJsonEmpty
+                                    null -> s.subscriptionCopyJson
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (onChangeUrl != null) {
+                    TextButton(
+                        enabled = valid && trimmed != subscriptionUrl.trim(),
+                        onClick = { onChangeUrl(trimmed); showingUrl = false }
+                    ) { Text(s.save) }
+                } else {
+                    TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(subscriptionUrl)) }) { Text(s.copy) }
+                    if (onChangeUrl != null) TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
+                }
+            }
+        )
+    }
+
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(
@@ -1098,10 +1161,39 @@ private fun SubscriptionGroupMenu(
             )
         }
 
+        val menuScroll = androidx.compose.foundation.rememberScrollState()
+        val thumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
         DropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            scrollState = menuScroll,
+            // Nine entries do not fit a phone screen: cap the height; the menu scrolls inside it, with a
+            // visible scrollbar so it is clear that there is more.
+            modifier = Modifier.heightIn(max = 340.dp).drawWithContent {
+                drawContent()
+                if (menuScroll.maxValue > 0) {
+                    val track = size.height
+                    val thumb = (track * track / (track + menuScroll.maxValue)).coerceAtLeast(24.dp.toPx())
+                    val top = (track - thumb) * menuScroll.value / menuScroll.maxValue
+                    drawRoundRect(
+                        color = thumbColor,
+                        topLeft = androidx.compose.ui.geometry.Offset(size.width - 6.dp.toPx(), top),
+                        size = androidx.compose.ui.geometry.Size(4.dp.toPx(), thumb),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx())
+                    )
+                }
+            }
         ) {
+            if (subscriptionUrl != null) {
+                DropdownMenuItem(
+                    text = { Text(s.subscriptionLink) },
+                    leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        showingUrl = true
+                    }
+                )
+            }
             // Remnawave `profile-web-page-url` — the panel's subscription/management page.
             if (!subscriptionPageUrl.isNullOrBlank()) {
                 DropdownMenuItem(
@@ -1120,6 +1212,16 @@ private fun SubscriptionGroupMenu(
                     onClick = {
                         expanded = false
                         renaming = true
+                    }
+                )
+            }
+            if (onContinueSearch != null) {
+                DropdownMenuItem(
+                    text = { Text(continueSearchLabel) },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                    onClick = {
+                        onContinueSearch()
+                        expanded = false
                     }
                 )
             }
@@ -1166,30 +1268,28 @@ private fun SubscriptionGroupMenu(
                     expanded = false
                 }
             )
-            if (onToggleAutoUpdate != null) {
-                DropdownMenuItem(
-                    text = { Text(s.groupAutoUpdate) },
-                    leadingIcon = {
+            DropdownMenuItem(
+                text = { Text(s.groupAutoUpdate) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = if (autoUpdateEnabled) Icons.Outlined.Sync else Icons.Outlined.SyncDisabled,
+                        contentDescription = null
+                    )
+                },
+                trailingIcon = if (autoUpdateEnabled) {
+                    {
                         Icon(
-                            imageVector = if (autoUpdateEnabled) Icons.Outlined.Sync else Icons.Outlined.SyncDisabled,
-                            contentDescription = null
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
                         )
-                    },
-                    trailingIcon = if (autoUpdateEnabled) {
-                        {
-                            Icon(
-                                imageVector = Icons.Filled.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    } else null,
-                    onClick = {
-                        onToggleAutoUpdate()
-                        expanded = false
                     }
-                )
-            }
+                } else null,
+                onClick = {
+                    onToggleAutoUpdate()
+                    expanded = false
+                }
+            )
             DropdownMenuItem(
                 text = { Text(s.moveToFolder) },
                 leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null) },
@@ -1269,10 +1369,11 @@ private fun FolderGroupHeader(
     folder: CustomGroup,
     memberCount: Int,
     isRefreshing: Boolean,
-    autoPickRunning: Boolean = false,
+    autoPickRunning: Boolean,
     onToggleCollapsed: () -> Unit,
     onRefresh: () -> Unit,
-    onAutoPick: () -> Unit = {},
+    onAutoPick: () -> Unit,
+    showAutoPick: Boolean = true,
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
@@ -1321,11 +1422,13 @@ private fun FolderGroupHeader(
                 )
             }
 
-            AutoPickButton(
-                isRunning = autoPickRunning,
-                onClick = onAutoPick,
-                tint = MaterialTheme.colorScheme.primary
-            )
+            if (showAutoPick) {
+                AutoPickButton(
+                    isRunning = autoPickRunning,
+                    onClick = onAutoPick,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             RefreshButton(
                 isRefreshing = isRefreshing,
                 onClick = onRefresh,
@@ -1398,91 +1501,10 @@ private fun LocationGroupHeader(
 }
 
 @Composable
-private fun SubscriptionAnnounceText(
-    announce: String,
-    onToggleCollapse: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
-) {
-    val uriHandler = LocalUriHandler.current
-    val primaryColor = MaterialTheme.colorScheme.primary
-
-    val annotatedString = remember(announce, primaryColor) {
-        buildAnnotatedString {
-            val linkRegex = Regex("""(https?://[^\s]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|t\.me/[^\s]+|tg://[^\s]+|(?<![a-zA-Z0-9._%+-])@[A-Za-z0-9_]{3,32}(?!\.[a-zA-Z])|\b(?:[a-zA-Z0-9-]+\.)+(?:com|online|org|net|ru|io|me|dev|app|site|space|top|xyz|pro|su|info|biz)(?:/[^\s]*)?\b)""")
-            var lastIndex = 0
-            val matches = linkRegex.findAll(announce)
-            for (match in matches) {
-                val start = match.range.first
-                val end = match.range.last + 1
-                if (start > lastIndex) {
-                    append(announce.substring(lastIndex, start))
-                }
-                var rawLink = match.value
-                var trailingPunct = ""
-                while (rawLink.isNotEmpty() && (rawLink.endsWith(".") || rawLink.endsWith(",") ||
-                            rawLink.endsWith("!") || rawLink.endsWith("?") ||
-                            rawLink.endsWith(")") || rawLink.endsWith("\"") || rawLink.endsWith("'"))) {
-                    trailingPunct = rawLink.takeLast(1) + trailingPunct
-                    rawLink = rawLink.dropLast(1)
-                }
-                val targetUrl = when {
-                    rawLink.startsWith("http://") || rawLink.startsWith("https://") -> rawLink
-                    rawLink.contains("@") && !rawLink.startsWith("@") -> "mailto:$rawLink"
-                    rawLink.startsWith("t.me/") -> "https://$rawLink"
-                    rawLink.startsWith("tg://") -> rawLink
-                    rawLink.startsWith("@") -> "https://t.me/${rawLink.removePrefix("@")}"
-                    else -> "https://$rawLink"
-                }
-                pushStringAnnotation(tag = "URL", annotation = targetUrl)
-                pushStyle(
-                    SpanStyle(
-                        color = primaryColor,
-                        fontWeight = FontWeight.SemiBold,
-                        textDecoration = TextDecoration.Underline
-                    )
-                )
-                append(rawLink)
-                pop()
-                pop()
-                if (trailingPunct.isNotEmpty()) {
-                    append(trailingPunct)
-                }
-                lastIndex = end
-            }
-            if (lastIndex < announce.length) {
-                append(announce.substring(lastIndex))
-            }
-        }
-    }
-
-    ClickableText(
-        text = annotatedString,
-        style = MaterialTheme.typography.labelSmall.copy(
-            fontSize = 11.sp,
-            lineHeight = 14.sp,
-            color = MaterialTheme.colorScheme.primary
-        ),
-        maxLines = org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines.current
-            .let { if (it > 0) it else Int.MAX_VALUE },
-        overflow = TextOverflow.Ellipsis,
-        modifier = modifier.padding(top = 2.dp),
-        onClick = { offset ->
-            val clickedAnnotation = annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()
-            if (clickedAnnotation != null) {
-                runCatching { uriHandler.openUri(clickedAnnotation.item) }
-            } else {
-                onToggleCollapse?.invoke()
-            }
-        }
-    )
-}
-
-@Composable
 private fun SubscriptionGroupHeader(
     locations: List<LocationItem>,
     pingsState: PingsState,
     isPinned: Boolean = false,
-    onToggleCollapse: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val first = locations.firstOrNull()
@@ -1513,7 +1535,10 @@ private fun SubscriptionGroupHeader(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                // Takes only what the (unweighted, measured first) counter/badge leave: a long title
+                // wraps onto more lines instead of being cut, and the "12/30" counter stays whole.
+                modifier = Modifier.weight(1f, fill = false)
             )
             // Red "!" badge when the subscription expires within 2 days; tap reveals the exact date.
             if (info?.expiryUrgent == true && info.expiryDateTime != null) {
@@ -1531,6 +1556,8 @@ private fun SubscriptionGroupHeader(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "$alive/${locations.size}",
+                    maxLines = 1,
+                    softWrap = false,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (alive > 0) {
                         MaterialTheme.colorScheme.primary
@@ -1545,10 +1572,20 @@ private fun SubscriptionGroupHeader(
         // right under the title like Happ. Gated on the app-settings toggle (off by default) and
         // independent of [info], so a sub that carries ONLY a description still shows it.
         if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionDescription.current) {
-            first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let { announceText ->
-                SubscriptionAnnounceText(
-                    announce = announceText,
-                    onToggleCollapse = onToggleCollapse
+            first?.metadata?.subscription?.announce?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = org.olcbox.app.ui.features.locations.components.rememberLinkified(it),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    // The whole description, wrapped onto as many lines as it needs: it takes the width
+                    // the header gives it (a long unbroken word is split by the layout), never more.
+                    softWrap = true,
+                    maxLines = org.olcbox.app.ui.features.locations.components.LocalSubscriptionDescriptionLines.current
+                        .let { if (it > 0) it else Int.MAX_VALUE },
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
                 )
             }
         }

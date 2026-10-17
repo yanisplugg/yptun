@@ -148,3 +148,13 @@ func TestUnknownUapiKeyParsing(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// Issue #51: AmneziaVPN writes "RandomTrailers = on"; the device's ParseBool rejected "on" and the
+// whole start failed with "IPC error -22: failed to parse random trailers".
+func TestOnOffBoolKnobsAreAccepted(t *testing.T) {
+	cfg := loadInto(t, "[Interface]\n"+testKeys+"RandomTrailers = on\nDisableCookies = off\n"+testPeer)
+	uapi, _ := cfg.uapi()
+	if !strings.Contains(uapi, "random_trailers=true") || !strings.Contains(uapi, "disable_cookies=false") {
+		t.Fatalf("bool knobs not normalised:\n%s", uapi)
+	}
+}

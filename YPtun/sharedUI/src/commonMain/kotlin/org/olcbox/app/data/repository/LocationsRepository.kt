@@ -57,6 +57,8 @@ interface LocationsRepository {
     suspend fun saveLocation(storageId: String, location: LocationConfig)
     suspend fun loadLocation(storageId: String): LocationConfig?
     suspend fun deleteLocation(storageId: String)
+    /** Pins / unpins a location so it floats to the top and survives free-server refreshes. */
+    suspend fun setLocationPinned(storageId: String, pinned: Boolean)
 
     /**
      * Deletes many locations in a single bundle rewrite (one load + one save), instead of N
