@@ -35,6 +35,7 @@ class App : Application(), Configuration.Provider {
             android.system.Os.setenv("GOMEMLIMIT", "400MiB", false)
         }
         appContext = applicationContext
+        keepOffPrimeCores()
         // Переезд со старого applicationId: копируем состояние из прошлой установки ДО того, как
         // что-либо тронет DataStore (иначе он закеширует пустые настройки, и подложенный файл
         // подхватится только со следующего запуска). Синхронно и один раз за установку; когда
@@ -45,6 +46,31 @@ class App : Application(), Configuration.Provider {
         EmojiCompat.init(BundledEmojiCompatConfig(this))
         scheduleProviderReport()
         org.olcbox.app.ui.activities.AppIcons.ensureLauncherEntry(this)
+    }
+
+    /**
+     * Keeps every thread of the app (UI, VPN service and the Go cores, which inherit it) off the fastest
+     * cores: the prime cores (e.g. 2 x 4.7 GHz on a Snapdragon 8 Elite) burn far more power per cycle, and a
+     * tunnel does not need them. Mask = every CPU slower than the fastest one; nothing happens on chips
+     * with identical cores or when sysfs is unreadable. Done twice (`taskset -a` covers existing threads,
+     * and threads created later inherit the mask) once the libraries have spawned their threads.
+     */
+    private fun keepOffPrimeCores() {
+        Thread {
+            runCatching {
+                val freqs = (0 until Runtime.getRuntime().availableProcessors()).map {
+                    java.io.File("/sys/devices/system/cpu/cpu$it/cpufreq/cpuinfo_max_freq").readText().trim().toLong()
+                }
+                val fastest = freqs.max()
+                val mask = freqs.indices.filter { freqs[it] < fastest }.fold(0L) { m, i -> m or (1L shl i) }
+                if (mask == 0L) return@runCatching
+                repeat(2) {
+                    Thread.sleep(if (it == 0) 3_000L else 30_000L)
+                    ProcessBuilder("taskset", "-ap", mask.toString(16), android.os.Process.myPid().toString())
+                        .redirectErrorStream(true).start().also { p -> p.inputStream.readBytes(); p.waitFor() }
+                }
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     /**
