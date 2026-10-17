@@ -16,6 +16,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -45,6 +46,14 @@ object WarpConfigGenerator {
     /** Standard WARP data-plane endpoint. */
     private const val ENDPOINT = "engage.cloudflareclient.com:2408"
 
+    /** A generator answers with one account; the git-hosted mirror with a pool of them. */
+    private fun parseAccount(text: String): WarpServiceAccount =
+        if (text.trimStart().startsWith("[")) {
+            json.decodeFromString(ListSerializer(WarpServiceAccount.serializer()), text).random()
+        } else {
+            json.decodeFromString(WarpServiceAccount.serializer(), text)
+        }
+
     /** Direct Cloudflare registration (fallback only — blocked in some regions). */
     private const val REG_URL = "https://api.cloudflareclient.com/v0a2158/reg"
 
@@ -64,6 +73,8 @@ object WarpConfigGenerator {
         "https://warp-vercel-chi.vercel.app/api/warp-data",
         "https://warp-vercel-murex.vercel.app/api/warp-data",
         "https://warp-gen.netlify.app/",
+        // Git-hosted mirror (GitHub Pages, rebuilt hourly by a workflow): a JSON ARRAY of accounts, one is picked at random.
+        "https://breead1337.github.io/ws-cache-9e41/w.json",
     )
 
     /** Full tunnel: every connection the local SOCKS client (Telegram) makes rides WARP. */
@@ -151,7 +162,7 @@ object WarpConfigGenerator {
                         headers { append(HttpHeaders.UserAgent, BROWSER_USER_AGENT) }
                     }
                     if (response.status.value !in 200..299) return@runCatching null
-                    json.decodeFromString(WarpServiceAccount.serializer(), response.bodyAsText())
+                    parseAccount(response.bodyAsText())
                 }.onFailure { Log.w(TAG, "WARP generator $url failed: ${it.message}") }.getOrNull()
 
                 val priv = account?.privKey?.takeIf { it.isNotBlank() }
