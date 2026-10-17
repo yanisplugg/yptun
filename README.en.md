@@ -45,17 +45,19 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 
 ---
 
-## What's new in 3.6.0
+## What's new in 3.7.0
 
 | | |
 |---|---|
-| ⚠️ **olcRTC is now a legacy core** | Still works as before, but is no longer developed and will be removed in a future version. Plan a replacement: VK-TURN, OpenFlux, MasterDNS or Xray/sing-box. |
-| **Free servers catalog** | Android and desktop: one-tap download, automatic reachability check that drops dead servers, check progress; on Windows and Linux right from the tray. Thanks @Zamotashka (#49, #50). |
-| **Two-column desktop UI** | Connect button, timer and status on the left, subscriptions and servers on the right; the window is wide by default. |
-| **OpenFlux 0.0.3** | New Mail.ru and cups.online transports, compression by default. ⚠️ Reinstall old nodes from the app. |
-| **Server auto-install** | MasterDNS checks for a busy port and that the server really runs, opens the firewall port, gains new options; OpenFlux works on ufw nodes and reports the Yandex captcha. |
-| **Fixes** | AmneziaWG with `RandomTrailers = on` (#51); free servers while VPN is on; "updated" with no internet; "My IP" on desktop without 2ip. |
-| **Linux AppImage** | Next to the `.deb` — AppImage for x64 and arm64, runs on any distro without installing. |
+| **Cloudflare WARP for JSON subscriptions** | Client side: every proxy of the subscription goes through WARP; server side: egress through WARP with a UDP relay. Android and desktop, WireGuard and AmneziaWG. |
+| **Free servers + WARP** | WARP for each found server or all at once: AmneziaWG for Russian servers, WireGuard for the rest. |
+| **AmneziaWG / WireGuard engine** | Pick the protocol, wg-quick config or a file; the "Allow editing configurations" switch exposes every parameter (Jc, S1–S4, H1–H4, I1–I5, MTU, DNS…) as separate fields. |
+| **Free servers search in the background** | "To background" button, scheduled auto-refresh, stop and keep what was found (#72), pin a server, limits of 2500 and 5000. |
+| **Ping and subscriptions** | Pause, resume and restart ping with progress; view and change the subscription link, pins and folders move along (#71); cascade for a whole subscription. |
+| **Privacy** | New page: ProviderID report (#69), subscription User-Agent, device data and own HWID (#70); HWID is not sent to GitHub on update checks. |
+| **Routing and cores** | `geosite:telegram` includes Telegram data-center addresses (#68); OpenFlux 0.13.0 (Avito, several transports per session, #66); clearer csqtt errors (#67); SOCKS5 port can be changed on desktop. |
+| **Lighter on the phone** | Free-server auto-refresh only while the window is open, soft memory limit for Go cores, VPN worker threads pinned to the slower CPU cores. |
+| **Fixes** | Mirror when the Cloudflare WARP API is down; server-side WARP AmneziaWG without I1–I5 packets; delta update on desktop; lists no longer jump to the top. |
 
 ---
 
