@@ -175,6 +175,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        val IMPORT_SCHEMES = listOf("qwdtt", "openflux")
+        val IMPORT_SCHEMES = listOf("qwdtt", "openflux", "masterdns", "snolc", "csqtt", "freeturn", "olcrtc", "amneziawg")
     }
 }

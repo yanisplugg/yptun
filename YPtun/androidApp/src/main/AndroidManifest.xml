@@ -83,13 +83,20 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="yptun" />
             </intent-filter>
-            <!-- Tunnel share links: qWDTT quick link and OpenFlux client link open the importer. -->
+            <!-- Tunnel share links (qWDTT, OpenFlux and the panel families below) open the importer. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="qwdtt" />
                 <data android:scheme="openflux" />
+                <!-- Links of the QuofortpostProtocols panel (one personal subscription = a list of these). -->
+                <data android:scheme="masterdns" />
+                <data android:scheme="snolc" />
+                <data android:scheme="csqtt" />
+                <data android:scheme="freeturn" />
+                <data android:scheme="olcrtc" />
+                <data android:scheme="amneziawg" />
             </intent-filter>
             <!--
                 Long-pressing the Quick Settings tile launches the tile's
