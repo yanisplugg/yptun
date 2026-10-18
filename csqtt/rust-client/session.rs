@@ -900,7 +900,7 @@ async fn request_configuration(
     let mut current_wire_version = NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire);
     let mut request = build_registration_payload_versioned(config, current_wire_version);
     let mut attempt = 0;
-    while attempt < CONFIG_RESPONSE_TIMEOUT_MS.len() {
+    'attempts: while attempt < CONFIG_RESPONSE_TIMEOUT_MS.len() {
         let timeout_ms = CONFIG_RESPONSE_TIMEOUT_MS[attempt];
         attempt += 1;
         crate::log_error!(
@@ -927,9 +927,7 @@ async fn request_configuration(
                     }
                     break packet;
                 }
-                Err(_) if attempt < CONFIG_RESPONSE_TIMEOUT_MS.len() => {
-                    break None;
-                }
+                Err(_) if attempt < CONFIG_RESPONSE_TIMEOUT_MS.len() => continue 'attempts,
                 Err(_) => {
                     let message = format!(
                         "FATAL_HANDSHAKE: сервер не подтвердил конфигурацию после {} попыток; проверьте пароль подключения и совместимость клиента с сервером",
@@ -941,9 +939,6 @@ async fn request_configuration(
                     bail!(message)
                 }
             }
-        };
-        let Some(packet) = packet else {
-            continue;
         };
         let response = match parse_config_response(packet.as_slice()) {
             Ok(resp) => resp,
@@ -963,7 +958,7 @@ async fn request_configuration(
                     NEGOTIATED_WIRE_VERSION.store(1, Ordering::Release);
                     request = build_registration_payload_versioned(config, 1);
                     attempt = 0;
-                    continue;
+                    continue 'attempts;
                 }
                 if is_invalid_worker_count && current_wire_version > 2 {
                     crate::log_error!(
@@ -975,7 +970,7 @@ async fn request_configuration(
                     NEGOTIATED_WIRE_VERSION.store(2, Ordering::Release);
                     request = build_registration_payload_versioned(config, 2);
                     attempt = 0;
-                    continue;
+                    continue 'attempts;
                 }
                 if is_protocol_mismatch && current_wire_version > 1 {
                     let fallback_ver = current_wire_version.saturating_sub(1).max(1);
@@ -989,7 +984,7 @@ async fn request_configuration(
                     NEGOTIATED_WIRE_VERSION.store(fallback_ver, Ordering::Release);
                     request = build_registration_payload_versioned(config, fallback_ver);
                     attempt = 0;
-                    continue;
+                    continue 'attempts;
                 }
                 let message = error.to_string();
                 if config.get_config && message.contains("FATAL_") {
