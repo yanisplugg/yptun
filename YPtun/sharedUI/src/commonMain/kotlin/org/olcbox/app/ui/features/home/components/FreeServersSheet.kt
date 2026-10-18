@@ -16,8 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Cloud
-import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material3.BottomSheetDefaults
@@ -25,8 +23,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -67,13 +63,11 @@ fun FreeServersSheet(
     // Servers the stopped search has not checked yet; > 0 shows «Продолжить поиск» under the add button.
     remaining: Int = 0,
     onContinue: () -> Unit = {},
-    // The second argument: ids of the servers that get server-side WARP.
-    onAddSelected: (List<FreeServerItem>, Set<String>) -> Unit
+    onAddSelected: (List<FreeServerItem>) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val s = LocalStrings.current
     var selectedIds by remember(servers) { mutableStateOf(servers.map { it.id }.toSet()) }
-    var warpIds by remember(servers) { mutableStateOf(emptySet<String>()) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -128,34 +122,7 @@ fun FreeServersSheet(
 
             Spacer(Modifier.height(6.dp))
 
-            // Server-side WARP for every free server at once; a row's cloud turns it off (or on) for that server.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Cloud,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Column(Modifier.weight(1f)) {
-                    Text(s.freeServersWarpAll, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        s.freeServersWarpAllHint,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 14.sp
-                    )
-                }
-                Switch(
-                    checked = warpIds.isNotEmpty(),
-                    onCheckedChange = { on -> warpIds = if (on) servers.map { it.id }.toSet() else emptySet() }
-                )
-            }
 
-            Spacer(Modifier.height(2.dp))
 
             // Select all / Deselect all bar
             Row(
@@ -198,10 +165,6 @@ fun FreeServersSheet(
                     FreeServerRow(
                         item = item,
                         isSelected = isSelected,
-                        warp = item.id in warpIds,
-                        onToggleWarp = {
-                            warpIds = if (item.id in warpIds) warpIds - item.id else warpIds + item.id
-                        },
                         onToggle = {
                             selectedIds = if (isSelected) selectedIds - item.id else selectedIds + item.id
                         }
@@ -212,7 +175,7 @@ fun FreeServersSheet(
             Spacer(Modifier.height(10.dp))
 
             Button(
-                onClick = { onAddSelected(servers.filter { it.id in selectedIds }, warpIds) },
+                onClick = { onAddSelected(servers.filter { it.id in selectedIds }) },
                 enabled = selectedIds.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(12.dp)
@@ -240,8 +203,6 @@ fun FreeServersSheet(
 private fun FreeServerRow(
     item: FreeServerItem,
     isSelected: Boolean,
-    warp: Boolean,
-    onToggleWarp: () -> Unit,
     onToggle: () -> Unit
 ) {
     val (flag, rawName) = parseEmojiAndName(item.displayName)
@@ -321,14 +282,7 @@ private fun FreeServerRow(
                 }
             }
 
-            IconButton(onClick = onToggleWarp) {
-                Icon(
-                    imageVector = if (warp) Icons.Outlined.Cloud else Icons.Outlined.CloudOff,
-                    contentDescription = "WARP",
-                    tint = if (warp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
+
 
             Checkbox(
                 checked = isSelected,

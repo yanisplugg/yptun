@@ -782,15 +782,8 @@ class HomeScreenViewModel(
                     onError("Не удалось найти работающие бесплатные серверы. Попробуйте позже.")
                 } else if (freeRunInBackground) {
                     if (run == freeServersRun) {
-                        // The cloud (server-side WARP) choice made when the list was first saved carries over.
-                        val hadWarp = runCatching {
-                            locationsRepository.getBundle().locations.any {
-                                it.subscriptionUrl?.trim() == FREE_SERVERS_URL && it.metadata?.pinned != true && it.warpEnabled
-                            }
-                        }.getOrDefault(false)
                         saveSelectedFreeServers(
-                            selectedServers = sortedWorking,
-                            warpIds = if (hadWarp) sortedWorking.map { it.id }.toSet() else emptySet()
+                            selectedServers = sortedWorking
                         )
                     }
                 } else {
@@ -840,7 +833,6 @@ class HomeScreenViewModel(
 
     fun saveSelectedFreeServers(
         selectedServers: List<FreeServerItem>,
-        warpIds: Set<String> = emptySet(),
         onComplete: (Int) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -861,13 +853,6 @@ class HomeScreenViewModel(
                         proxy = profile,
                         // The same core that verified the server (pingVerified runs xray), not the sing-box default.
                         core = org.olcbox.app.data.model.ProxyCore.Xray,
-                        // Cloud in the picker: WARP at the exit of this server.
-                        warpEnabled = item.id in warpIds,
-                        warpMode = org.olcbox.app.data.model.WarpMode.Server,
-                        // Russian servers (RU flag): AmneziaWG, plain WireGuard is cut there; the rest: WireGuard.
-                        warpProtocol = if (item.displayName.contains("\uD83C\uDDF7\uD83C\uDDFA")) {
-                            org.olcbox.app.data.model.WarpProtocol.Awg
-                        } else org.olcbox.app.data.model.WarpProtocol.Wg
                     ).normalized()
                     val base = "${profile.server}_${profile.serverPort}"
                         .lowercase()
