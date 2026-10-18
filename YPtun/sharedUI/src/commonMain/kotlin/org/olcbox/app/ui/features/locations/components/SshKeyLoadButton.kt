@@ -9,4 +9,4 @@ import androidx.compose.runtime.Composable
  * [onKeyLoaded] receives the file's full text content.
  */
 @Composable
-expect fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit)
+expect fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit, label: String? = null)

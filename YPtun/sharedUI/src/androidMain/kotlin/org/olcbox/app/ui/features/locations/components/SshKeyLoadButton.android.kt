@@ -20,7 +20,7 @@ import org.olcbox.app.ui.i18n.LocalStrings
  * Any file type is allowed — private keys usually have no/varied extensions (id_ed25519, *.pem, *.key).
  */
 @Composable
-actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit) {
+actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit, label: String?) {
     val context = LocalContext.current
     val s = LocalStrings.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -33,6 +33,6 @@ actual fun SshKeyLoadButton(enabled: Boolean, onKeyLoaded: (String) -> Unit) {
     OutlinedButton(enabled = enabled, onClick = { launcher.launch(arrayOf("*/*")) }) {
         Icon(Icons.Outlined.FileOpen, contentDescription = null)
         Spacer(Modifier.width(6.dp))
-        Text(s.sshKeyLoadFromFile)
+        Text(label ?: s.sshKeyLoadFromFile)
     }
 }
