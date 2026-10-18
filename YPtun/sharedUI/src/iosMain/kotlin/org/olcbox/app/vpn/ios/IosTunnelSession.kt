@@ -230,7 +230,9 @@ class IosTunnelSession(
         if (IosSharedStore.fileSize(LOG_FILE) > MAX_LOG_BYTES) IosSharedStore.writeText(LOG_FILE, "")
         val session = (IosSharedStore.readText(SESSION_COUNT_FILE)?.trim()?.toIntOrNull() ?: 0) + 1
         IosSharedStore.writeText(SESSION_COUNT_FILE, session.toString())
-        log("===== tunnel session #$session =====")
+        val buildVersion = platform.Foundation.NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleVersion") as? String ?: "unknown"
+        val shortVersion = platform.Foundation.NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: "unknown"
+        log("===== tunnel session #$session (build $buildVersion, v$shortVersion) =====")
     }
 
     /**

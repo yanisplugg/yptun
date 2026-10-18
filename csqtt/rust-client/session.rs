@@ -9,7 +9,7 @@ use crate::{
     obfs::{ObfsCipher, ObfsConfig, ObfsMode, ObfsState, is_rtp_packet},
     packet::{PacketBuf, PacketPool},
     protocol::{
-        ConfigResponse, NEGOTIATED_WIRE_VERSION, config_request, disconnect_request, is_config_response,
+        ConfigResponse, NEGOTIATED_WIRE_VERSION, config_request, config_request_versioned, disconnect_request, is_config_response,
         is_control_response, is_panel_restart_notice, parse_config_response, parse_stream_alive,
         parse_stream_repair,
     },
@@ -123,6 +123,19 @@ fn build_registration_payload(config: &SessionConfig) -> Bytes {
         &config.salt,
         config.id,
         Some(config.desired_count),
+    ))
+}
+
+fn build_registration_payload_versioned(config: &SessionConfig, wire_version: u8) -> Bytes {
+    Bytes::from(config_request_versioned(
+        &config.local_port,
+        &config.device_id,
+        &config.password,
+        config.generation,
+        &config.salt,
+        config.id,
+        Some(config.desired_count),
+        wire_version,
     ))
 }
 
@@ -884,8 +897,18 @@ async fn request_configuration(
     events: &Events,
     config_tx: Option<mpsc::Sender<String>>,
 ) -> Result<bool> {
-    let mut request = build_registration_payload(config);
-    'attempts: for (attempt, timeout_ms) in CONFIG_RESPONSE_TIMEOUT_MS.into_iter().enumerate() {
+    let mut current_wire_version = NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire);
+    let mut request = build_registration_payload_versioned(config, current_wire_version);
+    let mut attempt = 0;
+    while attempt < CONFIG_RESPONSE_TIMEOUT_MS.len() {
+        let timeout_ms = CONFIG_RESPONSE_TIMEOUT_MS[attempt];
+        attempt += 1;
+        crate::log_error!(
+            "[ВОРКЕР #{}] Отправка GETCONF (попытка {}, wire_v={})",
+            config.id,
+            attempt,
+            current_wire_version
+        );
         writer
             .send_bytes(request.as_ref())
             .await
@@ -904,7 +927,9 @@ async fn request_configuration(
                     }
                     break packet;
                 }
-                Err(_) if attempt + 1 < CONFIG_RESPONSE_TIMEOUT_MS.len() => continue 'attempts,
+                Err(_) if attempt < CONFIG_RESPONSE_TIMEOUT_MS.len() => {
+                    break None;
+                }
                 Err(_) => {
                     let message = format!(
                         "FATAL_HANDSHAKE: сервер не подтвердил конфигурацию после {} попыток; проверьте пароль подключения и совместимость клиента с сервером",
@@ -917,46 +942,54 @@ async fn request_configuration(
                 }
             }
         };
+        let Some(packet) = packet else {
+            continue;
+        };
         let response = match parse_config_response(packet.as_slice()) {
             Ok(resp) => resp,
             Err(error) => {
                 let response_str = std::str::from_utf8(packet.as_slice()).unwrap_or("");
-                if response_str == "DENIED:invalid_worker"
-                    && NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire) > 1
-                {
+                let is_invalid_worker = response_str.trim().contains("invalid_worker");
+                let is_invalid_worker_count = response_str.trim().contains("invalid_worker_count");
+                let is_protocol_mismatch = response_str.trim().contains("protocol_mismatch");
+
+                if is_invalid_worker && current_wire_version > 1 {
                     crate::log_error!(
-                        "[ВОРКЕР #{}] Сервер отклонил 8-польный GETCONF (invalid_worker), переключаемся на csqtt v2.0 legacy формат",
-                        config.id
+                        "[ВОРКЕР #{}] Сервер отклонил wire v{} (invalid_worker), переключаемся на legacy GETCONF v2.0 (wire_v=1)",
+                        config.id,
+                        current_wire_version
                     );
+                    current_wire_version = 1;
                     NEGOTIATED_WIRE_VERSION.store(1, Ordering::Release);
-                    request = build_registration_payload(config);
-                    continue 'attempts;
+                    request = build_registration_payload_versioned(config, 1);
+                    attempt = 0;
+                    continue;
                 }
-                if response_str == "DENIED:invalid_worker_count"
-                    && NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire) > 2
-                {
+                if is_invalid_worker_count && current_wire_version > 2 {
                     crate::log_error!(
-                        "[ВОРКЕР #{}] Сервер отклонил ревизию в GETCONF (invalid_worker_count), переключаемся на csqtt v2.1.5 формат",
-                        config.id
+                        "[ВОРКЕР #{}] Сервер отклонил wire v{} (invalid_worker_count), переключаемся на GETCONF v2.1.5 (wire_v=2)",
+                        config.id,
+                        current_wire_version
                     );
+                    current_wire_version = 2;
                     NEGOTIATED_WIRE_VERSION.store(2, Ordering::Release);
-                    request = build_registration_payload(config);
-                    continue 'attempts;
+                    request = build_registration_payload_versioned(config, 2);
+                    attempt = 0;
+                    continue;
                 }
-                if response_str == "DENIED:protocol_mismatch"
-                    && NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire) > 1
-                {
-                    let current_ver = NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire);
-                    let fallback_ver = current_ver.saturating_sub(1).max(1);
+                if is_protocol_mismatch && current_wire_version > 1 {
+                    let fallback_ver = current_wire_version.saturating_sub(1).max(1);
                     crate::log_error!(
                         "[ВОРКЕР #{}] Сервер вернул protocol_mismatch для wire v{}, переключаемся на v{}",
                         config.id,
-                        current_ver,
+                        current_wire_version,
                         fallback_ver
                     );
+                    current_wire_version = fallback_ver;
                     NEGOTIATED_WIRE_VERSION.store(fallback_ver, Ordering::Release);
-                    request = build_registration_payload(config);
-                    continue 'attempts;
+                    request = build_registration_payload_versioned(config, fallback_ver);
+                    attempt = 0;
+                    continue;
                 }
                 let message = error.to_string();
                 if config.get_config && message.contains("FATAL_") {
