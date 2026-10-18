@@ -1987,7 +1987,7 @@ private fun PingsState.pingFor(locationId: String): Int? {
 }
 
 private fun PingsState.isChecking(locationId: String): Boolean {
-    return this is PingsState.Loading && locationId in pendingLocationIds
+    return this is PingsState.Loading && !paused && locationId in pendingLocationIds
 }
 
 private fun PingsState.isOffline(locationId: String): Boolean {

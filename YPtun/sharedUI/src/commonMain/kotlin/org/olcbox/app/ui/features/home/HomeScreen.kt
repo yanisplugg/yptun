@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
@@ -444,6 +445,7 @@ fun HomeScreen(
                     FreeServersAutoStrip(
                         progress = state.freeServersProgress,
                         paused = state.freeServersPaused,
+                        onExpand = { viewModel.restoreFreeServersFromBackground() },
                         onPause = { viewModel.pauseFreeServersSearch() },
                         onResume = { viewModel.resumeFreeServersPaused() },
                         onCancel = { viewModel.cancelFreeServersLoad() }
@@ -902,31 +904,33 @@ fun HomeScreen(
                 title = { Text(s.freeServers) },
                 text = {
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (state.freeServersPaused) Spacer(Modifier.size(36.dp)) else PingDot()
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(
-                                    if (state.freeServersPaused) s.freeServers + " · " + s.pingPausedLabel else s.freeServersLoading,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    s.freeServersWaitNotice,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    s.freeServersSourceNotice,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            if (!state.freeServersPaused) {
+                                PingDot(size = 18.dp)
                             }
+                            Text(
+                                if (state.freeServersPaused) s.freeServers + " · " + s.pingPausedLabel else s.freeServersLoading,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                            )
                         }
+                        Text(
+                            s.freeServersWaitNotice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            s.freeServersSourceNotice,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                         state.freeServersProgress?.let { prog ->
                             if (prog.total > 0) {
                                 LinearProgressIndicator(
@@ -1147,6 +1151,7 @@ private fun PingDot(modifier: Modifier = Modifier, size: androidx.compose.ui.uni
 private fun FreeServersAutoStrip(
     progress: FreeServersProgress?,
     paused: Boolean,
+    onExpand: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit
@@ -1157,7 +1162,10 @@ private fun FreeServersAutoStrip(
         progress?.etaSeconds != null -> s.etaLeft(progress.etaSeconds)
         else -> null
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth().clickable { onExpand() }
+    ) {
         Column {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
@@ -1182,6 +1190,13 @@ private fun FreeServersAutoStrip(
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                     }
+                }
+                IconButton(onClick = onExpand, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Outlined.OpenInNew,
+                        contentDescription = "Развернуть",
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
                 IconButton(onClick = if (paused) onResume else onPause, modifier = Modifier.size(40.dp)) {
                     Icon(

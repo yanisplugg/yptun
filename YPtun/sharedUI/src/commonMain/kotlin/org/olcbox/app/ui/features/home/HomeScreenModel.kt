@@ -557,6 +557,16 @@ class HomeScreenViewModel(
         _state.update { it.copy(isFreeServersLoading = false, freeServersBackground = true) }
     }
 
+    /**
+     * Restores the running background search to the full dialog: the strip closes, the full modal
+     * dialog opens so the user can pause/resume, cancel, or stop and show found servers.
+     */
+    fun restoreFreeServersFromBackground() {
+        if (freeServersJob?.isActive != true) return
+        freeRunInBackground = false
+        _state.update { it.copy(isFreeServersLoading = true, freeServersBackground = false) }
+    }
+
     private var freeAutoAttemptMs = 0L
 
     /**

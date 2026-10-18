@@ -414,9 +414,10 @@ class LocationViewModel(
         pingableLocations.forEach { location ->
             val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
                 try {
+                    // Paused: wait here before taking semaphore permits or running probes.
+                    pingPaused.first { !it }
                     val ping = try {
                         semaphore.withPermit {
-                            // Paused: wait here, holding no ping — the ones already in flight finish on their own.
                             pingPaused.first { !it }
                             checkLocationPing(location, budgetMs, performPing)?.toInt()
                         }
@@ -589,6 +590,7 @@ class LocationViewModel(
 
         return withTimeoutOrNull(budgetMs) {
             repeat(LOCATION_PING_ATTEMPTS) { attempt ->
+                pingPaused.first { !it }
                 val result = try {
                     performPing(config)
                 } catch (e: CancellationException) {
@@ -602,6 +604,7 @@ class LocationViewModel(
                 }
 
                 if (attempt < LOCATION_PING_ATTEMPTS - 1) {
+                    pingPaused.first { !it }
                     delay(LOCATION_PING_RETRY_DELAY_MS)
                 }
             }
