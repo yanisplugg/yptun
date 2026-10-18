@@ -50,6 +50,7 @@ internal class IosEngineController(
     private var masterDnsProxyActive = false
     private var openfluxProxyActive = false
     private var snolcProxyActive = false
+    private var csqttProxyActive = false
 
     /** olcRTC's local SOCKS port when chaining; the proxy core dials its outbound through it. */
     private fun chainOlcrtcPort(socksPort: Int) = socksPort + 1
@@ -74,6 +75,7 @@ internal class IosEngineController(
         masterDnsProxyActive = false
         openfluxProxyActive = false
         snolcProxyActive = false
+        csqttProxyActive = false
         proxyMode = IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY
         httpProxyPort = 0
         val config = location.normalized()
@@ -98,16 +100,19 @@ internal class IosEngineController(
         runCatching { core.openfluxStop() }
         runCatching { core.rtcStop() }
         runCatching { core.snolcStop() }
+        runCatching { core.csqttStop() }
+        runCatching { core.csqttBridgeStop() }
         masterDnsProxyActive = false
         openfluxProxyActive = false
         snolcProxyActive = false
+        csqttProxyActive = false
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
         EngineType.Stealth -> core.rtcRunning()
         EngineType.Standard -> proxyCoreRunning()
         EngineType.Chain -> core.rtcRunning() && proxyCoreRunning()
-        EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning()) && proxyCoreRunning()
+        EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning() || (core.csqttRunning() && core.csqttBridgeRunning())) && (!csqttProxyActive || proxyCoreRunning())
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> core.openfluxRunning() && (!openfluxProxyActive || proxyCoreRunning())
         EngineType.Snolc -> core.snolcRunning() && (!snolcProxyActive || proxyCoreRunning())
@@ -691,6 +696,67 @@ internal class IosEngineController(
     var pendingCaptchaUrl: String = ""
         private set
 
+    private suspend fun startCsqtt(
+        config: LocationConfig,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+        deviceId: String,
+    ) {
+        val vk = config.vkturn
+        check(vk != null && vk.isComplete()) { "csqtt VK-TURN not configured" }
+
+        val chainProxy = vk.chainProxyLink.takeIf { it.isNotBlank() }?.let { link ->
+            (ShareLinkParser.parse(link)
+                ?: org.olcbox.app.data.share.YptunInboundCodec.parse(link)?.let { it.proxy ?: it.proxy2 }
+                ?: ShareLinkParser.parseSubscription(link).firstOrNull())
+                ?.enrichedFromRaw()
+                ?.takeIf { it.isComplete() }
+        }
+        val useProxy = chainProxy != null
+        csqttProxyActive = useProxy
+        val csqttPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
+
+        IosNet.awaitLocalPortClosed(listenPort, 3000)
+        require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
+        if (useProxy) {
+            IosNet.awaitLocalPortClosed(csqttPort, 3000)
+            require(!IosNet.isLocalPortOpen(csqttPort)) { "csqtt internal port $csqttPort is still in use" }
+        }
+
+        runCatching { core.csqttStop() }
+        runCatching { core.csqttBridgeStop() }
+
+        val clientUdpPort = csqttPort + 4
+        val clientUdpAddr = "127.0.0.1:$clientUdpPort"
+        val bridgeSocksAddr = "$LISTEN_HOST:$csqttPort"
+
+        log("Starting csqtt Go netstack bridge (SOCKS on $bridgeSocksAddr, client UDP on $clientUdpAddr)")
+        core.csqttBridgeStart(bridgeSocksAddr, clientUdpAddr, 1300).orThrow("csqtt bridge start failed")
+
+        val iosWorkers = if (vk.csqttWorkers <= 0) 9 else vk.csqttWorkers.coerceIn(9, 18)
+        val optsJson = vk.copy(csqttWorkers = iosWorkers).csqttCoreOptionsJson(
+            client = "in-process",
+            listen = clientUdpAddr,
+            deviceId = deviceId,
+        )
+        log("Starting csqtt in-process core (peer=${vk.csqttPeerAddr()}, workers=$iosWorkers)")
+        core.csqttStart(optsJson).orThrow("csqtt start failed")
+
+        if (!IosNet.awaitLocalPortOpen(csqttPort, MOBILE_READY_TIMEOUT_MS)) {
+            core.csqttStop()
+            core.csqttBridgeStop()
+            throw IllegalStateException("csqtt SOCKS port $csqttPort did not open")
+        }
+        log("csqtt ready on $LISTEN_HOST:$csqttPort")
+
+        if (chainProxy == null) return
+
+        startProxyOverTunnel("csqtt", config, chainProxy, csqttPort, listenPort, socksUsername, socksPassword) { p, _ ->
+            vk.resolvedProxyCore(p)
+        }
+    }
+
     private suspend fun startVkTurn(
         config: LocationConfig,
         listenPort: Int,
@@ -699,8 +765,10 @@ internal class IosEngineController(
         deviceId: String,
     ) {
         val vk = config.vkturn
-        // csqtt is a Rust executable run as a subprocess — iOS cannot spawn processes.
-        check(vk?.usesCsqtt() != true) { "csqtt не поддерживается на iOS (ядро — отдельный процесс). Выбери freeturn или qWDTT." }
+        if (vk?.usesCsqtt() == true) {
+            startCsqtt(config, listenPort, socksUsername, socksPassword, deviceId)
+            return
+        }
         // Clamp the exit's WireGuard/AmneziaWG MTU to what VK TURN + DTLS + RTP-obf can carry.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import NetworkExtension
 import SharedUI
 import Tun2SocksKit
@@ -9,6 +10,8 @@ import WidgetKit
 /// local SOCKS5 the cores leave behind.
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var session: IosTunnelSession?
+    private var pathMonitor: NWPathMonitor?
+    private let pathQueue = DispatchQueue(label: "org.yptun.pathMonitor")
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         let session = IosTunnelSession(core: SwiftCoreBridge(), provider: self)
@@ -51,6 +54,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 session.log(line: "hev-socks5-tunnel exited with code \(code)")
                 NSLog("YPtun: hev-socks5-tunnel exited with \(code)")
             }
+            self.setupPathMonitoring(session: session)
             completionHandler(nil)
             PacketTunnelProvider.refreshWidgets()
         }
@@ -103,12 +107,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        pathMonitor?.cancel()
+        pathMonitor = nil
         session?.log(line: "Tunnel stopping with reason: \(reason.rawValue)")
         Socks5Tunnel.quit()
         session?.stop()
         session = nil
         completionHandler()
         PacketTunnelProvider.refreshWidgets()
+    }
+
+    private func setupPathMonitoring(session: IosTunnelSession) {
+        pathMonitor?.cancel()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak session] path in
+            guard let session = session else { return }
+            let interfaces = path.availableInterfaces.map { "\($0.name)" }.joined(separator: ", ")
+            session.log(line: "Network path: status=\(path.status), expensive=\(path.isExpensive), ifaces=[\(interfaces)]")
+        }
+        monitor.start(queue: pathQueue)
+        self.pathMonitor = monitor
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {

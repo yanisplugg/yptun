@@ -871,7 +871,8 @@ class HomeScreenViewModel(
                         metadata = LocationMetadata(
                             subscription = SubscriptionMetadata(
                                 name = "Бесплатные серверы",
-                                announce = previousSub?.announce ?: "Бесплатные серверы от сообщества могут быть нестабильны. Для быстрого личного VPN: @quofortpostbot",
+                                announce = previousSub?.announce?.takeUnless { it.contains("quofortpostbot", ignoreCase = true) }
+                                    ?: "Бесплатные публичные серверы от сообщества. Доступность может изменяться.",
                                 updateIntervalHours = previousSub?.updateIntervalHours ?: 0,
                                 autoUpdateEnabled = previousSub?.autoUpdateEnabled ?: false,
                                 lastRefreshAtEpochMs = now,

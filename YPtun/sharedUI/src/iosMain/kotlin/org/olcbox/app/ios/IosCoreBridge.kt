@@ -130,6 +130,15 @@ interface IosCoreBridge {
     fun snolcStop()
     fun snolcRunning(): Boolean
 
+    fun csqttVersion(): String
+    fun csqttStart(optionsJson: String): String
+    fun csqttStop()
+    fun csqttRunning(): Boolean
+    fun csqttBridgeStart(socksAddr: String, clientUdpAddr: String, mtu: Int): String
+    fun csqttBridgeSetTunnel(tunConf: String): String
+    fun csqttBridgeStop()
+    fun csqttBridgeRunning(): Boolean
+
     fun resolveHostIpv4(host: String): String
 }
 

@@ -76,15 +76,10 @@ func init() {
 		PushLog("masterdns", line)
 	})
 	if runtime.GOOS == "ios" {
-		// The packet-tunnel extension may use about 50 MB before Jetsam kills it (15 MB was the
-		// iOS 14 limit; the app targets 15+). Same policy as sing-box's own iOS client
-		// (service/oomkiller): GC at 50%, soft limit below the budget — here 32 MB, leaving room for
-		// the Kotlin runtime and hev in the same process. The old 10 MB limit sat below what xray or
-		// sing-box need while connected, so the GC ran nonstop, and a FreeOSMemory every 5 s woke
-		// the CPU even when idle — both cost battery and throughput. Not on macOS: the desktop build
-		// wraps this same package and has no such budget.
-		debug.SetGCPercent(50)
-		debug.SetMemoryLimit(32 << 20)
+		// The packet-tunnel extension has a strict 15-20 MB limit on older devices (iPhone SE 2020 / iPhone 8).
+		// Keeping GC at 40% and a soft memory limit of 15 MB ensures Go GC triggers promptly before Jetsam kills the extension.
+		debug.SetGCPercent(40)
+		debug.SetMemoryLimit(15 << 20)
 	}
 }
 

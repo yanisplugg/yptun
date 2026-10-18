@@ -1124,12 +1124,14 @@ class LocationsRepositoryImpl(
     ): ImportSource? {
         if (text.isBlank()) return null
 
-        if (!text.isHttpUrl()) {
+        val targetUrl = CsqttUriParser.extractSubscriptionUrl(text) ?: text
+
+        if (!targetUrl.isHttpUrl()) {
             return ImportSource(content = text.normalizedImportText())
         }
 
         val downloaded = downloadTextFromUrl(
-            url = text,
+            url = targetUrl,
             requestMode = requestMode,
             subscriptionProxy = subscriptionProxy,
             forceHapp = forceHapp,
@@ -2278,8 +2280,9 @@ class LocationsRepositoryImpl(
             .filter { it.startsWith(CsqttUriParser.SCHEME, ignoreCase = true) }
             .mapNotNull { CsqttUriParser.parse(it) }
             .map { link ->
+                val locName = link.name.takeIf { it.isNotBlank() } ?: "csqtt ${link.host}"
                 val location = LocationConfig(
-                    name = "csqtt ${link.host}",
+                    name = locName,
                     engine = EngineType.VkTurn,
                     vkturn = VkTurnConfig(
                         core = VkTurnConfig.CORE_CSQTT,
@@ -2289,7 +2292,7 @@ class LocationsRepositoryImpl(
                         vkLink = link.hashes,
                     ),
                 ).normalized()
-                val base = link.host.lowercase().map { if (it.isLetterOrDigit()) it else '_' }.joinToString("")
+                val base = "${link.host}_${link.port}_$locName".storageSlug()
                 val storageId = uniqueStorageId("imported_csqtt_$base", usedStorageIds)
                 LocationEntry.from(storageId = storageId, location = location, subscriptionUrl = subscriptionUrl, metadata = locationMetadata)
             }

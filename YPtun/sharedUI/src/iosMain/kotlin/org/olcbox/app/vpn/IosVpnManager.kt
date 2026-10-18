@@ -245,7 +245,7 @@ class IosVpnManager(
                     publishRequest(active)
                     IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
                     addLog("Fast switching to ${active.displayName()}...")
-                    val reply = withTimeoutOrNull(4_000L) {
+                    val reply = withTimeoutOrNull(2_500L) {
                         askExtension(currentSession, "reload")
                     }
                     if (requestedGeneration != connectGeneration) return@withLock
@@ -761,7 +761,7 @@ class IosVpnManager(
         repeat(50) {
             val s = m.connection.status
             if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
-            delay(100)
+            delay(50)
         }
     }
 

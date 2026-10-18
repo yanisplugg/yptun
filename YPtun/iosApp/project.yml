@@ -75,6 +75,8 @@ targets:
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
         embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+        embed: false
     preBuildScripts:
       # Kotlin framework for this SDK/configuration + the Compose resources copied into the app bundle.
       - name: Kotlin SharedUI framework
@@ -108,6 +110,8 @@ targets:
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
         embed: false
     preBuildScripts:
       # The extension builds BEFORE the app (the app embeds it), so it links the Kotlin framework itself.

@@ -5,6 +5,9 @@ import SharedUI
 #if canImport(SnolcCore)
 import SnolcCore
 #endif
+#if canImport(CsqttCore)
+import CsqttCore
+#endif
 
 /// Kotlin's `IosCoreBridge`, forwarded 1:1 to the gomobile framework of `kazcores/coreapi`.
 /// Compiled into both the app (server pings) and the packet-tunnel extension (the tunnel itself).
@@ -297,6 +300,64 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         #else
         return false
         #endif
+    }
+
+    func csqttVersion() -> String {
+        #if canImport(CsqttCore)
+        guard let v = csqtt_ffi_version() else { return "" }
+        return String(cString: v)
+        #else
+        return ""
+        #endif
+    }
+
+    func csqttStart(optionsJson: String) -> String {
+        #if canImport(CsqttCore)
+        guard let err = csqtt_ffi_start(optionsJson, { conf in
+            guard let conf = conf else { return }
+            let confStr = String(cString: conf)
+            var err: NSError?
+            _ = CoreapiCsqttBridgeSetTunnel(confStr, &err)
+        }, { logLine in
+            guard let logLine = logLine else { return }
+            CoreapiPushLog("csqtt", String(cString: logLine))
+        }) else { return "" }
+        let msg = String(cString: err)
+        csqtt_ffi_free_string(err)
+        return msg
+        #else
+        return "CsqttCore framework not linked"
+        #endif
+    }
+
+    func csqttStop() {
+        #if canImport(CsqttCore)
+        csqtt_ffi_stop()
+        #endif
+    }
+
+    func csqttRunning() -> Bool {
+        #if canImport(CsqttCore)
+        return csqtt_ffi_is_running()
+        #else
+        return false
+        #endif
+    }
+
+    func csqttBridgeStart(socksAddr: String, clientUdpAddr: String, mtu: Int32) -> String {
+        err { CoreapiCsqttBridgeStart(socksAddr, clientUdpAddr, Int(mtu), $0) }
+    }
+
+    func csqttBridgeSetTunnel(tunConf: String) -> String {
+        err { CoreapiCsqttBridgeSetTunnel(tunConf, $0) }
+    }
+
+    func csqttBridgeStop() {
+        CoreapiCsqttBridgeStop()
+    }
+
+    func csqttBridgeRunning() -> Bool {
+        CoreapiCsqttBridgeIsRunning()
     }
 }
 

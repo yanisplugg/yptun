@@ -141,6 +141,17 @@ jobs:
         if: steps.cache-snolc.outputs.cache-hit != 'true'
         run: bash snolc/build-ios.sh
 
+      - name: Cache Csqtt core (CsqttCore.xcframework)
+        id: cache-csqtt
+        uses: actions/cache@v4
+        with:
+          path: YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+          key: csqtt-ios-${{ hashFiles('csqtt/**') }}
+
+      - name: Rust core (csqtt) → CsqttCore.xcframework
+        if: steps.cache-csqtt.outputs.cache-hit != 'true'
+        run: bash csqtt/build-ios.sh
+
       - name: Generate the Xcode project
         working-directory: YPtun/iosApp
         run: xcodegen generate

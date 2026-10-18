@@ -78,41 +78,45 @@ fun SupportProjectSection(
             }
             Spacer(Modifier.height(2.dp))
 
-            SupportOption(
-                icon = Icons.Rounded.CurrencyBitcoin,
-                accent = MaterialTheme.colorScheme.primary,
-                title = s.supportCrypto,
-                subtitle = DonationInfo.ASSETS,
-                trailing = Icons.Outlined.ContentCopy,
-                onClick = { onCopyAddress(DonationInfo.TON_ADDRESS) }
-            ) {
-                // Shown in full (monospace) so it can be checked against what lands in the clipboard.
-                Text(
-                    DonationInfo.TON_ADDRESS,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp)
+            val isIos = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
+
+            if (!isIos) {
+                SupportOption(
+                    icon = Icons.Rounded.CurrencyBitcoin,
+                    accent = MaterialTheme.colorScheme.primary,
+                    title = s.supportCrypto,
+                    subtitle = DonationInfo.ASSETS,
+                    trailing = Icons.Outlined.ContentCopy,
+                    onClick = { onCopyAddress(DonationInfo.TON_ADDRESS) }
+                ) {
+                    // Shown in full (monospace) so it can be checked against what lands in the clipboard.
+                    Text(
+                        DonationInfo.TON_ADDRESS,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+
+                SupportOption(
+                    icon = Icons.Rounded.Payments,
+                    accent = DonationAlertsOrange,
+                    title = "DonationAlerts",
+                    subtitle = s.supportDonationAlertsHint,
+                    trailing = Icons.AutoMirrored.Rounded.OpenInNew,
+                    onClick = { onOpenUrl(DonationInfo.DONATIONALERTS_URL) }
+                )
+
+                SupportOption(
+                    icon = Icons.Rounded.VpnKey,
+                    accent = VpnBlue,
+                    title = s.supportVpnSub,
+                    subtitle = s.supportVpnSubHint,
+                    trailing = Icons.AutoMirrored.Rounded.OpenInNew,
+                    onClick = { onOpenUrl(DonationInfo.VPN_BOT_URL) }
                 )
             }
-
-            SupportOption(
-                icon = Icons.Rounded.Payments,
-                accent = DonationAlertsOrange,
-                title = "DonationAlerts",
-                subtitle = s.supportDonationAlertsHint,
-                trailing = Icons.AutoMirrored.Rounded.OpenInNew,
-                onClick = { onOpenUrl(DonationInfo.DONATIONALERTS_URL) }
-            )
-
-            SupportOption(
-                icon = Icons.Rounded.VpnKey,
-                accent = VpnBlue,
-                title = s.supportVpnSub,
-                subtitle = s.supportVpnSubHint,
-                trailing = Icons.AutoMirrored.Rounded.OpenInNew,
-                onClick = { onOpenUrl(DonationInfo.VPN_BOT_URL) }
-            )
 
             SupportOption(
                 icon = Icons.Rounded.Star,
