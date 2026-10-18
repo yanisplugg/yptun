@@ -5,6 +5,9 @@ cd "$(dirname "$0")"
 echo "=== Building csqtt-client for iOS (aarch64-apple-ios) ==="
 rustup target add aarch64-apple-ios
 
+export IPHONEOS_DEPLOYMENT_TARGET=15.0
+export CFLAGS="-miphoneos-version-min=15.0"
+
 cargo build --release --lib -p csqtt-client --manifest-path rust-client/Cargo.toml --target aarch64-apple-ios
 
 OUT_DIR="../YPtun/sharedUI/build/generated/cores/ios"

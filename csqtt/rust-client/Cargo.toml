@@ -11,7 +11,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 [lib]
 name = "csqtt_ffi"
 path = "lib.rs"
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib"]
 
 [[bin]]
 name = "client"
