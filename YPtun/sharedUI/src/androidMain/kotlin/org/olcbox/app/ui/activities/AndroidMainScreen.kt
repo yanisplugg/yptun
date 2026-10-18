@@ -627,14 +627,6 @@ fun AndroidMainScreen(
         )
     }
 
-    homeState.vkTurnLinkPrompt?.let { prompt ->
-        VkTurnLinkPromptDialog(
-            locationName = prompt.locationName,
-            onLater = { viewModel.dismissVkTurnLinkPrompt() },
-            onNext = { link -> viewModel.submitVkTurnLink(prompt.storageId, link) }
-        )
-    }
-
     updateOffer?.let { info ->
         ApplicationUpdateOfferSheet(
             info = info,

@@ -31,6 +31,14 @@ fun VkTurnLinkPromptDialog(
 ) {
     var link by remember { mutableStateOf("") }
     val s = LocalStrings.current
+    val trimmed = link.trim()
+    val lines = trimmed.split('\n', '\r', ',', ';').map { it.trim() }.filter { it.isNotEmpty() }
+    val hasBad = lines.any { line ->
+        val isUrl = line.startsWith("http://", ignoreCase = true) || line.startsWith("https://", ignoreCase = true)
+        isUrl && !line.contains("/call/join/", ignoreCase = true)
+    }
+    val isValid = lines.isNotEmpty() && !hasBad
+
     AlertDialog(
         onDismissRequest = onLater,
         title = { Text(s.vkCallLink) },
@@ -42,7 +50,7 @@ fun VkTurnLinkPromptDialog(
                     value = link,
                     onValueChange = { link = it },
                     placeholder = { Text("https://vk.com/call/join/…") },
-                    isError = link.isNotBlank() && !link.contains("/call/join/"),
+                    isError = trimmed.isNotEmpty() && hasBad,
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -50,8 +58,8 @@ fun VkTurnLinkPromptDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onNext(link) },
-                enabled = link.contains("/call/join/")
+                onClick = { onNext(trimmed) },
+                enabled = isValid
             ) {
                 Text(s.next)
             }

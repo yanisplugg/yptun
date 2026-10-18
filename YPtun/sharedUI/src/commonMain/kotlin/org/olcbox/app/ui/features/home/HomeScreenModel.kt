@@ -183,20 +183,47 @@ class HomeScreenViewModel(
                 } else {
                     val active = locationsRepository.getActiveLocation()
                     if (active == null || !active.location.isComplete()) {
-                        _state.update {
-                            it.copy(
-                                isVpnLoading = false,
-                                canStartVpn = false,
-                                startBlockedReason = "Add a valid location first"
-                            )
+                        val isVkTurnWithoutLink = active?.location?.engine == EngineType.VkTurn &&
+                            active.location.vkturn?.vkLink.isNullOrBlank()
+                        if (isVkTurnWithoutLink && active != null) {
+                            _state.update {
+                                it.copy(
+                                    isVpnLoading = false,
+                                    vkTurnLinkPrompt = VkTurnLinkPrompt(
+                                        storageId = active.storageId,
+                                        locationName = active.location.displayName()
+                                    )
+                                )
+                            }
+                        } else {
+                            val reason = if (active == null) "Add a location first" else "Complete active location first"
+                            _state.update {
+                                it.copy(
+                                    isVpnLoading = false,
+                                    canStartVpn = false,
+                                    startBlockedReason = reason,
+                                    connectError = reason
+                                )
+                            }
                         }
                         return@launch
                     }
                     vpnManager.startVpn()
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(isVpnLoading = false) }
+                _state.update { it.copy(isVpnLoading = false, connectError = e.message) }
             }
+        }
+    }
+
+    fun promptForVkTurnLink(storageId: String, locationName: String) {
+        _state.update {
+            it.copy(
+                vkTurnLinkPrompt = VkTurnLinkPrompt(
+                    storageId = storageId,
+                    locationName = locationName
+                )
+            )
         }
     }
 

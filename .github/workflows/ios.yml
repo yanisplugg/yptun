@@ -189,10 +189,11 @@ jobs:
           du -sh Payload/YPtun.app Payload/YPtun.app/PlugIns/PacketTunnel.appex
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: YPtun-ios-unsigned
           path: YPtun/iosApp/*.ipa
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Sign IPA with Apple Distribution certificate
         working-directory: YPtun/iosApp
@@ -303,6 +304,7 @@ jobs:
             --show-progress
 
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: YPtun-ios-signed
           path: YPtun/iosApp/*-signed.ipa

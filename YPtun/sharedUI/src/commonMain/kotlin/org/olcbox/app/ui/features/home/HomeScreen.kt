@@ -80,6 +80,7 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.CustomGroup
 import org.olcbox.app.ui.features.home.components.folderMemberKey
 import org.olcbox.app.ui.components.StartButton
+import org.olcbox.app.ui.components.VkTurnLinkPromptDialog
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
 import org.olcbox.app.ui.features.home.components.FreeServersSheet
@@ -264,7 +265,7 @@ fun HomeScreen(
     selectedIds.retainAll(locations.map { it.storageId }.toSet())
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
-    val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
+    val requiresSetup = !state.isVpnConnected && !state.isVpnLoading && (locations.isEmpty() || state.selectedLocation == null)
 
     val primaryActionLabel = when {
         requiresSetup -> s.labelSetup
@@ -498,7 +499,12 @@ fun HomeScreen(
                             if (requiresSetup) {
                                 isAddSheetOpen = true
                             } else {
-                                onToggleClick()
+                                val sel = state.selectedLocation
+                                if (sel != null && sel.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn && sel.config.vkturn?.vkLink.isNullOrBlank()) {
+                                    viewModel.promptForVkTurnLink(sel.storageId, sel.fullName)
+                                } else {
+                                    onToggleClick()
+                                }
                             }
                         }
                     )
@@ -1097,6 +1103,14 @@ fun HomeScreen(
                 dismissButton = {
                     TextButton(onClick = { pendingFolderDelete = null }) { Text(s.cancel) }
                 }
+            )
+        }
+
+        state.vkTurnLinkPrompt?.let { prompt ->
+            VkTurnLinkPromptDialog(
+                locationName = prompt.locationName,
+                onLater = { viewModel.dismissVkTurnLinkPrompt() },
+                onNext = { link -> viewModel.submitVkTurnLink(prompt.storageId, link) }
             )
         }
     }
