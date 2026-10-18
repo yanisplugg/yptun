@@ -13,9 +13,15 @@ import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
 import org.olcbox.app.data.model.VkTurnConfig
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.ios.IosCoreBridge
 import org.olcbox.app.ios.orThrow
 import org.olcbox.app.vpn.singbox.SingBoxConfig
+import org.olcbox.app.vpn.warp.WarpConfigGenerator
+import org.olcbox.app.vpn.warp.WarpConfigStore
+import org.olcbox.app.vpn.warp.WarpHelper
+import org.olcbox.app.vpn.warp.WarpRelay
 import org.olcbox.app.vpn.xray.XrayConfig
 import kotlin.time.TimeSource
 
@@ -51,6 +57,7 @@ internal class IosEngineController(
     private var openfluxProxyActive = false
     private var snolcProxyActive = false
     private var csqttProxyActive = false
+    private var warpProxyActive = false
 
     /** olcRTC's local SOCKS port when chaining; the proxy core dials its outbound through it. */
     private fun chainOlcrtcPort(socksPort: Int) = socksPort + 1
@@ -76,6 +83,7 @@ internal class IosEngineController(
         openfluxProxyActive = false
         snolcProxyActive = false
         csqttProxyActive = false
+        warpProxyActive = false
         proxyMode = IosSharedStore.loadConnectionMode() == IosSharedStore.MODE_PROXY
         httpProxyPort = 0
         val config = location.normalized()
@@ -106,12 +114,13 @@ internal class IosEngineController(
         openfluxProxyActive = false
         snolcProxyActive = false
         csqttProxyActive = false
+        warpProxyActive = false
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
         EngineType.Stealth -> core.rtcRunning()
-        EngineType.Standard -> proxyCoreRunning()
-        EngineType.Chain -> core.rtcRunning() && proxyCoreRunning()
+        EngineType.Standard -> proxyCoreRunning() && (!warpProxyActive || core.awgRunning())
+        EngineType.Chain -> core.rtcRunning() && proxyCoreRunning() && (!warpProxyActive || core.awgRunning())
         EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning() || (core.csqttRunning() && core.csqttBridgeRunning())) && (!csqttProxyActive || proxyCoreRunning())
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> core.openfluxRunning() && (!openfluxProxyActive || proxyCoreRunning())
@@ -220,11 +229,50 @@ internal class IosEngineController(
         val chainPort = chainOlcrtcPort(listenPort)
         // Optional SECOND/cascade proxy, dialed THROUGH the main. A 2nd proxy on the SAME node as the
         // main is dropped — a cascade into itself cannot work.
-        val secondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
+        val configuredSecondProfile = config.proxy2?.takeIf { it.isComplete() }?.let { second ->
             if (profile.isSameNodeAs(second)) {
                 log("2nd (cascade) proxy is the same node as the main — ignoring it (exit via the main)")
                 null
             } else second
+        }
+
+        var warpAwgIni: String? = null
+        var warpRelay: WarpRelay? = null
+        var secondProfile = configuredSecondProfile
+
+        if (config.warpEnabled) {
+            val awg = config.warpProtocol == WarpProtocol.Awg
+            log("WARP: enabled - server side (VLESS -> WARP), protocol ${if (awg) "AmneziaWG" else "WireGuard"}")
+            val isRawXray = !profile.rawXrayConfig.isNullOrBlank()
+            val skipReason = when {
+                chained -> "olcRTC chain mode already owns the base tunnel"
+                !isRawXray && profile.type !in setOf(
+                    ProxyProfile.TYPE_VLESS, ProxyProfile.TYPE_VMESS, ProxyProfile.TYPE_TROJAN, ProxyProfile.TYPE_SHADOWSOCKS
+                ) -> "WARP supports VLESS/VMess/Trojan/Shadowsocks, this is ${profile.type}"
+                else -> null
+            }
+            if (skipReason != null) {
+                log("WARNING: WARP skipped: $skipReason")
+            } else {
+                var ini = WarpConfigStore.loadConfig()
+                if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+                if (ini.isNullOrBlank()) {
+                    log("WARP: generating Cloudflare WARP config...")
+                    ini = runCatching { WarpConfigGenerator.generate(log) }
+                        .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
+                    if (ini != null) runCatching { WarpConfigStore.saveConfig(ini) }
+                }
+                if (ini == null) {
+                    log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
+                } else {
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = false)
+                    val (rawHost, port) = WarpHelper.endpointOf(ini)
+                    val relay = WarpRelay(listenPort = listenPort + 3, targetHost = WarpHelper.pinnedHost(rawHost), targetPort = port)
+                    warpRelay = relay
+                    warpAwgIni = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
+                    secondProfile = localSocksProfile("WARP", awgLocalPort(listenPort))
+                }
+            }
         }
 
         IosNet.awaitLocalPortClosed(listenPort, 3000)
@@ -363,6 +411,7 @@ internal class IosEngineController(
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
                     hasGeoAssets = assetPath.isNotEmpty() && IosGeoAssets.hasGeosite(),
                     secondProfile = secondProfile,
+                    warpRelay = warpRelay,
                     bypassLan = routing.bypassLan,
                     fakeDnsSpec = config.fakeDns,
                     logLevel = "warning",
@@ -398,6 +447,7 @@ internal class IosEngineController(
                 blockQuic = !(isAwg || isHy2 || (isNaive && effectiveProfile.naiveQuic)),
                 sniffOverrideDestination = isAwg,
                 secondProfile = secondProfile,
+                warpRelay = warpRelay,
                 fakeDnsSpec = if (isAwg) null else config.fakeDns,
                 preferTcpRemoteDns = true,
                 remoteDnsOverHttps = false,
@@ -420,6 +470,13 @@ internal class IosEngineController(
             throw IllegalStateException("Proxy SOCKS port $listenPort did not open")
         }
         log("Proxy core ready on $LISTEN_HOST:$listenPort")
+
+        // WARP over AmneziaWG/WireGuard on the SERVER side: the core (and its UDP relay) is up - now start awgproxy.
+        if (warpRelay != null && warpAwgIni != null) {
+            log("WARP: starting WireGuard/AmneziaWG engine on 127.0.0.1:${awgLocalPort(listenPort)}")
+            prepareAmneziaWgProxy(ProxyProfile(tag = "WARP", type = ProxyProfile.TYPE_AMNEZIAWG, awgConfig = warpAwgIni), listenPort)
+            warpProxyActive = true
+        }
     }
 
     // ---------------------------------------------------------------------------------------

@@ -968,9 +968,10 @@ fun HomeScreen(
                         onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
                     )
                 },
-                onAddSelected = { selected ->
+                onAddSelected = { selected, warpIds ->
                     viewModel.saveSelectedFreeServers(
                         selectedServers = selected,
+                        warpIds = warpIds,
                         onComplete = { count ->
                             locationViewModel.loadLocations {
                                 viewModel.loadCurrentConfig {

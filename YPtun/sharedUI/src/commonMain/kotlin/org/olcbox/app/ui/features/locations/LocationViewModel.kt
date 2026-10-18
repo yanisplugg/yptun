@@ -41,6 +41,8 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.ShareLinkComposer
@@ -764,6 +766,21 @@ class LocationViewModel(
     /** Enables/disables the proxy (additional outbound). When off, the location exits directly. */
     fun onProxyEnabledChanged(enabled: Boolean) {
         editingConfig = editingConfig.copy(proxyEnabled = enabled)
+    }
+
+    /** Enables/disables Cloudflare WARP chaining for VLESS connections (strictly in Server mode on iOS). */
+    fun onWarpEnabledChanged(enabled: Boolean) {
+        editingConfig = editingConfig.copy(warpEnabled = enabled, warpMode = WarpMode.Server)
+    }
+
+    /** Changes whether WARP runs on client side (WARP -> VLESS) or server side (VLESS -> WARP). */
+    fun onWarpModeChanged(mode: WarpMode) {
+        editingConfig = editingConfig.copy(warpMode = mode)
+    }
+
+    /** Picks the WARP tunnel protocol (WireGuard or AmneziaWG); independent of the client/server side. */
+    fun onWarpProtocolChanged(protocol: WarpProtocol) {
+        editingConfig = editingConfig.copy(warpProtocol = protocol)
     }
 
 

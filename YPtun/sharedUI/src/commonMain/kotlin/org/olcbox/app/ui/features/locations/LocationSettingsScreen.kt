@@ -120,6 +120,8 @@ import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyCore
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing
@@ -427,6 +429,69 @@ fun LocationSettingsScreen(
                                 enabled = !isSaving,
                                 onChange = viewModel::onProxy2LinkChanged
                             )
+                        }
+                    }
+                }
+
+                // Cloudflare WARP chaining for VLESS: toggle + protocol selector (Server side: VLESS -> WARP)
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VkTurnSwitchRow(
+                            label = LocalStrings.current.enableWarp,
+                            checked = config.warpEnabled,
+                            enabled = !isSaving,
+                            onCheckedChange = viewModel::onWarpEnabledChanged
+                        )
+                        if (config.warpEnabled) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = LocalStrings.current.warpModeServerSubtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = LocalStrings.current.warpProtocolSection,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                val protocols = listOf(WarpProtocol.Wg, WarpProtocol.Awg)
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    protocols.forEachIndexed { index, protocol ->
+                                        SegmentedButton(
+                                            shape = SegmentedButtonDefaults.itemShape(index = index, count = protocols.size),
+                                            selected = config.warpProtocol == protocol,
+                                            onClick = { viewModel.onWarpProtocolChanged(protocol) },
+                                            enabled = !isSaving,
+                                            label = {
+                                                Text(
+                                                    text = if (protocol == WarpProtocol.Wg) {
+                                                        LocalStrings.current.warpProtocolWg
+                                                    } else {
+                                                        LocalStrings.current.warpProtocolAwg
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (config.warpProtocol == WarpProtocol.Wg) {
+                                        LocalStrings.current.warpProtocolWgSubtitle
+                                    } else {
+                                        LocalStrings.current.warpProtocolAwgSubtitle
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

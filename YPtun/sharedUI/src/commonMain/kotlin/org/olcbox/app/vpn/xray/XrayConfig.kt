@@ -22,6 +22,7 @@ import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
+import org.olcbox.app.vpn.warp.WarpRelay
 
 /**
  * Builds an Xray-core JSON configuration from a [ProxyProfile]. Mirrors [org.olcbox.app.vpn.singbox.SingBoxConfig]
@@ -320,6 +321,9 @@ object XrayConfig {
         // dial to the proxy server, then the vless/TLS handshake, all round-tripping over DNS). Xray
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
+        // Optional server-side Cloudflare WARP relay: awgproxy's UDP traffic arrives on this local port
+        // and is forwarded to Cloudflare through the main proxy.
+        warpRelay: WarpRelay? = null,
     ): String {
         val effectiveProfile = profile.enrichedFromRaw()
         val effectiveSecondProfile = secondProfile?.enrichedFromRaw()
@@ -435,6 +439,17 @@ object XrayConfig {
                         if (expert && routingProfile!!.xrayRouteOnly) put("routeOnly", true)
                     }
                 }
+                if (warpRelay != null) addJsonObject {
+                    put("tag", "warp-relay-in")
+                    put("port", warpRelay.listenPort)
+                    put("listen", "127.0.0.1")
+                    put("protocol", "dokodemo-door")
+                    putJsonObject("settings") {
+                        put("address", warpRelay.targetHost)
+                        put("port", warpRelay.targetPort)
+                        put("network", "udp")
+                    }
+                }
                 // Loopback SOCKS relay for the xhttp-main cascade (127.0.0.1 only, not exposed). Its
                 // traffic is routed straight to the xhttp main ([PROXY_BASE_TAG]) by the rule below.
                 if (cascadeLoopActive) addJsonObject {
@@ -460,27 +475,49 @@ object XrayConfig {
             val second = effectiveSecondProfile?.takeIf { it.isComplete() }
             putJsonArray("outbounds") {
                 if (second != null) {
-                    // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG, emitted FIRST so it is
-                    // Xray's default outbound), which dials THROUGH the main (PROXY_BASE_TAG); the main
-                    // dials through olcRTC/WG. Keeping the second as PROXY_TAG means the default route and
-                    // routing rules transparently use the real exit.
-                    add(
-                        buildProxyOutbound(
-                            second,
-                            chained = false,
-                            traffic = traffic,
-                            // xhttp main can't sub-dial → the exit dials through the SOCKS loopback
-                            // (which routes to the main). Otherwise it dials directly through the main.
-                            detourTagOverride = if (cascadeLoopActive) CASCADE_LOOP_OUT_TAG else PROXY_BASE_TAG,
-                            tag = PROXY_TAG,
-                            // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
-                            chainViaDialerProxy = cascadeLoopActive,
-                            // Over the clean loopback tunnel, KEEP the exit's XTLS Vision flow — the 2nd
-                            // server requires it (a vless-reality-vision tcp 2nd proxy reset with it dropped
-                            // while an xhttp 2nd, which has no Vision flow, worked).
-                            preserveFlow = cascadeLoopActive,
+                    if (warpRelay != null) {
+                        // AWG WARP exit (Server mode): the exit is awgproxy's local SOCKS (tag PROXY_TAG, no
+                        // dialerProxy — it is loopback); its UDP rides the main (tag PROXY_BASE_TAG) via the relay.
+                        add(
+                            buildProxyOutbound(
+                                second,
+                                chained = false,
+                                traffic = traffic,
+                                tag = PROXY_TAG,
+                            )
                         )
-                    )
+                        add(
+                            buildProxyOutbound(
+                                effectiveProfile,
+                                chained = olcrtcChainPort != null,
+                                traffic = traffic,
+                                detourTagOverride = baseDetour,
+                                tag = PROXY_BASE_TAG,
+                            )
+                        )
+                    } else {
+                        // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG, emitted FIRST so it is
+                        // Xray's default outbound), which dials THROUGH the main (PROXY_BASE_TAG); the main
+                        // dials through olcRTC/WG. Keeping the second as PROXY_TAG means the default route and
+                        // routing rules transparently use the real exit.
+                        add(
+                            buildProxyOutbound(
+                                second,
+                                chained = false,
+                                traffic = traffic,
+                                // xhttp main can't sub-dial → the exit dials through the SOCKS loopback
+                                // (which routes to the main). Otherwise it dials directly through the main.
+                                detourTagOverride = if (cascadeLoopActive) CASCADE_LOOP_OUT_TAG else PROXY_BASE_TAG,
+                                tag = PROXY_TAG,
+                                // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
+                                chainViaDialerProxy = cascadeLoopActive,
+                                // Over the clean loopback tunnel, KEEP the exit's XTLS Vision flow — the 2nd
+                                // server requires it (a vless-reality-vision tcp 2nd proxy reset with it dropped
+                                // while an xhttp 2nd, which has no Vision flow, worked).
+                                preserveFlow = cascadeLoopActive,
+                            )
+                        )
+                    }
                     add(
                         buildProxyOutbound(
                             effectiveProfile,
@@ -619,6 +656,11 @@ object XrayConfig {
             val cascadeLoopRule = if (cascadeLoopActive) buildJsonObject {
                 put("type", "field")
                 putJsonArray("inboundTag") { add(CASCADE_LOOP_IN_TAG) }
+                put("outboundTag", PROXY_BASE_TAG)
+            } else null
+            val warpRelayRule = if (warpRelay != null) buildJsonObject {
+                put("type", "field")
+                putJsonArray("inboundTag") { add("warp-relay-in") }
                 put("outboundTag", PROXY_BASE_TAG)
             } else null
             // A FakeDNS address is SYNTHETIC - it stands for the domain we handed the app and can
@@ -779,6 +821,7 @@ object XrayConfig {
                     val strategy = if (forceFamily || traffic.remoteDns.isNotBlank()) JsonPrimitive("IPIfNonMatch") else baseStrategy
                     put("domainStrategy", strategy)
                     putJsonArray("rules") {
+                        warpRelayRule?.let { add(it) }
                         // Loopback relay → xhttp main, before anything that could drop/redirect it.
                         cascadeLoopRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
@@ -800,6 +843,7 @@ object XrayConfig {
                 } else {
                     put("domainStrategy", if (forceFamily || traffic.remoteDns.isNotBlank()) "IPIfNonMatch" else "AsIs")
                     putJsonArray("rules") {
+                        warpRelayRule?.let { add(it) }
                         cascadeLoopRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
                         remoteDnsProxyRules.forEach { add(it) }
