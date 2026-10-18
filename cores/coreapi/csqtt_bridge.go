@@ -44,8 +44,8 @@ func (p *csqttPumper) attach(ip netip.Addr, dns []netip.Addr) (*netstack.Net, er
 			_ = dev.Close()
 			return nil, err
 		}
-		_ = c.SetReadBuffer(4 << 20)
-		_ = c.SetWriteBuffer(4 << 20)
+		_ = c.SetReadBuffer(1 << 20)
+		_ = c.SetWriteBuffer(1 << 20)
 		p.conn = c
 		go p.fromClient(c)
 	}

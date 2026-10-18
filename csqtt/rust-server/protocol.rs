@@ -3987,7 +3987,8 @@ fn parse_generation_id(value: &str) -> Option<u64> {
 }
 
 fn is_supported_wire_protocol(value: &str) -> bool {
-    value == crate::wire_protocol::WIRE_PROTOCOL_REVISION
+    value.is_empty()
+        || value == crate::wire_protocol::WIRE_PROTOCOL_REVISION
         || value == crate::wire_protocol::LEGACY_WIRE_PROTOCOL_REVISION
 }
 

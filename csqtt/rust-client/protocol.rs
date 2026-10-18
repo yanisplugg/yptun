@@ -23,6 +23,50 @@ pub struct StreamRepairCommand {
     pub worker_ids: Vec<u16>,
 }
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Negotiated wire version for GETCONF requests:
+/// 3 = CSQTT-WIRE-3 (v2.1.9, 8 fields)
+/// 2 = v2.1.5 (7 fields, with desired_count)
+/// 1 = v2.0.0 (6 fields, legacy)
+pub static NEGOTIATED_WIRE_VERSION: AtomicU8 = AtomicU8::new(3);
+
+pub fn reset_negotiated_wire_version() {
+    NEGOTIATED_WIRE_VERSION.store(3, Ordering::Release);
+}
+
+pub fn config_request_versioned(
+    local_port: &str,
+    device_id: &str,
+    password: &str,
+    generation_id: u64,
+    salt: &str,
+    worker_id: usize,
+    desired_count: Option<usize>,
+    wire_version: u8,
+) -> String {
+    match wire_version {
+        1 => {
+            // csqtt v2.0.0 legacy: 6 fields
+            format!("GETCONF:{local_port}|{device_id}|{password}|{generation_id}|{salt}|{worker_id}")
+        }
+        2 => {
+            // csqtt v2.1.5: 7 fields
+            let desired_count = desired_count.map_or_else(String::new, |value| value.to_string());
+            format!(
+                "GETCONF:{local_port}|{device_id}|{password}|{generation_id}|{salt}|{worker_id}|{desired_count}"
+            )
+        }
+        _ => {
+            // csqtt v2.1.9+ / CSQTT-WIRE-3: 8 fields
+            let desired_count = desired_count.map_or_else(String::new, |value| value.to_string());
+            format!(
+                "GETCONF:{local_port}|{device_id}|{password}|{generation_id}|{salt}|{worker_id}|{desired_count}|{WIRE_PROTOCOL_REVISION}"
+            )
+        }
+    }
+}
+
 pub fn config_request(
     local_port: &str,
     device_id: &str,
@@ -32,9 +76,15 @@ pub fn config_request(
     worker_id: usize,
     desired_count: Option<usize>,
 ) -> String {
-    let desired_count = desired_count.map_or_else(String::new, |value| value.to_string());
-    format!(
-        "GETCONF:{local_port}|{device_id}|{password}|{generation_id}|{salt}|{worker_id}|{desired_count}|{WIRE_PROTOCOL_REVISION}"
+    config_request_versioned(
+        local_port,
+        device_id,
+        password,
+        generation_id,
+        salt,
+        worker_id,
+        desired_count,
+        NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire),
     )
 }
 
@@ -149,6 +199,14 @@ mod tests {
         assert_eq!(
             config_request("9000", "device", "password", 7, "salt", 4, Some(36)),
             "GETCONF:9000|device|password|7|salt|4|36|CSQTT-WIRE-3"
+        );
+        assert_eq!(
+            config_request_versioned("9000", "device", "password", 7, "salt", 4, None, 1),
+            "GETCONF:9000|device|password|7|salt|4"
+        );
+        assert_eq!(
+            config_request_versioned("9000", "device", "password", 7, "salt", 4, Some(36), 2),
+            "GETCONF:9000|device|password|7|salt|4|36"
         );
     }
 

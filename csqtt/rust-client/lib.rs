@@ -150,6 +150,7 @@ pub extern "C" fn csqtt_ffi_start(
     }
 
     crate::logging::set_ffi_log_callback(on_log);
+    crate::protocol::reset_negotiated_wire_version();
 
     let cancel = CancellationToken::new();
     let cancel_worker = cancel.clone();
@@ -305,7 +306,10 @@ async fn run_inprocess(
         None,
     ));
 
-    let pool = packet::PacketPool::new(packet::packet_pool_size(workers));
+    // On iOS in-process mode, conserve memory to avoid Jetsam kills.
+    // 64 buffers per worker + 128 shared (~1.6 MB total) is optimal for mobile UDP throughput.
+    let pool_size = (workers * 64 + 128).min(packet::packet_pool_size(workers));
+    let pool = packet::PacketPool::new(pool_size);
     let stats = Arc::new(stats::Stats::default());
 
     let (dispatcher, local_port) = dispatcher::Dispatcher::start(

@@ -9,7 +9,7 @@ use crate::{
     obfs::{ObfsCipher, ObfsConfig, ObfsMode, ObfsState, is_rtp_packet},
     packet::{PacketBuf, PacketPool},
     protocol::{
-        ConfigResponse, config_request, disconnect_request, is_config_response,
+        ConfigResponse, NEGOTIATED_WIRE_VERSION, config_request, disconnect_request, is_config_response,
         is_control_response, is_panel_restart_notice, parse_config_response, parse_stream_alive,
         parse_stream_repair,
     },
@@ -884,7 +884,7 @@ async fn request_configuration(
     events: &Events,
     config_tx: Option<mpsc::Sender<String>>,
 ) -> Result<bool> {
-    let request = build_registration_payload(config);
+    let mut request = build_registration_payload(config);
     'attempts: for (attempt, timeout_ms) in CONFIG_RESPONSE_TIMEOUT_MS.into_iter().enumerate() {
         writer
             .send_bytes(request.as_ref())
@@ -917,12 +917,54 @@ async fn request_configuration(
                 }
             }
         };
-        let response = parse_config_response(packet.as_slice()).inspect_err(|error| {
-            let message = error.to_string();
-            if config.get_config && message.contains("FATAL_") {
-                events.error("handshake_rejected", &message, true);
+        let response = match parse_config_response(packet.as_slice()) {
+            Ok(resp) => resp,
+            Err(error) => {
+                let response_str = std::str::from_utf8(packet.as_slice()).unwrap_or("");
+                if response_str == "DENIED:invalid_worker"
+                    && NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire) > 1
+                {
+                    crate::log_error!(
+                        "[ВОРКЕР #{}] Сервер отклонил 8-польный GETCONF (invalid_worker), переключаемся на csqtt v2.0 legacy формат",
+                        config.id
+                    );
+                    NEGOTIATED_WIRE_VERSION.store(1, Ordering::Release);
+                    request = build_registration_payload(config);
+                    continue 'attempts;
+                }
+                if response_str == "DENIED:invalid_worker_count"
+                    && NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire) > 2
+                {
+                    crate::log_error!(
+                        "[ВОРКЕР #{}] Сервер отклонил ревизию в GETCONF (invalid_worker_count), переключаемся на csqtt v2.1.5 формат",
+                        config.id
+                    );
+                    NEGOTIATED_WIRE_VERSION.store(2, Ordering::Release);
+                    request = build_registration_payload(config);
+                    continue 'attempts;
+                }
+                if response_str == "DENIED:protocol_mismatch"
+                    && NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire) > 1
+                {
+                    let current_ver = NEGOTIATED_WIRE_VERSION.load(Ordering::Acquire);
+                    let fallback_ver = current_ver.saturating_sub(1).max(1);
+                    crate::log_error!(
+                        "[ВОРКЕР #{}] Сервер вернул protocol_mismatch для wire v{}, переключаемся на v{}",
+                        config.id,
+                        current_ver,
+                        fallback_ver
+                    );
+                    NEGOTIATED_WIRE_VERSION.store(fallback_ver, Ordering::Release);
+                    request = build_registration_payload(config);
+                    continue 'attempts;
+                }
+                let message = error.to_string();
+                if config.get_config && message.contains("FATAL_") {
+                    events.error("handshake_rejected", &message, true);
+                }
+                return Err(error);
             }
-        })?;
+        };
         match response {
             ConfigResponse::NoConfig => return Ok(false),
             ConfigResponse::Config(value) => {
