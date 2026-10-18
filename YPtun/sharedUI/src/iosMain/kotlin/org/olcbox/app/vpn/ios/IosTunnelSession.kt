@@ -320,6 +320,72 @@ class IosTunnelSession(
             log("OpenFlux carrier bypass IPs: ${extraExcludedIps.distinct().joinToString()}")
         }
 
+        // For VkTurn (CSQTT, WDTT, freeturn): carrier hosts (VK, OKCDN, OK.ru) and peer IP MUST bypass
+        // the tunnel, otherwise the underlying TURN relay and peer UDP packets loop back into utun and cause an instant deadlock!
+        if (location.engine == EngineType.VkTurn) {
+            val vk = location.vkturn
+            val candidateHosts = mutableListOf<String>()
+            // 1. Peer endpoint (first candidate so remoteAddr becomes the peer IP)
+            val csqttPeer = vk?.csqttPeer.orEmpty().substringBeforeLast(':').trim().removePrefix("[").removeSuffix("]")
+            if (csqttPeer.isNotEmpty()) candidateHosts.add(csqttPeer)
+            val wdttPeer = vk?.wdttPeer.orEmpty().substringBeforeLast(':').trim().removePrefix("[").removeSuffix("]")
+            if (wdttPeer.isNotEmpty()) candidateHosts.add(wdttPeer)
+            val freeturnUri = vk?.uri.orEmpty()
+            if (freeturnUri.isNotEmpty()) {
+                val host = freeturnUri.substringAfter("://").substringBefore('/').substringBefore(':').trim()
+                if (host.isNotEmpty()) candidateHosts.add(host)
+            }
+            vk?.extraFreeturnUris?.forEach { extraUri ->
+                val host = extraUri.substringAfter("://").substringBefore('/').substringBefore(':').trim()
+                if (host.isNotEmpty()) candidateHosts.add(host)
+            }
+            // 2. Explicit TURN override hosts if configured
+            val csqttTurnHost = vk?.csqtt?.turnHost.orEmpty().trim()
+            if (csqttTurnHost.isNotEmpty()) candidateHosts.add(csqttTurnHost)
+            val wdttTurnHost = vk?.wdttPlus?.turnHost.orEmpty().trim()
+            if (wdttTurnHost.isNotEmpty()) candidateHosts.add(wdttTurnHost)
+
+            // 3. VK Calls and TURN control infrastructure
+            candidateHosts.add("calls.okcdn.ru")
+            candidateHosts.add("turn.okcdn.ru")
+            candidateHosts.add("turn-msk.okcdn.ru")
+            candidateHosts.add("turn-spb.okcdn.ru")
+            candidateHosts.add("api.vk.me")
+            candidateHosts.add("api.vk.com")
+            candidateHosts.add("vk.com")
+            candidateHosts.add("login.vk.ru")
+            candidateHosts.add("api.vk.ru")
+            candidateHosts.add("id.vk.ru")
+            candidateHosts.add("vk.ru")
+            candidateHosts.add("api.ok.ru")
+            candidateHosts.add("ok.ru")
+            candidateHosts.add("okcdn.ru")
+
+            // 4. DNS resolvers used by VK-TURN cores prior to tunnel
+            candidateHosts.add("77.88.8.8")
+            candidateHosts.add("77.88.8.1")
+            candidateHosts.add("1.1.1.1")
+            candidateHosts.add("8.8.8.8")
+
+            candidateHosts.distinct().forEach { host ->
+                if (host.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"""))) {
+                    extraExcludedIps.add(host)
+                    if (remoteAddr == TUN_IPV4_REMOTE) {
+                        remoteAddr = host
+                    }
+                } else {
+                    val resolved = core.resolveHostIpv4(host)
+                    resolved.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { ip ->
+                        extraExcludedIps.add(ip)
+                        if (remoteAddr == TUN_IPV4_REMOTE) {
+                            remoteAddr = ip
+                        }
+                    }
+                }
+            }
+            log("VkTurn carrier & peer bypass IPs: ${extraExcludedIps.distinct().joinToString()}")
+        }
+
         val settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress = remoteAddr)
         settings.setMTU(NSNumber(int = mtu))
         settings.setIPv4Settings(

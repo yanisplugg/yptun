@@ -3,6 +3,7 @@
 
 use crossbeam_queue::ArrayQueue;
 use std::{
+    ffi::{c_char, CString},
     fmt,
     io::{self, Write},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -13,6 +14,14 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+
+static FFI_LOG_CALLBACK: Mutex<Option<extern "C" fn(*const c_char)>> = Mutex::new(None);
+
+pub fn set_ffi_log_callback(cb: Option<extern "C" fn(*const c_char)>) {
+    if let Ok(mut lock) = FFI_LOG_CALLBACK.lock() {
+        *lock = cb;
+    }
+}
 
 const PROTOCOL_CAPACITY: usize = 128;
 const DIAGNOSTIC_CAPACITY: usize = 512;
@@ -205,6 +214,18 @@ impl<W: Write> Sink<W> {
     }
 
     fn write_line(&mut self, value: &str, repetitions: usize) {
+        if let Ok(lock) = FFI_LOG_CALLBACK.lock() {
+            if let Some(cb) = *lock {
+                let text = if repetitions > 1 {
+                    format!("{value} (x{repetitions})")
+                } else {
+                    value.to_string()
+                };
+                if let Ok(c_str) = CString::new(text) {
+                    cb(c_str.as_ptr());
+                }
+            }
+        }
         if self.disabled {
             return;
         }

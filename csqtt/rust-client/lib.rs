@@ -149,6 +149,8 @@ pub extern "C" fn csqtt_ffi_start(
         }
     }
 
+    crate::logging::set_ffi_log_callback(on_log);
+
     let cancel = CancellationToken::new();
     let cancel_worker = cancel.clone();
     let running = Arc::new(AtomicBool::new(true));
@@ -178,8 +180,13 @@ pub extern "C" fn csqtt_ffi_start(
                 on_log,
             ));
 
-            if let Err(e) = res {
+            if let Err(ref e) = res {
                 eprintln!("[CSQTT-FFI] In-process client error: {e:#}");
+                if let Some(cb) = on_log {
+                    if let Ok(c_str) = CString::new(format!("In-process client error: {e:#}")) {
+                        cb(c_str.as_ptr());
+                    }
+                }
             }
             running_worker.store(false, Ordering::Release);
         }) {
@@ -198,6 +205,8 @@ pub extern "C" fn csqtt_ffi_start(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn csqtt_ffi_stop() {
+    crate::logging::set_ffi_log_callback(None);
+
     let mut state_guard = match STATE.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),

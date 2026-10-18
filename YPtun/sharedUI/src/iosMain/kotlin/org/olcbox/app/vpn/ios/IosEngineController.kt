@@ -748,6 +748,15 @@ internal class IosEngineController(
             core.csqttBridgeStop()
             throw IllegalStateException("csqtt SOCKS port $csqttPort did not open")
         }
+
+        log("Waiting for csqtt tunnel handshake with peer=${vk.csqttPeerAddr()}...")
+        if (!core.csqttBridgeWaitTunnel(VKTURN_RELAY_READY_TIMEOUT_MS)) {
+            core.csqttStop()
+            core.csqttBridgeStop()
+            throw IllegalStateException(
+                "csqtt tunnel handshake timed out (peer ${vk.csqttPeerAddr()} or VK TURN unreachable)"
+            )
+        }
         log("csqtt ready on $LISTEN_HOST:$csqttPort")
 
         if (chainProxy == null) return

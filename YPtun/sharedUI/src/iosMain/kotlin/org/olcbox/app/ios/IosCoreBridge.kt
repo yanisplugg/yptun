@@ -138,6 +138,8 @@ interface IosCoreBridge {
     fun csqttBridgeSetTunnel(tunConf: String): String
     fun csqttBridgeStop()
     fun csqttBridgeRunning(): Boolean
+    fun csqttBridgeTunnelReady(): Boolean
+    fun csqttBridgeWaitTunnel(timeoutMs: Int): Boolean
 
     fun resolveHostIpv4(host: String): String
 }

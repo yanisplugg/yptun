@@ -359,5 +359,13 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     func csqttBridgeRunning() -> Bool {
         CoreapiCsqttBridgeIsRunning()
     }
+
+    func csqttBridgeTunnelReady() -> Bool {
+        CoreapiCsqttBridgeIsTunnelReady()
+    }
+
+    func csqttBridgeWaitTunnel(timeoutMs: Int32) -> Bool {
+        CoreapiCsqttBridgeWaitTunnel(Int(timeoutMs))
+    }
 }
 

@@ -340,6 +340,7 @@ var (
 	csqttPumperInst    *csqttPumper
 	csqttSocksInst     *csqttSocksServer
 	csqttCancel        context.CancelFunc
+	csqttTunnelReadyCh chan struct{}
 )
 
 func CsqttBridgeStart(socksAddr, clientUdpAddr string, mtu int) error {
@@ -357,6 +358,7 @@ func CsqttBridgeStart(socksAddr, clientUdpAddr string, mtu int) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	csqttCancel = cancel
+	csqttTunnelReadyCh = make(chan struct{})
 
 	pumper := &csqttPumper{addr: raddr, mtu: mtu}
 	socks := &csqttSocksServer{}
@@ -409,6 +411,15 @@ func CsqttBridgeSetTunnel(tunConf string) error {
 	if tnet != nil {
 		socks.setNet(tnet)
 		PushLog("csqtt", fmt.Sprintf("netstack configured: IP %s, DNS %v", ip, dns))
+		csqttBridgeMu.Lock()
+		if csqttTunnelReadyCh != nil {
+			select {
+			case <-csqttTunnelReadyCh:
+			default:
+				close(csqttTunnelReadyCh)
+			}
+		}
+		csqttBridgeMu.Unlock()
 	}
 	return nil
 }
@@ -423,6 +434,14 @@ func CsqttBridgeStop() {
 		csqttCancel()
 		csqttCancel = nil
 	}
+	if csqttTunnelReadyCh != nil {
+		select {
+		case <-csqttTunnelReadyCh:
+		default:
+			close(csqttTunnelReadyCh)
+		}
+		csqttTunnelReadyCh = nil
+	}
 	if csqttPumperInst != nil {
 		csqttPumperInst.close()
 		csqttPumperInst = nil
@@ -434,4 +453,30 @@ func CsqttBridgeStop() {
 
 func CsqttBridgeIsRunning() bool {
 	return csqttBridgeRunning.Load()
+}
+
+func CsqttBridgeIsTunnelReady() bool {
+	csqttBridgeMu.Lock()
+	socks := csqttSocksInst
+	csqttBridgeMu.Unlock()
+	return socks != nil && socks.net.Load() != nil
+}
+
+func CsqttBridgeWaitTunnel(timeoutMs int) bool {
+	csqttBridgeMu.Lock()
+	socks := csqttSocksInst
+	ch := csqttTunnelReadyCh
+	csqttBridgeMu.Unlock()
+	if socks != nil && socks.net.Load() != nil {
+		return true
+	}
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+		return false
+	}
 }
