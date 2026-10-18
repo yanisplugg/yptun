@@ -27,12 +27,23 @@ data class MasterDnsInstallOptions(
     val domain: String = DEFAULT_DOMAIN,
     /** Payload cipher (DATA_ENCRYPTION_METHOD); the client must be set to the same value. */
     val encryptionMethod: Int = DEFAULT_ENCRYPTION_METHOD,
+    /** Throw away the server's key and generate a new one (every existing client must re-import). */
+    val regenerateKey: Boolean = false,
+    /** Upstream resolvers the server uses for DNS queries sent through the tunnel. */
+    val dnsUpstream: String = DEFAULT_DNS_UPSTREAM,
+    /** Let clients negotiate ZSTD/LZ4/ZLIB; off = only uncompressed payloads are accepted. */
+    val allowCompression: Boolean = true,
+    /** Stop and disable whatever systemd service holds [udpPort] (e.g. an old dnstt-server). */
+    val freePort: Boolean = false,
+    /** Server log verbosity: DEBUG, INFO, WARN, ERROR. */
+    val logLevel: String = "INFO",
 ) {
     companion object {
         const val DEFAULT_UDP_PORT = 5300
         const val DEFAULT_DOMAIN = "v.masterdns.net"
         /** XOR — the upstream default. */
         const val DEFAULT_ENCRYPTION_METHOD = 1
+        const val DEFAULT_DNS_UPSTREAM = "1.1.1.1:53, 8.8.8.8:53"
     }
 }
 
