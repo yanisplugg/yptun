@@ -81,6 +81,12 @@ val LocalShowSubscriptionAliveCount = staticCompositionLocalOf { false }
 val LocalShowPingControls = staticCompositionLocalOf { false }
 
 /**
+ * Whether the location settings screen shows raw AmneziaWG parameters as editable text fields.
+ * Controlled by the app behavior toggle; off by default.
+ */
+val LocalAllowConfigEditing = staticCompositionLocalOf { false }
+
+/**
  * Whether the subscription group header shows the panel's description (`announce` header) under the
  * title. Provided near the app root from the persisted app-behavior toggle; off by default.
  */
