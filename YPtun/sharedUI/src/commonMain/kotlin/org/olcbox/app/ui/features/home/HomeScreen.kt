@@ -930,7 +930,6 @@ fun HomeScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }
                         state.freeServersProgress?.let { prog ->
                             if (prog.total > 0) {
                                 LinearProgressIndicator(
