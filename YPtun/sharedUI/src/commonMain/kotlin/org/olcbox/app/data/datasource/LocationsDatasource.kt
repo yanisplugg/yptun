@@ -1440,8 +1440,16 @@ class LocationsRepositoryImpl(
         // JSON panels with a "links" array) become sing-box (Standard) locations.
         parseProxyText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
-        mergeParsedBundles(linkBundles)?.let {
-            return ParsedImport(it, ImportMode.Additive)
+        mergeParsedBundles(linkBundles)?.let { merged ->
+            // Only the proxy parser carried the panel's title/traffic/expiry/announce; every other
+            // family (snolc, masterdns, freeturn, …) dropped them, so the subscription showed no name.
+            val sub = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+            val withMeta = if (sub == null) merged else merged.copy(
+                locations = merged.locations.map { e ->
+                    if (e.metadata?.subscription != null) e else e.copy(metadata = sub)
+                }
+            )
+            return ParsedImport(withMeta, ImportMode.Additive)
         }
 
         // Raw sing-box config (full config with "outbounds", a single outbound object, or an
