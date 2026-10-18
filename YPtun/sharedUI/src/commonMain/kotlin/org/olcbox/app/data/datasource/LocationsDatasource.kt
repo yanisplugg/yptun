@@ -2036,7 +2036,7 @@ class LocationsRepositoryImpl(
                 ),
                 vkturn = VkTurnConfig(
                     uri = link.uri,
-                    vkLink = "",
+                    vkLink = link.vkLink,
                     listenPort = listenPort,
                     outbound = VkTurnConfig.OUTBOUND_PROXY,
                     outboundProxyLink = link.exitProxyLink,
@@ -2055,7 +2055,7 @@ class LocationsRepositoryImpl(
                 ),
                 vkturn = VkTurnConfig(
                     uri = link.uri,
-                    vkLink = "",
+                    vkLink = link.vkLink,
                     listenPort = link.listenPort,
                 ),
             ).normalized()
