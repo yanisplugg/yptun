@@ -517,37 +517,37 @@ object XrayConfig {
                                 preserveFlow = cascadeLoopActive,
                             )
                         )
-                    }
-                    add(
-                        buildProxyOutbound(
-                            effectiveProfile,
-                            chained = olcrtcChainPort != null,
-                            traffic = traffic,
-                            detourTagOverride = baseDetour,
-                            tag = PROXY_BASE_TAG,
-                            // Pack the loopback's many per-flow connections onto few main H2 tunnels.
-                            //
-                            // Mux.Cool is deliberately NOT forced on here any more. It killed the whole
-                            // cascade outright: reproduced against the user's own two servers with a
-                            // standalone xray-core running this exact config —
-                            //   proxy/vless/outbound: tunneling request to tcp:v1.mux.cool:9527 via <main>
-                            //   common/mux: failed to read metadata > io: read/write on closed pipe
-                            //   transport/internet/splithttp: failed to POST https://<main>/… > EOF
-                            // and every request after it EOF'd instantly. Drop the mux block and the inner
-                            // hop establishes ("tunneling request to tcp:<2nd server>:443 via <main>").
-                            // xhttp already multiplexes at the transport layer, so xmux above is enough.
-                            xhttpHighConcurrency = cascadeLoopActive,
-                            // …and keep the global "Mux" traffic toggle off this hop for the same reason.
-                            suppressMux = cascadeLoopActive,
+                        add(
+                            buildProxyOutbound(
+                                effectiveProfile,
+                                chained = olcrtcChainPort != null,
+                                traffic = traffic,
+                                detourTagOverride = baseDetour,
+                                tag = PROXY_BASE_TAG,
+                                // Pack the loopback's many per-flow connections onto few main H2 tunnels.
+                                //
+                                // Mux.Cool is deliberately NOT forced on here any more. It killed the whole
+                                // cascade outright: reproduced against the user's own two servers with a
+                                // standalone xray-core running this exact config —
+                                //   proxy/vless/outbound: tunneling request to tcp:v1.mux.cool:9527 via <main>
+                                //   common/mux: failed to read metadata > io: read/write on closed pipe
+                                //   transport/internet/splithttp: failed to POST https://<main>/… > EOF
+                                // and every request after it EOF'd instantly. Drop the mux block and the inner
+                                // hop establishes ("tunneling request to tcp:<2nd server>:443 via <main>").
+                                // xhttp already multiplexes at the transport layer, so xmux above is enough.
+                                xhttpHighConcurrency = cascadeLoopActive,
+                                // …and keep the global "Mux" traffic toggle off this hop for the same reason.
+                                suppressMux = cascadeLoopActive,
+                            )
                         )
-                    )
-                    // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
-                    if (cascadeLoopActive) addJsonObject {
-                        put("tag", CASCADE_LOOP_OUT_TAG)
-                        put("protocol", "socks")
-                        putJsonObject("settings") {
-                            putJsonArray("servers") {
-                                addJsonObject { put("address", "127.0.0.1"); put("port", cascadeLoopPort) }
+                        // The relay's socks outbound (loops back to the xhttp main, which dials the 2nd server).
+                        if (cascadeLoopActive) addJsonObject {
+                            put("tag", CASCADE_LOOP_OUT_TAG)
+                            put("protocol", "socks")
+                            putJsonObject("settings") {
+                                putJsonArray("servers") {
+                                    addJsonObject { put("address", "127.0.0.1"); put("port", cascadeLoopPort) }
+                                }
                             }
                         }
                     }
