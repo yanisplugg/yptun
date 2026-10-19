@@ -476,6 +476,7 @@ internal class IosEngineController(
             log("WARP: starting WireGuard/AmneziaWG engine on 127.0.0.1:${awgLocalPort(listenPort)}")
             prepareAmneziaWgProxy(ProxyProfile(tag = "WARP", type = ProxyProfile.TYPE_AMNEZIAWG, awgConfig = warpAwgIni), listenPort)
             warpProxyActive = true
+            log("WARP: WireGuard/AmneziaWG engine ready on 127.0.0.1:${awgLocalPort(listenPort)}")
         }
     }
 
