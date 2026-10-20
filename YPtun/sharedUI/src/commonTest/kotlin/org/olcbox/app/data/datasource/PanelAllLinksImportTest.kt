@@ -64,6 +64,15 @@ class PanelAllLinksImportTest {
     }
 
     @Test
+    fun orderLinesRestorePanelOrderAcrossFamilies() = runTest {
+        val body = links.getValue("masterdns") + "\n" + links.getValue("snolc") + "\n#order:Stealth%20NL-snolc\n#order:Stealth%20NL-dns\n"
+        val withOrder = FakeSource().also { LocationsRepositoryImpl(it).importText(body) }
+        assertEquals(listOf(EngineType.Snolc, EngineType.MasterDns), assertNotNull(withOrder.stored).locations.map { it.location.engine })
+        val without = FakeSource().also { LocationsRepositoryImpl(it).importText(body.substringBefore("#order")) }
+        assertEquals(listOf(EngineType.MasterDns, EngineType.Snolc), assertNotNull(without.stored).locations.map { it.location.engine })
+    }
+
+    @Test
     fun wholePanelSubscriptionKeepsEveryFamily() = runTest {
         val source = FakeSource()
         // A panel list may carry comment lines (# note) next to the links; they must be ignored.

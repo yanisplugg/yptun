@@ -1452,8 +1452,17 @@ class LocationsRepositoryImpl(
                 .filter { it.startsWith("#desc:") }
                 .mapNotNull { it.removePrefix("#desc:").trim().split('=', limit = 2).takeIf { p -> p.size == 2 } }
                 .associate { (n, d) -> UriCodec.percentDecode(n.trim()) to UriCodec.percentDecode(d.trim()) }
+            // `#order:<name>` lines (one per link, in the panel's order): the per-family parsers above
+            // concatenate by family, so restore the panel's own order. Absent → untouched (other panels).
+            val order = linkText.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("#order:") }
+                .map { UriCodec.percentDecode(it.removePrefix("#order:").trim()) }
+                .toList()
+            val ordered = if (order.isEmpty()) merged.locations else
+                merged.locations.sortedBy { e -> order.indexOf(e.name).takeIf { it >= 0 } ?: Int.MAX_VALUE }
             val withMeta = merged.copy(
-                locations = merged.locations.map { e ->
+                locations = ordered.map { e ->
                     val withSub = if (sub == null || e.metadata?.subscription != null) e else e.copy(metadata = sub)
                     val desc = descByName[withSub.name]
                     if (desc != null && withSub.description.isBlank()) withSub.copy(description = desc) else withSub
