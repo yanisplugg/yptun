@@ -804,7 +804,7 @@ data class SnolcConfig(
             val t = text.trim()
             if (!t.startsWith("snolc://", ignoreCase = true)) return null
             val rest = t.substring(8)
-            val name = rest.substringAfter('#', "").replace("%20", " ")
+            val name = org.olcbox.app.data.importer.UriCodec.percentDecode(rest.substringAfter('#', ""))
             val main = rest.substringBefore('#')
             val hostPort = main.substringBefore('?').trimEnd('/')
             val key = main.substringAfter('?', "").split('&').firstOrNull { it.startsWith("key=") }?.substring(4).orEmpty()

@@ -73,6 +73,22 @@ class PanelAllLinksImportTest {
     }
 
     @Test
+    fun cyrillicNamesSurviveInEveryFamily() = runTest {
+        val cyr = "Амстердам-1"
+        val bad = mutableListOf<String>()
+        val enc = java.net.URLEncoder.encode(cyr, "UTF-8")
+        for ((family, link) in links) {
+            val renamed = link.replace("Stealth%20", enc + "%20").replace("Stealth ", "$cyr ")
+            if (renamed == link) continue // the family carries its name elsewhere (qwdtt/csqtt query)
+            val source = FakeSource()
+            LocationsRepositoryImpl(source).importText(renamed)
+            val name = assertNotNull(source.stored).locations.single().name
+            if (!name.startsWith(cyr)) bad += "$family='$name'"
+        }
+        assertTrue(bad.isEmpty(), "names mangled: $bad")
+    }
+
+    @Test
     fun wholePanelSubscriptionKeepsEveryFamily() = runTest {
         val source = FakeSource()
         // A panel list may carry comment lines (# note) next to the links; they must be ignored.
