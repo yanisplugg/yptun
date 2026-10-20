@@ -54,6 +54,16 @@ class PanelAllLinksImportTest {
     }
 
     @Test
+    fun hostDescriptionLineReachesTheLocation() = runTest {
+        val source = FakeSource()
+        val body = links.getValue("snolc") + "\n#desc:Stealth%20NL-snolc=%D0%91%D1%8B%D1%81%D1%82%D1%80%D1%8B%D0%B9%20UDP\n" + links.getValue("masterdns")
+        LocationsRepositoryImpl(source).importText(body)
+        val byEngine = assertNotNull(source.stored).locations.associateBy { it.location.engine }
+        assertEquals("Быстрый UDP", byEngine.getValue(EngineType.Snolc).description)
+        assertEquals("", byEngine.getValue(EngineType.MasterDns).description)
+    }
+
+    @Test
     fun wholePanelSubscriptionKeepsEveryFamily() = runTest {
         val source = FakeSource()
         // A panel list may carry comment lines (# note) next to the links; they must be ignored.
