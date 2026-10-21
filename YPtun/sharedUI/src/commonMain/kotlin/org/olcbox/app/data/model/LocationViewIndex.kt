@@ -1,5 +1,6 @@
 package org.olcbox.app.data.model
 
+import org.olcbox.app.data.importer.displayServer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -56,7 +57,7 @@ data class LocationViewIndex(
                     authProvider = entry.authProvider.orEmpty(),
                     transport = entry.transport?.type.orEmpty(),
                     proxyType = entry.location.proxy?.type.orEmpty(),
-                    proxyServer = entry.location.proxy?.server.orEmpty(),
+                    proxyServer = entry.location.proxy?.displayServer.orEmpty(),
                     metadata = entry.metadata
                 )
             }

@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.features.locations.components
 
+import org.olcbox.app.data.importer.displayServer
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -384,18 +385,18 @@ private fun locationSubtitle(location: LocationItem): String {
     val engineParts = when (config?.engine) {
         EngineType.Standard -> listOfNotNull(
             protocolLabel(config.proxy?.type),
-            config.proxy?.server
+            config.proxy?.displayServer
         )
 
         EngineType.Chain -> listOfNotNull(
             "Chain",
             protocolLabel(config.proxy?.type),
-            config.proxy?.server
+            config.proxy?.displayServer
         )
 
         EngineType.VkTurn -> listOfNotNull(
             "VK-TURN",
-            config.proxy?.server
+            config.proxy?.displayServer
         )
 
         EngineType.MasterDns -> listOfNotNull(

@@ -13,6 +13,15 @@ import org.olcbox.app.data.model.ProxyProfile
  * fragment becomes the display tag; server/port stay placeholders (the real endpoint lives inside
  * the encoded blob and is resolved by the native client).
  */
+/**
+ * Server to show in the UI: a Trust Tunnel profile keeps the placeholder "trusttunnel" as its server (the real
+ * endpoint lives inside the tt:// blob), so read it from the link; every other protocol shows [ProxyProfile.server].
+ */
+val ProxyProfile.displayServer: String
+    get() = if (type == ProxyProfile.TYPE_TRUSTTUNNEL) {
+        TrustTunnelParser.endpoints(ttConfig).firstOrNull()?.first ?: server
+    } else server
+
 object TrustTunnelParser {
 
     const val SCHEME = "tt://"
