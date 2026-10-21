@@ -3630,6 +3630,31 @@ class OlcboxVpnService : VpnService() {
      * and return a SOCKS proxy pointing at its local listener, so sing-box routes through the Trust
      * Tunnel like it does through AmneziaWG. Otherwise returns [profile] unchanged.
      */
+    /**
+     * The native client resolves hostname addresses itself (getaddrinfo on a throwaway thread) and on Android that
+     * fails instantly ("state=1 → state=0"). Resolve here, where the process is already bound to the Wi-Fi network,
+     * and hand the client plain ip:port; `hostname` stays untouched, so SNI and certificate checks are unchanged.
+     */
+    private suspend fun resolveTrustTunnelHosts(toml: String): String = withContext(Dispatchers.IO) {
+        Regex("""(?m)^(\s*addresses\s*=\s*)\[(.*)]\s*$""").replace(toml) { m ->
+            val items = Regex(""""([^"]+)"""").findAll(m.groupValues[2]).flatMap { a ->
+                val addr = a.groupValues[1]
+                val host = addr.substringBeforeLast(':')
+                val port = addr.substringAfterLast(':')
+                if (host.startsWith("[") || host.all { it.isDigit() || it == '.' } || port.isEmpty()) {
+                    sequenceOf(addr)
+                } else {
+                    val ips = runCatching { java.net.InetAddress.getAllByName(host).toList() }.getOrDefault(emptyList())
+                        .sortedBy { it !is java.net.Inet4Address }
+                        .map { ip -> if (ip is java.net.Inet6Address) "[${ip.hostAddress}]:$port" else "${ip.hostAddress}:$port" }
+                    addLog("trusttunnel: resolved $host -> ${ips.joinToString()}")
+                    if (ips.isEmpty()) sequenceOf(addr) else ips.asSequence()
+                }
+            }.toList()
+            m.groupValues[1] + items.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
+        }
+    }
+
     private suspend fun prepareTrustTunnelProxy(profile: ProxyProfile): ProxyProfile {
         if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
         runCatching { trustTunnelClient?.stop(); trustTunnelClient?.close() }
@@ -3637,6 +3662,7 @@ class OlcboxVpnService : VpnService() {
 
         val endpointToml = runCatching { TrustTunnelDeepLink.decode(profile.ttConfig) }
             .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
+            .let { resolveTrustTunnelHosts(it) }
         val port = trustTunnelLocalPort
         // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.
         // No [listener.tun] → SOCKS-only. Kill switch off: our VpnService TUN owns routing, not the client.
@@ -3664,7 +3690,10 @@ class OlcboxVpnService : VpnService() {
         }
 
         addLog("Starting Trust Tunnel SOCKS on 127.0.0.1:$port")
+        // Native client logs go to slf4j (invisible here) — route them into the app log so a failed handshake is diagnosable.
+        com.adguard.trusttunnel.Logger.setCallback { level, msg -> addLog("tt-native[${level.name}] ${msg.take(400)}") }
         val client = TrustTunnelVpnClient(configToml, listener)
+        runCatching { com.adguard.trusttunnel.log.NativeLogger.defaultLogLevel = com.adguard.trusttunnel.log.NativeLoggerLevel.DEBUG }
         trustTunnelClient = client
         if (!client.start(null)) {
             trustTunnelClient = null
