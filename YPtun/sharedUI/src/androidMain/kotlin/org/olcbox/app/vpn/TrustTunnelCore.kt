@@ -17,7 +17,7 @@ import org.olcbox.app.vpn.service.OlcboxVpnState
 object TrustTunnelCore {
     /** Full client config for [ttLink]: SOCKS listener on 127.0.0.1:[port], no TUN, kill switch off. */
     suspend fun configToml(ttLink: String, port: Int): String {
-        val endpointToml = runCatching { DeepLink.decode(ttLink) }
+        val endpointToml = runCatching { DeepLink.decode(ttLink.substringBefore('#')) } // the native decoder takes the whole string as payload
             .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
             .let { resolveHosts(it) }
         // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.

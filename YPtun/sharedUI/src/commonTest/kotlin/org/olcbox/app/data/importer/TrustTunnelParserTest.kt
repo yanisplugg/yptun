@@ -39,4 +39,12 @@ class TrustTunnelParserTest {
         assertTrue(TrustTunnelParser.endpoints("tt://?!!!").isEmpty())
         assertTrue(TrustTunnelParser.endpoints("tt://").isEmpty())
     }
+
+    @Test
+    fun nameComesFromTheBlobUnlessAFragmentOverridesIt() {
+        val l = link(tlv(1, "h.example.com"), tlv(2, "203.0.113.7:443"), tlv(12, "🇷🇺Москва (TT)"))
+        assertEquals("🇷🇺Москва (TT)", TrustTunnelParser.parse(l)?.tag)
+        assertEquals("Из фрагмента", TrustTunnelParser.parse("$l#%D0%98%D0%B7%20%D1%84%D1%80%D0%B0%D0%B3%D0%BC%D0%B5%D0%BD%D1%82%D0%B0")?.tag)
+        assertEquals("Trust Tunnel", TrustTunnelParser.parse(link(tlv(1, "h.example.com")))?.tag)
+    }
 }

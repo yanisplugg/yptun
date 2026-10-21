@@ -37,7 +37,8 @@ object TrustTunnelParser {
         val afterScheme = trimmed.substring(SCHEME.length)
         val payload = afterScheme.substringBefore('#').removePrefix("?").trim()
         if (payload.isEmpty()) return null
-        val name = afterScheme.substringAfter('#', "").let(UriCodec::percentDecode).ifBlank { "Trust Tunnel" }
+        val name = afterScheme.substringAfter('#', "").let(UriCodec::percentDecode)
+            .ifBlank { name(trimmed) ?: "Trust Tunnel" }
         return ProxyProfile(
             tag = name,
             type = ProxyProfile.TYPE_TRUSTTUNNEL,
@@ -47,14 +48,16 @@ object TrustTunnelParser {
         )
     }
 
+    private const val TAG_HOSTNAME = 1
+    private const val TAG_ADDRESS = 2
+    private const val TAG_NAME = 12
+
     /**
-     * Real `host`/`port` of the endpoint(s) inside a `tt://` blob, for pings (the profile itself carries
-     * a placeholder). The blob is a TLV list — tag/length are QUIC-style varints: tag 1 = hostname,
-     * tag 2 = endpoint address `host:port` (repeated). Falls back to `hostname:443` when no address is
-     * present; empty when the link cannot be read.
+     * TLV list of a `tt://` blob (tag/length are QUIC-style varints: the top 2 bits of the first byte give the
+     * byte count), empty when the link cannot be read.
      */
     @OptIn(ExperimentalEncodingApi::class)
-    fun endpoints(link: String): List<Pair<String, Int>> {
+    private fun items(link: String): List<Pair<Int, String>> {
         val payload = link.trim().removePrefix(SCHEME).substringBefore('#').removePrefix("?").trim()
         val bytes = runCatching {
             Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL).decode(payload)
@@ -69,20 +72,31 @@ object TrustTunnelParser {
             i += len
             return v
         }
-        var hostname = ""
-        val addresses = mutableListOf<String>()
+        val out = mutableListOf<Pair<Int, String>>()
         while (i < bytes.size) {
             val tag = varint() ?: break
             val len = varint() ?: break
             if (len < 0 || i + len > bytes.size) break
-            val value = bytes.decodeToString(i, i + len)
+            // Only the text fields are read; binary ones (certificate) are skipped untouched.
+            if (tag == TAG_HOSTNAME || tag == TAG_ADDRESS || tag == TAG_NAME) out += tag to bytes.decodeToString(i, i + len)
             i += len
-            when (tag) {
-                1 -> hostname = value
-                2 -> addresses += value
-            }
         }
-        val raw = addresses.ifEmpty { listOfNotNull(hostname.takeIf { it.isNotBlank() }?.let { "$it:443" }) }
+        return out
+    }
+
+    /** Display name the panel puts into the blob (tag 12), or null when the link carries none. */
+    fun name(link: String): String? =
+        items(link).firstOrNull { it.first == TAG_NAME }?.second?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * Real `host`/`port` of the endpoint(s) inside a `tt://` blob, for pings (the profile itself carries a
+     * placeholder). Falls back to `hostname:443` when no address is present; empty when the link cannot be read.
+     */
+    fun endpoints(link: String): List<Pair<String, Int>> {
+        val all = items(link)
+        val hostname = all.firstOrNull { it.first == TAG_HOSTNAME }?.second.orEmpty()
+        val raw = all.filter { it.first == TAG_ADDRESS }.map { it.second }
+            .ifEmpty { listOfNotNull(hostname.takeIf { it.isNotBlank() }?.let { "$it:443" }) }
         return raw.mapNotNull { addr ->
             val host = addr.substringBeforeLast(':', "").removeSurrounding("[", "]")
             val port = addr.substringAfterLast(':', "").toIntOrNull()
