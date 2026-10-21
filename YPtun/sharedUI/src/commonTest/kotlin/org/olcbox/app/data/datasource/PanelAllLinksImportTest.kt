@@ -101,4 +101,17 @@ class PanelAllLinksImportTest {
         assertEquals(4, engines.count { it == EngineType.VkTurn })
         assertTrue(engines.count { it == EngineType.Standard } >= 1, "trusttunnel/amneziawg must survive: $engines")
     }
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test
+    fun trustTunnelNameInsideTheBlobBecomesTheLocationName() = runTest {
+        fun tlv(tag: Int, v: String) = v.encodeToByteArray().let { byteArrayOf(tag.toByte(), it.size.toByte()) + it }
+        val blob = tlv(1, "h.example.com") + tlv(2, "203.0.113.7:443") + tlv(12, "🇷🇺Москва (TT)")
+        val link = "tt://?" + kotlin.io.encoding.Base64.UrlSafe.encode(blob).trimEnd('=')
+        val body = links.getValue("snolc") + "\n" + link + "\n"
+        val source = FakeSource()
+        LocationsRepositoryImpl(source).importText(body)
+        val names = assertNotNull(source.stored).locations.map { it.name }
+        assertTrue("🇷🇺Москва (TT)" in names, "names: $names")
+    }
 }
