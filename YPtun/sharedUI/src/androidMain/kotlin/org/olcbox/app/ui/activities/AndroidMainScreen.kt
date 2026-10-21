@@ -500,8 +500,8 @@ fun AndroidMainScreen(
             viewModel.onCopyFullConfigClicked()
         },
         onShareLocationRequested = { config ->
-            // Share our universal yptun:// link (carries the whole inbound incl. proxy + toggles).
-            shareSheetPayload = s.locationQr to org.olcbox.app.data.share.YptunInboundCodec.compose(config)
+            // yptun:// (whole inbound incl. proxy + toggles) or the engine's own link, per the setting.
+            shareSheetPayload = s.locationQr to ConfigShareService.shareLink(config, appBehavior.shareUniversalLink)
         },
         onSaveLogsRequested = { onSaved, onError ->
             pendingLogSaveCallbacks.value = onSaved to onError

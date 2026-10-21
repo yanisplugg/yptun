@@ -44,6 +44,8 @@ object FreeturnUriParser {
         val exitProxyLink: String,
         /** Optional human comment after `$`. */
         val comment: String,
+        /** VK call link(s) from the panel (`vk=` base64url, or `vk` in the wire JSON); blank = user adds them in the app. */
+        val vkLink: String = "",
     )
 
     fun parse(uri: String): FreeturnLink? {
@@ -83,6 +85,7 @@ object FreeturnUriParser {
         val wgB64 = params["wg"]
         val exitB64 = params["vless"] ?: params["proxy"]
         val mode = params["mode"]?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        val vkLink = params["vk"]?.let { SubscriptionDecoder.decodeBase64Chunk(it) }?.trim().orEmpty()
 
         // tcp / Proxy-bonded: needs the embedded exit proxy link. No WireGuard outbound.
         if (exitB64 != null && (mode == "tcp" || wgB64 == null)) {
@@ -90,7 +93,7 @@ object FreeturnUriParser {
             if (exit.isBlank()) return null
             return FreeturnLink(
                 uri = trimmed, serverIp = serverIp, serverPort = serverPort,
-                listenPort = 0, mode = "tcp", wgOutboundJson = "", exitProxyLink = exit, comment = cm,
+                listenPort = 0, mode = "tcp", wgOutboundJson = "", exitProxyLink = exit, comment = cm, vkLink = vkLink,
             )
         }
 
@@ -100,7 +103,7 @@ object FreeturnUriParser {
         return FreeturnLink(
             uri = trimmed, serverIp = serverIp, serverPort = serverPort,
             listenPort = wg.endpointPort, mode = "udp",
-            wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = cm,
+            wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = cm, vkLink = vkLink,
         )
     }
 
@@ -119,7 +122,7 @@ object FreeturnUriParser {
         return FreeturnLink(
             uri = uri, serverIp = serverIp, serverPort = serverPort,
             listenPort = wg.endpointPort, mode = "udp",
-            wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = str("name"),
+            wgOutboundJson = wg.outboundJson, exitProxyLink = "", comment = str("name"), vkLink = str("vk"),
         )
     }
 

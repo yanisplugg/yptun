@@ -161,7 +161,13 @@ internal object YpTunCore {
             val tempFile = Files.createTempFile("yptuncore-", "-$fileName")
             tempFile.toFile().deleteOnExit()
             input.use { Files.copy(it, tempFile, StandardCopyOption.REPLACE_EXISTING) }
-            val lib = Native.load(tempFile.toAbsolutePath().toString(), YpTunCoreLib::class.java)
+            // The Go side reads every string as UTF-8; JNA's default is the system ANSI code page, which
+            // turned a Cyrillic user dir (log/cache paths) into '?' → "start logger: open …: cannot find the path".
+            val lib = Native.load(
+                tempFile.toAbsolutePath().toString(),
+                YpTunCoreLib::class.java,
+                mapOf(Library.OPTION_STRING_ENCODING to "UTF-8")
+            )
             startLogPump(lib)
             // NaïveProxy's cronet library is loaded lazily, by name, from PATH — point the core at
             // the directory we unpack the bundled natives into (see DesktopNativeAssets).
@@ -197,7 +203,7 @@ internal object YpTunCore {
     private fun takeString(p: Pointer?): String? {
         if (p == null) return null
         return try {
-            p.getString(0)
+            p.getString(0, "UTF-8")
         } finally {
             lib().YpFree(p)
         }
@@ -219,7 +225,7 @@ internal object YpTunCore {
                 }
                 if (p != null) {
                     val line = try {
-                        p.getString(0)
+                        p.getString(0, "UTF-8")
                     } finally {
                         lib.YpFree(p)
                     }

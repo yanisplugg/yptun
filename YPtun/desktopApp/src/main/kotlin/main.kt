@@ -1072,7 +1072,7 @@ private fun runApp(args: Array<String>) = application {
                         dependencies.homeViewModel.onCopyFullConfigClicked()
                     },
                     onShareLocationRequested = { config ->
-                        sharePayload = strings().locationQr to ConfigShareService.olcRtcUri(config)
+                        sharePayload = strings().locationQr to ConfigShareService.shareLink(config, appBehavior.shareUniversalLink)
                     },
                     onSaveLogsRequested = { onSaved, onError ->
                         chooseSaveFile(

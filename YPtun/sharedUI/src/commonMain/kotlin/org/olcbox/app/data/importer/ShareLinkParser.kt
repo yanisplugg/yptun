@@ -23,8 +23,11 @@ object ShareLinkParser {
             trimmed.startsWith("naive+", true) || trimmed.startsWith("naive://", true) -> parseNaive(trimmed)
             // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
             trimmed.startsWith("amneziawg://", true) -> {
-                val payload = trimmed.substring("amneziawg://".length).substringBefore('#')
-                SubscriptionDecoder.decodeBase64Chunk(payload)?.let { AmneziaWgParser.parse(it) }
+                val rest = trimmed.substring("amneziawg://".length)
+                // `#name` after the payload (the panel puts the host name there) wins over the conf's own comment.
+                val name = UriCodec.percentDecode(rest.substringAfter('#', "")).trim()
+                SubscriptionDecoder.decodeBase64Chunk(rest.substringBefore('#'))?.let { AmneziaWgParser.parse(it) }
+                    ?.let { if (name.isEmpty()) it else it.copy(tag = name) }
             }
             AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
             // tt://<base64> — AdGuard Trust Tunnel deep-link (decoded natively at connect time).

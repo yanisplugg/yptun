@@ -41,6 +41,7 @@ import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
+import org.olcbox.app.data.importer.UriCodec
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
@@ -1440,8 +1441,34 @@ class LocationsRepositoryImpl(
         // JSON panels with a "links" array) become sing-box (Standard) locations.
         parseProxyText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
-        mergeParsedBundles(linkBundles)?.let {
-            return ParsedImport(it, ImportMode.Additive)
+        mergeParsedBundles(linkBundles)?.let { merged ->
+            // Only the proxy parser carried the panel's title/traffic/expiry/announce; every other
+            // family (snolc, masterdns, freeturn, …) dropped them, so the subscription showed no name.
+            val sub = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+            // The panel's per-host description rides in `#desc:<name>=<text>` lines (both percent-encoded):
+            // plain share links have no field for it. Matched by location name.
+            val descByName = linkText.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("#desc:") }
+                .mapNotNull { it.removePrefix("#desc:").trim().split('=', limit = 2).takeIf { p -> p.size == 2 } }
+                .associate { (n, d) -> UriCodec.percentDecode(n.trim()) to UriCodec.percentDecode(d.trim()) }
+            // `#order:<name>` lines (one per link, in the panel's order): the per-family parsers above
+            // concatenate by family, so restore the panel's own order. Absent → untouched (other panels).
+            val order = linkText.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("#order:") }
+                .map { UriCodec.percentDecode(it.removePrefix("#order:").trim()) }
+                .toList()
+            val ordered = if (order.isEmpty()) merged.locations else
+                merged.locations.sortedBy { e -> order.indexOf(e.name).takeIf { it >= 0 } ?: Int.MAX_VALUE }
+            val withMeta = merged.copy(
+                locations = ordered.map { e ->
+                    val withSub = if (sub == null || e.metadata?.subscription != null) e else e.copy(metadata = sub)
+                    val desc = descByName[withSub.name]
+                    if (desc != null && withSub.description.isBlank()) withSub.copy(description = desc) else withSub
+                }
+            )
+            return ParsedImport(withMeta, ImportMode.Additive)
         }
 
         // Raw sing-box config (full config with "outbounds", a single outbound object, or an
@@ -2028,7 +2055,7 @@ class LocationsRepositoryImpl(
                 ),
                 vkturn = VkTurnConfig(
                     uri = link.uri,
-                    vkLink = "",
+                    vkLink = link.vkLink,
                     listenPort = listenPort,
                     outbound = VkTurnConfig.OUTBOUND_PROXY,
                     outboundProxyLink = link.exitProxyLink,
@@ -2047,7 +2074,7 @@ class LocationsRepositoryImpl(
                 ),
                 vkturn = VkTurnConfig(
                     uri = link.uri,
-                    vkLink = "",
+                    vkLink = link.vkLink,
                     listenPort = link.listenPort,
                 ),
             ).normalized()

@@ -7,6 +7,19 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 
 object ConfigShareService {
+    /**
+     * The link the "Share" button shows. [universal] = yptun:// (carries the whole inbound); otherwise the
+     * engine's own protocol link. Engines with no link of their own (MasterDNS/OpenFlux/Snolc) fall back
+     * to yptun:// — [olcRtcUri] would emit a bogus olcrtc:// link for them.
+     */
+    fun shareLink(config: LocationConfig, universal: Boolean): String {
+        val hasOwnLink = when (config.engine) {
+            EngineType.MasterDns, EngineType.OpenFlux, EngineType.Snolc -> false
+            else -> true
+        }
+        return if (universal || !hasOwnLink) YptunInboundCodec.compose(config) else olcRtcUri(config)
+    }
+
     fun olcRtcUri(entry: LocationEntry): String = olcRtcUri(entry.location)
 
     fun olcRtcUri(config: LocationConfig): String {

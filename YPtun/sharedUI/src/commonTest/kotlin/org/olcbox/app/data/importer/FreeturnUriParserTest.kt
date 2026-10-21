@@ -32,6 +32,16 @@ class FreeturnUriParserTest {
 
     @OptIn(ExperimentalEncodingApi::class)
     @Test
+    fun readsVkCallLinksFromThePanelLink() {
+        val calls = "https://vk.com/call/join/AAA\nhttps://vk.com/call/join/BBB"
+        val vk = Base64.UrlSafe.encode(calls.encodeToByteArray()).trimEnd('=')
+        val withVk = link().replace("&wg=", "&vk=$vk&wg=")
+        assertEquals(calls, FreeturnUriParser.parse(withVk)!!.vkLink)
+        assertEquals("", FreeturnUriParser.parse(link())!!.vkLink)
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
     fun parsesWireFormatWithCid() {
         val esc = wgConf.replace("\n", "\\n")
         val json = """{"v":1,"provider":"vk","peer":"203.0.113.7:56000","cid":"abc123","name":"W","wg":"$esc"}"""
