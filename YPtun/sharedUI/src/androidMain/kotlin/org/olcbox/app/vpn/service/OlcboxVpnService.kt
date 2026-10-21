@@ -3640,8 +3640,11 @@ class OlcboxVpnService : VpnService() {
         val port = trustTunnelLocalPort
         // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.
         // No [listener.tun] → SOCKS-only. Kill switch off: our VpnService TUN owns routing, not the client.
+        // vpn_mode is REQUIRED by TrustTunnelConfig::build_config (missing → createNative returns 0 →
+        // "client failed to start"); DeepLink.decode emits only [endpoint], so it must be added here.
         val configToml = buildString {
             append("loglevel = \"info\"\n")
+            append("vpn_mode = \"general\"\n")
             append("killswitch_enabled = false\n\n")
             append(endpointToml.trim()).append("\n\n")
             append("[listener.socks]\n")
