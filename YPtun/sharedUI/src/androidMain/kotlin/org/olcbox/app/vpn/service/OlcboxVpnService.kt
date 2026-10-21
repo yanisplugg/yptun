@@ -57,8 +57,6 @@ import mdnsmobile.Mdnsmobile
 import mdnsmobile.MasterDnsClient
 import mdnsmobile.SocketProtector as MasterDnsSocketProtector
 import com.adguard.trusttunnel.DeepLink as TrustTunnelDeepLink
-import com.adguard.trusttunnel.VpnClient as TrustTunnelVpnClient
-import com.adguard.trusttunnel.VpnClientListener as TrustTunnelListener
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.Runtime as OlcrtcRuntime
@@ -232,7 +230,7 @@ class OlcboxVpnService : VpnService() {
     /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
     private var snolcProxyActive: Boolean = false
     /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
-    private var trustTunnelClient: TrustTunnelVpnClient? = null
+    private var trustTunnelProcess: Process? = null
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -3531,9 +3529,7 @@ class OlcboxVpnService : VpnService() {
         snolcProcess = null
         snolcProxyActive = false
         runCatching { Awg.stop() }
-        runCatching { trustTunnelClient?.stop() }
-        runCatching { trustTunnelClient?.close() }
-        trustTunnelClient = null
+        stopTrustTunnelProcess()
         val provider = lastMobileProvider
         val wasRunning = mobileRuntime.isRunning()
         // stop(0) means Runtime's own 5 s default; on timeout it stays "stopping" and every
@@ -3626,14 +3622,14 @@ class OlcboxVpnService : VpnService() {
 
     /**
      * If [profile] is Trust Tunnel, decode its `tt://` deep-link into a `[endpoint]` TOML (native
-     * DeepLink.decode), start the AdGuard client in SOCKS-only mode (VpnClient.start(null) — no TUN),
-     * and return a SOCKS proxy pointing at its local listener, so sing-box routes through the Trust
-     * Tunnel like it does through AmneziaWG. Otherwise returns [profile] unchanged.
+     * DeepLink.decode), run the official AdGuard CLI as a SOCKS-only subprocess (no TUN), and return a
+     * SOCKS proxy pointing at its local listener, so sing-box routes through the Trust Tunnel like it
+     * does through AmneziaWG. Otherwise returns [profile] unchanged.
      */
     /**
-     * The native client resolves hostname addresses itself (getaddrinfo on a throwaway thread) and on Android that
-     * fails instantly ("state=1 → state=0"). Resolve here, where the process is already bound to the Wi-Fi network,
-     * and hand the client plain ip:port; `hostname` stays untouched, so SNI and certificate checks are unchanged.
+     * The static musl CLI resolves hostname addresses via /etc/resolv.conf, which Android does not have. Resolve
+     * here, where the process is already bound to the Wi-Fi network, and hand the client plain ip:port;
+     * `hostname` stays untouched, so SNI and certificate checks are unchanged.
      */
     private suspend fun resolveTrustTunnelHosts(toml: String): String = withContext(Dispatchers.IO) {
         Regex("""(?m)^(\s*addresses\s*=\s*)\[(.*)]\s*$""").replace(toml) { m ->
@@ -3655,10 +3651,19 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    private fun stopTrustTunnelProcess() {
+        trustTunnelProcess?.let { p ->
+            runCatching { p.destroy() }
+            if (runCatching { !p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(true)) {
+                runCatching { p.destroyForcibly() }
+            }
+        }
+        trustTunnelProcess = null
+    }
+
     private suspend fun prepareTrustTunnelProxy(profile: ProxyProfile): ProxyProfile {
         if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
-        runCatching { trustTunnelClient?.stop(); trustTunnelClient?.close() }
-        trustTunnelClient = null
+        stopTrustTunnelProcess()
 
         val endpointToml = runCatching { TrustTunnelDeepLink.decode(profile.ttConfig) }
             .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
@@ -3666,8 +3671,8 @@ class OlcboxVpnService : VpnService() {
         val port = trustTunnelLocalPort
         // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.
         // No [listener.tun] → SOCKS-only. Kill switch off: our VpnService TUN owns routing, not the client.
-        // vpn_mode is REQUIRED by TrustTunnelConfig::build_config (missing → createNative returns 0 →
-        // "client failed to start"); DeepLink.decode emits only [endpoint], so it must be added here.
+        // vpn_mode is REQUIRED by TrustTunnelConfig::build_config (missing → the client refuses to start);
+        // DeepLink.decode emits only [endpoint], so it must be added here.
         val configToml = buildString {
             append("loglevel = \"info\"\n")
             append("vpn_mode = \"general\"\n")
@@ -3677,30 +3682,26 @@ class OlcboxVpnService : VpnService() {
             append("address = \"127.0.0.1:").append(port).append("\"\n")
         }
 
-        val listener = object : TrustTunnelListener {
-            override fun protectSocket(socket: Int): Boolean {
-                if (connectionMode.isTunless) return true
-                return this@OlcboxVpnService.protect(socket)
-            }
-            // The endpoint certificate is embedded in the tt:// blob and pinned by the native client;
-            // this callback is the app-side hook — accept (the user configured this exact endpoint).
-            override fun verifyCertificate(certificate: ByteArray?, rawChain: List<ByteArray?>?): Boolean = true
-            override fun onStateChanged(state: Int) { addLog("trusttunnel: state=$state") }
-            override fun onConnectionInfo(info: String) { addLog("trusttunnel: $info") }
-        }
+        // SOCKS-only is impossible in-process: the AAR's JNI always passes a TUN fd and the client then
+        // refuses a SOCKS listener ("can only be created with AutoSetup"). So run the official CLI as a
+        // SUBPROCESS from nativeLibraryDir like snolc — same UID, so the app's own exclusion from the VPN
+        // keeps its sockets off the TUN (no protect() needed). The pinned endpoint certificate is in the config.
+        val exe = java.io.File(applicationInfo.nativeLibraryDir, "libtrusttunnel_client.so")
+        if (!exe.canExecute()) throw IllegalStateException("Trust Tunnel core is not included in this build for this CPU")
+        val dir = java.io.File(filesDir, "trusttunnel").apply { mkdirs() }
+        val configFile = java.io.File(dir, "client.toml")
+        configFile.writeText(configToml)
 
         addLog("Starting Trust Tunnel SOCKS on 127.0.0.1:$port")
-        // Native client logs go to slf4j (invisible here) — route them into the app log so a failed handshake is diagnosable.
-        com.adguard.trusttunnel.Logger.setCallback { level, msg -> addLog("tt-native[${level.name}] ${msg.take(400)}") }
-        val client = TrustTunnelVpnClient(configToml, listener)
-        runCatching { com.adguard.trusttunnel.log.NativeLogger.defaultLogLevel = com.adguard.trusttunnel.log.NativeLoggerLevel.DEBUG }
-        trustTunnelClient = client
-        if (!client.start(null)) {
-            trustTunnelClient = null
-            throw IllegalStateException("Trust Tunnel client failed to start")
+        val process = ProcessBuilder(exe.absolutePath, "-c", configFile.absolutePath)
+            .directory(dir).redirectErrorStream(true).start()
+        trustTunnelProcess = process
+        kotlin.concurrent.thread(name = "trusttunnel-log", isDaemon = true) {
+            runCatching { process.inputStream.bufferedReader().forEachLine { addLog("trusttunnel: ${it.take(300)}") } }
         }
         if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("Trust Tunnel SOCKS port $port did not open")
+            val exit = if (process.isAlive) "still starting" else "exited with ${process.exitValue()}"
+            throw IllegalStateException("Trust Tunnel SOCKS port $port did not open ($exit)")
         }
         val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
             "\"server_port\":$port,\"version\":\"5\"}"
