@@ -20,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
+import org.olcbox.app.vpn.TrustTunnelCore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -56,7 +57,6 @@ import wdttmobile.ConfigSink as WdttConfigSink
 import mdnsmobile.Mdnsmobile
 import mdnsmobile.MasterDnsClient
 import mdnsmobile.SocketProtector as MasterDnsSocketProtector
-import com.adguard.trusttunnel.DeepLink as TrustTunnelDeepLink
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.Runtime as OlcrtcRuntime
@@ -3626,38 +3626,8 @@ class OlcboxVpnService : VpnService() {
      * SOCKS proxy pointing at its local listener, so sing-box routes through the Trust Tunnel like it
      * does through AmneziaWG. Otherwise returns [profile] unchanged.
      */
-    /**
-     * The static musl CLI resolves hostname addresses via /etc/resolv.conf, which Android does not have. Resolve
-     * here, where the process is already bound to the Wi-Fi network, and hand the client plain ip:port;
-     * `hostname` stays untouched, so SNI and certificate checks are unchanged.
-     */
-    private suspend fun resolveTrustTunnelHosts(toml: String): String = withContext(Dispatchers.IO) {
-        Regex("""(?m)^(\s*addresses\s*=\s*)\[(.*)]\s*$""").replace(toml) { m ->
-            val items = Regex(""""([^"]+)"""").findAll(m.groupValues[2]).flatMap { a ->
-                val addr = a.groupValues[1]
-                val host = addr.substringBeforeLast(':')
-                val port = addr.substringAfterLast(':')
-                if (host.startsWith("[") || host.all { it.isDigit() || it == '.' } || port.isEmpty()) {
-                    sequenceOf(addr)
-                } else {
-                    val ips = runCatching { java.net.InetAddress.getAllByName(host).toList() }.getOrDefault(emptyList())
-                        .sortedBy { it !is java.net.Inet4Address }
-                        .map { ip -> if (ip is java.net.Inet6Address) "[${ip.hostAddress}]:$port" else "${ip.hostAddress}:$port" }
-                    addLog("trusttunnel: resolved $host -> ${ips.joinToString()}")
-                    if (ips.isEmpty()) sequenceOf(addr) else ips.asSequence()
-                }
-            }.toList()
-            m.groupValues[1] + items.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
-        }
-    }
-
     private fun stopTrustTunnelProcess() {
-        trustTunnelProcess?.let { p ->
-            runCatching { p.destroy() }
-            if (runCatching { !p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(true)) {
-                runCatching { p.destroyForcibly() }
-            }
-        }
+        TrustTunnelCore.stop(trustTunnelProcess)
         trustTunnelProcess = null
     }
 
@@ -3665,36 +3635,11 @@ class OlcboxVpnService : VpnService() {
         if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
         stopTrustTunnelProcess()
 
-        val endpointToml = runCatching { TrustTunnelDeepLink.decode(profile.ttConfig) }
-            .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
-            .let { resolveTrustTunnelHosts(it) }
         val port = trustTunnelLocalPort
-        // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.
-        // No [listener.tun] → SOCKS-only. Kill switch off: our VpnService TUN owns routing, not the client.
-        // vpn_mode is REQUIRED by TrustTunnelConfig::build_config (missing → the client refuses to start);
-        // DeepLink.decode emits only [endpoint], so it must be added here.
-        val configToml = buildString {
-            append("loglevel = \"info\"\n")
-            append("vpn_mode = \"general\"\n")
-            append("killswitch_enabled = false\n\n")
-            append(endpointToml.trim()).append("\n\n")
-            append("[listener.socks]\n")
-            append("address = \"127.0.0.1:").append(port).append("\"\n")
-        }
-
-        // SOCKS-only is impossible in-process: the AAR's JNI always passes a TUN fd and the client then
-        // refuses a SOCKS listener ("can only be created with AutoSetup"). So run the official CLI as a
-        // SUBPROCESS from nativeLibraryDir like snolc — same UID, so the app's own exclusion from the VPN
-        // keeps its sockets off the TUN (no protect() needed). The pinned endpoint certificate is in the config.
-        val exe = java.io.File(applicationInfo.nativeLibraryDir, "libtrusttunnel_client.so")
-        if (!exe.canExecute()) throw IllegalStateException("Trust Tunnel core is not included in this build for this CPU")
-        val dir = java.io.File(filesDir, "trusttunnel").apply { mkdirs() }
-        val configFile = java.io.File(dir, "client.toml")
-        configFile.writeText(configToml)
+        val configToml = TrustTunnelCore.configToml(profile.ttConfig, port)
 
         addLog("Starting Trust Tunnel SOCKS on 127.0.0.1:$port")
-        val process = ProcessBuilder(exe.absolutePath, "-c", configFile.absolutePath)
-            .directory(dir).redirectErrorStream(true).start()
+        val process = TrustTunnelCore.start(this, "trusttunnel", configToml)
         trustTunnelProcess = process
         kotlin.concurrent.thread(name = "trusttunnel-log", isDaemon = true) {
             runCatching { process.inputStream.bufferedReader().forEachLine { addLog("trusttunnel: ${it.take(300)}") } }

@@ -1,5 +1,7 @@
 package org.olcbox.app.data.importer
 
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import org.olcbox.app.data.model.ProxyProfile
 
 /**
@@ -34,5 +36,48 @@ object TrustTunnelParser {
             serverPort = 0,
             ttConfig = trimmed,
         )
+    }
+
+    /**
+     * Real `host`/`port` of the endpoint(s) inside a `tt://` blob, for pings (the profile itself carries
+     * a placeholder). The blob is a TLV list — tag/length are QUIC-style varints: tag 1 = hostname,
+     * tag 2 = endpoint address `host:port` (repeated). Falls back to `hostname:443` when no address is
+     * present; empty when the link cannot be read.
+     */
+    @OptIn(ExperimentalEncodingApi::class)
+    fun endpoints(link: String): List<Pair<String, Int>> {
+        val payload = link.trim().removePrefix(SCHEME).substringBefore('#').removePrefix("?").trim()
+        val bytes = runCatching {
+            Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL).decode(payload)
+        }.getOrNull() ?: return emptyList()
+        var i = 0
+        fun varint(): Int? {
+            if (i >= bytes.size) return null
+            val len = 1 shl ((bytes[i].toInt() and 0xFF) ushr 6)
+            if (i + len > bytes.size) return null
+            var v = (bytes[i].toInt() and 0x3F)
+            for (k in 1 until len) v = (v shl 8) or (bytes[i + k].toInt() and 0xFF)
+            i += len
+            return v
+        }
+        var hostname = ""
+        val addresses = mutableListOf<String>()
+        while (i < bytes.size) {
+            val tag = varint() ?: break
+            val len = varint() ?: break
+            if (len < 0 || i + len > bytes.size) break
+            val value = bytes.decodeToString(i, i + len)
+            i += len
+            when (tag) {
+                1 -> hostname = value
+                2 -> addresses += value
+            }
+        }
+        val raw = addresses.ifEmpty { listOfNotNull(hostname.takeIf { it.isNotBlank() }?.let { "$it:443" }) }
+        return raw.mapNotNull { addr ->
+            val host = addr.substringBeforeLast(':', "").removeSurrounding("[", "]")
+            val port = addr.substringAfterLast(':', "").toIntOrNull()
+            if (host.isBlank() || port == null || port !in 1..65535) null else host to port
+        }
     }
 }
