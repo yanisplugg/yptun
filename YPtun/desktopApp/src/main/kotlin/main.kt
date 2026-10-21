@@ -122,6 +122,7 @@ import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.JvmConfigImporter
 import org.olcbox.app.data.share.ConfigShareService
 import org.olcbox.app.data.share.SubscriptionShareItem
+import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.ui.OlcboxAppContent
 import org.olcbox.app.ui.activities.AppSettingsSheet
 import org.olcbox.app.vpn.AndroidSocksProxySettings
@@ -1072,7 +1073,8 @@ private fun runApp(args: Array<String>) = application {
                         dependencies.homeViewModel.onCopyFullConfigClicked()
                     },
                     onShareLocationRequested = { config ->
-                        sharePayload = strings().locationQr to ConfigShareService.olcRtcUri(config)
+                        // Same universal yptun:// link as Android/iOS: olcRtcUri() knows only olcRTC/VK-TURN/proxy engines.
+                        sharePayload = strings().locationQr to YptunInboundCodec.compose(config)
                     },
                     onSaveLogsRequested = { onSaved, onError ->
                         chooseSaveFile(
