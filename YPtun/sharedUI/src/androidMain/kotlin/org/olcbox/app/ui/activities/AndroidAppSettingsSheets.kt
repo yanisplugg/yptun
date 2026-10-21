@@ -3879,6 +3879,12 @@ private fun ApplicationBehaviorContent(
         ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
 
         RoutingToggleRow(
+            title = s.shareUniversalLinkTitle,
+            subtitle = s.shareUniversalLinkSubtitle,
+            checked = settings.shareUniversalLink
+        ) { onChanged(settings.copy(shareUniversalLink = it)) }
+
+        RoutingToggleRow(
             title = s.allowConfigEditingTitle,
             subtitle = s.allowConfigEditingSubtitle,
             checked = settings.allowConfigEditing

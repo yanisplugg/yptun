@@ -265,6 +265,8 @@ data class AppBehaviorSettings(
      * S1..S4, H1..H4, I1..I5, ...) as fields. Off by default — a wrong value silently breaks the tunnel.
      */
     val allowConfigEditing: Boolean = false,
+    /** Location share link: true = universal yptun:// (whole inbound), false = the engine's own protocol link. */
+    val shareUniversalLink: Boolean = true,
 ) {
     /**
      * A subscription's group key (`name|url`, also its folder member key) changed because its URL did: carry the

@@ -68,4 +68,13 @@ class YptunInboundCodecTest {
         assertNull(YptunInboundCodec.parse("https://example.com/sub"))
         assertNull(YptunInboundCodec.parse("yptun://inbound?v=1&d=!!!notbase64!!!"))
     }
+
+    @Test
+    fun shareLinkFollowsTheToggle() {
+        assertTrue(ConfigShareService.shareLink(sample, universal = true).startsWith(YptunInboundCodec.PREFIX))
+        assertTrue(ConfigShareService.shareLink(sample, universal = false).startsWith("vless://"))
+        // No link of its own → yptun://, never a bogus olcrtc://.
+        val flux = sample.copy(engine = EngineType.OpenFlux)
+        assertTrue(ConfigShareService.shareLink(flux, universal = false).startsWith(YptunInboundCodec.PREFIX))
+    }
 }
