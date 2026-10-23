@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-lang="en" dir="ltr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Support & Help Center - YPtun</title>
+    <title>Support &amp; Help Center - YPtun</title>
     <style>
         :root {
             --bg: #ffffff;
@@ -198,27 +198,92 @@
         footer a:hover {
             color: var(--text-main);
         }
+            /* language switching: only the block of the active language is shown (English without JS) */
+        html[data-lang="en"] [data-l]:not([data-l="en"]),
+        html[data-lang="ru"] [data-l]:not([data-l="ru"]),
+        html[data-lang="zh"] [data-l]:not([data-l="zh"]),
+        html[data-lang="fa"] [data-l]:not([data-l="fa"]) { display: none !important; }
+
+        .nav-right { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: flex-end; }
+        .lang-switch { display: flex; gap: 4px; }
+        .lang-switch button {
+            font: inherit; font-size: 0.8rem; line-height: 1;
+            padding: 6px 9px; border-radius: 8px; cursor: pointer;
+            color: var(--text-secondary); background: transparent;
+            border: 1px solid var(--surface-border);
+        }
+        .lang-switch button:hover { color: var(--text-main); }
+        html[data-lang="en"] .lang-switch [data-set="en"],
+        html[data-lang="ru"] .lang-switch [data-set="ru"],
+        html[data-lang="zh"] .lang-switch [data-set="zh"],
+        html[data-lang="fa"] .lang-switch [data-set="fa"] {
+            color: var(--text-main); background: var(--surface); border-color: var(--text-muted);
+        }
+
+        html[dir="rtl"] ul { margin: 12px 20px 18px 0; }
+        @media (max-width: 640px) {
+            .nav-container { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .nav-right { justify-content: flex-start; }
+        }
     </style>
+<script>
+(function () {
+    var L = ["en", "ru", "zh", "fa"], T = {"en": "Support & Help Center - YPtun", "ru": "Помощь и поддержка - YPtun", "zh": "帮助与支持 - YPtun", "fa": "راهنما و پشتیبانی - YPtun"};
+    var CODE = { en: "en", ru: "ru", zh: "zh-CN", fa: "fa" };
+    function fromBrowser() {
+        var n = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || "en"];
+        for (var i = 0; i < n.length; i++) {
+            var c = String(n[i]).toLowerCase().split("-")[0];
+            if (c === "prs") c = "fa";
+            if (L.indexOf(c) > -1) return c;
+        }
+        return "en";
+    }
+    function pick() {
+        try { var q = new URLSearchParams(location.search).get("lang"); if (q && L.indexOf(q) > -1) return q; } catch (e) {}
+        try { var s = localStorage.getItem("lang"); if (s && L.indexOf(s) > -1) return s; } catch (e) {}
+        return fromBrowser();
+    }
+    function apply(l) {
+        var h = document.documentElement;
+        h.setAttribute("data-lang", l);
+        h.setAttribute("lang", CODE[l]);
+        h.setAttribute("dir", l === "fa" ? "rtl" : "ltr");
+        document.title = T[l];
+    }
+    apply(pick());
+    document.addEventListener("DOMContentLoaded", function () {
+        var b = document.querySelectorAll(".lang-switch [data-set]");
+        for (var i = 0; i < b.length; i++) {
+            b[i].addEventListener("click", function () {
+                var l = this.getAttribute("data-set");
+                apply(l);
+                try { localStorage.setItem("lang", l); } catch (e) {}
+            });
+        }
+    });
+})();
+</script>
 </head>
 <body>
-
 <header>
     <div class="nav-container">
-        <a href="index.html" class="logo">
-            YPtun
-        </a>
+        <a href="index.html" class="logo">YPtun</a>
+        <div class="nav-right">
         <nav class="nav-links">
-            <a href="index.html">Home</a>
-            <a href="terms.html">Terms</a>
-            <a href="privacy.html">Privacy</a>
-            <a href="support.html" class="active">Support</a>
+            <a href="index.html"><span data-l="en">Home</span><span data-l="ru">Главная</span><span data-l="zh">首页</span><span data-l="fa">خانه</span></a>
+            <a href="terms.html"><span data-l="en">Terms</span><span data-l="ru">Условия</span><span data-l="zh">条款</span><span data-l="fa">شرایط</span></a>
+            <a href="privacy.html"><span data-l="en">Privacy</span><span data-l="ru">Конфиденциальность</span><span data-l="zh">隐私</span><span data-l="fa">حریم خصوصی</span></a>
+            <a href="support.html" class="active"><span data-l="en">Support</span><span data-l="ru">Поддержка</span><span data-l="zh">支持</span><span data-l="fa">پشتیبانی</span></a>
         </nav>
+        <div class="lang-switch"><button type="button" data-set="en">EN</button><button type="button" data-set="ru">RU</button><button type="button" data-set="zh">中文</button><button type="button" data-set="fa">فارسی</button></div>
+        </div>
     </div>
 </header>
-
 <main>
+<div data-l="en">
     <div class="support-header">
-        <h1>Help & Support</h1>
+        <h1>Help &amp; Support</h1>
         <p>Get assistance with configuration, troubleshooting, or general questions about YPtun.</p>
     </div>
 
@@ -233,18 +298,23 @@
     <h2 class="section-title">Frequently Asked Questions</h2>
 
     <div class="faq-item">
+        <h3>What is YPtun, and does it provide servers?</h3>
+        <p>YPtun is free, open-source client software. It does not provide servers, subscriptions or internet access. You add the servers and subscriptions you want to use. See the Terms of Use for details.</p>
+    </div>
+
+    <div class="faq-item">
         <h3>How do I import a configuration or subscription?</h3>
         <p>Tap the "+" button in the top app bar on the main screen. You can scan a QR code from your camera or paste a subscription URL / share link (supporting standard formats including VLESS, WireGuard, and compatible configs).</p>
     </div>
 
     <div class="faq-item">
         <h3>Why does the app request VPN permissions?</h3>
-        <p>YPtun utilizes Apple's official NetworkExtension framework to configure a local packet tunnel on your device. This allows your network traffic to be routed through the server profiles you configure.</p>
+        <p>YPtun uses the system VPN interface (Android VpnService, Apple's NetworkExtension, or a virtual network adapter on desktop) to create a local tunnel on your device. This allows your network traffic to be routed through the server profiles you configure. The permission only lets the app create the tunnel. It does not give the Developers access to your traffic.</p>
     </div>
 
     <div class="faq-item">
         <h3>Does YPtun collect my browsing history or personal data?</h3>
-        <p>No. YPtun is designed strictly under a zero-logs policy. All configurations, keys, and settings are stored locally on your device in secure storage (iOS Keychain). We do not operate tracking servers or log user activity.</p>
+        <p>The Developers do not collect it: there are no accounts, no analytics and no server that receives your activity. Configurations, keys and settings stay on your device. The app does make some network requests, for example to your subscription providers, to GitHub for updates, and to optional services, all described in the Privacy Policy. The servers you connect to can see your traffic according to their own rules.</p>
     </div>
 
     <div class="faq-item">
@@ -256,11 +326,148 @@
         <h3>What should I do if a server fails to connect?</h3>
         <p>Verify that the server endpoint credentials are active and have not expired. You can use the built-in ping diagnostic button next to any server to test connectivity and response latency before connecting.</p>
     </div>
+</div>
+<div data-l="ru">
+    <div class="support-header">
+        <h1>Помощь и поддержка</h1>
+        <p>Помощь с настройкой, решением проблем и ответы на общие вопросы о YPtun.</p>
+    </div>
+
+    <div class="contact-card">
+        <h2>Связь с разработчиком</h2>
+        <p>Столкнулись с проблемой, нашли ошибку или есть вопросы о приложении? Напишите напрямую на почту.</p>
+        <a href="mailto:yptunn@gmail.com" class="btn-primary">
+            Написать в поддержку &bull; yptunn@gmail.com
+        </a>
+    </div>
+
+    <h2 class="section-title">Частые вопросы</h2>
+
+    <div class="faq-item">
+        <h3>Что такое YPtun и предоставляет ли он серверы?</h3>
+        <p>YPtun - бесплатный клиент с открытым исходным кодом. Он не предоставляет серверы, подписки или доступ в интернет. Серверы и подписки, которыми вы хотите пользоваться, добавляете вы сами. Подробности в Условиях использования.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Как импортировать конфигурацию или подписку?</h3>
+        <p>Нажмите кнопку «+» в верхней панели главного экрана. Можно отсканировать QR-код камерой или вставить ссылку на подписку или ссылку-приглашение (поддерживаются стандартные форматы, включая VLESS, WireGuard и совместимые конфигурации).</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Зачем приложению разрешение на VPN?</h3>
+        <p>YPtun использует системный VPN-интерфейс (VpnService в Android, NetworkExtension от Apple или виртуальный сетевой адаптер на компьютере), чтобы создать локальный туннель на вашем устройстве. Это позволяет направлять сетевой трафик через профили серверов, которые вы настроили. Разрешение лишь позволяет приложению создать туннель. Оно не даёт Разработчикам доступа к вашему трафику.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Собирает ли YPtun историю просмотров или персональные данные?</h3>
+        <p>Разработчики их не собирают: нет учётных записей, аналитики и сервера, который получал бы вашу активность. Конфигурации, ключи и настройки остаются на вашем устройстве. Приложение делает некоторые сетевые запросы, например к вашим провайдерам подписок, к GitHub за обновлениями и к необязательным сервисам, и все они описаны в Политике конфиденциальности. Серверы, к которым вы подключаетесь, видят ваш трафик по своим правилам.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Поддерживает ли приложение Пункт управления и виджеты iOS 18?</h3>
+        <p>Да. В YPtun есть переключатели в Пункте управления, виджеты экрана блокировки и индикаторы Live Activity в Dynamic Island для отображения состояния подключения в реальном времени.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>Что делать, если сервер не подключается?</h3>
+        <p>Проверьте, что учётные данные сервера действительны и не истекли. Рядом с любым сервером есть встроенная кнопка проверки пинга, которой можно проверить доступность и задержку перед подключением.</p>
+    </div>
+</div>
+<div data-l="zh">
+    <div class="support-header">
+        <h1>帮助与支持</h1>
+        <p>获取有关配置、故障排除或 YPtun 常见问题的帮助。</p>
+    </div>
+
+    <div class="contact-card">
+        <h2>联系开发者</h2>
+        <p>遇到问题、发现错误，或对应用有疑问？请直接发送电子邮件。</p>
+        <a href="mailto:yptunn@gmail.com" class="btn-primary">
+            联系支持 &bull; yptunn@gmail.com
+        </a>
+    </div>
+
+    <h2 class="section-title">常见问题</h2>
+
+    <div class="faq-item">
+        <h3>YPtun 是什么？它提供服务器吗？</h3>
+        <p>YPtun 是免费、开源的客户端软件。它不提供服务器、订阅或互联网接入。您需要自行添加想要使用的服务器和订阅。详情见使用条款。</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>如何导入配置或订阅？</h3>
+        <p>点击主界面顶部栏中的“+”按钮。您可以用相机扫描二维码，或粘贴订阅链接 / 分享链接（支持标准格式，包括 VLESS、WireGuard 及兼容配置）。</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>为什么应用要求 VPN 权限？</h3>
+        <p>YPtun 使用系统的 VPN 接口（Android 的 VpnService、Apple 的 NetworkExtension，或桌面端的虚拟网卡）在您的设备上创建本地隧道，使您的网络流量可以通过您配置的服务器配置文件转发。该权限只允许应用创建隧道，不会让开发者获得访问您流量的权限。</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>YPtun 会收集我的浏览记录或个人数据吗？</h3>
+        <p>开发者不会收集：没有账户、没有分析，也没有接收您活动的服务器。配置、密钥和设置保留在您的设备上。应用确实会发出一些网络请求，例如发往您的订阅提供方、用于检查更新的 GitHub，以及可选服务，这些都已在隐私政策中说明。您所连接的服务器会依其自身规则看到您的流量。</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>应用是否支持 iOS 18 控制中心和小组件？</h3>
+        <p>支持。YPtun 提供原生控制中心开关、锁屏小组件，以及灵动岛中的实时活动状态指示器，用于实时显示连接状态。</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>服务器连接失败怎么办？</h3>
+        <p>请确认服务器的凭据仍然有效且未过期。每个服务器旁都有内置的 ping 诊断按钮，可在连接前测试连通性和响应延迟。</p>
+    </div>
+</div>
+<div data-l="fa">
+    <div class="support-header">
+        <h1>راهنما و پشتیبانی</h1>
+        <p>برای پیکربندی، رفع اشکال یا پرسش‌های عمومی درباره‌ی YPtun کمک بگیرید.</p>
+    </div>
+
+    <div class="contact-card">
+        <h2>ارتباط مستقیم با توسعه‌دهنده</h2>
+        <p>مشکل، گزارش خطا یا پرسشی درباره‌ی برنامه دارید؟ مستقیماً با ایمیل پیام بدهید.</p>
+        <a href="mailto:yptunn@gmail.com" class="btn-primary">
+            تماس با پشتیبانی &bull; yptunn@gmail.com
+        </a>
+    </div>
+
+    <h2 class="section-title">پرسش‌های متداول</h2>
+
+    <div class="faq-item">
+        <h3>YPtun چیست و آیا سرور ارائه می‌دهد؟</h3>
+        <p>YPtun نرم‌افزار کلاینت رایگان و متن‌باز است. سرور، اشتراک یا دسترسی به اینترنت ارائه نمی‌دهد. سرورها و اشتراک‌هایی را که می‌خواهید استفاده کنید خودتان اضافه می‌کنید. برای جزئیات، شرایط استفاده را ببینید.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>چگونه پیکربندی یا اشتراک را وارد کنم؟</h3>
+        <p>دکمه‌ی «+» را در نوار بالای صفحه‌ی اصلی بزنید. می‌توانید با دوربین کد QR را اسکن کنید یا نشانی اشتراک / پیوند اشتراک‌گذاری را جای‌گذاری کنید (قالب‌های استاندارد از جمله VLESS، WireGuard و پیکربندی‌های سازگار پشتیبانی می‌شوند).</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>چرا برنامه مجوز VPN می‌خواهد؟</h3>
+        <p>YPtun از رابط VPN سیستم (VpnService در اندروید، NetworkExtension اپل یا کارت شبکه‌ی مجازی در رایانه) برای ساخت یک تونل محلی روی دستگاه شما استفاده می‌کند. این کار اجازه می‌دهد ترافیک شبکه‌ی شما از طریق پروفایل‌های سروری که پیکربندی کرده‌اید عبور کند. این مجوز فقط به برنامه اجازه‌ی ساخت تونل می‌دهد و دسترسی به ترافیک شما را به توسعه‌دهندگان نمی‌دهد.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>آیا YPtun تاریخچه‌ی مرور یا داده‌ی شخصی مرا جمع می‌کند؟</h3>
+        <p>توسعه‌دهندگان جمع نمی‌کنند: حساب کاربری، تحلیل و سروری که فعالیت شما را دریافت کند وجود ندارد. پیکربندی‌ها، کلیدها و تنظیمات روی دستگاه شما می‌ماند. برنامه برخی درخواست‌های شبکه‌ای می‌فرستد، برای نمونه به ارائه‌دهندگان اشتراک شما، به گیت‌هاب برای به‌روزرسانی و به خدمات اختیاری، که همه در سیاست حریم خصوصی شرح داده شده است. سرورهایی که به آن‌ها وصل می‌شوید ترافیک شما را طبق قواعد خودشان می‌بینند.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>آیا برنامه از مرکز کنترل و ویجت‌های iOS 18 پشتیبانی می‌کند؟</h3>
+        <p>بله. YPtun کلیدهای بومی مرکز کنترل، ویجت‌های صفحه‌ی قفل و نشانگرهای وضعیت Live Activity در Dynamic Island را برای نمایش لحظه‌ای وضعیت اتصال دارد.</p>
+    </div>
+
+    <div class="faq-item">
+        <h3>اگر سروری وصل نشد چه کنم؟</h3>
+        <p>بررسی کنید که اعتبارنامه‌های سرور فعال باشند و منقضی نشده باشند. کنار هر سرور دکمه‌ی عیب‌یابی پینگ داخلی هست که می‌توانید پیش از اتصال با آن اتصال‌پذیری و تأخیر پاسخ را آزمایش کنید.</p>
+    </div>
+</div>
 </main>
-
 <footer>
-    <p>&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Use</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></p>
+    <p><span data-l="en">&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Use</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></span><span data-l="ru">&copy; 2026 YPtun. Все права защищены. &bull; <a href="index.html">Главная</a> &bull; <a href="terms.html">Условия использования</a> &bull; <a href="privacy.html">Политика конфиденциальности</a> &bull; <a href="support.html">Поддержка</a></span><span data-l="zh">&copy; 2026 YPtun. 保留所有权利。 &bull; <a href="index.html">首页</a> &bull; <a href="terms.html">使用条款</a> &bull; <a href="privacy.html">隐私政策</a> &bull; <a href="support.html">支持</a></span><span data-l="fa">&copy; 2026 YPtun. کلیه حقوق محفوظ است. &bull; <a href="index.html">خانه</a> &bull; <a href="terms.html">شرایط استفاده</a> &bull; <a href="privacy.html">سیاست حریم خصوصی</a> &bull; <a href="support.html">پشتیبانی</a></span></p>
 </footer>
-
 </body>
 </html>

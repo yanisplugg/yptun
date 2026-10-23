@@ -34,18 +34,18 @@ a{color:var(--acc)}
   <details id="all" hidden><summary id="allT"></summary><ul id="list"></ul></details>
   <p class="mut">
     <a id="gh" href="https://github.com/yanisplugg/yptun/releases/latest">GitHub Releases</a> &bull;
-    <a href="privacy.html">Privacy Policy</a> &bull;
-    <a href="terms.html">Terms of Use</a> &bull;
-    <a href="support.html">Support</a>
+    <a id="fPriv" href="privacy.html">Privacy Policy</a> &bull;
+    <a id="fTerms" href="terms.html">Terms of Use</a> &bull;
+    <a id="fSup" href="support.html">Support</a>
   </p>
 </main>
 <script>
 const REPO = "yanisplugg/yptun";
 const L = {
-  ru: {name: "Русский", title: "YPtun — скачать", dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему — выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже."},
-  en: {name: "English", title: "YPtun — download", dl: "Download for", other: "All release files", none: "Could not detect your system — pick a file below.", err: "Could not load the release. Use GitHub Releases below."},
-  fa: {name: "فارسی", title: "YPtun — دانلود", dl: "دانلود برای", other: "همه فایل‌های نسخه", none: "سیستم شما شناسایی نشد — یکی از فایل‌های زیر را انتخاب کنید.", err: "بارگذاری نسخه ناموفق بود. از GitHub Releases در پایین استفاده کنید."},
-  zh: {name: "中文", title: "YPtun — 下载", dl: "下载适用于", other: "所有发布文件", none: "无法识别您的系统 — 请在下方选择文件。", err: "无法加载发布版本，请使用下方的 GitHub Releases。"}
+  ru: {name: "Русский", title: "YPtun - скачать", dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему, выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже.", gh: "Релизы на GitHub", priv: "Политика конфиденциальности", terms: "Условия использования", sup: "Поддержка"},
+  en: {name: "English", title: "YPtun - download", dl: "Download for", other: "All release files", none: "Could not detect your system, pick a file below.", err: "Could not load the release. Use GitHub Releases below.", gh: "GitHub Releases", priv: "Privacy Policy", terms: "Terms of Use", sup: "Support"},
+  fa: {name: "فارسی", title: "YPtun - دانلود", dl: "دانلود برای", other: "همه فایل‌های نسخه", none: "سیستم شما شناسایی نشد، یکی از فایل‌های زیر را انتخاب کنید.", err: "بارگذاری نسخه ناموفق بود. از GitHub Releases در پایین استفاده کنید.", gh: "انتشارها در گیت‌هاب", priv: "سیاست حریم خصوصی", terms: "شرایط استفاده", sup: "پشتیبانی"},
+  zh: {name: "中文", title: "YPtun - 下载", dl: "下载适用于", other: "所有发布文件", none: "无法识别您的系统，请在下方选择文件。", err: "无法加载发布版本，请使用下方的 GitHub Releases。", gh: "GitHub 发布页", priv: "隐私政策", terms: "使用条款", sup: "支持"}
 };
 // Язык: ?lang= → выбор пользователя (localStorage) → язык браузера (navigator.languages) → en.
 const store = {get: () => { try { return localStorage.lang; } catch (e) {} }, set: (v) => { try { localStorage.lang = v; } catch (e) {} }};
@@ -58,9 +58,9 @@ function autoLang() {
 }
 let lang = [new URLSearchParams(location.search).get("lang"), store.get()].find((c) => L[c]) || autoLang();
 let T = L[lang];
-let rendered = null; // null = грузится, false = ошибка; иначе последний {r, assets, d, best} — для перерисовки при смене языка
+let rendered = null; // null = грузится, false = ошибка; иначе последний {r, assets, d, best} - для перерисовки при смене языка
 
-// Определение ОС и архитектуры. ponytail: macOS/iOS сборок нет — покажем общий список.
+// Определение ОС и архитектуры. ponytail: macOS/iOS сборок нет - покажем общий список.
 async function detect() {
   const ua = navigator.userAgent;
   let os = /Android/i.test(ua) ? "android" : /Windows/i.test(ua) ? "windows" : /Linux|X11/i.test(ua) ? "linux" : null;
@@ -85,6 +85,7 @@ function render() {
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
   document.title = T.title;
+  for (const [id, k] of [["gh", "gh"], ["fPriv", "priv"], ["fTerms", "terms"], ["fSup", "sup"]]) document.getElementById(id).textContent = T[k];
   document.getElementById("lang").innerHTML = Object.keys(L)
     .map((c) => `<button data-l="${c}" aria-pressed="${c === lang}">${L[c].name}</button>`).join("");
   if (!rendered) { document.getElementById("main").innerHTML = rendered === false ? `<p class="mut">${T.err}</p>` : ""; return; }
@@ -110,7 +111,7 @@ render();
 
 (async () => {
   try {
-    // API первым (всегда свежий); под VPN он часто режется/упирается в лимит — тогда берём latest.json
+    // API первым (всегда свежий); под VPN он часто режется/упирается в лимит - тогда берём latest.json
     // с того же домена (обновляется YPtun/scripts/update-download-page.ps1 после релиза).
     let r;
     try {
@@ -120,12 +121,12 @@ render();
     } catch (e) {
       r = await (await fetch("latest.json", {cache: "no-cache"})).json();
     }
-    // delta-патчи — служебные файлы автообновления, пользователю не нужны
+    // delta-патчи - служебные файлы автообновления, пользователю не нужны
     const assets = r.assets.filter((a) => !/\.patch(\.gz)?$/i.test(a.name) && !/delta/i.test(a.name));
     document.getElementById("ver").textContent = r.name || r.tag_name;
     const d = await detect();
     const best = pick(assets, d);
-    // ?auto — сразу начать скачивание подобранного файла (ссылка для README/чатов)
+    // ?auto - сразу начать скачивание подобранного файла (ссылка для README/чатов)
     if (best && new URLSearchParams(location.search).has("auto")) location.href = best.browser_download_url;
     rendered = {r, assets, d, best};
     render();
