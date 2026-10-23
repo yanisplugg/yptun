@@ -204,8 +204,11 @@
         html[data-lang="zh"] [data-l]:not([data-l="zh"]),
         html[data-lang="fa"] [data-l]:not([data-l="fa"]) { display: none !important; }
 
-        .nav-right { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: flex-end; }
-        .lang-switch { display: flex; gap: 4px; }
+        main { overflow-wrap: break-word; }
+        .nav-container { gap: 10px 20px; }
+        .nav-right { display: flex; align-items: center; gap: 20px; justify-content: flex-end; }
+        .nav-links { flex-wrap: wrap; gap: 6px 22px; }
+        .lang-switch { display: flex; gap: 4px; flex-shrink: 0; }
         .lang-switch button {
             font: inherit; font-size: 0.8rem; line-height: 1;
             padding: 6px 9px; border-radius: 8px; cursor: pointer;
@@ -219,11 +222,22 @@
         html[data-lang="fa"] .lang-switch [data-set="fa"] {
             color: var(--text-main); background: var(--surface); border-color: var(--text-muted);
         }
-
         html[dir="rtl"] ul { margin: 12px 20px 18px 0; }
-        @media (max-width: 640px) {
-            .nav-container { flex-direction: column; align-items: flex-start; gap: 10px; }
-            .nav-right { justify-content: flex-start; }
+        .btn-primary { overflow-wrap: anywhere; }
+
+        /* phone: row 1 = logo + language, row 2 = menu (wraps instead of running off screen) */
+        @media (max-width: 720px) {
+            .nav-container { flex-wrap: wrap; padding: 12px 16px; }
+            .nav-right { display: contents; }
+            .logo { order: 1; }
+            .lang-switch { order: 2; margin-inline-start: auto; }
+            .nav-links { order: 3; width: 100%; }
+            main { margin: 32px auto 64px; padding: 0 16px; }
+            .doc-header h1, .support-header h1 { font-size: 1.75rem; }
+            .contact-card { padding: 24px 18px; }
+            .btn-primary { display: block; text-align: center; padding: 12px 16px; border-radius: 16px; }
+            footer { padding: 28px 16px; line-height: 1.9; }
+            footer a { margin: 0 3px; }
         }
     </style>
 <script>

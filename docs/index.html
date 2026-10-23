@@ -1,139 +1,374 @@
-<!doctype html>
-<html lang="ru">
+<!DOCTYPE html>
+<html lang="en" data-lang="en" dir="ltr">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>YPtun</title>
-<style>
-:root{--bg:#fff;--fg:#14171f;--mut:#667085;--card:#f4f6fa;--acc:#2f6bff;--accfg:#fff}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--fg:#e8ebf2;--mut:#98a2b3;--card:#1a1f2b}}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
-main{width:100%;max-width:520px;text-align:center}
-h1{margin:0 0 4px}
-.mut{color:var(--mut);font-size:14px}
-.mut a{color:var(--mut);text-decoration:none;margin:0 6px}
-.mut a:hover{color:var(--acc);text-decoration:underline}
-.big{display:block;margin:24px 0 8px;padding:16px;border-radius:12px;background:var(--acc);color:var(--accfg);font-size:18px;font-weight:600;text-decoration:none}
-.big small{display:block;font-weight:400;opacity:.85;font-size:13px}
-details{margin-top:24px;text-align:left;background:var(--card);border-radius:12px;padding:8px 16px}
-summary{cursor:pointer;padding:8px 0}
-li{margin:6px 0;word-break:break-all}
-a{color:var(--acc)}
-.lang{direction:ltr;display:flex;gap:6px;justify-content:center;margin-bottom:16px}
-.lang button{border:0;border-radius:8px;padding:6px 12px;background:var(--card);color:var(--fg);font:inherit;font-size:14px;cursor:pointer}
-.lang button[aria-pressed=true]{background:var(--acc);color:var(--accfg)}
-.big small,li{direction:ltr}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YPtun - download</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --surface: #f5f5f7;
+            --surface-border: #e5e5ea;
+            --text-main: #1d1d1f;
+            --text-secondary: #6e6e73;
+            --text-muted: #86868b;
+            --accent: #0071e3;
+            --accent-hover: #0077ed;
+            --nav-bg: rgba(255, 255, 255, 0.8);
+            --card-bg: #ffffff;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #000000;
+                --surface: #1c1c1e;
+                --surface-border: #2c2c2e;
+                --text-main: #f5f5f7;
+                --text-secondary: #86868b;
+                --text-muted: #6e6e73;
+                --accent: #2997ff;
+                --accent-hover: #0077ed;
+                --nav-bg: rgba(0, 0, 0, 0.8);
+                --card-bg: #1c1c1e;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            background-color: var(--nav-bg);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid var(--surface-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-main);
+            text-decoration: none;
+            letter-spacing: -0.01em;
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.92rem;
+            font-weight: 400;
+            transition: color 0.15s ease;
+        }
+
+        .nav-links a:hover, .nav-links a.active {
+            color: var(--text-main);
+        }
+
+        main {
+            max-width: 760px;
+            margin: 56px auto 96px;
+            padding: 0 24px;
+        }
+
+        .doc-header {
+            margin-bottom: 40px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--surface-border);
+        }
+
+        .doc-header h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            margin-bottom: 8px;
+        }
+
+        .doc-meta {
+            color: var(--text-secondary);
+            font-size: 0.92rem;
+        }
+
+        section {
+            margin-bottom: 36px;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            margin-top: 32px;
+            margin-bottom: 12px;
+            color: var(--text-main);
+        }
+
+        p {
+            font-size: 1rem;
+            color: var(--text-main);
+            margin-bottom: 14px;
+            font-weight: 400;
+        }
+
+        ul {
+            margin: 12px 0 18px 20px;
+        }
+
+        li {
+            font-size: 1rem;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        strong {
+            font-weight: 600;
+        }
+
+        .callout {
+            background-color: var(--surface);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 20px 0;
+            font-size: 0.95rem;
+        }
+
+        .callout p:last-child {
+            margin-bottom: 0;
+        }
+
+        footer {
+            border-top: 1px solid var(--surface-border);
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            margin: 0 8px;
+        }
+
+        footer a:hover {
+            color: var(--text-main);
+        }
+    
+        /* language switching: only the block of the active language is shown (English without JS) */
+        html[data-lang="en"] [data-l]:not([data-l="en"]),
+        html[data-lang="ru"] [data-l]:not([data-l="ru"]),
+        html[data-lang="zh"] [data-l]:not([data-l="zh"]),
+        html[data-lang="fa"] [data-l]:not([data-l="fa"]) { display: none !important; }
+
+        main { overflow-wrap: break-word; }
+        .nav-container { gap: 10px 20px; }
+        .nav-right { display: flex; align-items: center; gap: 20px; justify-content: flex-end; }
+        .nav-links { flex-wrap: wrap; gap: 6px 22px; }
+        .lang-switch { display: flex; gap: 4px; flex-shrink: 0; }
+        .lang-switch button {
+            font: inherit; font-size: 0.8rem; line-height: 1;
+            padding: 6px 9px; border-radius: 8px; cursor: pointer;
+            color: var(--text-secondary); background: transparent;
+            border: 1px solid var(--surface-border);
+        }
+        .lang-switch button:hover { color: var(--text-main); }
+        html[data-lang="en"] .lang-switch [data-set="en"],
+        html[data-lang="ru"] .lang-switch [data-set="ru"],
+        html[data-lang="zh"] .lang-switch [data-set="zh"],
+        html[data-lang="fa"] .lang-switch [data-set="fa"] {
+            color: var(--text-main); background: var(--surface); border-color: var(--text-muted);
+        }
+        html[dir="rtl"] ul { margin: 12px 20px 18px 0; }
+        .btn-primary { overflow-wrap: anywhere; }
+
+        /* phone: row 1 = logo + language, row 2 = menu (wraps instead of running off screen) */
+        @media (max-width: 720px) {
+            .nav-container { flex-wrap: wrap; padding: 12px 16px; }
+            .nav-right { display: contents; }
+            .logo { order: 1; }
+            .lang-switch { order: 2; margin-inline-start: auto; }
+            .nav-links { order: 3; width: 100%; }
+            main { margin: 32px auto 64px; padding: 0 16px; }
+            .doc-header h1, .support-header h1 { font-size: 1.75rem; }
+            .contact-card { padding: 24px 18px; }
+            .btn-primary { display: block; text-align: center; padding: 12px 16px; border-radius: 16px; }
+            footer { padding: 28px 16px; line-height: 1.9; }
+            footer a { margin: 0 3px; }
+        }
+
+        /* home */
+        .hero { text-align: center; padding: 40px 0 8px; }
+        .hero h1 { font-size: 3.2rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
+        .tagline { color: var(--text-secondary); font-size: 1.1rem; max-width: 34rem; margin: 12px auto 0; }
+        .ver { color: var(--text-muted); font-size: 0.92rem; margin-top: 18px; min-height: 1.4em; }
+        .dl-btn {
+            display: inline-block; margin-top: 18px; max-width: 100%;
+            background-color: var(--accent); color: #ffffff; text-decoration: none;
+            font-weight: 600; font-size: 1.05rem; padding: 14px 30px; border-radius: 22px;
+            transition: background-color 0.15s ease;
+        }
+        .dl-btn:hover { background-color: var(--accent-hover); }
+        .dl-btn small { display: block; font-weight: 400; opacity: 0.85; font-size: 0.78rem; margin-top: 2px; overflow-wrap: anywhere; }
+        .note { color: var(--text-secondary); font-size: 0.95rem; margin-top: 16px; }
+        .platforms { color: var(--text-muted); font-size: 0.9rem; margin-top: 14px; }
+        details.files { background: var(--surface); border-radius: 14px; padding: 6px 20px; margin-top: 32px; }
+        details.files summary { cursor: pointer; padding: 12px 0; font-weight: 500; }
+        details.files ul { margin: 4px 0 14px 0; padding: 0; list-style: none; }
+        details.files li { margin: 0; padding: 8px 0; border-top: 1px solid var(--surface-border); font-size: 0.92rem; overflow-wrap: anywhere; }
+        details.files a, .info a { color: var(--accent); text-decoration: none; }
+        details.files a:hover, .info a:hover { text-decoration: underline; }
+        html[dir="rtl"] details.files ul { margin: 4px 0 14px 0; }
+        .info { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-top: 40px; }
+        .info > div { background: var(--surface); border-radius: 14px; padding: 22px; }
+        .info h2 { font-size: 1.05rem; margin: 0 0 8px; }
+        .info p { color: var(--text-secondary); font-size: 0.93rem; margin-bottom: 10px; }
+        @media (max-width: 720px) { .hero h1 { font-size: 2.5rem; } .hero { padding-top: 16px; } }
+    </style>
 </head>
 <body>
+<header>
+    <div class="nav-container">
+        <a href="index.html" class="logo">YPtun</a>
+        <div class="nav-right">
+        <nav class="nav-links">
+            <a href="index.html" class="active"><span data-l="en">Home</span><span data-l="ru">Главная</span><span data-l="zh">首页</span><span data-l="fa">خانه</span></a>
+            <a href="terms.html"><span data-l="en">Terms</span><span data-l="ru">Условия</span><span data-l="zh">条款</span><span data-l="fa">شرایط</span></a>
+            <a href="privacy.html"><span data-l="en">Privacy</span><span data-l="ru">Конфиденциальность</span><span data-l="zh">隐私</span><span data-l="fa">حریم خصوصی</span></a>
+            <a href="support.html"><span data-l="en">Support</span><span data-l="ru">Поддержка</span><span data-l="zh">支持</span><span data-l="fa">پشتیبانی</span></a>
+        </nav>
+        <div class="lang-switch"><button type="button" data-set="en">EN</button><button type="button" data-set="ru">RU</button><button type="button" data-set="zh">中文</button><button type="button" data-set="fa">فارسی</button></div>
+        </div>
+    </div>
+</header>
 <main>
-  <div class="lang" id="lang"></div>
-  <h1>YPtun</h1>
-  <div class="mut" id="ver">…</div>
-  <div id="main"></div>
-  <details id="all" hidden><summary id="allT"></summary><ul id="list"></ul></details>
-  <p class="mut">
-    <a id="gh" href="https://github.com/yanisplugg/yptun/releases/latest">GitHub Releases</a> &bull;
-    <a id="fPriv" href="privacy.html">Privacy Policy</a> &bull;
-    <a id="fTerms" href="terms.html">Terms of Use</a> &bull;
-    <a id="fSup" href="support.html">Support</a>
-  </p>
+    <section class="hero">
+        <h1>YPtun</h1>
+        <p class="tagline"><span data-l="en">Free, open-source multi-protocol network client</span><span data-l="ru">Бесплатный клиент с открытым исходным кодом для сетевых подключений по разным протоколам</span><span data-l="zh">免费、开源的多协议网络客户端</span><span data-l="fa">کلاینت رایگان و متن‌باز شبکه با پروتکل‌های متعدد</span></p>
+        <div class="ver" id="ver">&hellip;</div>
+        <div id="dl"></div>
+        <p class="platforms"><span data-l="en">Android 6.0+ &bull; Windows 10+ &bull; Linux &bull; iOS (beta)</span><span data-l="ru">Android 6.0+ &bull; Windows 10+ &bull; Linux &bull; iOS (бета)</span><span data-l="zh">Android 6.0+ &bull; Windows 10+ &bull; Linux &bull; iOS（测试版）</span><span data-l="fa">Android 6.0+ &bull; Windows 10+ &bull; Linux &bull; iOS (بتا)</span></p>
+    </section>
+
+    <details class="files" id="all" hidden>
+        <summary><span data-l="en">All release files</span><span data-l="ru">Все файлы релиза</span><span data-l="zh">所有发布文件</span><span data-l="fa">همه فایل‌های نسخه</span></summary>
+        <ul id="list"></ul>
+    </details>
+
+    <div class="info">
+        <div><h2><span data-l="en">Open source</span><span data-l="ru">Открытый код</span><span data-l="zh">开源</span><span data-l="fa">متن‌باز</span></h2><p><span data-l="en">Licensed under GPL-3.0. Source code and all releases are on GitHub.</span><span data-l="ru">Лицензия GPL-3.0. Исходный код и все релизы находятся на GitHub.</span><span data-l="zh">采用 GPL-3.0 许可证。源代码和所有发布版本均在 GitHub 上。</span><span data-l="fa">با مجوز GPL-3.0. کد منبع و همه‌ی نسخه‌ها در گیت‌هاب است.</span></p><a data-gh href="https://github.com/yanisplugg/yptun/releases/latest"><span data-l="en">GitHub Releases</span><span data-l="ru">Релизы на GitHub</span><span data-l="zh">GitHub 发布页</span><span data-l="fa">انتشارها در گیت‌هاب</span></a></div>
+        <div><h2><span data-l="en">Your servers, your choice</span><span data-l="ru">Ваши серверы, ваш выбор</span><span data-l="zh">您的服务器，您的选择</span><span data-l="fa">سرورهای شما، انتخاب شما</span></h2><p><span data-l="en">YPtun is only a client. It does not provide servers or subscriptions: you add the ones you want to use.</span><span data-l="ru">YPtun - это только клиент. Он не предоставляет серверы и подписки: вы добавляете те, которыми хотите пользоваться.</span><span data-l="zh">YPtun 只是客户端。它不提供服务器或订阅，您自行添加想要使用的。</span><span data-l="fa">YPtun فقط یک کلاینت است. سرور یا اشتراک ارائه نمی‌دهد؛ آنچه می‌خواهید استفاده کنید را خودتان اضافه می‌کنید.</span></p><a href="terms.html"><span data-l="en">Terms of Use</span><span data-l="ru">Условия использования</span><span data-l="zh">使用条款</span><span data-l="fa">شرایط استفاده</span></a></div>
+        <div><h2><span data-l="en">Privacy</span><span data-l="ru">Приватность</span><span data-l="zh">隐私</span><span data-l="fa">حریم خصوصی</span></h2><p><span data-l="en">No accounts, no analytics, and no server run by the developers. See exactly what the app sends.</span><span data-l="ru">Без аккаунтов, без аналитики и без сервера разработчиков. Подробно о том, что отправляет приложение.</span><span data-l="zh">没有账户，没有分析，也没有开发者运营的服务器。详细了解应用会发送什么。</span><span data-l="fa">بدون حساب کاربری، بدون تحلیل و بدون سرور توسعه‌دهندگان. ببینید دقیقاً چه چیزی فرستاده می‌شود.</span></p><a href="privacy.html"><span data-l="en">Privacy Policy</span><span data-l="ru">Политика конфиденциальности</span><span data-l="zh">隐私政策</span><span data-l="fa">سیاست حریم خصوصی</span></a></div>
+    </div>
 </main>
+<footer>
+    <p><span data-l="en">&copy; 2026 YPtun. All rights reserved. &bull; <a href="index.html">Home</a> &bull; <a href="terms.html">Terms of Use</a> &bull; <a href="privacy.html">Privacy Policy</a> &bull; <a href="support.html">Support</a></span><span data-l="ru">&copy; 2026 YPtun. Все права защищены. &bull; <a href="index.html">Главная</a> &bull; <a href="terms.html">Условия использования</a> &bull; <a href="privacy.html">Политика конфиденциальности</a> &bull; <a href="support.html">Поддержка</a></span><span data-l="zh">&copy; 2026 YPtun. 保留所有权利。 &bull; <a href="index.html">首页</a> &bull; <a href="terms.html">使用条款</a> &bull; <a href="privacy.html">隐私政策</a> &bull; <a href="support.html">支持</a></span><span data-l="fa">&copy; 2026 YPtun. کلیه حقوق محفوظ است. &bull; <a href="index.html">خانه</a> &bull; <a href="terms.html">شرایط استفاده</a> &bull; <a href="privacy.html">سیاست حریم خصوصی</a> &bull; <a href="support.html">پشتیبانی</a></span></p>
+</footer>
 <script>
-const REPO = "yanisplugg/yptun";
-const L = {
-  ru: {name: "Русский", title: "YPtun - скачать", dl: "Скачать для", other: "Все файлы релиза", none: "Не удалось определить систему, выберите файл ниже.", err: "Не удалось загрузить релиз. Откройте GitHub Releases ниже.", gh: "Релизы на GitHub", priv: "Политика конфиденциальности", terms: "Условия использования", sup: "Поддержка"},
-  en: {name: "English", title: "YPtun - download", dl: "Download for", other: "All release files", none: "Could not detect your system, pick a file below.", err: "Could not load the release. Use GitHub Releases below.", gh: "GitHub Releases", priv: "Privacy Policy", terms: "Terms of Use", sup: "Support"},
-  fa: {name: "فارسی", title: "YPtun - دانلود", dl: "دانلود برای", other: "همه فایل‌های نسخه", none: "سیستم شما شناسایی نشد، یکی از فایل‌های زیر را انتخاب کنید.", err: "بارگذاری نسخه ناموفق بود. از GitHub Releases در پایین استفاده کنید.", gh: "انتشارها در گیت‌هاب", priv: "سیاست حریم خصوصی", terms: "شرایط استفاده", sup: "پشتیبانی"},
-  zh: {name: "中文", title: "YPtun - 下载", dl: "下载适用于", other: "所有发布文件", none: "无法识别您的系统，请在下方选择文件。", err: "无法加载发布版本，请使用下方的 GitHub Releases。", gh: "GitHub 发布页", priv: "隐私政策", terms: "使用条款", sup: "支持"}
-};
-// Язык: ?lang= → выбор пользователя (localStorage) → язык браузера (navigator.languages) → en.
-const store = {get: () => { try { return localStorage.lang; } catch (e) {} }, set: (v) => { try { localStorage.lang = v; } catch (e) {} }};
-function autoLang() {
-  for (const l of navigator.languages || [navigator.language]) {
-    const c = String(l).slice(0, 2).toLowerCase();
-    if (L[c]) return c;
-  }
-  return "en";
-}
-let lang = [new URLSearchParams(location.search).get("lang"), store.get()].find((c) => L[c]) || autoLang();
-let T = L[lang];
-let rendered = null; // null = грузится, false = ошибка; иначе последний {r, assets, d, best} - для перерисовки при смене языка
-
-// Определение ОС и архитектуры. ponytail: macOS/iOS сборок нет - покажем общий список.
-async function detect() {
-  const ua = navigator.userAgent;
-  let os = /Android/i.test(ua) ? "android" : /Windows/i.test(ua) ? "windows" : /Linux|X11/i.test(ua) ? "linux" : null;
-  let arm = /arm64|aarch64/i.test(ua);
-  try {
-    const h = await navigator.userAgentData?.getHighEntropyValues(["architecture"]);
-    if (h) arm = /arm/i.test(h.architecture);
-  } catch (e) {}
-  return {os, arm};
-}
-
-// Подбор файла по подстроке имени (в именах есть версия, поэтому точное имя не годится).
-function pick(assets, {os, arm}) {
-  const has = (re) => assets.find((a) => re.test(a.name));
-  const a = arm ? "arm64" : "(x64|amd64)";
-  if (os === "windows") return has(new RegExp(`${arm ? "arm64" : "x64"}.*installer\\.exe$`, "i")) || has(/\.exe$/i);
-  if (os === "linux") return has(new RegExp(`${a}.*\\.AppImage$`, "i")) || has(new RegExp(`${a}.*\\.deb$`, "i"));
-  if (os === "android") return has(/universal.*\.apk$/i) || has(/\.apk$/i);
-}
-
-function render() {
-  document.documentElement.lang = lang;
-  document.documentElement.dir = lang === "fa" ? "rtl" : "ltr";
-  document.title = T.title;
-  for (const [id, k] of [["gh", "gh"], ["fPriv", "priv"], ["fTerms", "terms"], ["fSup", "sup"]]) document.getElementById(id).textContent = T[k];
-  document.getElementById("lang").innerHTML = Object.keys(L)
-    .map((c) => `<button data-l="${c}" aria-pressed="${c === lang}">${L[c].name}</button>`).join("");
-  if (!rendered) { document.getElementById("main").innerHTML = rendered === false ? `<p class="mut">${T.err}</p>` : ""; return; }
-  const {r, assets, d, best} = rendered;
-  const label = {windows: "Windows", linux: "Linux", android: "Android"}[d.os];
-  document.getElementById("main").innerHTML = best
-    ? `<a class="big" href="${best.browser_download_url}">${T.dl} ${label}${d.os !== "android" ? (d.arm ? " ARM64" : " x64") : ""}<small>${best.name}</small></a>`
-    : `<p class="mut">${T.none}</p>`;
-  document.getElementById("allT").textContent = T.other;
-  document.getElementById("list").innerHTML = assets
-    .map((a) => `<li><a href="${a.browser_download_url}">${a.name}</a></li>`).join("");
-  const all = document.getElementById("all");
-  all.hidden = false;
-  all.open = !best;
-  document.getElementById("gh").href = r.html_url;
-}
-document.getElementById("lang").onclick = (e) => {
-  const c = e.target.dataset?.l;
-  if (!L[c]) return;
-  lang = c; T = L[c]; store.set(c); render();
-};
-render();
-
-(async () => {
-  try {
-    // API первым (всегда свежий); под VPN он часто режется/упирается в лимит - тогда берём latest.json
-    // с того же домена (обновляется YPtun/scripts/update-download-page.ps1 после релиза).
-    let r;
-    try {
-      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`);
-      if (!res.ok) throw new Error(res.status);
-      r = await res.json();
-    } catch (e) {
-      r = await (await fetch("latest.json", {cache: "no-cache"})).json();
+(function () {
+    var REPO = "yanisplugg/yptun", L = ["en", "ru", "zh", "fa"], D = {"en": {"dl": "Download for", "none": "Could not detect your system, pick a file below.", "err": "Could not load the release. Use GitHub Releases below.", "title": "YPtun - download"}, "ru": {"dl": "Скачать для", "none": "Не удалось определить систему, выберите файл ниже.", "err": "Не удалось загрузить релиз. Откройте релизы на GitHub ниже.", "title": "YPtun - скачать"}, "zh": {"dl": "下载适用于", "none": "无法识别您的系统，请在下方选择文件。", "err": "无法加载发布版本，请使用下方的 GitHub 发布页。", "title": "YPtun - 下载"}, "fa": {"dl": "دانلود برای", "none": "سیستم شما شناسایی نشد، یکی از فایل‌های زیر را انتخاب کنید.", "err": "بارگذاری نسخه ناموفق بود. از انتشارهای گیت‌هاب در پایین استفاده کنید.", "title": "YPtun - دانلود"}};
+    var CODE = { en: "en", ru: "ru", zh: "zh-CN", fa: "fa" }, lang = "en", state = null; // state: null = loading, false = failed
+    function fromBrowser() {
+        var n = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || "en"];
+        for (var i = 0; i < n.length; i++) {
+            var c = String(n[i]).toLowerCase().split("-")[0];
+            if (c === "prs") c = "fa";
+            if (L.indexOf(c) > -1) return c;
+        }
+        return "en";
     }
-    // delta-патчи - служебные файлы автообновления, пользователю не нужны
-    const assets = r.assets.filter((a) => !/\.patch(\.gz)?$/i.test(a.name) && !/delta/i.test(a.name));
-    document.getElementById("ver").textContent = r.name || r.tag_name;
-    const d = await detect();
-    const best = pick(assets, d);
-    // ?auto - сразу начать скачивание подобранного файла (ссылка для README/чатов)
-    if (best && new URLSearchParams(location.search).has("auto")) location.href = best.browser_download_url;
-    rendered = {r, assets, d, best};
-    render();
-  } catch (e) {
-    rendered = false;
-    render();
-  }
+    function pick() {
+        try { var q = new URLSearchParams(location.search).get("lang"); if (q && L.indexOf(q) > -1) return q; } catch (e) {}
+        try { var s = localStorage.getItem("lang"); if (s && L.indexOf(s) > -1) return s; } catch (e) {}
+        return fromBrowser();
+    }
+    function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+    function apply(l) {
+        lang = l;
+        var h = document.documentElement;
+        h.setAttribute("data-lang", l); h.setAttribute("lang", CODE[l]); h.setAttribute("dir", l === "fa" ? "rtl" : "ltr");
+        document.title = D[l].title;
+        draw();
+    }
+    // OS and CPU detection. There are no macOS builds, so other systems just get the full file list.
+    async function detect() {
+        var ua = navigator.userAgent;
+        var os = /Android/i.test(ua) ? "android" : /Windows/i.test(ua) ? "windows" : /Linux|X11/i.test(ua) ? "linux" : null;
+        var arm = /arm64|aarch64/i.test(ua);
+        try { var h = await navigator.userAgentData.getHighEntropyValues(["architecture"]); if (h) arm = /arm/i.test(h.architecture); } catch (e) {}
+        return { os: os, arm: arm };
+    }
+    // Pick by name pattern: file names carry the version, so exact names do not work.
+    function best(assets, d) {
+        function has(re) { return assets.find(function (a) { return re.test(a.name); }); }
+        var a = d.arm ? "arm64" : "(x64|amd64)";
+        if (d.os === "windows") return has(new RegExp((d.arm ? "arm64" : "x64") + ".*installer\\.exe$", "i")) || has(/\.exe$/i);
+        if (d.os === "linux") return has(new RegExp(a + ".*\\.AppImage$", "i")) || has(new RegExp(a + ".*\\.deb$", "i"));
+        if (d.os === "android") return has(/universal.*\.apk$/i) || has(/\.apk$/i);
+    }
+    function draw() {
+        var dl = document.getElementById("dl"), all = document.getElementById("all");
+        if (state === null) { dl.innerHTML = ""; return; }
+        if (state === false) { dl.innerHTML = '<p class="note">' + D[lang].err + "</p>"; return; }
+        var b = state.best, label = { windows: "Windows", linux: "Linux", android: "Android" }[state.d.os];
+        dl.innerHTML = b
+            ? '<a class="dl-btn" href="' + esc(b.browser_download_url) + '">' + D[lang].dl + " " + label + (state.d.os !== "android" ? (state.d.arm ? " ARM64" : " x64") : "") + "<small>" + esc(b.name) + "</small></a>"
+            : '<p class="note">' + D[lang].none + "</p>";
+        document.getElementById("list").innerHTML = state.assets.map(function (a) { return '<li><a href="' + esc(a.browser_download_url) + '">' + esc(a.name) + "</a></li>"; }).join("");
+        all.hidden = false; all.open = !b;
+        var gh = document.querySelectorAll("a[data-gh]"); for (var i = 0; i < gh.length; i++) gh[i].href = state.r.html_url;
+    }
+    document.addEventListener("DOMContentLoaded", function () {
+        var b = document.querySelectorAll(".lang-switch [data-set]");
+        for (var i = 0; i < b.length; i++) b[i].addEventListener("click", function () {
+            var l = this.getAttribute("data-set"); apply(l); try { localStorage.setItem("lang", l); } catch (e) {}
+        });
+        apply(pick());
+        (async function () {
+            try {
+                // GitHub API first (always fresh); it is often rate-limited, so fall back to latest.json from this site.
+                var r;
+                try { var res = await fetch("https://api.github.com/repos/" + REPO + "/releases/latest"); if (!res.ok) throw new Error(res.status); r = await res.json(); }
+                catch (e) { r = await (await fetch("latest.json", { cache: "no-cache" })).json(); }
+                // delta patches are for in-app updates only
+                var assets = r.assets.filter(function (a) { return !/\.patch(\.gz)?$/i.test(a.name) && !/delta/i.test(a.name); });
+                document.getElementById("ver").textContent = r.name || r.tag_name;
+                var d = await detect(), bst = best(assets, d);
+                // ?auto starts the download of the matching file straight away (link for READMEs and chats)
+                if (bst && new URLSearchParams(location.search).has("auto")) location.href = bst.browser_download_url;
+                state = { r: r, assets: assets, d: d, best: bst };
+            } catch (e) { state = false; }
+            draw();
+        })();
+    });
 })();
 </script>
 </body>
