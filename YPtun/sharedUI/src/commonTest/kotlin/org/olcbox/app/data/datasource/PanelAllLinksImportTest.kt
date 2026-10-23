@@ -63,6 +63,31 @@ class PanelAllLinksImportTest {
         assertEquals("", byEngine.getValue(EngineType.MasterDns).description)
     }
 
+    /** The panel writes `#desc:<node name>=<text>` with the SAME name it puts in the link, for every family. */
+    @Test
+    fun hostDescriptionReachesEveryFamily() = runTest {
+        val lost = mutableListOf<String>()
+        for ((family, link) in links) {
+            val plain = FakeSource().also { LocationsRepositoryImpl(it).importText(link) }
+            val name = assertNotNull(plain.stored).locations.single().name
+            val source = FakeSource()
+            val enc = java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20")
+            LocationsRepositoryImpl(source).importText("$link\n#desc:$enc=desc-$family\n")
+            val got = assertNotNull(source.stored).locations.single().description
+            if (got != "desc-$family") lost += "$family(name='$name', description='$got')"
+        }
+        assertTrue(lost.isEmpty(), "description lost: $lost")
+    }
+
+    /** The cold-start list is painted from the light index first: it must carry the description too. */
+    @Test
+    fun coldStartIndexKeepsDescription() = runTest {
+        val source = FakeSource()
+        LocationsRepositoryImpl(source).importText(links.getValue("snolc") + "\n#desc:Stealth%20NL-snolc=Fast\n")
+        val index = org.olcbox.app.data.model.LocationViewIndex.from(assertNotNull(source.stored))
+        assertEquals("Fast", index.items.single().description)
+    }
+
     @Test
     fun orderLinesRestorePanelOrderAcrossFamilies() = runTest {
         val body = links.getValue("masterdns") + "\n" + links.getValue("snolc") + "\n#order:Stealth%20NL-snolc\n#order:Stealth%20NL-dns\n"

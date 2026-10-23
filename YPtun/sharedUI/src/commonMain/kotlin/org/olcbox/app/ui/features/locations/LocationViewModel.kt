@@ -282,6 +282,7 @@ class LocationViewModel(
         fullName = name,
         config = LocationConfig(
             name = name,
+            description = description,
             engine = engine,
             bypassProvider = authProvider,
             transport = transport,

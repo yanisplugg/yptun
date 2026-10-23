@@ -28,6 +28,8 @@ data class LocationViewIndex(
         @SerialName("storage_id")
         val storageId: String,
         val name: String = "",
+        // Subscription/panel description shown under the name; without it the cold-start seed paints rows bare.
+        val description: String = "",
         @SerialName("subscription_url")
         val subscriptionUrl: String? = null,
         val engine: EngineType = EngineType.Stealth,
@@ -52,6 +54,7 @@ data class LocationViewIndex(
                 Item(
                     storageId = entry.storageId,
                     name = entry.name,
+                    description = entry.description,
                     subscriptionUrl = entry.subscriptionUrl ?: entry.legacySubscriptionUrl,
                     engine = entry.engine ?: EngineType.Stealth,
                     authProvider = entry.authProvider.orEmpty(),
