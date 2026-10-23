@@ -499,6 +499,7 @@ impl Engine {
             .collect();
         self.emit(Event::Lifecycle(Lifecycle::Running));
 
+        let mut idle_streak: u32 = 0;
         loop {
             match self.commands.try_recv() {
                 Ok(command) => match command {
@@ -556,8 +557,19 @@ impl Engine {
             self.poll_tunnels(&mut tunnels, &stack);
             self.drain_module_events();
             self.drain_log_errors();
-            if self.idle_wait && tunnels.iter().all(TunnelRuntime::is_idle) {
-                std::thread::sleep(Duration::from_micros(25));
+            // Сервер, ждущий клиента (Carrier), и туннель без потоков не должны крутить цикл на 100% ЦП:
+            // после 1000 пустых проходов пауза растёт до 1 мс, любая работа сбрасывает счётчик.
+            if tunnels.iter().all(|t| t.is_idle() || t.is_waiting()) {
+                idle_streak = idle_streak.saturating_add(1);
+                if self.idle_wait || idle_streak > 1_000 {
+                    std::thread::sleep(Duration::from_micros(match idle_streak {
+                        0..=1_000 => 25,
+                        1_001..=10_000 => 250,
+                        _ => 1_000,
+                    }));
+                }
+            } else {
+                idle_streak = 0;
             }
         }
 
@@ -947,6 +959,10 @@ impl TunnelRuntime {
             TunnelState::Established(session) => session.is_idle(self.binding.role),
             _ => false,
         }
+    }
+
+    fn is_waiting(&self) -> bool {
+        matches!(self.state, TunnelState::Carrier)
     }
 
     fn new(binding: TunnelBinding) -> Self {
