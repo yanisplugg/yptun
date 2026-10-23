@@ -224,6 +224,7 @@
         }
         html[dir="rtl"] ul { margin: 12px 20px 18px 0; }
         .btn-primary { overflow-wrap: anywhere; }
+        header, footer { overflow-wrap: anywhere; }
 
         /* phone: row 1 = logo + language, row 2 = menu (wraps instead of running off screen) */
         @media (max-width: 720px) {
@@ -232,6 +233,8 @@
             .logo { order: 1; }
             .lang-switch { order: 2; margin-inline-start: auto; }
             .nav-links { order: 3; width: 100%; }
+            .nav-links a { overflow-wrap: anywhere; max-width: 100%; }
+            .nav-links a, footer a { font-size: 0.9rem; }
             main { margin: 32px auto 64px; padding: 0 16px; }
             .doc-header h1, .support-header h1 { font-size: 1.75rem; }
             .contact-card { padding: 24px 18px; }
