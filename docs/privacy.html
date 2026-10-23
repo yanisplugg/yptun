@@ -227,7 +227,7 @@
     }
     function pick() {
         try { var q = new URLSearchParams(location.search).get("lang"); if (q && L.indexOf(q) > -1) return q; } catch (e) {}
-        try { var s = localStorage.getItem("yptun-lang"); if (s && L.indexOf(s) > -1) return s; } catch (e) {}
+        try { var s = localStorage.getItem("lang"); if (s && L.indexOf(s) > -1) return s; } catch (e) {}
         return fromBrowser();
     }
     function apply(l) {
@@ -244,7 +244,7 @@
             b[i].addEventListener("click", function () {
                 var l = this.getAttribute("data-set");
                 apply(l);
-                try { localStorage.setItem("yptun-lang", l); } catch (e) {}
+                try { localStorage.setItem("lang", l); } catch (e) {}
             });
         }
     });
