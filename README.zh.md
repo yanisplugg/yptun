@@ -2,9 +2,9 @@
 
 # YPtun
 
-### 快速抗审查 VPN · Android、Windows 与 Linux · iOS 测试中
+### 多协议网络客户端 · Android、Windows 与 Linux · iOS 测试中
 
-*基于 **Xray** 与 **sing-box** 的 VLESS · Reality · XHTTP，**Hysteria2**（QUIC），混淆的 **AmneziaWG**，通过 **VK-TURN** 通话的隧道，**MasterDNS** DNS 隧道，基于 **WARP** 的独立 Telegram 代理 —— 以及把流量伪装成视频通话的 **olcRTC**。*
+*基于 **Xray** 与 **sing-box** 的 VLESS · Reality · XHTTP，**Hysteria2**（QUIC），混淆的 **AmneziaWG**，通过 **VK-TURN** 通话的隧道，**MasterDNS** DNS 隧道，基于 **WARP** 的独立 Telegram 代理 —— 以及基于视频会议服务的传输 **olcRTC**。*
 
 <br>
 
@@ -35,11 +35,11 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 
 ## 为什么选 YPtun？
 
-大多数 VPN 客户端只给你一个内核、一种连接方式。**YPtun 给你一整套工具箱。** 一个应用里集成了多种翻墙引擎：一种方式被封，就切换到另一种继续用。
+大多数 VPN 客户端只给你一个内核、一种连接方式。**YPtun 给你一整套工具箱。** 一个应用里集成了多种网络引擎：一种传输效果不佳，就切换到另一种继续用。
 
-> **核心在于多样性。** Xray 与 sing-box 支持所有常见协议与传输，通过 AmneziaWG 实现混淆的 WireGuard，通过真实通话隧道（VK-TURN 与 olcRTC），MasterDNS 的 DNS 隧道，几乎可导入任何东西，以及兼容 Happ 的分流配置。封掉一条路，旁边还有好几条。
+> **核心在于多样性。** Xray 与 sing-box 支持所有常见协议与传输，通过 AmneziaWG 实现混淆的 WireGuard，通过真实通话隧道（VK-TURN 与 olcRTC），MasterDNS 的 DNS 隧道，几乎可导入任何东西，以及兼容 Happ 的分流配置。一种连接方式不合适时，旁边还有好几种。
 
-> 为互联网受阻的地方而生 —— 俄罗斯、伊朗，以及任何网站会无预警消失的国家。
+> 为希望灵活掌控自己网络连接的人而做：自己的服务器、自己的订阅、自己的路由。
 
 > **Windows 版已发布** —— 安装程序与单文件 `.exe` 便携版，支持 x64 与原生 ARM64。与手机端完全相同的应用和内核：订阅、路由配置、链式代理、VK-TURN、olcRTC、MasterDNS、Trust Tunnel。
 
@@ -68,14 +68,14 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 | **多引擎** | Xray、sing-box、AmneziaWG、VK-TURN、MasterDNS —— 内核按协议自动或手动选择。 |
 | **协议** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
 | **传输** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS 指纹 |
-| **MasterDNS（DNS 隧道）** | 基于 DNS 查询的隧道（MasterDnsVPN：自研 ARQ 传输、同时使用多个解析器、数据包冗余）—— 在其他流量都被封、仅 DNS 可用时仍能工作。可通过 SSH 一键在 VPS 上安装服务端。 |
+| **MasterDNS（DNS 隧道）** | 基于 DNS 查询的隧道（MasterDnsVPN：自研 ARQ 传输、同时使用多个解析器、数据包冗余）—— 适用于仅 DNS 可用的网络。可通过 SSH 一键在 VPS 上安装服务端。 |
 | **基于 WARP 的 Telegram 代理** | 轻量后台服务：WARP 隧道 + 供 Telegram 使用的本地 SOCKS5，独立于主连接。 |
-| **olcRTC** | [olcRTC](https://github.com/openlibrecommunity/olcrtc) 传输 —— 流量经过真实视频通话服务（Jazz、Telemost、WB Stream、Jitsi）；对 DPI 而言像一次真实通话，而非代理。 |
+| **olcRTC** | [olcRTC](https://github.com/openlibrecommunity/olcrtc) 传输 —— 流量经过真实视频通话服务（Jazz、Telemost、WB Stream、Jitsi）；流量承载在这些服务之上。 |
 | **智能导入** | vless/vmess/trojan/ss 链接、base64、JSON 面板、**完整的原始 Xray / sing-box 配置**（原样应用）、AmneziaWG `.conf`/二维码、olcRTC URI、Happ 配置、批量链接导入。 |
-| **DNS 与分流** | 兼容 Happ 的分流配置（按 `geoip:`/`geosite:`/`asn:`/域名/CIDR 进行 拦截/直连/代理）、v2rayNG 风格的逐条规则、「拦截俄罗斯域名」开关、自定义 DNS 与 fakedns。 |
+| **DNS 与分流** | 兼容 Happ 的分流配置（按 `geoip:`/`geosite:`/`asn:`/域名/CIDR 进行 禁止/直连/代理）、v2rayNG 风格的逐条规则、俄罗斯域名过滤开关、自定义 DNS 与 fakedns。 |
 | **自动选服** | 一键连接到最快的可用节点，失败自动切换。 |
 | **HTTP 代理** | 在活动引擎之上提供兼容 Happ 的本地 HTTP 代理。 |
-| **抗 DPI** | TLS 分片、多路复用、AmneziaWG 混淆，并在会泄漏处拦截 QUIC。 |
+| **连接调优** | TLS 分片、多路复用、AmneziaWG 混淆，并在会泄漏处关闭 QUIC。 |
 | **无泄漏** | 同时接管 IPv4 与 IPv6 —— 不让任何流量绕过隧道。 |
 | **分应用代理** | 自行选择哪些应用走 VPN。 |
 | **订阅** | 自动更新（可逐个订阅关闭）、可用服务器计数、服务器描述、流量/余量、可折叠/置顶/按延迟排序的分组、文件夹。 |
@@ -154,11 +154,11 @@ YPtun 只申请某项功能缺之不可的权限。相机、通知、不受电�
 ## 引擎简述
 
 - **Xray / sing-box** —— 经典代理内核：VLESS+Reality、XHTTP、WS+TLS 等。内核按传输自动选择。
-- **AmneziaWG** —— 带混淆的 WireGuard：握手与数据包不像「普通」WireGuard（后者常按特征被切断）。
+- **AmneziaWG** —— 带混淆的 WireGuard：握手与数据包与标准 WireGuard 不同。
 - **Hysteria2** —— 基于 QUIC 的高速协议，带 Salamander 混淆与端口跳跃；在不稳定线路上速度保持好。
 - **VK-TURN** —— 启动本地 WireGuard 并经 VK 通话的 TURN 服务器转发；多路「通话」绑定以提升带宽。
 - **MasterDNS** —— 基于 DNS 查询的隧道；在只有 DNS 可用时仍可工作。
-- **olcRTC** —— 视频通话伪装：流量经过真实会议服务，对 DPI 而言像一次真实通话。
+- **olcRTC** —— 基于视频会议服务的传输：流量承载在真实通话之上。
 - **基于 WARP 的 Telegram 代理** —— 在 Cloudflare WARP 之上为 Telegram 提供的独立后台代理。
 
 ---
@@ -221,7 +221,7 @@ YPtun 采用 **Kotlin Multiplatform**：所有逻辑（导入、配置生成、�
 ```
 YPtun/            Kotlin Multiplatform 应用 —— Compose UI、Android VpnService、引擎
 cores/            Go 胶水层：由 sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + MasterDNS 构成的单个 gomobile AAR
-olcrtc/           olcRTC —— 视频通话伪装传输                       (第三方，已 vendored)
+olcrtc/           olcRTC —— 基于视频通话的传输                       (第三方，已 vendored)
 sing-box/         sing-box / libbox                                (已 vendored)
 awgproxy/         AmneziaWG 封装 → 本地 SOCKS5                     (Go 模块)
 hysteria2proxy/   Hysteria2 (apernet) 封装 → 本地 SOCKS5           (Go 模块)
@@ -273,20 +273,3 @@ amneziawg-go/     AmneziaWG 实现                                   (已 vendor
 ## 许可证
 
 [GPL-3.0](LICENSE) —— 本应用以 GNU GPL v3.0 发布，因为它打包了 **sing-box**（同为 GPL-3.0）：copyleft 适用于整个产品。Vendored 组件保留各自的许可证（`sing-box` — GPL-3.0，Xray — MPL-2.0，`amneziawg-go` — MIT，`olcrtc` — WTFPL，OpenFlux — GPL-3.0，qWDTT（`wdtt`）— GPL-3.0，MasterDnsVPN（`masterdns`）— MIT，`free-turn-proxy` — Happy Bunny License（类 MIT），Trust Tunnel — Apache-2.0，`hev-socks5-tunnel` — MIT，`tun2socks` — MIT）。
-
-<div align="center">
-<br>
-
-<img src="docs/no-rkn.jpg" alt="拒绝审查" width="150">
-
-<br><br>
-
-> *「一个害怕让人民在公开市场上判断真伪的国家，是一个害怕自己人民的国家。」*
->
-> — **约翰·肯尼迪**
-
-<br>
-
-<sub>为了自由的互联网</sub>
-
-</div>
