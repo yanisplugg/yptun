@@ -203,79 +203,118 @@
 <main>
     <div class="doc-header">
         <h1>Privacy Policy</h1>
-        <div class="doc-meta">Last Updated: October 5, 2026 &bull; Version 1.0</div>
+        <div class="doc-meta">Last Updated: October 23, 2026 &bull; Version 2.0</div>
     </div>
 
     <section>
-        <p>This Privacy Policy outlines how <strong>YPtun</strong> ("we", "our", or "the Application") handles user privacy and information. We operate with a strict commitment to user privacy, data minimization, and transparent client-side software architecture.</p>
+        <p>This Privacy Policy explains what the <strong>YPtun</strong> software for Android, iOS, Windows and Linux (the "Software") stores on your device, what it sends over the network, and to whom. It is written to match how the Software actually behaves. It should be read together with the <a href="terms.html" style="color: var(--accent); text-decoration: none;">Terms of Use</a>.</p>
+        <p>"We", "us" and "the Developers" mean the individuals who maintain the Software and its public repository, together with its contributors.</p>
         <div class="callout">
-            <p><strong>Core Zero-Logs Commitment:</strong> YPtun does not collect, monitor, log, record, or share your browsing activity, network traffic destinations, DNS lookups, transmitted data payloads, or originating IP addresses. The Application operates strictly as a local, client-side network utility.</p>
+            <p><strong>Short version.</strong> The Software has no accounts, no advertising, no analytics or crash-reporting libraries, and no server run by the Developers. We do not receive your traffic, your servers, your settings or your device information. Your data stays on your device, except for the network requests described in section 3, which go to third parties that you choose or that the features you use depend on.</p>
         </div>
     </section>
 
     <section>
-        <h2>1. Information We Never Collect</h2>
-        <p>In full compliance with Apple App Store Review Guidelines (specifically Guideline 5.1 on Data Collection and Guideline 5.4 on VPN Applications), YPtun adheres to the following principles:</p>
+        <h2>1. What We Do Not Do</h2>
         <ul>
-            <li><strong>No Traffic Logs:</strong> We do not inspect, log, or store data packets, websites visited, or online services accessed through the Application.</li>
-            <li><strong>No Connection Timestamps:</strong> We do not log timestamps indicating when connections are established or disconnected.</li>
-            <li><strong>No IP Address Records:</strong> We never log your originating IP address or the destination IP addresses reached through tunnels.</li>
-            <li><strong>No DNS Query Recording:</strong> We do not record or retain your DNS queries.</li>
-            <li><strong>No User Account or Identity:</strong> YPtun does not require account registration. We do not collect names, email addresses, phone numbers, or passwords.</li>
-            <li><strong>No Advertising or Behavioral Tracking:</strong> The Application contains no third-party advertising frameworks, analytics SDKs, device fingerprinting, or tracking mechanisms.</li>
+            <li>We operate no backend that receives data from the Software, and no VPN or proxy servers.</li>
+            <li>We do not inspect, record or store your traffic, the sites you visit, your DNS queries or your connection times. The Software does not send such information to us.</li>
+            <li>The Software requires no account and does not ask for your name, email address, phone number or password.</li>
+            <li>The Software contains no advertising frameworks, no analytics or telemetry SDKs, no crash-reporting services and no device fingerprinting for marketing.</li>
+            <li>We do not sell, rent or trade personal data, and we do not receive any from the Software to share.</li>
+        </ul>
+        <p>These statements describe the Software and its Developers only. We cannot speak for the third parties in section 3, who see what any server sees when you connect to it.</p>
+    </section>
+
+    <section>
+        <h2>2. Data Stored on Your Device</h2>
+        <p>The following is stored locally, in the Software's private storage on your device (on iOS, in the app sandbox, the Keychain and the app group container):</p>
+        <ul>
+            <li><strong>Configurations:</strong> servers, subscription links, keys and credentials, routing rules and settings that you or your provider add.</li>
+            <li><strong>Subscription data:</strong> metadata a provider supplies, such as a title, traffic and expiry information, announcements and a logo.</li>
+            <li><strong>Identifiers:</strong> a device identifier (HWID), which on Android is derived from a platform identifier where available and otherwise generated randomly, and a random per-install application ID. They are used only as described in section 3 and can be turned off in Settings, Privacy.</li>
+            <li><strong>Diagnostics:</strong> an in-app journal and log files that may contain events, server addresses and error messages. They stay on your device until you clear them or uninstall the Software, and are shared only if you export or send them yourself. Energy-saver mode reduces journal capture.</li>
+            <li><strong>Measurements:</strong> latency (ping) results, and, if you turn it on, the saved latest successful results.</li>
+        </ul>
+        <p>Some features need local access that is not sent anywhere by the Software: the camera (to scan QR codes, processed on the device), the list of installed applications (for per-application routing), and notification, battery and installation permissions that you grant on request.</p>
+    </section>
+
+    <section>
+        <h2>3. Network Requests the Software Makes</h2>
+        <p>The Software must use the network to work. Each recipient below is a third party that sees at least your IP address and the usual details of a web request. We do not receive any of this.</p>
+        <ul>
+            <li><strong>Servers and subscriptions you add.</strong> Your traffic goes to the servers in your configurations, and the Software downloads and refreshes the subscription links you add. Their operators can see your IP address, your traffic according to their setup, and the request headers. When a subscription request is made, the Software sends a User-Agent and, unless you turn it off in Settings, Privacy, the headers <code>x-hwid</code>, <code>x-app-id</code>, <code>x-device-os</code>, <code>x-ver-os</code>, <code>x-device-model</code> and <code>x-app-version</code>. Panels use them for device limits. With these turned off, a panel may refuse the subscription.</li>
+            <li><strong>Provider report (Happ-compatible ProviderID).</strong> If a subscription carries a <code>providerid</code> header, the Software sends a request to <code>check.happ-proxy.com</code> once a day with the provider ID, the device identifier, the application ID, the OS and its version, the device model and the application version. This is on by default and can be turned off in Settings, Privacy. When off, the request is not sent. The service is run by a third party.</li>
+            <li><strong>Update checks.</strong> The Software asks the GitHub API for the latest release. This request does not include your device identifier. If you download an update, you download it from GitHub.</li>
+            <li><strong>Routing rule data.</strong> Geo-IP, geo-site, rule-set and ASN lists are downloaded from public GitHub-hosted repositories, which see your IP address.</li>
+            <li><strong>Public free-server lists.</strong> If you use the free-servers feature, the Software downloads lists published by independent third parties, then tests the listed servers by connecting to them. The operators of those servers can see your IP address and the test requests. Such servers are unverified.</li>
+            <li><strong>Cloudflare WARP.</strong> If you use a WARP feature (for example the Telegram proxy), the Software registers a WARP account with Cloudflare. When the direct request fails, it may use fallback mirrors hosted on third-party platforms to obtain a configuration. These recipients see your IP address.</li>
+            <li><strong>Connectivity and address checks.</strong> Latency and connectivity tests use a test address you can change (by default a Google-hosted <code>generate_204</code> address). Some versions also query public IP-lookup services such as <code>api.ipify.org</code>, <code>icanhazip.com</code>, <code>ifconfig.me</code> and <code>ipinfo.io</code> to show or verify your external address. These services see the address that makes the request.</li>
+            <li><strong>DNS.</strong> Name lookups go to the resolvers set in your configuration or settings, and these operators see the queries according to their policies.</li>
+            <li><strong>Connection methods you choose.</strong> Some engines carry traffic through third-party platforms, for example video-call, document or messaging services. If you select one, that platform receives the traffic and handles it under its own terms.</li>
+            <li><strong>Server installation.</strong> If you use the built-in server installer, the Software connects over SSH to the server you specify, using the details you enter. They are used for that connection and are not sent to us.</li>
+            <li><strong>Links you open.</strong> Links to websites, social networks or donation pages open in your browser or another app, under their own policies.</li>
         </ul>
     </section>
 
     <section>
-        <h2>2. Data Stored Locally on Your Device</h2>
-        <p>All data necessary for the Application to function is stored strictly within sandboxed local device storage:</p>
+        <h2>4. Third Parties</h2>
+        <p>Every recipient in section 3 is independent of us. They decide what they log and how long they keep it, and we do not control, audit or answer for them. Their own privacy policies apply. Connect only to servers and use only services you trust. We do not share your information with advertisers or authorities because we do not hold it. This does not limit what a law may require third parties to do.</p>
+    </section>
+
+    <section>
+        <h2>5. Roles, Legal Bases and Your Rights</h2>
+        <p>Because the Developers receive no personal data from the Software, we are not the controller or processor of the data that stays on your device or that is sent to the third parties in section 3. Those third parties act on their own behalf. If a law nevertheless treats part of the on-device processing as ours, it is limited to what is described here and is carried out in the legitimate interest of providing the Software you asked to run, or on your consent when you turn a feature on.</p>
         <ul>
-            <li><strong>Connection Configurations:</strong> Server addresses, port numbers, cryptographic keys, and routing rules imported by the user are stored locally in the secure iOS Keychain and sandboxed application storage (App Group container).</li>
-            <li><strong>Session Diagnostics:</strong> Latency measurements (ping) and packet transfer counters displayed in the user interface or Live Activity are computed transiently in memory during active sessions and are discarded when closed.</li>
+            <li><strong>Access, export and erasure:</strong> you hold your data on your device. You can export configurations in the Software, delete profiles and logs, or remove everything by uninstalling it.</li>
+            <li><strong>Choice:</strong> you can switch off the provider report and the sending of device information in Settings, Privacy, and you can avoid the optional features above.</li>
+            <li><strong>Requests to third parties:</strong> to access or delete data held by a server operator, panel, WARP provider or other service, contact that party directly.</li>
+            <li><strong>Our contact data:</strong> if you email us, we process your address and message only to reply, and keep them as long as needed for that purpose and for legal reasons.</li>
+            <li>Depending on where you live (for example the EEA, the UK, California, Russia, Brazil and other countries), you may have additional rights, including to complain to your data protection authority. Nothing in this Policy limits rights that cannot be waived by law.</li>
         </ul>
-        <p>This data is never transmitted to, stored on, or synchronized with any server owned or controlled by YPtun.</p>
+        <p>We do not sell or share personal information as those terms are used in California law, and we do not use sensitive personal information for profiling.</p>
     </section>
 
     <section>
-        <h2>3. Apple Network Extension Framework</h2>
-        <p>To establish secure network routing on iOS, YPtun utilizes Apple's official <code>NetworkExtension</code> framework (specifically <code>NEPacketTunnelProvider</code>). This system entitlement enables the Application to create a virtual network interface on the device and direct packets through user-selected protocols.</p>
-        <p>Packet processing is handled locally by the tunnel provider extension according to the user's active routing configuration.</p>
+        <h2>6. Security</h2>
+        <p>Configuration data is kept in the Software's private storage (on iOS also in the Keychain), and traffic to servers uses the protocols and encryption you select. No software or network is completely secure. We do not guarantee that your data cannot be accessed by someone with access to your device, to a server you use, or to a network you use.</p>
     </section>
 
     <section>
-        <h2>4. User-Provided Configurations & Third-Party Endpoints</h2>
-        <p>YPtun functions as an open routing client. When you import and connect to a server or subscription provided by a third-party service provider or private server, your encrypted network traffic routes through that endpoint.</p>
-        <p>The handling of traffic passing through external endpoints is governed exclusively by the privacy policies and infrastructure of those independent server operators. We advise users to connect only through verified, trustworthy network servers.</p>
+        <h2>7. Retention and International Transfers</h2>
+        <p>Data on your device remains until you delete it or uninstall the Software. We do not retain data from the Software. Your requests go to the servers and services you use wherever they are located, which can be in other countries, and the Developers do not control those transfers.</p>
     </section>
 
     <section>
-        <h2>5. Third-Party Data Sharing</h2>
-        <p>Because we do not collect personal data, account information, or network telemetry, we do not sell, rent, monetize, trade, or share any user information with third parties, advertisers, or government entities.</p>
+        <h2>8. Children</h2>
+        <p>The Software is not directed at children. We do not knowingly collect personal data from anyone, including children under 13 (or under 16 where that is the local age of consent). Parents or guardians who believe a child has used the Software to share data with a third party should contact that third party.</p>
     </section>
 
     <section>
-        <h2>6. Compliance with International Privacy Laws (GDPR & CCPA)</h2>
-        <p>Under the European General Data Protection Regulation (GDPR) and the California Consumer Privacy Act (CCPA):</p>
+        <h2>9. Apple Platforms</h2>
+        <p>On iOS the Software uses Apple's NetworkExtension framework (a packet tunnel provider) to create a virtual network interface and route packets on your device according to your configuration. This processing takes place locally on the device.</p>
+    </section>
+
+    <section>
+        <h2>10. Changes</h2>
+        <p>We may update this Policy when the Software changes or the law requires it. The new version is published on this page with an updated date. Continued use means you accept the change.</p>
+    </section>
+
+    <section>
+        <h2>11. Contact</h2>
+        <p>Questions about this Policy: <a href="mailto:yptunn@gmail.com" style="color: var(--accent); text-decoration: none;">yptunn@gmail.com</a></p>
+    </section>
+
+    <section>
+        <h2>Краткое изложение на русском</h2>
+        <p>Полным и приоритетным является английский текст. Ниже краткий пересказ.</p>
         <ul>
-            <li><strong>Right of Access & Portability:</strong> Since we store no personal data on servers, any configurations you create reside solely on your device and can be exported directly through the app interface.</li>
-            <li><strong>Right to Erasure:</strong> You can completely erase all locally stored data, configurations, and keys at any time by deleting profiles within the app or uninstalling the Application.</li>
+            <li>У программы нет аккаунтов, рекламы, аналитики, отчётов о сбоях и собственного сервера разработчиков. Мы не получаем ваш трафик, серверы, настройки и данные устройства.</li>
+            <li>На устройстве хранятся конфигурации, подписки, ключи, настройки, идентификаторы (HWID и случайный ID установки) и локальные журналы. Всё остаётся у вас, пока вы не очистите данные или не удалите приложение.</li>
+            <li>Сетевые запросы идут только к сторонним получателям, и все они видят ваш IP-адрес: ваши серверы и подписки (с заголовками устройства, которые можно отключить в Настройки, Приватность), check.happ-proxy.com (ежедневный отчёт провайдеру, можно отключить), GitHub (обновления и списки правил маршрутизации), публичные списки бесплатных серверов, Cloudflare WARP и запасные зеркала, сервисы проверки связи и внешнего IP, выбранные вами DNS и платформы выбранных способов подключения.</li>
+            <li>Эти получатели независимы от нас, их правила и журналы мы не контролируем.</li>
+            <li>Поскольку мы не получаем персональные данные, мы не являемся их оператором или контролёром. Данные можно удалить на устройстве; запросы об удалении данных у третьих лиц направляйте им напрямую. Права, от которых нельзя отказаться по закону, не ограничиваются.</li>
         </ul>
-    </section>
-
-    <section>
-        <h2>7. Children's Privacy</h2>
-        <p>YPtun does not knowingly collect or solicit personal data from children under the age of 13 (or under the age of 16 in certain jurisdictions). As the Application operates without user registration or data collection, it complies with the Children's Online Privacy Protection Act (COPPA).</p>
-    </section>
-
-    <section>
-        <h2>8. Updates to This Policy</h2>
-        <p>We may periodically update this Privacy Policy to reflect software changes or evolving regulatory standards. Any revisions will be published on this page with an updated "Last Updated" date.</p>
-    </section>
-
-    <section>
-        <h2>9. Contact Information</h2>
-        <p>If you have questions, feedback, or require assistance regarding this Privacy Policy, please contact us at:</p>
-        <p><strong>Email:</strong> <a href="mailto:yptunn@gmail.com" style="color: var(--accent); text-decoration: none;">yptunn@gmail.com</a></p>
     </section>
 </main>
 
