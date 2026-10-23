@@ -2,9 +2,9 @@
 
 # YPtun
 
-### Fast censorship-resistant VPN · Android, Windows and Linux · iOS in beta
+### Multi-protocol network client · Android, Windows and Linux · iOS in beta
 
-*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **MasterDNS** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, which disguises traffic as a video call.*
+*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **MasterDNS** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, a transport over video-conferencing services.*
 
 <br>
 
@@ -35,11 +35,11 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 
 ## Why YPtun?
 
-Most VPN clients give you one core and one way to connect. **YPtun gives you a toolbox.** Several censorship-bypass engines in a single app: when one method gets blocked, switch to another and keep going.
+Most VPN clients give you one core and one way to connect. **YPtun gives you a toolbox.** Several network engines in a single app: when one transport works poorly, switch to another and keep going.
 
-> **The point is versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via AmneziaWG, tunnelling through real calls (VK-TURN and olcRTC), the MasterDNS DNS tunnel, import of basically anything, and Happ-compatible routing profiles. Kill one path — there are several more next to it.
+> **The point is versatility.** Xray and sing-box with every common protocol and transport, obfuscated WireGuard via AmneziaWG, tunnelling through real calls (VK-TURN and olcRTC), the MasterDNS DNS tunnel, import of basically anything, and Happ-compatible routing profiles. If one way to connect doesn't fit, there are several more next to it.
 
-> Built for places where the internet fights back — Russia, Iran, and any country where sites vanish without warning.
+> For anyone who wants flexible control over their network connections: your own servers, your own subscriptions, your own routing.
 
 > **Windows is here** — an installer and a portable build as a single `.exe`, x64 and native ARM64. The same app and the same engines as on the phone: subscriptions, routing profiles, cascade, VK-TURN, olcRTC, MasterDNS, Trust Tunnel.
 
@@ -68,14 +68,14 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 | **Multiple engines** | Xray, sing-box, AmneziaWG, VK-TURN, MasterDNS — the core is picked per protocol automatically or by hand. |
 | **Protocols** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
 | **Transports** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS fingerprints |
-| **MasterDNS (DNS tunnel)** | A tunnel over DNS queries (MasterDnsVPN: custom ARQ transport, several resolvers at once, packet duplication) — works where all other traffic is blocked but DNS still flows. One-tap server install on a VPS over SSH. |
+| **MasterDNS (DNS tunnel)** | A tunnel over DNS queries (MasterDnsVPN: custom ARQ transport, several resolvers at once, packet duplication) — an option for networks where only DNS is available. One-tap server install on a VPS over SSH. |
 | **Telegram proxy over WARP** | A lightweight background service: a WARP tunnel + a local SOCKS5 for Telegram, independent of the main connection. |
-| **olcRTC** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi); to DPI it looks like a live call, not a proxy. |
+| **olcRTC** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi); traffic is carried over these services. |
 | **Smart import** | vless/vmess/trojan/ss links, base64, JSON panels, **full raw Xray / sing-box configs** (applied as-is), AmneziaWG `.conf`/QR, olcRTC URIs, Happ profiles, bulk link-list import. |
-| **DNS & routing** | Happ-compatible routing profiles (block/direct/proxy by `geoip:`/`geosite:`/`asn:`/domains/CIDR), v2rayNG-style per-rule routing, a "block RU domains" toggle, custom DNS and fakedns. |
+| **DNS & routing** | Happ-compatible routing profiles (deny/direct/proxy by `geoip:`/`geosite:`/`asn:`/domains/CIDR), v2rayNG-style per-rule routing, an RU-domain filter toggle, custom DNS and fakedns. |
 | **Auto server pick** | One-tap connect to the fastest reachable node, with failover. |
 | **HTTP proxy** | A Happ-compatible local HTTP proxy on top of the active engine. |
-| **DPI evasion** | TLS fragmentation, multiplexing, AmneziaWG obfuscation, QUIC blocking where it would leak. |
+| **Connection tuning** | TLS fragmentation, multiplexing, AmneziaWG obfuscation, disabling QUIC where it would leak. |
 | **No leaks** | Captures both IPv4 and IPv6 — nothing slips past the tunnel. |
 | **Split tunneling** | Choose which apps go through the VPN. |
 | **Subscriptions** | Auto-update (toggle per subscription), reachable-server counter, server descriptions, traffic/quota, groups with collapse/pin/ping-sort, folders. |
@@ -154,11 +154,11 @@ Every native core is built into **one** `gomobile` library (a single Go runtime)
 ## Engines in plain words
 
 - **Xray / sing-box** — classic proxy cores: VLESS+Reality, XHTTP, WS+TLS, etc. The core is chosen per transport automatically.
-- **AmneziaWG** — WireGuard with obfuscation: the handshake and packets don't look like "plain" WireGuard, which is often cut by signature.
+- **AmneziaWG** — WireGuard with obfuscation: the handshake and packets differ from standard WireGuard.
 - **Hysteria2** — a fast QUIC-based protocol with Salamander obfuscation and port hopping; holds speed well on lossy links.
 - **VK-TURN** — raises a local WireGuard and pushes it through VK's call TURN servers; several "calls" are bonded for throughput.
 - **MasterDNS** — a tunnel over DNS queries; works where only DNS is open.
-- **olcRTC** — video-call disguise: traffic rides real conferencing services and looks like a live call to DPI.
+- **olcRTC** — a transport over video-conferencing services: traffic is carried on top of a real call.
 - **Telegram proxy over WARP** — a standalone background proxy for Telegram on top of Cloudflare WARP.
 
 ---
@@ -221,7 +221,7 @@ Found a bug or want a feature? Open an issue or PR — see **[CONTRIBUTING.md](C
 ```
 YPtun/            Kotlin Multiplatform app — Compose UI, Android VpnService, engines
 cores/            Go glue: one gomobile AAR from sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + MasterDNS
-olcrtc/           olcRTC — video-call disguise transport          (third-party, vendored)
+olcrtc/           olcRTC — video-call based transport             (third-party, vendored)
 sing-box/         sing-box / libbox                                (vendored)
 awgproxy/         AmneziaWG wrapper → local SOCKS5                 (Go module)
 hysteria2proxy/   Hysteria2 (apernet) wrapper → local SOCKS5       (Go module)
@@ -278,25 +278,8 @@ Signed are the Windows installer and portable built by [GitHub Actions](.github/
 - Committers and reviewers: [repository contributors](https://github.com/yanisplugg/yptun/graphs/contributors)
 - Approvers: [repository owner](https://github.com/yanisplugg)
 
-Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the circumvention services they choose), apart from checking GitHub for updates. Details are in [Permissions and why they are needed](#permissions-and-why-they-are-needed).
+Privacy: this program will not transfer any information to other networked systems unless specifically requested by the user (their servers, subscriptions and the connection services they choose), apart from checking GitHub for updates. Details are in [Permissions and why they are needed](#permissions-and-why-they-are-needed).
 
 ## License
 
 [GPL-3.0](LICENSE) — the app ships under the GNU GPL v3.0 because it bundles **sing-box** (also GPL-3.0): copyleft applies to the whole product. Vendored components keep their own licenses (`sing-box` — GPL-3.0, Xray — MPL-2.0, `amneziawg-go` — MIT, `olcrtc` — WTFPL, OpenFlux — GPL-3.0, qWDTT (`wdtt`) — GPL-3.0, MasterDnsVPN (`masterdns`) — MIT, `free-turn-proxy` — Happy Bunny License (MIT-style), Trust Tunnel — Apache-2.0, `hev-socks5-tunnel` — MIT, `tun2socks` — MIT).
-
-<div align="center">
-<br>
-
-<img src="docs/no-rkn.jpg" alt="No censorship" width="150">
-
-<br><br>
-
-> *"A nation that is afraid to let its people judge the truth and falsehood in an open market is a nation that is afraid of its people."*
->
-> — **John F. Kennedy**
-
-<br>
-
-<sub>For a free internet</sub>
-
-</div>
