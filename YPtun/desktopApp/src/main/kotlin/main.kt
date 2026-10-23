@@ -1014,6 +1014,11 @@ private fun runApp(args: Array<String>) = application {
                 OlcboxAppContent(
                     homeViewModel = dependencies.homeViewModel,
                     onExitClick = { quitApplication(dependencies) },
+                    appBehavior = appBehavior,
+                    onAppBehaviorChanged = dependencies.settings::setAppBehavior,
+                    onShareSubscriptionRequested = { url ->
+                        sharePayload = strings().subscriptionQr to ConfigShareService.subscriptionQrText(url)
+                    },
                     locationViewModel = dependencies.locationViewModel,
                     currentScreen = currentScreen,
                     onNavigate = { screen ->
@@ -1028,6 +1033,13 @@ private fun runApp(args: Array<String>) = application {
                                 reloadLocationsAfterImport()
                             }
                         }
+                    },
+                    onImportTextRequested = { text, onImported, onError ->
+                        dependencies.homeViewModel.onImportFullConfig(
+                            rawText = text,
+                            onComplete = { reloadLocationsAfterImport(onImported) },
+                            onError = onError
+                        )
                     },
                     onImportFromClipboardRequested = { onImported, onError ->
                         dependencies.homeViewModel.onPasteFromClipboard(
@@ -1092,7 +1104,7 @@ private fun runApp(args: Array<String>) = application {
                     onAppSettingsClick = { showDesktopSettings = true },
                     onSplitTunnelingClick = {},
                     confirmBeforeDelete = appBehavior.confirmBeforeDelete,
-                    allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
+                    allowVpsAutoInstall = true,
                     pingParallelism = appBehavior.effectivePingParallelism(),
                     freeServersLimit = appBehavior.freeServersLimit,
                     collapsedGroups = appBehavior.collapsedSubscriptionGroups,

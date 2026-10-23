@@ -866,6 +866,80 @@ interface Strings {
     val tlsFragmentXray: String
     val coreAuto: String
     fun advancedCoreSettings(core: String): String
+    val settingsSectionConnection: String
+    val notificationsSettingsTitle: String
+    val notificationsSettingsSubtitle: String
+    val advancedSettingsTitle: String
+    val advancedSettingsSubtitle: String
+    val aboutTitle: String
+    val aboutSubtitle: String
+    val coreVersionsLabel: String
+    val themeSection: String
+    val startupSection: String
+    val homeButtonsSection: String
+    val homeListSection: String
+    val homeSubscriptionsSection: String
+    val listViewTitle: String
+    val listViewSubtitle: String
+    val deletionSection: String
+    val pingSettingsTitle: String
+    val pingSpeedSection: String
+    val menuCleanupSection: String
+    val settingsSectionApp: String
+    val settingsSectionMore: String
+    val notificationVpnSection: String
+    val advancedConfigsSection: String
+    val helpSection: String
+    val deviceSection: String
+    val addTitle: String
+    val addLinkLabel: String
+    val addPaste: String
+    val addLinkHint: String
+    val addButton: String
+    val addFromQr: String
+    val addFromFile: String
+    val addNoSubscriptionSection: String
+    val addFreeServersSubtitle: String
+    val addManualTitle: String
+    val addManualSubtitle: String
+    val addDetectedJson: String
+    val freeServersHowMany: String
+    val freeServersSourceSection: String
+    val freeServersFind: String
+    val manualIntro: String
+    val manualViaServices: String
+    val manualOwnServer: String
+    val manualLinkNote: String
+    val engineStealthName: String
+    val engineStealthDesc: String
+    val engineChainName: String
+    val engineChainDesc: String
+    val engineVkTurnDesc: String
+    val engineOpenFluxDesc: String
+    val engineWireguardDesc: String
+    val engineSnolcDesc: String
+    val engineMasterDnsDesc: String
+    val engineStandardName: String
+    val engineStandardDesc: String
+    val engineGroupProxy: String
+    val engineTypeTitle: String
+    val howToConnectSection: String
+    val extraProtectionSection: String
+    val warpSubtitle: String
+    val autoInstallTitle: String
+    val autoInstallText: String
+    val autoInstallButton: String
+    val autoInstallOrManual: String
+    val deleteLocationButton: String
+    val subscriptionActionRefresh: String
+    val subscriptionActionShare: String
+    val subscriptionActionPanel: String
+    val subscriptionForAllServers: String
+    fun addDetectedMany(n: Int): String
+    fun addDetectedSubscription(host: String): String
+    fun addDetectedKey(proto: String): String
+    fun subscriptionExpiresIn(date: String, days: Long): String
+    fun subscriptionServersCount(total: Int, alive: Int?): String
 }
 
 object RuStrings : Strings {
@@ -1209,7 +1283,7 @@ object RuStrings : Strings {
     override fun addSelectedServers(count: Int) = "Добавить выбранные ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Добавлено рабочих серверов: $working из $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Проверено: $checked из $total (найдено: $found)"
-    override val freeServersStopKeep = "Остановить и показать найденные"
+    override val freeServersStopKeep = "Стоп и показать"
     override val pingPause = "Пауза"
     override val pingResume = "Продолжить"
     override val pingRestart = "Заново"
@@ -1526,7 +1600,7 @@ object RuStrings : Strings {
     override val pingVerify = "Нажмите для проверки доступности"
     override val connectivityCheck = "Проверка соединения"
     override val pingSettings = "Пинг"
-    override val pingSettingsSubtitle = "Способ проверки инбаундов"
+    override val pingSettingsSubtitle = "Способ, потоки, таймаут, точность"
     override val pingMethod = "Способ пинга"
     override val pingTarget = "Сайт для пинга"
     override val pingTargetHint = "Например: https://google.com"
@@ -1556,7 +1630,7 @@ object RuStrings : Strings {
     override val freeServersLimitTitle = "Лимит бесплатных серверов"
     override val freeServersLimitSubtitle = "Сколько серверов брать в «Бесплатных серверах»: первые N по приоритету источников. Больше — дольше проверка."
     override val freeServersLimitUnlimited = "Без лимита"
-    override val freeServersToBackground = "В фон"
+    override val freeServersToBackground = "Свернуть"
     override val freeServersPagesTitle = "Источник: GitHub Page"
     override val freeServersPagesSubtitle = "Бесплатные серверы брать из единого списка (до 20 000 vless-ссылок со всего GitHub, обновляется раз в час). Выкл — прежние источники"
     override val pingThreadsTitle = "Потоки пинга"
@@ -1622,6 +1696,80 @@ object RuStrings : Strings {
     override val tlsFragmentXray = "Фрагментация TLS (анти-DPI, Xray)"
     override val coreAuto = "Авто"
     override fun advancedCoreSettings(core: String) = "Дополнительные настройки $core"
+    override val settingsSectionConnection = "ПОДКЛЮЧЕНИЕ"
+    override val notificationsSettingsTitle = "Уведомления"
+    override val notificationsSettingsSubtitle = "Скорость и пинг в шторке, окончание подписки"
+    override val advancedSettingsTitle = "Дополнительно"
+    override val advancedSettingsSubtitle = "Движок VLESS, схемы URL, редактор конфигураций"
+    override val aboutTitle = "О приложении"
+    override val aboutSubtitle = "обновления, журнал, помощь"
+    override val coreVersionsLabel = "Версии ядер"
+    override val themeSection = "Тема"
+    override val startupSection = "Поведение"
+    override val homeButtonsSection = "Кнопки"
+    override val homeListSection = "Список конфигураций"
+    override val homeSubscriptionsSection = "Подписки"
+    override val listViewTitle = "Вид списка"
+    override val listViewSubtitle = "Как выглядят главный экран и список серверов"
+    override val deletionSection = "Удаление"
+    override val pingSettingsTitle = "Настройки пинга"
+    override val pingSpeedSection = "Скорость проверки"
+    override val menuCleanupSection = "Очистка"
+    override val settingsSectionApp = "Приложение"
+    override val settingsSectionMore = "Ещё"
+    override val notificationVpnSection = "Уведомление VPN"
+    override val advancedConfigsSection = "Конфигурации и ссылки"
+    override val helpSection = "Помощь"
+    override val deviceSection = "Устройство"
+    override val addTitle = "Добавить"
+    override val addLinkLabel = "Ссылка на подписку или ключ"
+    override val addPaste = "Вставить"
+    override val addLinkHint = "Можно несколько ссылок — каждую с новой строки"
+    override val addButton = "Добавить"
+    override val addFromQr = "QR-код"
+    override val addFromFile = "Из файла"
+    override val addNoSubscriptionSection = "Нет подписки?"
+    override val addFreeServersSubtitle = "Найдём рабочие в открытых списках"
+    override val addManualTitle = "Создать вручную"
+    override val addManualSubtitle = "olcRTC, VK-TURN, WireGuard и другие"
+    override val addDetectedJson = "Конфигурация JSON"
+    override val freeServersHowMany = "Сколько проверить"
+    override val freeServersSourceSection = "Источник"
+    override val freeServersFind = "Найти серверы"
+    override val manualIntro = "Выберите, через что пойдёт трафик. Поля для выбранного типа — на следующем шаге."
+    override val manualViaServices = "Через звонки и сервисы"
+    override val manualOwnServer = "Свой сервер"
+    override val manualLinkNote = "VLESS, VMess, Trojan, Shadowsocks и Hysteria2 добавляются ссылкой — вставьте её на прошлом экране."
+    override val engineStealthName = "olcRTC"
+    override val engineStealthDesc = "Туннель через комнату видеозвонка: Телемост, Jazz, WB Stream, Jitsi"
+    override val engineChainName = "olcRTC + прокси"
+    override val engineChainDesc = "Ваш прокси внутри туннеля olcRTC"
+    override val engineVkTurnDesc = "WireGuard через TURN-серверы звонков VK"
+    override val engineOpenFluxDesc = "Через Яндекс Документы или звонок MAX до своей ноды"
+    override val engineWireguardDesc = "Файл .conf или ключи вручную"
+    override val engineSnolcDesc = "Зашифрованный туннель по TCP до своей ноды"
+    override val engineMasterDnsDesc = "Туннель через DNS-запросы — когда открыт только DNS"
+    override val engineStandardName = "Прокси напрямую"
+    override val engineStandardDesc = "VLESS, VMess, Trojan, Shadowsocks — из ссылки или подписки"
+    override val engineGroupProxy = "Прокси"
+    override val engineTypeTitle = "Тип подключения"
+    override val howToConnectSection = "Как подключаться"
+    override val extraProtectionSection = "Дополнительная защита"
+    override val warpSubtitle = "Выход в интернет через Cloudflare WARP"
+    override val autoInstallTitle = "Установить сервер на VPS"
+    override val autoInstallText = "Подключимся к вашему VPS по SSH, поставим сервер и сами заполним поля ниже. Нужны только IP и пароль."
+    override val autoInstallButton = "Установить на VPS"
+    override val autoInstallOrManual = "Или заполните поля ниже вручную"
+    override val deleteLocationButton = "Удалить сервер"
+    override val subscriptionActionRefresh = "Обновить"
+    override val subscriptionActionShare = "Поделиться"
+    override val subscriptionActionPanel = "Панель"
+    override val subscriptionForAllServers = "Для всех серверов подписки"
+    override fun addDetectedMany(n: Int) = "Ссылок: $n"
+    override fun addDetectedSubscription(host: String) = if (host.isBlank()) "Подписка" else "Подписка · $host"
+    override fun addDetectedKey(proto: String) = "Ключ $proto"
+    override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "Закончилась $date" else "До $date · ещё $days ${ruPlural(days.toInt(), "день", "дня", "дней")}"
+    override fun subscriptionServersCount(total: Int, alive: Int?) = "Серверов: $total" + (alive?.let { " · отвечают $it" } ?: "")
 }
 
 object EnStrings : Strings {
@@ -1965,7 +2113,7 @@ object EnStrings : Strings {
     override fun addSelectedServers(count: Int) = "Add selected ($count)"
     override fun freeServersImported(working: Int, total: Int) = "Added working servers: $working of $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "Tested: $checked of $total (working: $found)"
-    override val freeServersStopKeep = "Stop and show what was found"
+    override val freeServersStopKeep = "Stop and show"
     override val pingPause = "Pause"
     override val pingResume = "Resume"
     override val pingRestart = "Restart"
@@ -2282,7 +2430,7 @@ object EnStrings : Strings {
     override val pingVerify = "Click to verify reachability"
     override val connectivityCheck = "Connectivity check"
     override val pingSettings = "Ping"
-    override val pingSettingsSubtitle = "How inbounds are probed"
+    override val pingSettingsSubtitle = "Method, threads, timeout, accuracy"
     override val pingMethod = "Ping method"
     override val pingTarget = "Ping target site"
     override val pingTargetHint = "e.g. https://google.com"
@@ -2312,7 +2460,7 @@ object EnStrings : Strings {
     override val freeServersLimitTitle = "Free servers limit"
     override val freeServersLimitSubtitle = "How many servers «Free servers» may take: the first N by source priority. More means a longer check."
     override val freeServersLimitUnlimited = "Unlimited"
-    override val freeServersToBackground = "Background"
+    override val freeServersToBackground = "Minimize"
     override val freeServersPagesTitle = "Source: GitHub Page"
     override val freeServersPagesSubtitle = "Take free servers from one combined list (up to 20,000 vless links harvested from GitHub, refreshed hourly). Off — the built-in sources"
     override val pingThreadsTitle = "Ping threads"
@@ -2378,6 +2526,80 @@ object EnStrings : Strings {
     override val tlsFragmentXray = "TLS fragment (anti-DPI, Xray)"
     override val coreAuto = "Auto"
     override fun advancedCoreSettings(core: String) = "Advanced $core settings"
+    override val settingsSectionConnection = "CONNECTION"
+    override val notificationsSettingsTitle = "Notifications"
+    override val notificationsSettingsSubtitle = "Speed and ping in the shade, subscription expiry"
+    override val advancedSettingsTitle = "Advanced"
+    override val advancedSettingsSubtitle = "VLESS engine, URL schemes, config editing"
+    override val aboutTitle = "About"
+    override val aboutSubtitle = "updates, log, help"
+    override val coreVersionsLabel = "Core versions"
+    override val themeSection = "Theme"
+    override val startupSection = "Behavior"
+    override val homeButtonsSection = "Buttons"
+    override val homeListSection = "Configuration list"
+    override val homeSubscriptionsSection = "Subscriptions"
+    override val listViewTitle = "List view"
+    override val listViewSubtitle = "How the home screen and the server list look"
+    override val deletionSection = "Deleting"
+    override val pingSettingsTitle = "Ping settings"
+    override val pingSpeedSection = "Check speed"
+    override val menuCleanupSection = "Clean up"
+    override val settingsSectionApp = "App"
+    override val settingsSectionMore = "More"
+    override val notificationVpnSection = "VPN notification"
+    override val advancedConfigsSection = "Configs and links"
+    override val helpSection = "Help"
+    override val deviceSection = "Device"
+    override val addTitle = "Add"
+    override val addLinkLabel = "Subscription link or key"
+    override val addPaste = "Paste"
+    override val addLinkHint = "Several links work too — one per line"
+    override val addButton = "Add"
+    override val addFromQr = "QR code"
+    override val addFromFile = "From file"
+    override val addNoSubscriptionSection = "No subscription?"
+    override val addFreeServersSubtitle = "We'll find working ones in public lists"
+    override val addManualTitle = "Create manually"
+    override val addManualSubtitle = "olcRTC, VK-TURN, WireGuard and more"
+    override val addDetectedJson = "JSON config"
+    override val freeServersHowMany = "How many to check"
+    override val freeServersSourceSection = "Source"
+    override val freeServersFind = "Find servers"
+    override val manualIntro = "Pick what the traffic goes through. The fields for it come next."
+    override val manualViaServices = "Through calls and services"
+    override val manualOwnServer = "Your own server"
+    override val manualLinkNote = "VLESS, VMess, Trojan, Shadowsocks and Hysteria2 are added by link — paste it on the previous screen."
+    override val engineStealthName = "olcRTC"
+    override val engineStealthDesc = "A tunnel through a video call room: Telemost, Jazz, WB Stream, Jitsi"
+    override val engineChainName = "olcRTC + proxy"
+    override val engineChainDesc = "Your proxy inside the olcRTC tunnel"
+    override val engineVkTurnDesc = "WireGuard over VK call TURN servers"
+    override val engineOpenFluxDesc = "Through Yandex Docs or a MAX call to your own node"
+    override val engineWireguardDesc = "A .conf file or keys by hand"
+    override val engineSnolcDesc = "An encrypted TCP tunnel to your own node"
+    override val engineMasterDnsDesc = "A tunnel over DNS queries — for when only DNS gets through"
+    override val engineStandardName = "Direct proxy"
+    override val engineStandardDesc = "VLESS, VMess, Trojan, Shadowsocks — from a link or a subscription"
+    override val engineGroupProxy = "Proxy"
+    override val engineTypeTitle = "Connection type"
+    override val howToConnectSection = "How to connect"
+    override val extraProtectionSection = "Extra protection"
+    override val warpSubtitle = "Go out to the internet through Cloudflare WARP"
+    override val autoInstallTitle = "Install the server on a VPS"
+    override val autoInstallText = "We'll connect to your VPS over SSH, install the server and fill in the fields below. All it takes is the IP and the password."
+    override val autoInstallButton = "Install on VPS"
+    override val autoInstallOrManual = "Or fill in the fields below by hand"
+    override val deleteLocationButton = "Delete server"
+    override val subscriptionActionRefresh = "Refresh"
+    override val subscriptionActionShare = "Share"
+    override val subscriptionActionPanel = "Panel"
+    override val subscriptionForAllServers = "For every server of the subscription"
+    override fun addDetectedMany(n: Int) = "Links: $n"
+    override fun addDetectedSubscription(host: String) = if (host.isBlank()) "Subscription" else "Subscription · $host"
+    override fun addDetectedKey(proto: String) = "$proto key"
+    override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "Ended $date" else "Until $date · $days ${if (days == 1L) "day" else "days"} left"
+    override fun subscriptionServersCount(total: Int, alive: Int?) = "Servers: $total" + (alive?.let { " · answering $it" } ?: "")
 }
 
 object FaStrings : Strings {
@@ -2721,7 +2943,7 @@ object FaStrings : Strings {
     override fun addSelectedServers(count: Int) = "افزودن موارد انتخاب‌شده ($count)"
     override fun freeServersImported(working: Int, total: Int) = "سرورهای فعال افزوده شد: $working از $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "بررسی شد: $checked از $total (فعال: $found)"
-    override val freeServersStopKeep = "توقف و نمایش موارد یافت‌شده"
+    override val freeServersStopKeep = "توقف و نمایش"
     override val pingPause = "مکث"
     override val pingResume = "ادامه"
     override val pingRestart = "از نو"
@@ -3038,7 +3260,7 @@ object FaStrings : Strings {
     override val pingVerify = "برای بررسی دسترس‌پذیری کلیک کنید"
     override val connectivityCheck = "بررسی اتصال"
     override val pingSettings = "پینگ"
-    override val pingSettingsSubtitle = "نحوه بررسی ورودی‌ها"
+    override val pingSettingsSubtitle = "روش، رشته‌ها، مهلت، دقت"
     override val pingMethod = "روش پینگ"
     override val pingTarget = "سایت هدف پینگ"
     override val pingTargetHint = "مثال: https://google.com"
@@ -3068,7 +3290,7 @@ object FaStrings : Strings {
     override val freeServersLimitTitle = "سقف سرورهای رایگان"
     override val freeServersLimitSubtitle = "حداکثر تعداد سرورهای «سرورهای رایگان»: N سرور اول بر اساس اولویت منبع. تعداد بیشتر، بررسی طولانی‌تر."
     override val freeServersLimitUnlimited = "نامحدود"
-    override val freeServersToBackground = "پس‌زمینه"
+    override val freeServersToBackground = "کوچک کردن"
     override val freeServersPagesTitle = "منبع: GitHub Page"
     override val freeServersPagesSubtitle = "سرورهای رایگان از یک فهرست واحد گرفته شوند (تا ۲۰٬۰۰۰ لینک vless از سراسر GitHub، هر ساعت به‌روز می‌شود). خاموش — منابع قبلی"
     override val pingThreadsTitle = "رشته‌های پینگ"
@@ -3134,6 +3356,80 @@ object FaStrings : Strings {
     override val tlsFragmentXray = "تکه‌تکه‌سازی TLS (ضد DPI، Xray)"
     override val coreAuto = "خودکار"
     override fun advancedCoreSettings(core: String) = "تنظیمات پیشرفتهٔ $core"
+    override val settingsSectionConnection = "اتصال"
+    override val notificationsSettingsTitle = "اعلان‌ها"
+    override val notificationsSettingsSubtitle = "سرعت و پینگ در اعلان، پایان اشتراک"
+    override val advancedSettingsTitle = "پیشرفته"
+    override val advancedSettingsSubtitle = "موتور VLESS، طرح‌های URL، ویرایش پیکربندی"
+    override val aboutTitle = "درباره برنامه"
+    override val aboutSubtitle = "به‌روزرسانی‌ها، گزارش، راهنما"
+    override val coreVersionsLabel = "نسخهٔ هسته‌ها"
+    override val themeSection = "پوسته"
+    override val startupSection = "رفتار"
+    override val homeButtonsSection = "دکمه‌ها"
+    override val homeListSection = "فهرست پیکربندی‌ها"
+    override val homeSubscriptionsSection = "اشتراک‌ها"
+    override val listViewTitle = "نمای فهرست"
+    override val listViewSubtitle = "ظاهر صفحه اصلی و فهرست سرورها"
+    override val deletionSection = "حذف"
+    override val pingSettingsTitle = "تنظیمات پینگ"
+    override val pingSpeedSection = "سرعت بررسی"
+    override val menuCleanupSection = "پاک‌سازی"
+    override val settingsSectionApp = "برنامه"
+    override val settingsSectionMore = "بیشتر"
+    override val notificationVpnSection = "اعلان VPN"
+    override val advancedConfigsSection = "پیکربندی‌ها و پیوندها"
+    override val helpSection = "راهنما"
+    override val deviceSection = "دستگاه"
+    override val addTitle = "افزودن"
+    override val addLinkLabel = "پیوند اشتراک یا کلید"
+    override val addPaste = "چسباندن"
+    override val addLinkHint = "چند پیوند هم می‌شود — هر کدام در یک خط"
+    override val addButton = "افزودن"
+    override val addFromQr = "کد QR"
+    override val addFromFile = "از فایل"
+    override val addNoSubscriptionSection = "اشتراک ندارید؟"
+    override val addFreeServersSubtitle = "سرورهای سالم را در فهرست‌های عمومی پیدا می‌کنیم"
+    override val addManualTitle = "ساخت دستی"
+    override val addManualSubtitle = "olcRTC، VK-TURN، WireGuard و بیشتر"
+    override val addDetectedJson = "پیکربندی JSON"
+    override val freeServersHowMany = "چند سرور بررسی شود"
+    override val freeServersSourceSection = "منبع"
+    override val freeServersFind = "یافتن سرورها"
+    override val manualIntro = "انتخاب کنید ترافیک از چه راهی برود. فیلدهای آن در مرحله بعد می‌آیند."
+    override val manualViaServices = "از راه تماس‌ها و سرویس‌ها"
+    override val manualOwnServer = "سرور خودتان"
+    override val manualLinkNote = "VLESS، VMess، Trojan، Shadowsocks و Hysteria2 با پیوند افزوده می‌شوند — آن را در صفحه قبل بچسبانید."
+    override val engineStealthName = "olcRTC"
+    override val engineStealthDesc = "تونل از راه اتاق تماس تصویری: Telemost، Jazz، WB Stream، Jitsi"
+    override val engineChainName = "olcRTC + پراکسی"
+    override val engineChainDesc = "پراکسی شما درون تونل olcRTC"
+    override val engineVkTurnDesc = "WireGuard از راه سرورهای TURN تماس‌های VK"
+    override val engineOpenFluxDesc = "از راه Yandex Docs یا تماس MAX تا گره خودتان"
+    override val engineWireguardDesc = "فایل .conf یا کلیدها به‌صورت دستی"
+    override val engineSnolcDesc = "تونل رمزنگاری‌شده TCP تا گره خودتان"
+    override val engineMasterDnsDesc = "تونل از راه درخواست‌های DNS — وقتی فقط DNS باز است"
+    override val engineStandardName = "پراکسی مستقیم"
+    override val engineStandardDesc = "VLESS، VMess، Trojan، Shadowsocks — از پیوند یا اشتراک"
+    override val engineGroupProxy = "پراکسی"
+    override val engineTypeTitle = "نوع اتصال"
+    override val howToConnectSection = "نحوه اتصال"
+    override val extraProtectionSection = "حفاظت بیشتر"
+    override val warpSubtitle = "خروج به اینترنت از راه Cloudflare WARP"
+    override val autoInstallTitle = "نصب سرور روی VPS"
+    override val autoInstallText = "با SSH به VPS شما وصل می‌شویم، سرور را نصب می‌کنیم و فیلدهای زیر را خودمان پر می‌کنیم. فقط IP و گذرواژه لازم است."
+    override val autoInstallButton = "نصب روی VPS"
+    override val autoInstallOrManual = "یا فیلدهای زیر را دستی پر کنید"
+    override val deleteLocationButton = "حذف سرور"
+    override val subscriptionActionRefresh = "به‌روزرسانی"
+    override val subscriptionActionShare = "اشتراک‌گذاری"
+    override val subscriptionActionPanel = "پنل"
+    override val subscriptionForAllServers = "برای همه سرورهای اشتراک"
+    override fun addDetectedMany(n: Int) = "پیوندها: $n"
+    override fun addDetectedSubscription(host: String) = if (host.isBlank()) "اشتراک" else "اشتراک · $host"
+    override fun addDetectedKey(proto: String) = "کلید $proto"
+    override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "پایان یافت $date" else "تا $date · $days روز مانده"
+    override fun subscriptionServersCount(total: Int, alive: Int?) = "سرورها: $total" + (alive?.let { " · پاسخ‌گو $it" } ?: "")
 }
 
 object ZhStrings : Strings {
@@ -3477,7 +3773,7 @@ object ZhStrings : Strings {
     override fun addSelectedServers(count: Int) = "添加所选节点 ($count)"
     override fun freeServersImported(working: Int, total: Int) = "已添加可用节点：$working / $total"
     override fun freeServersProgressText(checked: Int, total: Int, found: Int) = "已测试：$checked / $total（可用：$found）"
-    override val freeServersStopKeep = "停止并显示已找到的"
+    override val freeServersStopKeep = "停止并显示"
     override val pingPause = "暂停"
     override val pingResume = "继续"
     override val pingRestart = "重新开始"
@@ -3794,7 +4090,7 @@ object ZhStrings : Strings {
     override val pingVerify = "点击以验证可达性"
     override val connectivityCheck = "连通性检查"
     override val pingSettings = "延迟测试"
-    override val pingSettingsSubtitle = "如何探测节点"
+    override val pingSettingsSubtitle = "方式、线程、超时、精度"
     override val pingMethod = "测试方法"
     override val pingTarget = "测试目标站点"
     override val pingTargetHint = "例如 https://google.com"
@@ -3824,7 +4120,7 @@ object ZhStrings : Strings {
     override val freeServersLimitTitle = "免费节点上限"
     override val freeServersLimitSubtitle = "“免费节点”最多取多少个：按来源优先级取前 N 个。越多，检测越久。"
     override val freeServersLimitUnlimited = "不限"
-    override val freeServersToBackground = "转后台"
+    override val freeServersToBackground = "收起"
     override val freeServersPagesTitle = "来源：GitHub Page"
     override val freeServersPagesSubtitle = "免费节点取自统一列表（从 GitHub 汇总最多 20000 条 vless 链接，每小时更新）。关闭 — 使用内置来源"
     override val pingThreadsTitle = "测试线程"
@@ -3890,4 +4186,78 @@ object ZhStrings : Strings {
     override val tlsFragmentXray = "TLS 分片（反 DPI，Xray）"
     override val coreAuto = "自动"
     override fun advancedCoreSettings(core: String) = "$core 高级设置"
+    override val settingsSectionConnection = "连接"
+    override val notificationsSettingsTitle = "通知"
+    override val notificationsSettingsSubtitle = "通知栏中的速度和延迟、订阅到期"
+    override val advancedSettingsTitle = "高级"
+    override val advancedSettingsSubtitle = "VLESS 引擎、URL 方案、配置编辑"
+    override val aboutTitle = "关于"
+    override val aboutSubtitle = "更新、日志、帮助"
+    override val coreVersionsLabel = "核心版本"
+    override val themeSection = "主题"
+    override val startupSection = "行为"
+    override val homeButtonsSection = "按钮"
+    override val homeListSection = "配置列表"
+    override val homeSubscriptionsSection = "订阅"
+    override val listViewTitle = "列表视图"
+    override val listViewSubtitle = "主屏幕和服务器列表的外观"
+    override val deletionSection = "删除"
+    override val pingSettingsTitle = "延迟测试设置"
+    override val pingSpeedSection = "测试速度"
+    override val menuCleanupSection = "清理"
+    override val settingsSectionApp = "应用"
+    override val settingsSectionMore = "更多"
+    override val notificationVpnSection = "VPN 通知"
+    override val advancedConfigsSection = "配置与链接"
+    override val helpSection = "帮助"
+    override val deviceSection = "设备"
+    override val addTitle = "添加"
+    override val addLinkLabel = "订阅链接或密钥"
+    override val addPaste = "粘贴"
+    override val addLinkHint = "也可以多个链接——每行一个"
+    override val addButton = "添加"
+    override val addFromQr = "二维码"
+    override val addFromFile = "从文件"
+    override val addNoSubscriptionSection = "没有订阅？"
+    override val addFreeServersSubtitle = "从公开列表中找出可用的"
+    override val addManualTitle = "手动创建"
+    override val addManualSubtitle = "olcRTC、VK-TURN、WireGuard 等"
+    override val addDetectedJson = "JSON 配置"
+    override val freeServersHowMany = "检查数量"
+    override val freeServersSourceSection = "来源"
+    override val freeServersFind = "查找服务器"
+    override val manualIntro = "选择流量的通道。所选类型的字段在下一步填写。"
+    override val manualViaServices = "通过通话和服务"
+    override val manualOwnServer = "自己的服务器"
+    override val manualLinkNote = "VLESS、VMess、Trojan、Shadowsocks 和 Hysteria2 通过链接添加——请在上一页粘贴。"
+    override val engineStealthName = "olcRTC"
+    override val engineStealthDesc = "通过视频通话房间的隧道：Telemost、Jazz、WB Stream、Jitsi"
+    override val engineChainName = "olcRTC + 代理"
+    override val engineChainDesc = "你的代理在 olcRTC 隧道内"
+    override val engineVkTurnDesc = "通过 VK 通话 TURN 服务器的 WireGuard"
+    override val engineOpenFluxDesc = "通过 Yandex 文档或 MAX 通话到你自己的节点"
+    override val engineWireguardDesc = ".conf 文件或手动填写密钥"
+    override val engineSnolcDesc = "到你自己节点的加密 TCP 隧道"
+    override val engineMasterDnsDesc = "通过 DNS 查询的隧道——仅 DNS 可用时"
+    override val engineStandardName = "直连代理"
+    override val engineStandardDesc = "VLESS、VMess、Trojan、Shadowsocks——来自链接或订阅"
+    override val engineGroupProxy = "代理"
+    override val engineTypeTitle = "连接类型"
+    override val howToConnectSection = "连接方式"
+    override val extraProtectionSection = "额外保护"
+    override val warpSubtitle = "通过 Cloudflare WARP 访问互联网"
+    override val autoInstallTitle = "在 VPS 上安装服务器"
+    override val autoInstallText = "我们会通过 SSH 连接你的 VPS，安装服务器并自动填写下面的字段。只需要 IP 和密码。"
+    override val autoInstallButton = "安装到 VPS"
+    override val autoInstallOrManual = "或手动填写下面的字段"
+    override val deleteLocationButton = "删除服务器"
+    override val subscriptionActionRefresh = "更新"
+    override val subscriptionActionShare = "分享"
+    override val subscriptionActionPanel = "面板"
+    override val subscriptionForAllServers = "适用于订阅的所有服务器"
+    override fun addDetectedMany(n: Int) = "链接：$n"
+    override fun addDetectedSubscription(host: String) = if (host.isBlank()) "订阅" else "订阅 · $host"
+    override fun addDetectedKey(proto: String) = "$proto 密钥"
+    override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "已于 $date 到期" else "至 $date · 剩余 $days 天"
+    override fun subscriptionServersCount(total: Int, alive: Int?) = "服务器：$total" + (alive?.let { " · 响应 $it" } ?: "")
 }

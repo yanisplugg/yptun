@@ -32,6 +32,8 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -126,6 +128,8 @@ fun LazyListScope.locationSelectorContent(
     onChangeSubscriptionUrl: (oldUrl: String, newUrl: String, groupKey: String) -> Unit = { _, _, _ -> },
     // Writes one proxy link as the cascade of every server of the subscription (blank removes it).
     onSetSubscriptionCascade: (url: String, link: String) -> Unit = { _, _ -> },
+    // Share a subscription (its link / QR) from its own sheet; null hides «Поделиться».
+    onShareSubscription: ((url: String) -> Unit)? = null,
     // Pin / unpin one server of the free-servers list (a pinned one survives the next search).
     onToggleFreeServerPinned: (storageId: String, pinned: Boolean) -> Unit = { _, _ -> },
     // Servers a stopped free search has not checked yet; > 0 adds "continue the search" to that group's menu.
@@ -322,7 +326,10 @@ fun LazyListScope.locationSelectorContent(
                             onCopyJson = { subscriptionJson(group) },
                             onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(groupKey))) },
                             onDelete = { onDeleteSubscription(groupIds) },
-                            subscriptionPageUrl = groupWebPageUrl
+                            subscriptionPageUrl = groupWebPageUrl,
+                            groupLocations = group,
+                            pingsState = pingsState,
+                            onShare = groupSubUrl?.takeIf { !isFree }?.let { url -> onShareSubscription?.let { share -> { share(url) } } }
                         )
                     }
 
@@ -505,7 +512,11 @@ fun LazyListScope.locationSelectorContent(
                                                 onCopyJson = { subscriptionJson(mGroup) },
                                                 onMoveToFolder = { onRequestMoveToFolder(listOf(CustomGroup.subMember(mKey))) },
                                                 onDelete = { onDeleteSubscription(mIds) },
-                                                subscriptionPageUrl = mWebPageUrl
+                                                subscriptionPageUrl = mWebPageUrl,
+                                                groupLocations = mGroup,
+                                                pingsState = pingsState,
+                                                onShare = mSubUrl?.takeIf { it.trim() != org.olcbox.app.ui.features.home.FREE_SERVERS_URL }
+                                                    ?.let { url -> onShareSubscription?.let { share -> { share(url) } } }
                                             )
                                         }
                                         if (!mCollapsed) {
@@ -1049,7 +1060,11 @@ private fun SubscriptionGroupMenu(
     onCopyJson: (() -> String?)? = null,
     onMoveToFolder: () -> Unit,
     onDelete: () -> Unit,
-    subscriptionPageUrl: String? = null
+    subscriptionPageUrl: String? = null,
+    // For the subscription sheet: its servers (stats) and how to share it (null hides «Поделиться»).
+    groupLocations: List<LocationItem> = emptyList(),
+    pingsState: PingsState? = null,
+    onShare: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -1080,75 +1095,20 @@ private fun SubscriptionGroupMenu(
     }
 
     if (showingUrl && subscriptionUrl != null) {
-        var draft by remember(subscriptionUrl) { mutableStateOf(subscriptionUrl) }
-        val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-        val trimmed = draft.trim()
-        val valid = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
-        var cascadeDraft by remember(cascadeLink) { mutableStateOf(cascadeLink.orEmpty()) }
-        var jsonCopied by remember { mutableStateOf<Boolean?>(null) }
-        val cascadeTrimmed = cascadeDraft.trim()
-        AlertDialog(
-            onDismissRequest = { showingUrl = false },
-            title = { Text(s.subscriptionLink) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        readOnly = onChangeUrl == null,
-                        isError = onChangeUrl != null && !valid,
-                        minLines = 2,
-                        supportingText = { Text(if (onChangeUrl != null) s.subscriptionLinkHint else s.subscriptionLinkReadOnlyHint) }
-                    )
-                    if (onSetCascade != null) {
-                        OutlinedTextField(
-                            value = cascadeDraft,
-                            onValueChange = { cascadeDraft = it },
-                            label = { Text(s.subscriptionCascadeTitle) },
-                            minLines = 2,
-                            supportingText = { Text(s.subscriptionCascadeHint) }
-                        )
-                        TextButton(
-                            enabled = cascadeTrimmed != cascadeLink.orEmpty().trim(),
-                            onClick = { onSetCascade(cascadeTrimmed); showingUrl = false }
-                        ) { Text(if (cascadeTrimmed.isEmpty()) s.subscriptionCascadeRemove else s.subscriptionCascadeApply) }
-                    }
-                    if (onCopyJson != null) {
-                        TextButton(onClick = {
-                            val json = onCopyJson()
-                            if (json != null) clipboard.setText(androidx.compose.ui.text.AnnotatedString(json))
-                            jsonCopied = json != null
-                        }) {
-                            Text(
-                                when (jsonCopied) {
-                                    true -> s.subscriptionJsonCopied
-                                    false -> s.subscriptionJsonEmpty
-                                    null -> s.subscriptionCopyJson
-                                }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                if (onChangeUrl != null) {
-                    TextButton(
-                        enabled = valid && trimmed != subscriptionUrl.trim(),
-                        onClick = { onChangeUrl(trimmed); showingUrl = false }
-                    ) { Text(s.save) }
-                } else {
-                    TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(subscriptionUrl)) }) { Text(s.copy) }
-                    if (onChangeUrl != null) TextButton(onClick = { showingUrl = false }) { Text(s.cancel) }
-                }
-            }
+        SubscriptionSheet(
+            groupLocations = groupLocations,
+            pingsState = pingsState,
+            subscriptionUrl = subscriptionUrl,
+            onChangeUrl = onChangeUrl,
+            autoUpdateEnabled = autoUpdateEnabled,
+            onToggleAutoUpdate = onToggleAutoUpdate,
+            onRefreshSubscription = onRefreshSubscription,
+            onShare = onShare,
+            subscriptionPageUrl = subscriptionPageUrl,
+            cascadeLink = cascadeLink,
+            onSetCascade = onSetCascade,
+            onCopyJson = onCopyJson,
+            onDismiss = { showingUrl = false }
         )
     }
 
@@ -1314,6 +1274,237 @@ private fun SubscriptionGroupMenu(
                     expanded = false
                 }
             )
+        }
+    }
+}
+
+/**
+ * The subscription's own sheet (opened from «Ссылка подписки» in its ⋮ menu): what the panel reports about
+ * it (traffic, end date, last refresh, how many servers answer), the everyday actions, its link and
+ * auto-refresh, and what applies to all of its servers (cascade, JSON).
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun SubscriptionSheet(
+    groupLocations: List<LocationItem>,
+    pingsState: PingsState?,
+    subscriptionUrl: String,
+    onChangeUrl: ((String) -> Unit)?,
+    autoUpdateEnabled: Boolean,
+    onToggleAutoUpdate: () -> Unit,
+    onRefreshSubscription: (() -> Unit)?,
+    onShare: (() -> Unit)?,
+    subscriptionPageUrl: String?,
+    cascadeLink: String?,
+    onSetCascade: ((String) -> Unit)?,
+    onCopyJson: (() -> String?)?,
+    onDismiss: () -> Unit
+) {
+    val s = org.olcbox.app.ui.i18n.LocalStrings.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val first = groupLocations.firstOrNull()
+    val info = first?.subscriptionInfo()
+    val host = Regex("^https?://([^/?#:]+)", RegexOption.IGNORE_CASE).find(subscriptionUrl.trim())?.groupValues?.get(1)
+    var editingUrl by remember { mutableStateOf(false) }
+    var urlDraft by remember(subscriptionUrl) { mutableStateOf(subscriptionUrl) }
+    var cascadeDraft by remember(cascadeLink) { mutableStateOf(cascadeLink.orEmpty()) }
+    var jsonCopied by remember { mutableStateOf<Boolean?>(null) }
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = first?.subscriptionTitle().orEmpty().ifBlank { s.subscriptionsSection },
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (host != null) {
+                Text(host, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            // What the panel says about it.
+            // Only after a ping pass: before it nothing has answered yet, and "0 answering" would read as dead servers.
+            val alive = pingsState?.let { ps -> groupLocations.count { ps.pingFor(it.storageId) != null } }?.takeIf { it > 0 }
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TrafficProgressBar(location = first)
+                    info?.expiryDateTime?.let { date ->
+                        Text(
+                            text = s.subscriptionExpiresIn(date, info.daysLeft ?: 0L),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (info.expiryUrgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    listOfNotNull(info?.updatedAt, info?.interval).takeIf { it.isNotEmpty() }?.let { parts ->
+                        Text(
+                            text = parts.joinToString(" · "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = s.subscriptionServersCount(groupLocations.size, alive),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // The everyday actions.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (onRefreshSubscription != null) {
+                    SubscriptionAction(s.subscriptionActionRefresh, Icons.Outlined.Refresh, Modifier.weight(1f)) {
+                        onRefreshSubscription()
+                        onDismiss()
+                    }
+                }
+                if (onShare != null) {
+                    SubscriptionAction(s.subscriptionActionShare, Icons.Outlined.Share, Modifier.weight(1f)) {
+                        onShare()
+                        onDismiss()
+                    }
+                }
+                if (!subscriptionPageUrl.isNullOrBlank()) {
+                    SubscriptionAction(s.subscriptionActionPanel, Icons.Outlined.OpenInNew, Modifier.weight(1f)) {
+                        runCatching { uriHandler.openUri(subscriptionPageUrl) }
+                    }
+                }
+            }
+
+            org.olcbox.app.ui.components.SettingsCaption(s.subscriptionLink)
+            org.olcbox.app.ui.components.SettingsCard {
+                if (editingUrl && onChangeUrl != null) {
+                    val trimmed = urlDraft.trim()
+                    val valid = trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = urlDraft,
+                            onValueChange = { urlDraft = it },
+                            isError = !valid,
+                            minLines = 2,
+                            supportingText = { Text(s.subscriptionLinkHint) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { editingUrl = false; urlDraft = subscriptionUrl }) { Text(s.cancel) }
+                            FilledTonalButton(
+                                enabled = valid && trimmed != subscriptionUrl.trim(),
+                                onClick = { onChangeUrl(trimmed); onDismiss() }
+                            ) { Text(s.save) }
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = subscriptionUrl,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(subscriptionUrl)) }) {
+                            Icon(Icons.Outlined.ContentCopy, contentDescription = s.copy, tint = MaterialTheme.colorScheme.primary)
+                        }
+                        if (onChangeUrl != null) {
+                            IconButton(onClick = { editingUrl = true }) {
+                                Icon(Icons.Outlined.Edit, contentDescription = s.subscriptionLink, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+                org.olcbox.app.ui.components.SettingsCardDivider()
+                org.olcbox.app.ui.components.SettingsCardToggle(
+                    title = s.groupAutoUpdate,
+                    subtitle = info?.interval,
+                    checked = autoUpdateEnabled,
+                    onCheckedChange = { onToggleAutoUpdate() }
+                )
+            }
+
+            if (onSetCascade != null || onCopyJson != null) {
+                org.olcbox.app.ui.components.SettingsCaption(s.subscriptionForAllServers)
+                org.olcbox.app.ui.components.SettingsCard {
+                    if (onSetCascade != null) {
+                        val cascadeTrimmed = cascadeDraft.trim()
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedTextField(
+                                value = cascadeDraft,
+                                onValueChange = { cascadeDraft = it },
+                                label = { Text(s.subscriptionCascadeTitle) },
+                                minLines = 2,
+                                supportingText = { Text(s.subscriptionCascadeHint) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            FilledTonalButton(
+                                enabled = cascadeTrimmed != cascadeLink.orEmpty().trim(),
+                                onClick = { onSetCascade(cascadeTrimmed); onDismiss() }
+                            ) { Text(if (cascadeTrimmed.isEmpty()) s.subscriptionCascadeRemove else s.subscriptionCascadeApply) }
+                        }
+                    }
+                    if (onSetCascade != null && onCopyJson != null) org.olcbox.app.ui.components.SettingsCardDivider()
+                    if (onCopyJson != null) {
+                        org.olcbox.app.ui.components.SettingsCardRow(
+                            title = when (jsonCopied) {
+                                true -> s.subscriptionJsonCopied
+                                false -> s.subscriptionJsonEmpty
+                                null -> s.subscriptionCopyJson
+                            },
+                            showChevron = false,
+                            onClick = {
+                                val json = onCopyJson()
+                                if (json != null) clipboard.setText(androidx.compose.ui.text.AnnotatedString(json))
+                                jsonCopied = json != null
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubscriptionAction(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        onClick = onClick
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+            Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

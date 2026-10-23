@@ -28,6 +28,8 @@ fun OlcboxAppContent(
     onToggleClick: () -> Unit,
     onImportFileRequested: () -> Unit,
     onImportFromClipboardRequested: (onImported: () -> Unit, onError: (String) -> Unit) -> Unit,
+    // The «Добавить» field: import this text and reload the list (null → import without a platform reload).
+    onImportTextRequested: ((text: String, onImported: () -> Unit, onError: (String) -> Unit) -> Unit)? = null,
     onScanQrRequested: () -> Unit = {},
     onCopyConfigRequested: () -> Unit,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
@@ -72,7 +74,11 @@ fun OlcboxAppContent(
     wideLayout: Boolean = false,
     extraConnectContent: (@Composable () -> Unit)? = null,
     // Desktop only: shows an exit button in the home screen's top bar.
-    onExitClick: (() -> Unit)? = null
+    onExitClick: (() -> Unit)? = null,
+    // For the home screen's ⋮ «Вид списка» / «Настройки пинга» sheets; null keeps them hidden.
+    appBehavior: AppBehaviorSettings? = null,
+    onAppBehaviorChanged: (AppBehaviorSettings) -> Unit = {},
+    onShareSubscriptionRequested: ((url: String) -> Unit)? = null
 ) {
     val homeScrollState = rememberLazyListState()
 
@@ -136,6 +142,16 @@ fun OlcboxAppContent(
                         locationViewModel.startEditing(null)
                         onNavigate(AppScreen.LocationSettings(null))
                     },
+                    onAddLocationOfType = { engine, wireguard ->
+                        locationViewModel.startEditing(null)
+                        if (wireguard) locationViewModel.onWireguardEngineSelected()
+                        else locationViewModel.onEngineChanged(engine)
+                        onNavigate(AppScreen.LocationSettings(null))
+                    },
+                    onImportTextRequested = onImportTextRequested
+                        ?: { text: String, onImported: () -> Unit, onError: (String) -> Unit ->
+                            homeViewModel.onImportFullConfig(text, onImported, onError)
+                        },
                     confirmBeforeDelete = confirmBeforeDelete,
                     pingParallelism = pingParallelism,
                     freeServersLimit = freeServersLimit,
@@ -168,7 +184,10 @@ fun OlcboxAppContent(
                     onToggleFolderCollapsed = onToggleFolderCollapsed,
                     wideLayout = wideLayout,
                     extraConnectContent = extraConnectContent,
-                    onExitClick = onExitClick
+                    onExitClick = onExitClick,
+                    appBehavior = appBehavior,
+                    onAppBehaviorChanged = onAppBehaviorChanged,
+                    onShareSubscriptionRequested = onShareSubscriptionRequested
                 )
             }
 
