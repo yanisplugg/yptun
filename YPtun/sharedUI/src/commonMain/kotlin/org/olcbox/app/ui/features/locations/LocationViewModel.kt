@@ -139,6 +139,9 @@ class LocationViewModel(
     var editingConfig by mutableStateOf(LocationConfig())
     var editingName by mutableStateOf("")
     var editingId by mutableStateOf<String?>(null)
+    /** The edited location comes from an encrypted subscription: its settings are not shown at all. */
+    val editingLocked: Boolean
+        get() = editingId?.let { id -> locations.find { it.storageId == id }?.metadata?.locked } == true
     var editingSubscriptionUrl by mutableStateOf<String?>(null)
         private set
     var editingSubscriptionIntervalHours by mutableStateOf(SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS.toString())

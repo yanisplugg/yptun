@@ -125,6 +125,7 @@ import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing
+import org.olcbox.app.ui.features.locations.components.LockedLocationNotice
 import org.olcbox.app.data.model.WarpMode
 import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
@@ -186,6 +187,10 @@ fun LocationSettingsScreen(
     // Settings → «Разрешить редактирование конфигураций»: every AmneziaWG parameter becomes a field.
     val allowConfigEditing = LocalAllowConfigEditing.current
     val name = viewModel.editingName
+    if (viewModel.editingLocked) {
+        LockedLocationNotice(name, onBack)
+        return
+    }
     val isSaving = viewModel.isSaving
     val normalizedTransport = LocationConfig.normalizeTransport(
         config.transport,

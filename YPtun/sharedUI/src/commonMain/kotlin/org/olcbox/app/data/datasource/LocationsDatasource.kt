@@ -41,6 +41,7 @@ import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
+import org.olcbox.app.data.share.SubscriptionCrypto
 import org.olcbox.app.data.importer.UriCodec
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
@@ -290,7 +291,9 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun exportBundle(): String {
-        return json.encodeToString(LocationBundleV4.serializer(), getBundle())
+        // Locations of an encrypted subscription stay out of the backup: it would spell out what the panel hides.
+        val bundle = getBundle()
+        return json.encodeToString(LocationBundleV4.serializer(), bundle.copy(locations = bundle.locations.filterNot { it.metadata?.locked == true }))
     }
 
     override suspend fun importText(text: String, subscriptionProxy: SubscriptionFetchProxy?): Boolean {
@@ -1385,7 +1388,22 @@ class LocationsRepositoryImpl(
         ).normalized()
     }
 
+    /** Decrypts `yptun-enc://` lines (encrypted panel subscription) and marks every resulting location locked. */
     private fun parseImport(
+        text: String,
+        subscriptionUrl: String? = null,
+        updateIntervalHours: Int? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): ParsedImport? {
+        val decrypted = SubscriptionCrypto.decryptLines(SubscriptionDecoder.toLinkText(text))
+        val parsed = parseImportPlain(if (decrypted.encrypted) decrypted.text else text, subscriptionUrl, updateIntervalHours, subscriptionMetadata)
+        if (!decrypted.encrypted || parsed == null) return parsed
+        return parsed.copy(bundle = parsed.bundle.copy(locations = parsed.bundle.locations.map {
+            it.copy(metadata = (it.metadata ?: LocationMetadata()).copy(locked = true)).normalized()
+        }))
+    }
+
+    private fun parseImportPlain(
         text: String,
         subscriptionUrl: String? = null,
         updateIntervalHours: Int? = null,

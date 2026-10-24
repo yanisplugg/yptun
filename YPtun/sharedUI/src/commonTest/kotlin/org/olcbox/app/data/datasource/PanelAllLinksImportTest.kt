@@ -139,4 +139,25 @@ class PanelAllLinksImportTest {
         val names = assertNotNull(source.stored).locations.map { it.name }
         assertTrue("🇷🇺Москва (TT)" in names, "names: $names")
     }
+
+    /** Encrypted subscription (panel "зашифрованная подписка"): lines are `yptun-enc://` + the same links, produced by app/subcrypt.py. */
+    @Test
+    fun encryptedSubscriptionImportsLocked() = runTest {
+        val enc = listOf(
+            "yptun-enc://v1/Do26vXS1jq3CxJ-6XGVBoB_4jbqnlre-nqdQuMD5T7aviLWfI7bNoZiPOuhAr-chTP5UP-B3JokCD1jKM-dQueHVwjHfACHsaTgui-gVVWyxDmPeuvnK_WftJUJ4MoPcVcAXg7dHBqgl5nHTtmvJhk321hM2IHAE7EIJlpjOviH7ZmV_OBQSVoC2kmG238V413NwI1-RLht0rshtEE_pK3unOouIVyEP1A2pn3-jlBUevA_OhDfAtcWqbLYbUSdQvqprt2Qw8fmI0vQQ41bE2izr923TjxGHHLtGSkDviu6B3r2S22ccIdjaLb65kQ",
+            "yptun-enc://v1/--RFO6lshrJ0RXSzEVdsGgyBexlKV-uMANoWEuemt0hUYRbTOtlhGy5TDczqWFNBr7wOFBpOTo-MqkmZ0HXUMXDBKR4Ge4lcDnyEf1MtXIEltN3f64zn1f9IReo3sleNAbMxm18vO0FfECq16Z2jzdlJ62v1KAkAHs73rmUPARQ",
+        )
+        val locked = FakeSource()
+        LocationsRepositoryImpl(locked).importText(enc.joinToString("\n") + "\n")
+        val stored = assertNotNull(locked.stored)
+        assertEquals(setOf(EngineType.OpenFlux, EngineType.Snolc), stored.locations.map { it.location.engine }.toSet())
+        assertTrue(stored.locations.all { it.metadata?.locked == true })
+
+        val open = FakeSource()
+        LocationsRepositoryImpl(open).importText(links.getValue("openflux") + "\n" + links.getValue("snolc") + "\n")
+        assertTrue(assertNotNull(open.stored).locations.none { it.metadata?.locked == true })
+
+        val backup = LocationsRepositoryImpl(locked).exportBundle()
+        assertTrue("cloud.mail.ru" !in backup && "locations\":[]" in backup.replace(" ", ""), "locked locations must stay out of the backup")
+    }
 }

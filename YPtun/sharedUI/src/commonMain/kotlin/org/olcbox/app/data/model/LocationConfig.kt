@@ -1527,7 +1527,9 @@ data class LocationMetadata(
     val mimo: String? = null,
     val subscription: SubscriptionMetadata? = null,
     /** Pinned by the user: a pinned free server survives the next free-servers search (see saveSelectedFreeServers). */
-    val pinned: Boolean = false
+    val pinned: Boolean = false,
+    /** From an encrypted subscription: the app shows no address, token or key of this location and does not share or export it. */
+    val locked: Boolean = false
 ) {
     fun normalized(): LocationMetadata {
         val normalizedSubscription = subscription
@@ -1556,6 +1558,7 @@ data class LocationMetadata(
                 comment.isNullOrBlank() &&
                 mimo.isNullOrBlank() &&
                 !pinned &&
+                !locked &&
                 (subscription == null || subscription.isEmpty())
     }
 }

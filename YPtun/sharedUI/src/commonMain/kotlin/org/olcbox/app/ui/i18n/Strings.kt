@@ -723,6 +723,7 @@ interface Strings {
 
     // Location settings
     val locationSettingsTitle: String
+    val lockedLocationNotice: String
     val proxyLinkOrConfig: String
     val proxyLink: String
     val fieldName: String
@@ -1455,13 +1456,20 @@ object RuStrings : Strings {
     override val speedMs = "мс"
     override val speedTestFailed = "Тест не удался. Проверьте подключение"
     override val notifSpeed = "Скорость в уведомлении"
-    override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
-    override val notifPingTitle = "Отображение пинга в уведомлении"
-    override val notifPingSubtitle = "Включено: пинг отдельной строкой над скоростью. Выключено: после названия сервера"
-    override val notifPingWord = "Пинг"
-    override val notifPingSourceTitle = "Откуда брать пинг"
-    override val notifPingSourceLast = "Последний (замеренный вручную)"
-    override val notifPingSourceAuto = "Автоматически в туннеле"
+    override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
+
+    override val notifPingTitle = "Отображение пинга в уведомлении"
+
+    override val notifPingSubtitle = "Включено: пинг отдельной строкой над скоростью. Выключено: после названия сервера"
+
+    override val notifPingWord = "Пинг"
+
+    override val notifPingSourceTitle = "Откуда брать пинг"
+
+    override val notifPingSourceLast = "Последний (замеренный вручную)"
+
+    override val notifPingSourceAuto = "Автоматически в туннеле"
+
     override val notifPingIntervalLabel = "Раз в сколько минут"
     override val speedOnHomeTitle = "Скорость на главном экране"
     override val speedOnHomeSubtitle = "Под выбранной конфигурацией показывать ↓ и ↑"
@@ -1587,6 +1595,7 @@ object RuStrings : Strings {
     override val noLogEntries = "Нет записей"
     override fun logEntriesCount(n: Int) = "Записей: $n"
     override val locationSettingsTitle = "Настройки локации"
+    override val lockedLocationNotice = "Подключение из зашифрованной подписки: адреса, токены и ключи скрыты и не копируются. Удалить его можно в списке."
     override val proxyLinkOrConfig = "Ссылка прокси или конфигурация"
     override val proxyLink = "Ссылка прокси"
     override val fieldName = "Название"
@@ -2309,13 +2318,20 @@ object EnStrings : Strings {
     override val speedMs = "ms"
     override val speedTestFailed = "The test failed. Check your connection"
     override val notifSpeed = "Speed in notification"
-    override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
-    override val notifPingTitle = "Ping in notification"
-    override val notifPingSubtitle = "On: ping on its own line above the speed. Off: after the server name"
-    override val notifPingWord = "Ping"
-    override val notifPingSourceTitle = "Ping source"
-    override val notifPingSourceLast = "Last one (measured by hand)"
-    override val notifPingSourceAuto = "Automatic, through the tunnel"
+    override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
+
+    override val notifPingTitle = "Ping in notification"
+
+    override val notifPingSubtitle = "On: ping on its own line above the speed. Off: after the server name"
+
+    override val notifPingWord = "Ping"
+
+    override val notifPingSourceTitle = "Ping source"
+
+    override val notifPingSourceLast = "Last one (measured by hand)"
+
+    override val notifPingSourceAuto = "Automatic, through the tunnel"
+
     override val notifPingIntervalLabel = "Every how many minutes"
     override val speedOnHomeTitle = "Speed on home screen"
     override val speedOnHomeSubtitle = "Show ↓ and ↑ under the selected configuration"
@@ -2441,6 +2457,7 @@ object EnStrings : Strings {
     override val noLogEntries = "No entries"
     override fun logEntriesCount(n: Int) = "$n entries"
     override val locationSettingsTitle = "Location settings"
+    override val lockedLocationNotice = "This connection comes from an encrypted subscription: addresses, tokens and keys are hidden and cannot be copied. You can remove it from the list."
     override val proxyLinkOrConfig = "Proxy link or config"
     override val proxyLink = "Proxy link"
     override val fieldName = "Name"
@@ -3179,13 +3196,20 @@ object FaStrings : Strings {
     override val speedMs = "میلی‌ثانیه"
     override val speedTestFailed = "تست ناموفق بود. اتصال را بررسی کنید"
     override val notifSpeed = "سرعت در اعلان"
-    override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
-    override val notifPingTitle = "نمایش پینگ در اعلان"
-    override val notifPingSubtitle = "روشن: پینگ در خط جداگانه بالای سرعت. خاموش: بعد از نام سرور"
-    override val notifPingWord = "پینگ"
-    override val notifPingSourceTitle = "منبع پینگ"
-    override val notifPingSourceLast = "آخرین (اندازه‌گیری دستی)"
-    override val notifPingSourceAuto = "خودکار، از طریق تونل"
+    override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
+
+    override val notifPingTitle = "نمایش پینگ در اعلان"
+
+    override val notifPingSubtitle = "روشن: پینگ در خط جداگانه بالای سرعت. خاموش: بعد از نام سرور"
+
+    override val notifPingWord = "پینگ"
+
+    override val notifPingSourceTitle = "منبع پینگ"
+
+    override val notifPingSourceLast = "آخرین (اندازه‌گیری دستی)"
+
+    override val notifPingSourceAuto = "خودکار، از طریق تونل"
+
     override val notifPingIntervalLabel = "هر چند دقیقه"
     override val speedOnHomeTitle = "سرعت در صفحه اصلی"
     override val speedOnHomeSubtitle = "نمایش ↓ و ↑ زیر پیکربندی انتخاب‌شده"
@@ -3295,6 +3319,7 @@ object FaStrings : Strings {
     override val noLogEntries = "ورودی‌ای نیست"
     override fun logEntriesCount(n: Int) = "$n ورودی"
     override val locationSettingsTitle = "تنظیمات موقعیت"
+    override val lockedLocationNotice = "این اتصال از یک اشتراک رمزگذاری‌شده است: نشانی‌ها، توکن‌ها و کلیدها پنهان‌اند و کپی نمی‌شوند. می‌توانید آن را از فهرست حذف کنید."
     override val proxyLinkOrConfig = "پیوند یا پیکربندی پراکسی"
     override val proxyLink = "پیوند پراکسی"
     override val fieldName = "نام"
@@ -4017,13 +4042,20 @@ object ZhStrings : Strings {
     override val speedMs = "毫秒"
     override val speedTestFailed = "测试失败，请检查连接"
     override val notifSpeed = "通知栏显示速度"
-    override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
-    override val notifPingTitle = "通知栏显示延迟"
-    override val notifPingSubtitle = "开启：延迟单独一行显示在速度上方。关闭：显示在服务器名称之后"
-    override val notifPingWord = "延迟"
-    override val notifPingSourceTitle = "延迟来源"
-    override val notifPingSourceLast = "最近一次（手动测得）"
-    override val notifPingSourceAuto = "通过隧道自动测量"
+    override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
+
+    override val notifPingTitle = "通知栏显示延迟"
+
+    override val notifPingSubtitle = "开启：延迟单独一行显示在速度上方。关闭：显示在服务器名称之后"
+
+    override val notifPingWord = "延迟"
+
+    override val notifPingSourceTitle = "延迟来源"
+
+    override val notifPingSourceLast = "最近一次（手动测得）"
+
+    override val notifPingSourceAuto = "通过隧道自动测量"
+
     override val notifPingIntervalLabel = "每隔多少分钟"
     override val speedOnHomeTitle = "主屏幕显示速度"
     override val speedOnHomeSubtitle = "在所选配置下方显示 ↓ 和 ↑"
@@ -4149,6 +4181,7 @@ object ZhStrings : Strings {
     override val noLogEntries = "无记录"
     override fun logEntriesCount(n: Int) = "$n 条记录"
     override val locationSettingsTitle = "节点设置"
+    override val lockedLocationNotice = "此连接来自加密订阅：地址、令牌和密钥均已隐藏，无法复制。可在列表中将其删除。"
     override val proxyLinkOrConfig = "代理链接或配置"
     override val proxyLink = "代理链接"
     override val fieldName = "名称"

@@ -21,7 +21,7 @@ import org.olcbox.app.data.share.inflateOrNull
  * multi-transport session (`--transports`, needs the link's `secret`). Optionally encrypted with the link's
  * `secret` (AES-256-GCM, KDF `context`) and `negotiate` (Session-only; without it the Classic-compatible
  * mode). A link is importable when every transport is a Yandex/Mail.ru/cups.online/Avito/direct one with
- * its coordinate and there is no stream mode; anything else yields null rather than a location that
+ * its coordinate (or a lone MAX one with `uid` + `token`) and there is no stream mode; anything else yields null rather than a location that
  * cannot connect.
  */
 object OpenFluxUriParser {
@@ -53,7 +53,17 @@ object OpenFluxUriParser {
         val single = items.singleOrNull()
         if (single != null && single.str("type") != OpenFluxConfig.TRANSPORT_DIRECT) {
             val type = single.str("type")
-            if (type !in OpenFluxConfig.TRANSPORTS || type == OpenFluxConfig.TRANSPORT_MAX) return null
+            if (type !in OpenFluxConfig.TRANSPORTS) return null
+            if (type == OpenFluxConfig.TRANSPORT_MAX) {
+                // The panel's own addition (not in the core's share format): the exit account's `uid` to call and the
+                // clients' MAX web `token`. The token makes the link secret, so the panel hands it out encrypted only.
+                val uid = single.str("uid")
+                val token = single.str("token")
+                if (uid.toLongOrNull() == null || token.isEmpty()) return null
+                return OpenFluxLink(root.str("name"), OpenFluxConfig(
+                    transport = type, maxUid = uid, maxToken = token, secret = secret, context = root.str("context"), negotiate = negotiate,
+                ).normalized())
+            }
             val url = single.str("url")
             if (!(url.startsWith("http", ignoreCase = true) || (type in ROOM_CARRIERS && url.length >= 16))) return null
             return OpenFluxLink(root.str("name"), OpenFluxConfig(
