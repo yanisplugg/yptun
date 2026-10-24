@@ -536,7 +536,7 @@ fun AndroidMainScreen(
         showSplitTunnelingButton = false,
         canScanQr = true,
         confirmBeforeDelete = appBehavior.confirmBeforeDelete,
-        allowVpsAutoInstall = true,
+        allowVpsAutoInstall = !appBehavior.hideSshInstall,
         pingParallelism = appBehavior.effectivePingParallelism(),
         freeServersLimit = appBehavior.freeServersLimit,
         updateAvailable = updateAvailable != null,

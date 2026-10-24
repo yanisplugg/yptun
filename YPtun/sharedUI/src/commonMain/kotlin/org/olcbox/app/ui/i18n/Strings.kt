@@ -563,6 +563,8 @@ interface Strings {
     val experimentalUnlocked: String
     val legacyUi: String
     val legacyUiSubtitle: String
+    val hideSshInstall: String
+    val hideSshInstallSubtitle: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
     val notifPingTitle: String
@@ -1410,6 +1412,8 @@ object RuStrings : Strings {
     override val experimentalUnlocked = "Экспериментальные настройки разблокированы"
     override val legacyUi = "Старый интерфейс"
     override val legacyUiSubtitle = "Прежний вид настроек, главного экрана и экрана сервера"
+    override val hideSshInstall = "Скрыть автоустановку по SSH"
+    override val hideSshInstallSubtitle = "Убрать кнопки установки на VPS с экрана сервера"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
     override val notifPingTitle = "Отображение пинга в уведомлении"
@@ -2242,6 +2246,8 @@ object EnStrings : Strings {
     override val experimentalUnlocked = "Experimental settings unlocked"
     override val legacyUi = "Old interface"
     override val legacyUiSubtitle = "The previous look of settings, the home screen and the server screen"
+    override val hideSshInstall = "Hide SSH auto-install"
+    override val hideSshInstallSubtitle = "Remove the install-on-VPS buttons from the server screen"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
     override val notifPingTitle = "Ping in notification"
@@ -3090,6 +3096,8 @@ object FaStrings : Strings {
     override val experimentalUnlocked = "تنظیمات آزمایشی باز شد"
     override val legacyUi = "رابط قدیمی"
     override val legacyUiSubtitle = "ظاهر قبلی تنظیمات، صفحه اصلی و صفحه سرور"
+    override val hideSshInstall = "پنهان کردن نصب خودکار SSH"
+    override val hideSshInstallSubtitle = "حذف دکمه‌های نصب روی VPS از صفحه سرور"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
     override val notifPingTitle = "نمایش پینگ در اعلان"
@@ -3906,6 +3914,8 @@ object ZhStrings : Strings {
     override val experimentalUnlocked = "已解锁实验性设置"
     override val legacyUi = "旧版界面"
     override val legacyUiSubtitle = "设置、主屏幕和服务器页面的旧版外观"
+    override val hideSshInstall = "隐藏 SSH 自动安装"
+    override val hideSshInstallSubtitle = "从服务器页面移除 VPS 安装按钮"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
     override val notifPingTitle = "通知栏显示延迟"

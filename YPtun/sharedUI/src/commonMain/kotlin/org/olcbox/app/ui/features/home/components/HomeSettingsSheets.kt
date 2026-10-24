@@ -150,6 +150,12 @@ fun ListViewSheet(
                 onChanged(settings.copy(confirmBeforeDelete = it))
             }
         }
+
+        SettingsCard {
+            SettingsCardToggle(s.hideSshInstall, s.hideSshInstallSubtitle, settings.hideSshInstall) {
+                onChanged(settings.copy(hideSshInstall = it))
+            }
+        }
     }
 }
 

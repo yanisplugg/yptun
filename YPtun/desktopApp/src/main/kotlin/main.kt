@@ -1104,7 +1104,7 @@ private fun runApp(args: Array<String>) = application {
                     onAppSettingsClick = { showDesktopSettings = true },
                     onSplitTunnelingClick = {},
                     confirmBeforeDelete = appBehavior.confirmBeforeDelete,
-                    allowVpsAutoInstall = true,
+                    allowVpsAutoInstall = !appBehavior.hideSshInstall,
                     pingParallelism = appBehavior.effectivePingParallelism(),
                     freeServersLimit = appBehavior.freeServersLimit,
                     collapsedGroups = appBehavior.collapsedSubscriptionGroups,
