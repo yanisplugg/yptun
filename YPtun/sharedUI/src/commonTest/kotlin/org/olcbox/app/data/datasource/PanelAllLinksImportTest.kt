@@ -160,4 +160,19 @@ class PanelAllLinksImportTest {
         val backup = LocationsRepositoryImpl(locked).exportBundle()
         assertTrue("cloud.mail.ru" !in backup && "locations\":[]" in backup.replace(" ", ""), "locked locations must stay out of the backup")
     }
+
+    /** A locked VK-TURN location lets the user set their own VK call link; it is stored as an override. */
+    @Test
+    fun lockedVkTurnLocationAcceptsOwnCallLink() = runTest {
+        val source = FakeSource()
+        val repo = LocationsRepositoryImpl(source)
+        repo.importText("yptun-enc://v1/JVBUZ7U1iOvnfPq-QWNzPehb8T-2iuhOFoaaaChf9K3oITd7cVxM5XGBVXsnX2fqcTy4CIhfD1uWyb1robI-XUa7A4C7v-cHJ8sgOss0fEMfUKK4VG32GKuNKzQc6wVAPutWCRMzMIGrHYzr4W7YmV6sPLI1XNmAQrxQJ0K8Z0Dmw5X-YY-nI1tMHcAEuHZBcC7YKYNwhEPJ1TuEBS6DLfB9Q0ev3Ipg6lfK9EsyCzhfDMgyy8_fGQ_Bke0qwQqotm0zNm8PU51uBOCdmG9ABkXrj63ap2JPXmuPS6WcWDHAquxX2sOyqOOAvxyXdc7lnjokdi5BeUm57rsH3V-5HJfAFlKObJawlIacSL6Ex69BcqLfb7HUfdc4Y2w00ctLWEecHX3zSRvC2UO2\n")
+        val entry = assertNotNull(source.stored).locations.single()
+        assertEquals(true, entry.metadata?.locked)
+        repo.setLocationVkLink(entry.storageId, " https://vk.com/call/join/abc ")
+        val after = assertNotNull(source.stored).locations.single()
+        assertEquals("https://vk.com/call/join/abc", after.location.vkturn?.vkLink)
+        assertEquals("https://vk.com/call/join/abc", after.metadata?.vkLinkOverride)
+        assertEquals(true, after.metadata?.locked)
+    }
 }

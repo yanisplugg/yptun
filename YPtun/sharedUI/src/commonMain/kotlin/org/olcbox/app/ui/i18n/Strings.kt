@@ -724,6 +724,8 @@ interface Strings {
     // Location settings
     val locationSettingsTitle: String
     val lockedLocationNotice: String
+    val settingsSearchHint: String
+    val settingsSearchEmpty: String
     val proxyLinkOrConfig: String
     val proxyLink: String
     val fieldName: String
@@ -1596,6 +1598,8 @@ object RuStrings : Strings {
     override fun logEntriesCount(n: Int) = "Записей: $n"
     override val locationSettingsTitle = "Настройки локации"
     override val lockedLocationNotice = "Подключение из зашифрованной подписки: адреса, токены и ключи скрыты и не копируются. Удалить его можно в списке."
+    override val settingsSearchHint = "Поиск по настройкам"
+    override val settingsSearchEmpty = "Ничего не найдено"
     override val proxyLinkOrConfig = "Ссылка прокси или конфигурация"
     override val proxyLink = "Ссылка прокси"
     override val fieldName = "Название"
@@ -2458,6 +2462,8 @@ object EnStrings : Strings {
     override fun logEntriesCount(n: Int) = "$n entries"
     override val locationSettingsTitle = "Location settings"
     override val lockedLocationNotice = "This connection comes from an encrypted subscription: addresses, tokens and keys are hidden and cannot be copied. You can remove it from the list."
+    override val settingsSearchHint = "Search settings"
+    override val settingsSearchEmpty = "Nothing found"
     override val proxyLinkOrConfig = "Proxy link or config"
     override val proxyLink = "Proxy link"
     override val fieldName = "Name"
@@ -3320,6 +3326,8 @@ object FaStrings : Strings {
     override fun logEntriesCount(n: Int) = "$n ورودی"
     override val locationSettingsTitle = "تنظیمات موقعیت"
     override val lockedLocationNotice = "این اتصال از یک اشتراک رمزگذاری‌شده است: نشانی‌ها، توکن‌ها و کلیدها پنهان‌اند و کپی نمی‌شوند. می‌توانید آن را از فهرست حذف کنید."
+    override val settingsSearchHint = "جستجو در تنظیمات"
+    override val settingsSearchEmpty = "چیزی پیدا نشد"
     override val proxyLinkOrConfig = "پیوند یا پیکربندی پراکسی"
     override val proxyLink = "پیوند پراکسی"
     override val fieldName = "نام"
@@ -4182,6 +4190,8 @@ object ZhStrings : Strings {
     override fun logEntriesCount(n: Int) = "$n 条记录"
     override val locationSettingsTitle = "节点设置"
     override val lockedLocationNotice = "此连接来自加密订阅：地址、令牌和密钥均已隐藏，无法复制。可在列表中将其删除。"
+    override val settingsSearchHint = "搜索设置"
+    override val settingsSearchEmpty = "未找到"
     override val proxyLinkOrConfig = "代理链接或配置"
     override val proxyLink = "代理链接"
     override val fieldName = "名称"

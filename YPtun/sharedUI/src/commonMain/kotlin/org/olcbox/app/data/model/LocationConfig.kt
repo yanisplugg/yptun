@@ -1529,7 +1529,10 @@ data class LocationMetadata(
     /** Pinned by the user: a pinned free server survives the next free-servers search (see saveSelectedFreeServers). */
     val pinned: Boolean = false,
     /** From an encrypted subscription: the app shows no address, token or key of this location and does not share or export it. */
-    val locked: Boolean = false
+    val locked: Boolean = false,
+    /** VK call links the user typed for a locked VK-TURN location; kept over subscription refreshes. */
+    @SerialName("vk_link_override")
+    val vkLinkOverride: String? = null
 ) {
     fun normalized(): LocationMetadata {
         val normalizedSubscription = subscription
@@ -1544,6 +1547,7 @@ data class LocationMetadata(
             ip = ip.cleanMetadataValue(),
             comment = comment.cleanMetadataValue(),
             mimo = mimo.cleanMetadataValue(),
+            vkLinkOverride = vkLinkOverride.cleanMetadataValue(),
             subscription = normalizedSubscription
         )
     }
@@ -1559,6 +1563,7 @@ data class LocationMetadata(
                 mimo.isNullOrBlank() &&
                 !pinned &&
                 !locked &&
+                vkLinkOverride.isNullOrBlank() &&
                 (subscription == null || subscription.isEmpty())
     }
 }

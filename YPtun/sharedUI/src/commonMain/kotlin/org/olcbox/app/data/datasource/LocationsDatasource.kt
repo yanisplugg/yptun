@@ -497,7 +497,9 @@ class LocationsRepositoryImpl(
                         customName = previousCustomName,
                         cascadeLink = previousCascadeLink
                     )
-                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }.normalized()
+                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }
+                    .withVkLinkOverride(reusedEntry?.metadata?.vkLinkOverride)
+                    .normalized()
             }
 
             // Only reset the selection when the selected server actually vanished from this
@@ -765,6 +767,28 @@ class LocationsRepositoryImpl(
             }
             saveBundleUnlocked(bundle.copy(locations = updated))
         }
+    }
+
+    override suspend fun setLocationVkLink(storageId: String, link: String) {
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.storageId == storageId }) return@withLock
+            val updated = bundle.locations.map { entry ->
+                if (entry.storageId != storageId || entry.vkturn == null) entry
+                else entry.copy(
+                    vkturn = entry.vkturn.copy(vkLink = link.trim()),
+                    metadata = (entry.metadata ?: LocationMetadata()).copy(vkLinkOverride = link.trim()),
+                ).normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    /** The user's own VK call link beats the one the subscription brings. */
+    private fun LocationEntry.withVkLinkOverride(link: String?): LocationEntry {
+        val vk = vkturn
+        if (link.isNullOrBlank() || vk == null) return this
+        return copy(vkturn = vk.copy(vkLink = link), metadata = (metadata ?: LocationMetadata()).copy(vkLinkOverride = link))
     }
 
     override suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String): Boolean {

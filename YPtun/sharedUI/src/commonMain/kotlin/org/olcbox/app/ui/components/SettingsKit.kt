@@ -99,6 +99,7 @@ fun SettingsCardRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .heightIn(min = 56.dp)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
             .padding(horizontal = 18.dp, vertical = 12.dp),
@@ -170,6 +171,7 @@ fun SettingsCardToggle(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .heightIn(min = 56.dp)
             .clickable(enabled = enabled) { onCheckedChange(!checked) }
             .padding(horizontal = 18.dp, vertical = 10.dp),

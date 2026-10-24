@@ -194,7 +194,13 @@ fun LocationSettingsScreen(
     val allowConfigEditing = LocalAllowConfigEditing.current
     val name = viewModel.editingName
     if (viewModel.editingLocked) {
-        LockedLocationNotice(name, onBack)
+        val id = viewModel.editingId
+        LockedLocationNotice(
+            name = name,
+            onBack = onBack,
+            vkLink = if (config.engine == EngineType.VkTurn) viewModel.locations.find { it.storageId == id }?.metadata?.vkLinkOverride.orEmpty() else null,
+            onSaveVkLink = { link -> id?.let { viewModel.setLocationVkLink(it, link) } },
+        )
         return
     }
     val isSaving = viewModel.isSaving

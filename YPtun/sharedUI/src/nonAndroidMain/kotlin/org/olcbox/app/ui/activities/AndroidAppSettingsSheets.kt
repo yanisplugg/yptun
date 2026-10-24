@@ -28,6 +28,12 @@ import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Language
 import org.olcbox.app.ui.components.SettingsCaption
 import org.olcbox.app.ui.components.SettingsCard
+import org.olcbox.app.ui.components.settingsHighlight
+import org.olcbox.app.ui.components.GlobalSettingsHighlight
+import org.olcbox.app.ui.components.SettingsSearch
+import org.olcbox.app.ui.components.SettingsSearchBar
+import org.olcbox.app.ui.components.SettingsSearchEntry
+import org.olcbox.app.ui.components.SettingsSearchResults
 import org.olcbox.app.ui.components.SettingsCardDivider
 import org.olcbox.app.ui.components.SettingsCardRow
 import org.olcbox.app.ui.components.SettingsCardToggle
@@ -282,6 +288,11 @@ fun AppSettingsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var route by remember(initialRoute) { mutableStateOf(initialRoute.toRoute()) }
+    val searchStrings = LocalStrings.current
+    var searchQuery by remember { mutableStateOf("") }
+    val searchEntries = remember(searchStrings, appBehavior.experimentalUnlocked) {
+        SettingsSearch.index(searchStrings, appBehavior.experimentalUnlocked)
+    }
     var autoBypassPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var russianBypassPresetEnabled by remember { mutableStateOf(false) }
 
@@ -359,7 +370,18 @@ fun AppSettingsSheet(
                     appBehavior = appBehavior,
                     language = language,
                     enabled = enabled,
-                    onOpen = { route = it }
+                    onOpen = { route = it },
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { searchQuery = it },
+                    searchEntries = searchEntries,
+                    onSearchPick = { e ->
+                        val target = settingsRouteFor(e.page)
+                        if (target != null) {
+                            GlobalSettingsHighlight.target = if (e.row) e.title else null
+                            searchQuery = ""
+                            route = target
+                        }
+                    }
                 )
 
                 AppSettingsRoute.Language -> LanguageContent(
@@ -768,6 +790,10 @@ private fun AppSettingsHubContent(
     language: AppLanguage,
     enabled: Boolean,
     onOpen: (AppSettingsRoute) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    searchEntries: List<SettingsSearchEntry>,
+    onSearchPick: (SettingsSearchEntry) -> Unit,
     scrollState: androidx.compose.foundation.ScrollState
 ) {
     val s = LocalStrings.current
@@ -787,6 +813,10 @@ private fun AppSettingsHubContent(
             modifier = Modifier.padding(start = 2.dp, bottom = 4.dp)
         )
 
+        SettingsSearchBar(searchQuery, onSearchQueryChange)
+        if (searchQuery.isNotBlank()) {
+            SettingsSearchResults(SettingsSearch.search(searchEntries, searchQuery), onSearchPick)
+        } else {
         SettingsCaption(s.settingsSectionConnection)
         SettingsCard {
             SettingsCardRow(
@@ -868,6 +898,7 @@ private fun AppSettingsHubContent(
             onCopyAddress = { it -> clipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
             onOpenUrl = { it -> SettingsPlatform.openUri(it) }
         )
+        }
     }
 }
 
@@ -1851,6 +1882,7 @@ private fun SettingsNavigationRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .height(72.dp)
             .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
@@ -1918,6 +1950,7 @@ private fun SettingsSwitchRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .height(72.dp)
             .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled) { onCheckedChange(!checked) },
@@ -3211,6 +3244,7 @@ private fun RoutingToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable { onCheckedChange(!checked) }
@@ -3854,6 +3888,25 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
+}
+
+private fun settingsRouteFor(page: String): AppSettingsRoute? = when (page) {
+        "ConnectionSettings" -> AppSettingsRoute.ConnectionSettings
+        "ConnectionMode" -> AppSettingsRoute.ConnectionMode
+        "SocksProxy" -> AppSettingsRoute.SocksProxy
+        "SplitTunneling" -> AppSettingsRoute.SplitTunneling
+        "RoutingProfiles" -> AppSettingsRoute.RoutingProfiles
+        "Traffic" -> AppSettingsRoute.Traffic
+        "Language" -> AppSettingsRoute.Language
+        "Appearance" -> AppSettingsRoute.Appearance
+        "Privacy" -> AppSettingsRoute.Privacy
+        "Advanced" -> AppSettingsRoute.Advanced
+        "UrlSchemes" -> AppSettingsRoute.UrlSchemes
+        "Experimental" -> AppSettingsRoute.Experimental
+        "About" -> AppSettingsRoute.About
+        "Updates" -> AppSettingsRoute.Updates
+        "ApplicationLogs" -> AppSettingsRoute.ApplicationLogs
+        else -> null
 }
 
 private fun AppSettingsInitialRoute.toRoute(): AppSettingsRoute {
