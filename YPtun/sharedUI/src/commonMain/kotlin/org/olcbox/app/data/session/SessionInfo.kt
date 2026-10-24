@@ -105,35 +105,36 @@ suspend fun runSpeedTest(proxy: SubscriptionFetchProxy?, onUpdate: (SpeedProgres
             }
             push(p.copy(phase = SpeedPhase.Download, pingMs = rtts.min()))
 
-            client.prepareGet("$SPEED_HOST/__down?bytes=200000000").execute { resp ->
-                val ch = resp.bodyAsChannel()
-                val buf = ByteArray(64 * 1024)
-                var total = 0L
-                var started: TimeSource.Monotonic.ValueTimeMark? = null
-                var lastPush = 0L
-                while (true) {
-                    val n = ch.readAvailable(buf)
-                    if (n < 0) break
-                    val t = started ?: TimeSource.Monotonic.markNow().also { started = it }
-                    total += n
-                    val ms = t.elapsedNow().inWholeMilliseconds
-                    if (ms - lastPush >= 250 && ms > 0) {
-                        lastPush = ms
-                        push(p.copy(downMbps = total * 8.0 / 1000.0 / ms))
+            // Cloudflare refuses a single download above ~25 MB (403), so keep asking for 25 MB until the window ends.
+            val dl = TimeSource.Monotonic.markNow()
+            var total = 0L
+            var lastPush = 0L
+            val buf = ByteArray(64 * 1024)
+            while (dl.elapsedNow().inWholeMilliseconds < PHASE_MS) {
+                client.prepareGet("$SPEED_HOST/__down?bytes=25000000").execute { resp ->
+                    check(resp.status.value in 200..299) { "speed test: HTTP ${resp.status.value}" }
+                    val ch = resp.bodyAsChannel()
+                    while (true) {
+                        val n = ch.readAvailable(buf)
+                        if (n < 0) break
+                        total += n
+                        val ms = dl.elapsedNow().inWholeMilliseconds
+                        if (ms - lastPush >= 250 && ms > 0) {
+                            lastPush = ms
+                            push(p.copy(downMbps = total * 8.0 / 1000.0 / ms))
+                        }
+                        if (ms >= PHASE_MS) break
                     }
-                    if (ms >= PHASE_MS) break
-                }
-                started?.elapsedNow()?.inWholeMilliseconds?.takeIf { it > 0 }?.let {
-                    push(p.copy(downMbps = total * 8.0 / 1000.0 / it))
                 }
             }
+            dl.elapsedNow().inWholeMilliseconds.takeIf { it > 0 }?.let { push(p.copy(downMbps = total * 8.0 / 1000.0 / it)) }
 
             push(p.copy(phase = SpeedPhase.Upload))
             val chunk = ByteArray(UP_CHUNK)
             val t = TimeSource.Monotonic.markNow()
             var sent = 0L
             while (t.elapsedNow().inWholeMilliseconds < PHASE_MS) {
-                client.post("$SPEED_HOST/__up") { setBody(chunk) }.bodyAsText()
+                check(client.post("$SPEED_HOST/__up") { setBody(chunk) }.status.value in 200..299) { "speed test: upload rejected" }
                 sent += chunk.size
                 push(p.copy(upMbps = sent * 8.0 / 1000.0 / t.elapsedNow().inWholeMilliseconds.coerceAtLeast(1)))
             }
