@@ -1196,10 +1196,11 @@ class LocationViewModel(
     }
 
     /** Own VK call link(s) of a (locked) VK-TURN location; blank = the subscription's again. */
-    fun setLocationVkLink(storageId: String, link: String) {
+    fun setLocationVkLink(storageId: String, link: String, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             locationsRepository.setLocationVkLink(storageId, link)
             loadLocations()
+            onDone()
         }
     }
 

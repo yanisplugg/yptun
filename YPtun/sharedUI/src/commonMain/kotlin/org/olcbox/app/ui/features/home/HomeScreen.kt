@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.features.home
 
+import org.olcbox.app.ui.features.home.components.VkLinkPromptDialog
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -283,7 +284,21 @@ fun HomeScreen(
     selectedIds.retainAll(locations.map { it.storageId }.toSet())
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
-    val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
+    val needsVkLink = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading &&
+        state.selectedLocation?.config?.needsVkLink() == true
+    val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading && !needsVkLink
+    var vkPromptOpen by remember { mutableStateOf(false) }
+    if (vkPromptOpen) {
+        VkLinkPromptDialog(
+            onDismiss = { vkPromptOpen = false },
+            onConfirm = { link ->
+                vkPromptOpen = false
+                state.selectedLocation?.storageId?.let { id ->
+                    locationViewModel.setLocationVkLink(id, link) { viewModel.loadCurrentConfig { onToggleClick() } }
+                }
+            }
+        )
+    }
 
     val primaryActionLabel = when {
         requiresSetup -> s.labelSetup
@@ -515,7 +530,9 @@ fun HomeScreen(
                         label = primaryActionLabel,
                         enabled = true,
                         onClick = {
-                            if (requiresSetup) {
+                            if (needsVkLink) {
+                                vkPromptOpen = true
+                            } else if (requiresSetup) {
                                 isAddSheetOpen = true
                             } else {
                                 onToggleClick()

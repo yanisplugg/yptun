@@ -1027,6 +1027,10 @@ data class LocationConfig(
      * rejected the proxy/AmneziaWG exits (rawOutbound is only set for plain WireGuard) — that made a
      * "Proxy (tcp) + bonding" VK-TURN location fail isStorable and VANISH on save.
      */
+    /** A VK-TURN location that lacks nothing but the user's VK call link (the panel may leave it out): connecting asks for it. */
+    fun needsVkLink(): Boolean = engine == EngineType.VkTurn &&
+        vkturn?.let { it.isStorable() && it.vkLink.isBlank() } == true && vkTurnExitPresent()
+
     private fun vkTurnExitPresent(): Boolean = when {
         // WDTT connects purely by the wdtt-server IP[:port]; the WireGuard config is fetched FROM the
         // server at runtime (GETCONF/OnConfig), so no stored exit artifact is required here.

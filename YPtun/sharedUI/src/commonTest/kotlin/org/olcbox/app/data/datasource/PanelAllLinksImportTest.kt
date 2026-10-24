@@ -175,4 +175,19 @@ class PanelAllLinksImportTest {
         assertEquals("https://vk.com/call/join/abc", after.metadata?.vkLinkOverride)
         assertEquals(true, after.metadata?.locked)
     }
+
+    /** The panel may hand out qWDTT/VK-TURN without a VK call link: the location is usable once the user adds one (the app asks at connect). */
+    @Test
+    fun locationWithoutVkLinkNeedsOneThenConnects() = runTest {
+        val source = FakeSource()
+        val repo = LocationsRepositoryImpl(source)
+        repo.importText("qwdtt://config?name=NoVk&peer=203.0.113.5&workers=9&port=9000&pass=pw")
+        val entry = assertNotNull(source.stored).locations.single()
+        assertTrue(entry.location.needsVkLink())
+        assertEquals(false, entry.location.isComplete())
+        repo.setLocationVkLink(entry.storageId, "https://vk.com/call/join/abc")
+        val after = assertNotNull(source.stored).locations.single().location
+        assertEquals(false, after.needsVkLink())
+        assertEquals(true, after.isComplete())
+    }
 }
