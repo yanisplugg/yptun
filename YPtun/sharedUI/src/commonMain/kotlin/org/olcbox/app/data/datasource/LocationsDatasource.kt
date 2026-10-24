@@ -1505,7 +1505,7 @@ class LocationsRepositoryImpl(
                 merged.locations.sortedBy { e -> order.indexOf(e.name).takeIf { it >= 0 } ?: Int.MAX_VALUE }
             val withMeta = merged.copy(
                 locations = ordered.map { e ->
-                    val withSub = if (sub == null || e.metadata?.subscription != null) e else e.copy(metadata = sub)
+                    val withSub = withPanelSubscription(e, sub)
                     val desc = descByName[withSub.name]
                     if (desc != null && withSub.description.isBlank()) withSub.copy(description = desc) else withSub
                 }
@@ -3155,4 +3155,20 @@ class LocationsRepositoryImpl(
          */
         const val HEADER_APP_ID = "x-app-id"
     }
+}
+
+/**
+ * Puts the panel's subscription metadata (title, traffic, expiry, support link…) on an imported location. A family whose
+ * parser built its own metadata without a title (olcRTC does: its `#refresh:` header) must still join the panel's
+ * subscription: the list groups by title + URL, so without the title it showed up as a separate "subscription".
+ */
+internal fun withPanelSubscription(e: LocationEntry, sub: LocationMetadata?): LocationEntry {
+    val panel = sub?.subscription ?: return e
+    val own = e.metadata?.subscription ?: return e.copy(metadata = sub)
+    if (!own.name.isNullOrBlank()) return e
+    val merged = panel.copy(
+        update = panel.update ?: own.update, refresh = panel.refresh ?: own.refresh, color = panel.color ?: own.color,
+        icon = panel.icon ?: own.icon, used = panel.used ?: own.used, available = panel.available ?: own.available,
+    )
+    return e.copy(metadata = (e.metadata ?: LocationMetadata()).copy(subscription = merged))
 }
