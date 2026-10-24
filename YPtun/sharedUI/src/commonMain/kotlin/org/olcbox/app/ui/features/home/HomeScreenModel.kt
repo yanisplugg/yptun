@@ -324,6 +324,9 @@ class HomeScreenViewModel(
         }
     }
 
+    /** The live tunnel's SOCKS endpoint (null when not connected); «Сессия» goes out through it. */
+    fun tunnelProxy() = vpnManager.subscriptionFetchProxy()
+
     fun onPasteFromClipboard(
         onComplete: () -> Unit = {},
         onError: (String) -> Unit = {}

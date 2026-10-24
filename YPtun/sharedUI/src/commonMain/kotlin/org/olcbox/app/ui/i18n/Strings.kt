@@ -565,6 +565,24 @@ interface Strings {
     val legacyUiSubtitle: String
     val hideSshInstall: String
     val hideSshInstallSubtitle: String
+    val sessionTitle: String
+    val sessionProvider: String
+    val sessionCountry: String
+    val sessionCity: String
+    val sessionRegion: String
+    val sessionLatitude: String
+    val sessionLongitude: String
+    val sessionNote: String
+    val sessionFailed: String
+    val speedTestTitle: String
+    val speedTestSubtitle: String
+    val speedTestAgain: String
+    val speedPing: String
+    val speedDownload: String
+    val speedUpload: String
+    val speedMbps: String
+    val speedMs: String
+    val speedTestFailed: String
     val notifSpeed: String
     val notifSpeedSubtitle: String
     val notifPingTitle: String
@@ -1414,6 +1432,24 @@ object RuStrings : Strings {
     override val legacyUiSubtitle = "Прежний вид настроек, главного экрана и экрана сервера"
     override val hideSshInstall = "Скрыть автоустановку по SSH"
     override val hideSshInstallSubtitle = "Убрать кнопки установки на VPS с экрана сервера"
+    override val sessionTitle = "Сессия"
+    override val sessionProvider = "Провайдер"
+    override val sessionCountry = "Страна"
+    override val sessionCity = "Город"
+    override val sessionRegion = "Регион"
+    override val sessionLatitude = "Широта"
+    override val sessionLongitude = "Долгота"
+    override val sessionNote = "Ваш IP-адрес — это уникальный идентификатор вашего подключения в Интернете, аналогичный обратному адресу в письме. Данные запрашиваются только при открытии этого окна."
+    override val sessionFailed = "Не удалось получить данные. Проверьте подключение"
+    override val speedTestTitle = "Тест скорости"
+    override val speedTestSubtitle = "Проверка вашего подключения к Интернету"
+    override val speedTestAgain = "Повторить тест"
+    override val speedPing = "Пинг"
+    override val speedDownload = "Загрузка"
+    override val speedUpload = "Отдача"
+    override val speedMbps = "Мбит/с"
+    override val speedMs = "мс"
+    override val speedTestFailed = "Тест не удался. Проверьте подключение"
     override val notifSpeed = "Скорость в уведомлении"
     override val notifSpeedSubtitle = "Показывать загрузку ↓ и отдачу ↑ в шторке"
     override val notifPingTitle = "Отображение пинга в уведомлении"
@@ -2248,6 +2284,24 @@ object EnStrings : Strings {
     override val legacyUiSubtitle = "The previous look of settings, the home screen and the server screen"
     override val hideSshInstall = "Hide SSH auto-install"
     override val hideSshInstallSubtitle = "Remove the install-on-VPS buttons from the server screen"
+    override val sessionTitle = "Session"
+    override val sessionProvider = "Provider"
+    override val sessionCountry = "Country"
+    override val sessionCity = "City"
+    override val sessionRegion = "Region"
+    override val sessionLatitude = "Latitude"
+    override val sessionLongitude = "Longitude"
+    override val sessionNote = "Your IP address is a unique identifier of your connection to the Internet, like a return address on a letter. The data is requested only when this window is opened."
+    override val sessionFailed = "Could not load the data. Check your connection"
+    override val speedTestTitle = "Speed test"
+    override val speedTestSubtitle = "Check your Internet connection"
+    override val speedTestAgain = "Run again"
+    override val speedPing = "Ping"
+    override val speedDownload = "Download"
+    override val speedUpload = "Upload"
+    override val speedMbps = "Mbit/s"
+    override val speedMs = "ms"
+    override val speedTestFailed = "The test failed. Check your connection"
     override val notifSpeed = "Speed in notification"
     override val notifSpeedSubtitle = "Show download ↓ and upload ↑ in the shade"
     override val notifPingTitle = "Ping in notification"
@@ -3098,6 +3152,24 @@ object FaStrings : Strings {
     override val legacyUiSubtitle = "ظاهر قبلی تنظیمات، صفحه اصلی و صفحه سرور"
     override val hideSshInstall = "پنهان کردن نصب خودکار SSH"
     override val hideSshInstallSubtitle = "حذف دکمه‌های نصب روی VPS از صفحه سرور"
+    override val sessionTitle = "نشست"
+    override val sessionProvider = "ارائه‌دهنده"
+    override val sessionCountry = "کشور"
+    override val sessionCity = "شهر"
+    override val sessionRegion = "منطقه"
+    override val sessionLatitude = "عرض جغرافیایی"
+    override val sessionLongitude = "طول جغرافیایی"
+    override val sessionNote = "آدرس IP شناسه یکتای اتصال شما به اینترنت است، مانند آدرس فرستنده روی نامه. داده‌ها فقط هنگام باز شدن این پنجره درخواست می‌شوند."
+    override val sessionFailed = "دریافت داده ناموفق بود. اتصال را بررسی کنید"
+    override val speedTestTitle = "تست سرعت"
+    override val speedTestSubtitle = "بررسی اتصال شما به اینترنت"
+    override val speedTestAgain = "اجرای دوباره"
+    override val speedPing = "پینگ"
+    override val speedDownload = "دانلود"
+    override val speedUpload = "آپلود"
+    override val speedMbps = "مگابیت/ث"
+    override val speedMs = "میلی‌ثانیه"
+    override val speedTestFailed = "تست ناموفق بود. اتصال را بررسی کنید"
     override val notifSpeed = "سرعت در اعلان"
     override val notifSpeedSubtitle = "نمایش بارگیری ↓ و بارگذاری ↑ در کشوی اعلان"
     override val notifPingTitle = "نمایش پینگ در اعلان"
@@ -3916,6 +3988,24 @@ object ZhStrings : Strings {
     override val legacyUiSubtitle = "设置、主屏幕和服务器页面的旧版外观"
     override val hideSshInstall = "隐藏 SSH 自动安装"
     override val hideSshInstallSubtitle = "从服务器页面移除 VPS 安装按钮"
+    override val sessionTitle = "会话"
+    override val sessionProvider = "服务商"
+    override val sessionCountry = "国家"
+    override val sessionCity = "城市"
+    override val sessionRegion = "地区"
+    override val sessionLatitude = "纬度"
+    override val sessionLongitude = "经度"
+    override val sessionNote = "您的 IP 地址是您连接互联网的唯一标识，类似信件上的回邮地址。仅在打开此窗口时才会请求数据。"
+    override val sessionFailed = "无法获取数据，请检查连接"
+    override val speedTestTitle = "速度测试"
+    override val speedTestSubtitle = "检查您的互联网连接"
+    override val speedTestAgain = "重新测试"
+    override val speedPing = "延迟"
+    override val speedDownload = "下载"
+    override val speedUpload = "上传"
+    override val speedMbps = "Mbit/s"
+    override val speedMs = "毫秒"
+    override val speedTestFailed = "测试失败，请检查连接"
     override val notifSpeed = "通知栏显示速度"
     override val notifSpeedSubtitle = "在通知栏显示下载 ↓ 和上传 ↑"
     override val notifPingTitle = "通知栏显示延迟"

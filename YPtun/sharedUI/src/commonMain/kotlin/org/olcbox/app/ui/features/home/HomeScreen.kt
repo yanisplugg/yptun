@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -85,6 +87,7 @@ import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
 import org.olcbox.app.ui.features.home.components.FreeServersSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
 import org.olcbox.app.ui.features.home.components.ListViewSheet
+import org.olcbox.app.ui.features.home.components.SessionSheet
 import org.olcbox.app.ui.features.home.components.PingSettingsSheet
 import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
@@ -169,6 +172,7 @@ fun HomeScreen(
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isListViewSheetOpen by remember { mutableStateOf(false) }
+    var isSessionSheetOpen by remember { mutableStateOf(false) }
     var isPingSettingsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
@@ -549,6 +553,18 @@ fun HomeScreen(
                 }
             }
 
+            if (state.isVpnConnected) {
+                item(key = "session-chip") {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.FilledTonalButton(onClick = { isSessionSheetOpen = true }) {
+                            Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(s.sessionTitle)
+                        }
+                    }
+                }
+            }
+
             extraConnectContent?.let { extra ->
                 item(key = "extra-connect-content") { extra() }
             }
@@ -812,6 +828,10 @@ fun HomeScreen(
                     isLogsSheetOpen = false
                 }
             )
+        }
+
+        if (isSessionSheetOpen) {
+            SessionSheet(proxy = { viewModel.tunnelProxy() }, onDismiss = { isSessionSheetOpen = false })
         }
 
         if (isListViewSheetOpen && appBehavior != null) {
