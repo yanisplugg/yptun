@@ -68,6 +68,8 @@ object OpenFluxUriParser {
             if (!(url.startsWith("http", ignoreCase = true) || (type in ROOM_CARRIERS && url.length >= 16))) return null
             return OpenFluxLink(root.str("name"), OpenFluxConfig(
                 transport = type, docUrl = url, secret = secret, context = root.str("context"), negotiate = negotiate,
+                // Avito needs the account cookies on the client too; the panel puts them in the (encrypted) link.
+                avitoCookies = if (type == OpenFluxConfig.TRANSPORT_AVITO) single.str("cookies") else "",
             ).normalized())
         }
         // A session: the core only runs one without an encryption key.

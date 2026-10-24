@@ -98,4 +98,12 @@ class OpenFluxUriParserTest {
         assertNull(OpenFluxUriParser.parse(link("""{"transports":[{"type":"oneme","uid":"x1","token":"t"}]}""")))
         assertNull(OpenFluxUriParser.parse(link("""{"transports":[{"type":"oneme","uid":"777"}]}""")))
     }
+
+    @Test
+    fun avitoLinkCarriesRoomListAndClientCookies() {
+        val c = OpenFluxUriParser.parse(link("""{"transports":[{"type":"avito","url":"ROOMLISTROOMLIST1234567890","cookies":"sid=c1"}]}"""))!!.config
+        assertEquals(OpenFluxConfig.TRANSPORT_AVITO, c.transport)
+        assertEquals("ROOMLISTROOMLIST1234567890", c.docUrl)
+        assertEquals("sid=c1", c.avitoCookies)
+    }
 }
