@@ -553,7 +553,7 @@ fun HomeScreen(
                 }
             }
 
-            if (state.isVpnConnected) {
+            if (state.isVpnConnected && appBehavior?.hideSessionButton != true) {
                 item(key = "session-chip") {
                     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         androidx.compose.material3.FilledTonalButton(onClick = { isSessionSheetOpen = true }) {

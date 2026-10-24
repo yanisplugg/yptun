@@ -565,6 +565,8 @@ interface Strings {
     val legacyUiSubtitle: String
     val hideSshInstall: String
     val hideSshInstallSubtitle: String
+    val hideSessionButton: String
+    val hideSessionButtonSubtitle: String
     val sessionTitle: String
     val sessionProvider: String
     val sessionCountry: String
@@ -1432,6 +1434,8 @@ object RuStrings : Strings {
     override val legacyUiSubtitle = "Прежний вид настроек, главного экрана и экрана сервера"
     override val hideSshInstall = "Скрыть автоустановку по SSH"
     override val hideSshInstallSubtitle = "Убрать кнопки установки на VPS с экрана сервера"
+    override val hideSessionButton = "Скрыть кнопку «Сессия»"
+    override val hideSessionButtonSubtitle = "Убрать кнопку «Сессия» с главного экрана"
     override val sessionTitle = "Сессия"
     override val sessionProvider = "Провайдер"
     override val sessionCountry = "Страна"
@@ -2284,6 +2288,8 @@ object EnStrings : Strings {
     override val legacyUiSubtitle = "The previous look of settings, the home screen and the server screen"
     override val hideSshInstall = "Hide SSH auto-install"
     override val hideSshInstallSubtitle = "Remove the install-on-VPS buttons from the server screen"
+    override val hideSessionButton = "Hide the Session button"
+    override val hideSessionButtonSubtitle = "Remove the Session button from the home screen"
     override val sessionTitle = "Session"
     override val sessionProvider = "Provider"
     override val sessionCountry = "Country"
@@ -3152,6 +3158,8 @@ object FaStrings : Strings {
     override val legacyUiSubtitle = "ظاهر قبلی تنظیمات، صفحه اصلی و صفحه سرور"
     override val hideSshInstall = "پنهان کردن نصب خودکار SSH"
     override val hideSshInstallSubtitle = "حذف دکمه‌های نصب روی VPS از صفحه سرور"
+    override val hideSessionButton = "پنهان کردن دکمه «نشست»"
+    override val hideSessionButtonSubtitle = "حذف دکمه «نشست» از صفحه اصلی"
     override val sessionTitle = "نشست"
     override val sessionProvider = "ارائه‌دهنده"
     override val sessionCountry = "کشور"
@@ -3988,6 +3996,8 @@ object ZhStrings : Strings {
     override val legacyUiSubtitle = "设置、主屏幕和服务器页面的旧版外观"
     override val hideSshInstall = "隐藏 SSH 自动安装"
     override val hideSshInstallSubtitle = "从服务器页面移除 VPS 安装按钮"
+    override val hideSessionButton = "隐藏“会话”按钮"
+    override val hideSessionButtonSubtitle = "从主屏幕移除“会话”按钮"
     override val sessionTitle = "会话"
     override val sessionProvider = "服务商"
     override val sessionCountry = "国家"
