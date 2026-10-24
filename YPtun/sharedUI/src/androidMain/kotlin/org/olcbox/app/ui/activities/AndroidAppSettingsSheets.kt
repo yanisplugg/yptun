@@ -121,7 +121,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Icon
@@ -658,7 +657,7 @@ private fun ColorPickerDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .size(56.dp)
-                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                         .background(color)
                 )
                 OutlinedTextField(
@@ -859,10 +858,17 @@ private fun SettingsPage(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+            Surface(
+                modifier = Modifier.size(46.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                }
             }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(14.dp))
             Text(
                 text = title,
                 style = MaterialTheme.typography.headlineSmall,
@@ -1689,9 +1695,8 @@ private fun ApplicationLogsSettingsContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             LogLines(
                 logs = logs,
@@ -1747,9 +1752,8 @@ private fun UpdatesSettingsContent(
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -1808,11 +1812,10 @@ private fun SettingsNavigationRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -1821,7 +1824,7 @@ private fun SettingsNavigationRow(
             Surface(
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Icon(
@@ -1876,11 +1879,10 @@ private fun SettingsSwitchRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled) { onCheckedChange(!checked) },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -1889,7 +1891,7 @@ private fun SettingsSwitchRow(
             Surface(
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Icon(
@@ -1942,8 +1944,8 @@ private fun SettingsDetailHeader(
         Surface(
             modifier = Modifier.size(46.dp),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface
         ) {
             IconButton(onClick = onBack) {
                 Icon(
@@ -2030,7 +2032,7 @@ private fun SplitTunnelRoutingOption(
         targetValue = if (selected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.outlineVariant
+            Color.Transparent
         },
         label = "splitTunnelRoutingOptionBorder"
     )
@@ -2039,9 +2041,9 @@ private fun SplitTunnelRoutingOption(
         modifier = Modifier
             .fillMaxWidth()
             .height(74.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -2055,7 +2057,7 @@ private fun SplitTunnelRoutingOption(
                 color = if (selected) {
                     MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                    MaterialTheme.colorScheme.surfaceContainerHigh
                 },
                 contentColor = if (selected) {
                     MaterialTheme.colorScheme.onPrimary
@@ -2120,7 +2122,7 @@ private fun SelectableSettingsCard(
         targetValue = if (selected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.outlineVariant
+            Color.Transparent
         },
         label = "selectableSettingsCardBorder"
     )
@@ -2129,9 +2131,9 @@ private fun SelectableSettingsCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(82.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -2145,7 +2147,7 @@ private fun SelectableSettingsCard(
                 color = if (selected) {
                     MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                    MaterialTheme.colorScheme.surfaceContainerHigh
                 },
                 contentColor = if (selected) {
                     MaterialTheme.colorScheme.onPrimary
@@ -2194,13 +2196,7 @@ private fun SelectableSettingsCard(
 
 @Composable
 private fun SettingsSectionLabel(text: String) {
-    Text(
-        text = text,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(start = 2.dp)
-    )
+    SettingsCaption(text)
 }
 
 @Composable
@@ -2211,10 +2207,9 @@ private fun SplitTunnelStatusCard(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -2223,7 +2218,7 @@ private fun SplitTunnelStatusCard(
             Surface(
                 modifier = Modifier.size(42.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Icon(
@@ -2259,9 +2254,8 @@ private fun SplitTunnelStatusCard(
 private fun SplitTunnelNoListCard() {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
@@ -2271,7 +2265,7 @@ private fun SplitTunnelNoListCard() {
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -2521,10 +2515,9 @@ private fun RussianBypassPresetChips(
 @Composable
 private fun RussianBypassInfoPill(value: String) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Text(
             text = value,
@@ -2559,15 +2552,15 @@ private fun SplitTunnelAppRow(
         targetValue = when {
             autoSelected -> colors.tertiary.copy(alpha = 0.72f)
             selected -> colors.primary
-            else -> colors.outlineVariant
+            else -> Color.Transparent
         },
         label = "splitTunnelAppRowBorder"
     )
     val iconContainerColor by animateColorAsState(
         targetValue = when {
-            autoSelected -> colors.surfaceContainerHighest
+            autoSelected -> colors.surfaceContainerHigh
             selected -> colors.primary
-            else -> colors.surfaceVariant
+            else -> colors.surfaceContainerHigh
         },
         label = "splitTunnelAppRowIconContainer"
     )
@@ -2584,9 +2577,9 @@ private fun SplitTunnelAppRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(76.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -2645,7 +2638,7 @@ private fun SplitTunnelAppRow(
 
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = colors.surfaceContainerHighest,
+                    color = colors.surfaceContainerHigh,
                     contentColor = colors.tertiary
                 ) {
                     Text(
@@ -2678,9 +2671,8 @@ private fun EmptyAppsState(
         modifier = Modifier
             .fillMaxWidth()
             .height(128.dp),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -3004,7 +2996,7 @@ private fun SingBoxRuleCard(
     val s = LocalStrings.current
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh
     ) {
         Column(
@@ -3211,7 +3203,7 @@ private fun RoutingToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -3249,7 +3241,7 @@ private fun BatteryOptimizationRow() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(enabled = !ignoring) {
                 val req = Intent(
@@ -3781,10 +3773,10 @@ private fun AppIconTile(option: AppIconOption, name: String, selected: Boolean, 
     }
     val bg = remember(option.bg) { layer(option.bg) }
     val fg = remember(option.fg) { layer(option.fg) }
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(24.dp)
     val ring = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     Column(
-        modifier = Modifier.width(88.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        modifier = Modifier.width(88.dp).clip(RoundedCornerShape(18.dp)).clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
@@ -4082,7 +4074,7 @@ private fun UrlSchemesContent(onBack: () -> Unit) {
 private fun UrlSchemeRow(scheme: String, clipboard: androidx.compose.ui.platform.ClipboardManager) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer
     ) {
         Row(

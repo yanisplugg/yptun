@@ -6,13 +6,14 @@ import org.olcbox.app.ui.components.SettingsCard
 import org.olcbox.app.ui.components.SettingsCardDivider
 import org.olcbox.app.ui.components.SettingsCardRow
 import org.olcbox.app.ui.components.SettingsCardToggle
+import org.olcbox.app.ui.components.SettingsNote
+import org.olcbox.app.ui.components.LocalSettingsGapColor
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -349,6 +350,8 @@ fun LocationSettingsScreen(
             }
         }
     ) { innerPadding ->
+        // A full screen, not a sheet: the gaps between card rows show the page background.
+        CompositionLocalProvider(LocalSettingsGapColor provides MaterialTheme.colorScheme.background) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -744,12 +747,12 @@ fun LocationSettingsScreen(
                             containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
                             contentColor = MaterialTheme.colorScheme.error
                         ),
-                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Text(s.deleteLocationButton)
                     }
                 }
             }
+        }
         }
     }
 }
@@ -885,25 +888,15 @@ private fun MultiRoomSection(
     }
 }
 
+/** A section's caption, the same small caps as on the settings pages, with an optional note under it. */
 @Composable
 private fun SectionTitle(
     title: String,
     subtitle: String? = null
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        if (subtitle != null) {
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SettingsCaption(title)
+        if (subtitle != null) SettingsNote(subtitle)
     }
 }
 
@@ -925,7 +918,7 @@ private fun WireguardEngineSection(
     val s = LocalStrings.current
     val isAwg = AwgIniEditor.isAwg(ini)
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(s.wgProtocolTitle, style = MaterialTheme.typography.titleSmall)
+        SettingsCaption(s.wgProtocolTitle)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = isAwg, onClick = { onProtocol(true) }, enabled = enabled, label = { Text("AmneziaWG") })
             FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
@@ -951,7 +944,7 @@ private fun WireguardEngineSection(
             )
         }
         if (allowEditing) {
-            Text(s.wgConnectionTitle, style = MaterialTheme.typography.titleSmall)
+            SettingsCaption(s.wgConnectionTitle)
             AwgIniEditor.CONNECTION.forEach { knob ->
                 VkTurnField(
                     value = AwgIniEditor.get(ini, knob.key, knob.section),
@@ -1701,8 +1694,8 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 160.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .padding(8.dp)
                 .verticalScroll(logScroll)
         ) {
@@ -3335,10 +3328,10 @@ private fun MasterDnsInstallDialog(
                     enabled = !running,
                     modifier = Modifier.fillMaxWidth()
                 )
-                VkTurnSwitchRow("Разрешить сжатие (ZSTD/LZ4/ZLIB)", allowCompression, !running) { allowCompression = it }
-                VkTurnSwitchRow("Новый ключ шифрования (старые клиенты отвалятся)", regenerateKey, !running) { regenerateKey = it }
-                VkTurnSwitchRow("Освободить порт, если занят другой службой", freePort, !running) { freePort = it }
-                VkTurnSwitchRow("Подробный журнал сервера (DEBUG)", debugLog, !running) { debugLog = it }
+                VkTurnSwitchRow("Разрешить сжатие (ZSTD/LZ4/ZLIB)", allowCompression, !running, inCard = false) { allowCompression = it }
+                VkTurnSwitchRow("Новый ключ шифрования (старые клиенты отвалятся)", regenerateKey, !running, inCard = false) { regenerateKey = it }
+                VkTurnSwitchRow("Освободить порт, если занят другой службой", freePort, !running, inCard = false) { freePort = it }
+                VkTurnSwitchRow("Подробный журнал сервера (DEBUG)", debugLog, !running, inCard = false) { debugLog = it }
                 InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
@@ -3540,7 +3533,7 @@ private fun AwgTuningSection(
     )
     val rowKeys = numberRows.flatten().toSet()
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(s.awgTuningTitle, style = MaterialTheme.typography.titleSmall)
+        SettingsCaption(s.awgTuningTitle)
         Text(
             s.awgTuningHint,
             style = MaterialTheme.typography.bodySmall,
@@ -3581,8 +3574,16 @@ private fun VkTurnSwitchRow(
     label: String,
     checked: Boolean,
     enabled: Boolean,
+    // On the page a switch is its own small card; inside a dialog it stays a plain row.
+    inCard: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    if (inCard) {
+        SettingsCard {
+            SettingsCardToggle(title = label, checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
+        }
+        return
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -4008,35 +4009,42 @@ private fun EnginePickerSheet(
 private fun AutoInstallCard(enabled: Boolean, onInstall: () -> Unit) {
     val s = LocalStrings.current
     androidx.compose.material3.Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.primaryContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Outlined.CloudUpload,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(26.dp)
-                )
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.CloudUpload,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Text(
                     text = s.autoInstallTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
             Text(
                 text = s.autoInstallText,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Button(
                 onClick = onInstall,
                 enabled = enabled,
-                shape = RoundedCornerShape(24.dp),
                 modifier = Modifier.fillMaxWidth().height(48.dp)
             ) {
                 Text(s.autoInstallButton, fontWeight = FontWeight.SemiBold)
@@ -4044,7 +4052,7 @@ private fun AutoInstallCard(enabled: Boolean, onInstall: () -> Unit) {
             Text(
                 text = s.autoInstallOrManual,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -4411,7 +4419,6 @@ private fun ActionsBar(
                 modifier = Modifier.size(56.dp),
                 enabled = !isSaving,
                 shape = CircleShape,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Icon(Icons.Outlined.Delete, contentDescription = "Delete")
             }

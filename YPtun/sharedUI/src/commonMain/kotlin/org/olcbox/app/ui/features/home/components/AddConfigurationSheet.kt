@@ -166,7 +166,7 @@ private fun AddMainPage(
                 Icon(Icons.Outlined.ContentPaste, contentDescription = s.addPaste)
             }
         },
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth()
     )
     if (detected != null) {
@@ -192,7 +192,6 @@ private fun AddMainPage(
     Button(
         onClick = { onImportText(text.trim()) },
         enabled = text.isNotBlank(),
-        shape = RoundedCornerShape(26.dp),
         modifier = Modifier.fillMaxWidth().height(52.dp)
     ) {
         Text(s.addButton, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -228,7 +227,7 @@ private fun AddMainPage(
 private fun AddTile(title: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         onClick = onClick
     ) {
@@ -280,7 +279,7 @@ private fun FreeServersStartPage(
     val s = LocalStrings.current
     AddPageHeader(title = s.freeServers, onBack = onBack)
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.tertiaryContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -323,7 +322,6 @@ private fun FreeServersStartPage(
     Spacer(Modifier.height(10.dp))
     Button(
         onClick = onStart,
-        shape = RoundedCornerShape(26.dp),
         modifier = Modifier.fillMaxWidth().height(52.dp)
     ) {
         Text(s.freeServersFind, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)

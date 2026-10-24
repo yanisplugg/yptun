@@ -1,6 +1,5 @@
 package org.olcbox.app.ui.features.home.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -101,9 +100,8 @@ fun FreeServersSheet(
 
             // Disclaimer banner
             Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -215,7 +213,6 @@ fun FreeServersSheet(
                 onClick = { onAddSelected(servers.filter { it.id in selectedIds }, warpIds) },
                 enabled = selectedIds.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
                     text = s.addSelectedServers(selectedIds.size),
@@ -227,7 +224,6 @@ fun FreeServersSheet(
                 androidx.compose.material3.FilledTonalButton(
                     onClick = onContinue,
                     modifier = Modifier.fillMaxWidth().height(44.dp),
-                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(s.freeServersContinueLeft(remaining), fontWeight = FontWeight.SemiBold)
                 }
@@ -250,12 +246,8 @@ private fun FreeServerRow(
 
     Surface(
         onClick = onToggle,
-        shape = RoundedCornerShape(12.dp),
-        color = if (isSelected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            1.dp,
-            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-        ),
+        shape = RoundedCornerShape(24.dp),
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(

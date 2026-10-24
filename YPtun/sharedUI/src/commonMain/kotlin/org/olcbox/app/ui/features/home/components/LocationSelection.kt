@@ -1,6 +1,5 @@
 package org.olcbox.app.ui.features.home.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
@@ -245,7 +244,7 @@ fun LazyListScope.locationSelectorContent(
         item(key = "group-header-$groupKey") {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = if (isFree) {
                     androidx.compose.ui.graphics.lerp(MaterialTheme.colorScheme.surfaceContainer, androidx.compose.ui.graphics.Color(0xFF43A047), 0.22f)
                 } else MaterialTheme.colorScheme.surfaceContainer
@@ -264,7 +263,7 @@ fun LazyListScope.locationSelectorContent(
                         Row(
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable { onToggleGroupCollapsed(groupKey) },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -409,7 +408,7 @@ fun LazyListScope.locationSelectorContent(
                         pingsState.pendingLocationIds.any { it in memberIds }
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
                     Column(
@@ -441,7 +440,7 @@ fun LazyListScope.locationSelectorContent(
                                 val mPingDesc = mKey in pingSortDescendingGroups
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(24.dp),
                                     color = MaterialTheme.colorScheme.surfaceContainer
                                 ) {
                                     Column(
@@ -456,7 +455,7 @@ fun LazyListScope.locationSelectorContent(
                                             Row(
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clip(RoundedCornerShape(16.dp))
                                                     .clickable { onToggleGroupCollapsed(mKey) },
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
@@ -666,7 +665,6 @@ fun LazyListScope.locationSelectorContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(54.dp),
-            shape = RoundedCornerShape(16.dp)
         ) {
             Icon(Icons.Rounded.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -685,7 +683,6 @@ fun LazyListScope.locationSelectorContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp),
-                shape = RoundedCornerShape(16.dp)
             ) {
                 Icon(Icons.Rounded.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
@@ -744,13 +741,7 @@ private fun SetupActionRow(
     val containerColor = if (prominent) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
-
-    val borderColor = if (prominent) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.outlineVariant
+        MaterialTheme.colorScheme.surfaceContainer
     }
 
     val contentColor = if (prominent) {
@@ -762,9 +753,8 @@ private fun SetupActionRow(
     Surface(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = containerColor,
-        border = BorderStroke(1.dp, borderColor)
+        shape = RoundedCornerShape(24.dp),
+        color = containerColor
     ) {
         Row(
             modifier = Modifier
@@ -849,7 +839,7 @@ private fun TrafficProgressBar(location: LocationItem?) {
                 .weight(1f)
                 .height(24.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center
         ) {
             // Filled portion: exact fraction when total is known, otherwise full pill.
@@ -1336,7 +1326,7 @@ private fun SubscriptionSheet(
             // Only after a ping pass: before it nothing has answered yet, and "0 answering" would read as dead servers.
             val alive = pingsState?.let { ps -> groupLocations.count { ps.pingFor(it.storageId) != null } }?.takeIf { it > 0 }
             Surface(
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(28.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
             ) {
@@ -1494,7 +1484,7 @@ private fun SubscriptionAction(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         onClick = onClick
     ) {
@@ -1578,7 +1568,7 @@ private fun FolderGroupHeader(
             Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .clickable { onToggleCollapsed() },
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1878,8 +1868,8 @@ private fun ExpiryWarningBadge(dateTime: String, daysLeft: Long) {
                 properties = androidx.compose.ui.window.PopupProperties(focusable = false)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     shadowElevation = 4.dp
                 ) {
                     Text(

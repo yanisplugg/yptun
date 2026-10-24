@@ -128,7 +128,7 @@ fun LogsContent(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(18.dp))
                 .background(Color.Black.copy(alpha = 0.05f))
         ) {
             LogLines(

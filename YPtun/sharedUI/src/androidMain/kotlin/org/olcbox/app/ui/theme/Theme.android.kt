@@ -15,7 +15,6 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
@@ -66,19 +65,7 @@ actual fun AppTheme(
         // device (Material You) scheme so the two systems never mix.
         var colorScheme = baseScheme
         if (!useDynamicColor) {
-            if (accent != null) {
-                val onAccent = if (accent.luminance() > 0.5f) Color(0xFF101010) else Color(0xFFFFFFFF)
-                colorScheme = colorScheme.copy(
-                    primary = accent,
-                    onPrimary = onAccent,
-                    primaryContainer = accent,
-                    onPrimaryContainer = onAccent,
-                    secondary = accent,
-                    onSecondary = onAccent,
-                    tertiary = accent,
-                    inversePrimary = accent
-                )
-            }
+            if (accent != null) colorScheme = colorScheme.withAccent(accent)
             // The background/text swatches are all dark-canvas colors; applying them over the light
             // scheme would put a black canvas (or near-white text) under light-scheme content.
             if (!lightMode) {
@@ -112,7 +99,8 @@ actual fun AppTheme(
 
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = typography
+            typography = typography,
+            shapes = AppShapes
         ) {
             ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
         }

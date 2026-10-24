@@ -27,7 +27,6 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -341,14 +340,13 @@ private fun QrScannerPreview(
     controller: CameraController,
     modifier: Modifier = Modifier
 ) {
-    val previewShape = RoundedCornerShape(16.dp)
+    val previewShape = RoundedCornerShape(28.dp)
 
     Surface(
         modifier = Modifier
             .then(modifier),
         shape = previewShape,
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Box(
             modifier = Modifier
@@ -393,9 +391,8 @@ private fun QrScannerFrame(modifier: Modifier = Modifier) {
 private fun QrScannerStatusPanel(modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Column(
             modifier = Modifier.padding(16.dp)

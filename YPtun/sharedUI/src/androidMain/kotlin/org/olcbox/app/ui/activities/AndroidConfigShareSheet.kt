@@ -79,7 +79,7 @@ internal fun AndroidConfigShareSheet(
 
             if (qrBitmap != null) {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surface,
                     tonalElevation = 2.dp
                 ) {
@@ -94,8 +94,8 @@ internal fun AndroidConfigShareSheet(
                 }
             } else {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     tonalElevation = 2.dp,
                     modifier = Modifier.size(248.dp)
                 ) {

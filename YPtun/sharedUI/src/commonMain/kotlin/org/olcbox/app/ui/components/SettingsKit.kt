@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,16 +19,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,9 +38,16 @@ import androidx.compose.ui.unit.sp
 
 /*
  * The grouped-card look shared by the settings pages and the sheets on the home screen: a small caps
- * caption over one rounded card, rows inside it split by hairlines. A row is either a door to a page or
- * a picker (title, current value on the right, chevron) or a switch (title, short explanation, switch).
+ * caption over one rounded card, rows inside it split by thin gaps (segments). A row is either a door to
+ * a page or a picker (title, current value on the right, chevron) or a switch (title, short explanation,
+ * switch).
  */
+
+/**
+ * What shows through the gaps between rows of a [SettingsCard]: the page under it. Unset means a bottom
+ * sheet (where most cards live); a full screen provides its own background.
+ */
+val LocalSettingsGapColor = staticCompositionLocalOf { Color.Unspecified }
 
 /** Small caption over a [SettingsCard]. */
 @Composable
@@ -48,7 +58,7 @@ fun SettingsCaption(text: String, modifier: Modifier = Modifier) {
         fontSize = 12.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.6.sp,
-        modifier = modifier.padding(start = 2.dp, top = 10.dp, bottom = 2.dp)
+        modifier = modifier.padding(start = 6.dp, top = 10.dp, bottom = 2.dp)
     )
 }
 
@@ -57,7 +67,7 @@ fun SettingsCaption(text: String, modifier: Modifier = Modifier) {
 fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainer
     ) {
         Column(content = content)
@@ -66,11 +76,8 @@ fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope
 
 @Composable
 fun SettingsCardDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(start = 16.dp),
-        thickness = 0.5.dp,
-        color = MaterialTheme.colorScheme.outlineVariant
-    )
+    val gap = LocalSettingsGapColor.current.takeOrElse { MaterialTheme.colorScheme.surfaceContainerLow }
+    Spacer(Modifier.fillMaxWidth().height(3.dp).background(gap))
 }
 
 /**
@@ -92,9 +99,9 @@ fun SettingsCardRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            .heightIn(min = 56.dp)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (icon != null) {
@@ -163,9 +170,9 @@ fun SettingsCardToggle(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            .heightIn(min = 56.dp)
             .clickable(enabled = enabled) { onCheckedChange(!checked) }
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -196,7 +203,7 @@ fun SettingsNote(text: String, color: Color = Color.Unspecified) {
         color = if (color != Color.Unspecified) color else MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.5.sp,
         lineHeight = 17.sp,
-        modifier = Modifier.padding(horizontal = 4.dp)
+        modifier = Modifier.padding(horizontal = 6.dp)
     )
 }
 
@@ -213,7 +220,7 @@ fun <T> SettingsChoiceChips(
     FlowRow(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (inCard) Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp) else Modifier),
+            .then(if (inCard) Modifier.padding(start = 18.dp, end = 18.dp, bottom = 12.dp) else Modifier),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         options.forEach { (value, label) ->

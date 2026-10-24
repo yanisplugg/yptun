@@ -525,7 +525,7 @@ fun HomeScreen(
                                 .offset(x = 100.dp)
                                 .size(56.dp)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                 .clickable(enabled = !autoRunning) { autoConnectFastest() },
                             contentAlignment = Alignment.Center
                         ) {
@@ -565,7 +565,7 @@ fun HomeScreen(
                 item(key = "selection-bar") {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh
                     ) {
                         Row(
@@ -1322,7 +1322,7 @@ private fun SubscriptionsRefreshRow(text: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),

@@ -9,7 +9,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
@@ -44,19 +43,7 @@ actual fun AppTheme(
         val background = if (dynamic || lightMode) null else ThemeState.background
 
         var colorScheme = if (lightMode) OlcboxLightColorScheme else OlcboxDarkColorScheme
-        if (accent != null) {
-            val onAccent = if (accent.luminance() > 0.5f) Color(0xFF101010) else Color(0xFFFFFFFF)
-            colorScheme = colorScheme.copy(
-                primary = accent,
-                onPrimary = onAccent,
-                primaryContainer = accent,
-                onPrimaryContainer = onAccent,
-                secondary = accent,
-                onSecondary = onAccent,
-                tertiary = accent,
-                inversePrimary = accent
-            )
-        }
+        if (accent != null) colorScheme = colorScheme.withAccent(accent)
         if (background != null) {
             colorScheme = colorScheme.copy(
                 background = background,
@@ -70,7 +57,8 @@ actual fun AppTheme(
 
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = typography
+            typography = typography,
+            shapes = AppShapes
         ) {
             ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
         }
