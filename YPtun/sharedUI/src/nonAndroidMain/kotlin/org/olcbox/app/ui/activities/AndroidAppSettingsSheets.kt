@@ -221,6 +221,64 @@ fun AppSettingsSheet(
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
 ) {
+    if (appBehavior.legacyUi) {
+        org.olcbox.app.ui.activities.legacy.AppSettingsSheet(
+            initialRoute = org.olcbox.app.ui.activities.legacy.AppSettingsInitialRoute.valueOf(initialRoute.name),
+            selectedMode = selectedMode,
+            proxySettings = proxySettings,
+            splitTunnelSettings = splitTunnelSettings,
+            installedApps = installedApps,
+            logs = logs,
+            dynamicThemeEnabled = dynamicThemeEnabled,
+            lightThemeEnabled = lightThemeEnabled,
+            hwid = hwid,
+            routing = routing,
+            onRoutingChanged = onRoutingChanged,
+            routingProfilesState = routingProfilesState,
+            geoUpdateStatus = geoUpdateStatus,
+            onRoutingProfileSaved = onRoutingProfileSaved,
+            onRoutingProfileDeleted = onRoutingProfileDeleted,
+            onGlobalRoutingProfileChanged = onGlobalRoutingProfileChanged,
+            onRoutingProfileLinkImported = onRoutingProfileLinkImported,
+            onGeoSourcesChanged = onGeoSourcesChanged,
+            onUpdateGeoNow = onUpdateGeoNow,
+            trafficSettings = trafficSettings,
+            onTrafficChanged = onTrafficChanged,
+            appBehavior = appBehavior,
+            onAppBehaviorChanged = onAppBehaviorChanged,
+            telegramProxyState = telegramProxyState,
+            language = language,
+            onLanguageChanged = onLanguageChanged,
+            updateSettings = updateSettings,
+            updateStatusText = updateStatusText,
+            updateDownloadProgress = updateDownloadProgress,
+            subscriptions = subscriptions,
+            enabled = enabled,
+            isConnectionActive = isConnectionActive,
+            onDismiss = onDismiss,
+            onCopyConfigClick = onCopyConfigClick,
+            onSaveLogsClick = onSaveLogsClick,
+            onShareLogsClick = onShareLogsClick,
+            onUpdateIntervalSelected = onUpdateIntervalSelected,
+            onCheckUpdatesClick = onCheckUpdatesClick,
+            onSubscriptionShareClick = onSubscriptionShareClick,
+            onSubscriptionRefreshClick = onSubscriptionRefreshClick,
+            onDynamicThemeChanged = onDynamicThemeChanged,
+            onLightThemeChanged = onLightThemeChanged,
+            onAccentColorSelected = onAccentColorSelected,
+            onTextColorSelected = onTextColorSelected,
+            onBackgroundColorSelected = onBackgroundColorSelected,
+            onModeSelected = onModeSelected,
+            onProxySettingsSaved = onProxySettingsSaved,
+            onProxyPasswordRegenerated = onProxyPasswordRegenerated,
+            onSecuredProxyChanged = onSecuredProxyChanged,
+            onUnsecuredPortSaved = onUnsecuredPortSaved,
+            onSplitTunnelModeSelected = onSplitTunnelModeSelected,
+            onSplitTunnelAppToggled = onSplitTunnelAppToggled,
+            onSplitTunnelAppsSelected = onSplitTunnelAppsSelected
+        )
+        return
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var route by remember(initialRoute) { mutableStateOf(initialRoute.toRoute()) }
@@ -3651,6 +3709,12 @@ private fun ExperimentalContent(
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
+
+        RoutingToggleRow(
+            title = s.legacyUi,
+            subtitle = s.legacyUiSubtitle,
+            checked = settings.legacyUi
+        ) { onChanged(settings.copy(legacyUi = it)) }
 
         SettingsSectionLabel("Yandex Telemost")
         Text(

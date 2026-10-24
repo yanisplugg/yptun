@@ -17,6 +17,8 @@ import org.olcbox.app.ui.features.home.HomeScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationSettingsScreen
 import org.olcbox.app.ui.features.locations.LocationViewModel
+import org.olcbox.app.ui.legacy.HomeScreen as LegacyHomeScreen
+import org.olcbox.app.ui.legacy.LocationSettingsScreen as LegacyLocationSettingsScreen
 import org.olcbox.app.ui.navigation.AppScreen
 
 @Composable
@@ -119,90 +121,164 @@ fun OlcboxAppContent(
     ) { screen ->
         when (screen) {
             AppScreen.Home -> {
-                HomeScreen(
-                    viewModel = homeViewModel,
-                    locationViewModel = locationViewModel,
-                    scrollState = homeScrollState,
-                    onToggleClick = onToggleClick,
-                    onImportFileRequested = onImportFileRequested,
-                    onImportFromClipboardRequested = onImportFromClipboardRequested,
-                    onScanQrRequested = onScanQrRequested,
-                    onCopyConfigRequested = onCopyConfigRequested,
-                    onSaveLogsRequested = onSaveLogsRequested,
-                    showAppSettingsButton = showAppSettingsButton,
-                    showSplitTunnelingButton = showSplitTunnelingButton,
-                    canScanQr = canScanQr,
-                    onAppSettingsClick = onAppSettingsClick,
-                    onSplitTunnelingClick = onSplitTunnelingClick,
-                    onOpenLocationSettings = { id ->
-                        locationViewModel.startEditing(id)
-                        onNavigate(AppScreen.LocationSettings(id))
-                    },
-                    onAddLocation = {
-                        locationViewModel.startEditing(null)
-                        onNavigate(AppScreen.LocationSettings(null))
-                    },
-                    onAddLocationOfType = { engine, wireguard ->
-                        locationViewModel.startEditing(null)
-                        if (wireguard) locationViewModel.onWireguardEngineSelected()
-                        else locationViewModel.onEngineChanged(engine)
-                        onNavigate(AppScreen.LocationSettings(null))
-                    },
-                    onImportTextRequested = onImportTextRequested
-                        ?: { text: String, onImported: () -> Unit, onError: (String) -> Unit ->
-                            homeViewModel.onImportFullConfig(text, onImported, onError)
+                if (appBehavior?.legacyUi == true) {
+                    LegacyHomeScreen(
+                        viewModel = homeViewModel,
+                        locationViewModel = locationViewModel,
+                        scrollState = homeScrollState,
+                        onToggleClick = onToggleClick,
+                        onImportFileRequested = onImportFileRequested,
+                        onImportFromClipboardRequested = onImportFromClipboardRequested,
+                        onScanQrRequested = onScanQrRequested,
+                        onCopyConfigRequested = onCopyConfigRequested,
+                        onSaveLogsRequested = onSaveLogsRequested,
+                        showAppSettingsButton = showAppSettingsButton,
+                        showSplitTunnelingButton = showSplitTunnelingButton,
+                        canScanQr = canScanQr,
+                        onAppSettingsClick = onAppSettingsClick,
+                        onSplitTunnelingClick = onSplitTunnelingClick,
+                        onOpenLocationSettings = { id ->
+                            locationViewModel.startEditing(id)
+                            onNavigate(AppScreen.LocationSettings(id))
                         },
-                    confirmBeforeDelete = confirmBeforeDelete,
-                    pingParallelism = pingParallelism,
-                    freeServersLimit = freeServersLimit,
-                    updateAvailable = updateAvailable,
-                    onUpdateClick = onUpdateClick,
-                    onUnlockExperimental = onUnlockExperimental,
-                    collapsedGroups = collapsedGroups,
-                    pinnedGroups = pinnedGroups,
-                    pingSortedGroups = pingSortedGroups,
-                    pingSortDescendingGroups = pingSortDescendingGroups,
-                    pinnedCustomLocations = pinnedCustomLocations,
-                    customLocationsPingSorted = customLocationsPingSorted,
-                    customLocationsPingSortDescending = customLocationsPingSortDescending,
-                    twoColumns = twoColumns,
-                    showAutoButton = showAutoButton,
-                    showGroupAutoPick = showGroupAutoPick,
-                    onToggleGroupCollapsed = onToggleGroupCollapsed,
-                    onToggleGroupPinned = onToggleGroupPinned,
-                    onSubscriptionKeyChanged = onSubscriptionKeyChanged,
-                    onToggleGroupPingSort = onToggleGroupPingSort,
-                    onToggleCustomLocationPinned = onToggleCustomLocationPinned,
-                    onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort,
-                    customGroups = customGroups,
-                    onCreateFolder = onCreateFolder,
-                    onRenameFolder = onRenameFolder,
-                    onDeleteFolder = onDeleteFolder,
-                    onAddToFolder = onAddToFolder,
-                    onRemoveFromFolder = onRemoveFromFolder,
-                    onToggleFolderPinned = onToggleFolderPinned,
-                    onToggleFolderCollapsed = onToggleFolderCollapsed,
-                    wideLayout = wideLayout,
-                    extraConnectContent = extraConnectContent,
-                    onExitClick = onExitClick,
-                    appBehavior = appBehavior,
-                    onAppBehaviorChanged = onAppBehaviorChanged,
-                    onShareSubscriptionRequested = onShareSubscriptionRequested
-                )
+                        onAddLocation = {
+                            locationViewModel.startEditing(null)
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
+                        confirmBeforeDelete = confirmBeforeDelete,
+                        pingParallelism = pingParallelism,
+                        freeServersLimit = freeServersLimit,
+                        updateAvailable = updateAvailable,
+                        onUpdateClick = onUpdateClick,
+                        onUnlockExperimental = onUnlockExperimental,
+                        collapsedGroups = collapsedGroups,
+                        pinnedGroups = pinnedGroups,
+                        pingSortedGroups = pingSortedGroups,
+                        pingSortDescendingGroups = pingSortDescendingGroups,
+                        pinnedCustomLocations = pinnedCustomLocations,
+                        customLocationsPingSorted = customLocationsPingSorted,
+                        customLocationsPingSortDescending = customLocationsPingSortDescending,
+                        twoColumns = twoColumns,
+                        showAutoButton = showAutoButton,
+                        showGroupAutoPick = showGroupAutoPick,
+                        onToggleGroupCollapsed = onToggleGroupCollapsed,
+                        onToggleGroupPinned = onToggleGroupPinned,
+                        onSubscriptionKeyChanged = onSubscriptionKeyChanged,
+                        onToggleGroupPingSort = onToggleGroupPingSort,
+                        onToggleCustomLocationPinned = onToggleCustomLocationPinned,
+                        onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort,
+                        customGroups = customGroups,
+                        onCreateFolder = onCreateFolder,
+                        onRenameFolder = onRenameFolder,
+                        onDeleteFolder = onDeleteFolder,
+                        onAddToFolder = onAddToFolder,
+                        onRemoveFromFolder = onRemoveFromFolder,
+                        onToggleFolderPinned = onToggleFolderPinned,
+                        onToggleFolderCollapsed = onToggleFolderCollapsed,
+                        wideLayout = wideLayout,
+                        extraConnectContent = extraConnectContent,
+                        onExitClick = onExitClick
+                    )
+                    } else {
+                    HomeScreen(
+                        viewModel = homeViewModel,
+                        locationViewModel = locationViewModel,
+                        scrollState = homeScrollState,
+                        onToggleClick = onToggleClick,
+                        onImportFileRequested = onImportFileRequested,
+                        onImportFromClipboardRequested = onImportFromClipboardRequested,
+                        onScanQrRequested = onScanQrRequested,
+                        onCopyConfigRequested = onCopyConfigRequested,
+                        onSaveLogsRequested = onSaveLogsRequested,
+                        showAppSettingsButton = showAppSettingsButton,
+                        showSplitTunnelingButton = showSplitTunnelingButton,
+                        canScanQr = canScanQr,
+                        onAppSettingsClick = onAppSettingsClick,
+                        onSplitTunnelingClick = onSplitTunnelingClick,
+                        onOpenLocationSettings = { id ->
+                            locationViewModel.startEditing(id)
+                            onNavigate(AppScreen.LocationSettings(id))
+                        },
+                        onAddLocation = {
+                            locationViewModel.startEditing(null)
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
+                        onAddLocationOfType = { engine, wireguard ->
+                            locationViewModel.startEditing(null)
+                            if (wireguard) locationViewModel.onWireguardEngineSelected()
+                            else locationViewModel.onEngineChanged(engine)
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
+                        onImportTextRequested = onImportTextRequested
+                            ?: { text: String, onImported: () -> Unit, onError: (String) -> Unit ->
+                                homeViewModel.onImportFullConfig(text, onImported, onError)
+                            },
+                        confirmBeforeDelete = confirmBeforeDelete,
+                        pingParallelism = pingParallelism,
+                        freeServersLimit = freeServersLimit,
+                        updateAvailable = updateAvailable,
+                        onUpdateClick = onUpdateClick,
+                        onUnlockExperimental = onUnlockExperimental,
+                        collapsedGroups = collapsedGroups,
+                        pinnedGroups = pinnedGroups,
+                        pingSortedGroups = pingSortedGroups,
+                        pingSortDescendingGroups = pingSortDescendingGroups,
+                        pinnedCustomLocations = pinnedCustomLocations,
+                        customLocationsPingSorted = customLocationsPingSorted,
+                        customLocationsPingSortDescending = customLocationsPingSortDescending,
+                        twoColumns = twoColumns,
+                        showAutoButton = showAutoButton,
+                        showGroupAutoPick = showGroupAutoPick,
+                        onToggleGroupCollapsed = onToggleGroupCollapsed,
+                        onToggleGroupPinned = onToggleGroupPinned,
+                        onSubscriptionKeyChanged = onSubscriptionKeyChanged,
+                        onToggleGroupPingSort = onToggleGroupPingSort,
+                        onToggleCustomLocationPinned = onToggleCustomLocationPinned,
+                        onToggleCustomLocationsPingSort = onToggleCustomLocationsPingSort,
+                        customGroups = customGroups,
+                        onCreateFolder = onCreateFolder,
+                        onRenameFolder = onRenameFolder,
+                        onDeleteFolder = onDeleteFolder,
+                        onAddToFolder = onAddToFolder,
+                        onRemoveFromFolder = onRemoveFromFolder,
+                        onToggleFolderPinned = onToggleFolderPinned,
+                        onToggleFolderCollapsed = onToggleFolderCollapsed,
+                        wideLayout = wideLayout,
+                        extraConnectContent = extraConnectContent,
+                        onExitClick = onExitClick,
+                        appBehavior = appBehavior,
+                        onAppBehaviorChanged = onAppBehaviorChanged,
+                        onShareSubscriptionRequested = onShareSubscriptionRequested
+                    )
+                    }
             }
 
             is AppScreen.LocationSettings -> {
-                LocationSettingsScreen(
-                    viewModel = locationViewModel,
-                    homeViewModel = homeViewModel,
-                    allowVpsAutoInstall = allowVpsAutoInstall,
-                    confirmBeforeDelete = confirmBeforeDelete,
-                    onShareLocationRequested = onShareLocationRequested,
-                    onBack = {
-                        homeViewModel.loadCurrentConfig()
-                        onNavigate(AppScreen.Home)
+                if (appBehavior?.legacyUi == true) {
+                    LegacyLocationSettingsScreen(
+                        viewModel = locationViewModel,
+                        homeViewModel = homeViewModel,
+                        allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
+                        confirmBeforeDelete = confirmBeforeDelete,
+                        onShareLocationRequested = onShareLocationRequested,
+                        onBack = {
+                            homeViewModel.loadCurrentConfig()
+                            onNavigate(AppScreen.Home)
+                        }
+                    )
+                    } else {
+                    LocationSettingsScreen(
+                        viewModel = locationViewModel,
+                        homeViewModel = homeViewModel,
+                        allowVpsAutoInstall = allowVpsAutoInstall,
+                        confirmBeforeDelete = confirmBeforeDelete,
+                        onShareLocationRequested = onShareLocationRequested,
+                        onBack = {
+                            homeViewModel.loadCurrentConfig()
+                            onNavigate(AppScreen.Home)
+                        }
+                    )
                     }
-                )
             }
         }
     }
