@@ -1209,7 +1209,7 @@ class OlcboxVpnService : VpnService() {
             java.io.File(dir, "state").mkdirs()
             java.io.File(dir, "modules").mkdirs()
             SnolcFiles.client(
-                socksListenHost, snolcPort, snolc.host, snolc.port, snolc.debug,
+                socksListenHost, snolcPort, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { org.olcbox.app.vpn.snolc.resolveSnolcHost(snolc.host) }, snolc.port, snolc.debug,
                 username = if (proxy != null) "" else socksUsername,
                 password = if (proxy != null) "" else socksPassword,
             ).forEach { (name, body) -> java.io.File(dir, name).writeText(body) }
