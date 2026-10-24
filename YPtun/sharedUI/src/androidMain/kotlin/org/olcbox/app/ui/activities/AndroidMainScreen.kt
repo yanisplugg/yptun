@@ -447,6 +447,18 @@ fun AndroidMainScreen(
         navigateHomeFromLocationSettings()
     }
 
+    // One way to change the app behaviour, from the settings sheet and from the home screen's ⋮ sheets alike.
+    val applyAppBehavior: (AppBehaviorSettings) -> Unit = { newBehavior ->
+        val expiryJustEnabled = (newBehavior.showSubscriptionExpiry && !appBehavior.showSubscriptionExpiry) ||
+            (newBehavior.showSubscriptionDescription && !appBehavior.showSubscriptionDescription)
+        vpnManager.setAppBehavior(newBehavior)
+        // Turning either header toggle on refreshes every subscription right away, so the
+        // "до …" date / panel description appear without waiting for the next poll.
+        if (expiryJustEnabled) {
+            viewModel.refreshSubscriptionExpiryNow()
+        }
+    }
+
     androidx.compose.runtime.CompositionLocalProvider(
         org.olcbox.app.ui.features.locations.components.LocalPingResultDisplay provides appBehavior.pingResultDisplay,
         org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionExpiry provides appBehavior.showSubscriptionExpiry,
@@ -460,18 +472,6 @@ fun AndroidMainScreen(
         org.olcbox.app.ui.features.locations.components.LocalConnectedSpeed provides
             (if (appBehavior.showSpeedOnHome && isVpnConnected) liveSpeed else null)
     ) {
-    // One way to change the app behaviour, from the settings sheet and from the home screen's ⋮ sheets alike.
-    val applyAppBehavior: (AppBehaviorSettings) -> Unit = { newBehavior ->
-        val expiryJustEnabled = (newBehavior.showSubscriptionExpiry && !appBehavior.showSubscriptionExpiry) ||
-            (newBehavior.showSubscriptionDescription && !appBehavior.showSubscriptionDescription)
-        vpnManager.setAppBehavior(newBehavior)
-        // Turning either header toggle on refreshes every subscription right away, so the
-        // "до …" date / panel description appear without waiting for the next poll.
-        if (expiryJustEnabled) {
-            viewModel.refreshSubscriptionExpiryNow()
-        }
-    }
-
     OlcboxAppContent(
         appBehavior = appBehavior,
         onAppBehaviorChanged = applyAppBehavior,
