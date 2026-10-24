@@ -9,7 +9,10 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -87,8 +90,10 @@ data class SpeedProgress(
 )
 
 private const val SPEED_HOST = "https://speed.cloudflare.com"
-private const val PHASE_MS = 7_000L
-private const val UP_CHUNK = 512 * 1024
+private const val PHASE_MS = 8_000L
+private const val WARMUP_MS = 1_500L
+private const val STREAMS = 4
+private const val UP_CHUNK = 1024 * 1024
 
 /** Ping, then download, then upload against Cloudflare through [proxy]; [onUpdate] fires as numbers move. */
 suspend fun runSpeedTest(proxy: SubscriptionFetchProxy?, onUpdate: (SpeedProgress) -> Unit) {
@@ -105,39 +110,28 @@ suspend fun runSpeedTest(proxy: SubscriptionFetchProxy?, onUpdate: (SpeedProgres
             }
             push(p.copy(phase = SpeedPhase.Download, pingMs = rtts.min()))
 
-            // Cloudflare refuses a single download above ~25 MB (403), so keep asking for 25 MB until the window ends.
-            val dl = TimeSource.Monotonic.markNow()
-            var total = 0L
-            var lastPush = 0L
-            val buf = ByteArray(64 * 1024)
-            while (dl.elapsedNow().inWholeMilliseconds < PHASE_MS) {
+            // Several streams, like the web speed tests: one TCP stream through a tunnel never fills the link.
+            // Cloudflare refuses a single download above ~25 MB (403), so each stream asks for 25 MB again and again.
+            val down = measureRate({ push(p.copy(downMbps = it)) }) { add, over ->
+                val buf = ByteArray(64 * 1024)
                 client.prepareGet("$SPEED_HOST/__down?bytes=25000000").execute { resp ->
                     check(resp.status.value in 200..299) { "speed test: HTTP ${resp.status.value}" }
                     val ch = resp.bodyAsChannel()
-                    while (true) {
+                    while (!over()) {
                         val n = ch.readAvailable(buf)
                         if (n < 0) break
-                        total += n
-                        val ms = dl.elapsedNow().inWholeMilliseconds
-                        if (ms - lastPush >= 250 && ms > 0) {
-                            lastPush = ms
-                            push(p.copy(downMbps = total * 8.0 / 1000.0 / ms))
-                        }
-                        if (ms >= PHASE_MS) break
+                        add(n)
                     }
                 }
             }
-            dl.elapsedNow().inWholeMilliseconds.takeIf { it > 0 }?.let { push(p.copy(downMbps = total * 8.0 / 1000.0 / it)) }
+            push(p.copy(phase = SpeedPhase.Upload, downMbps = down))
 
-            push(p.copy(phase = SpeedPhase.Upload))
             val chunk = ByteArray(UP_CHUNK)
-            val t = TimeSource.Monotonic.markNow()
-            var sent = 0L
-            while (t.elapsedNow().inWholeMilliseconds < PHASE_MS) {
+            val up = measureRate({ push(p.copy(upMbps = it)) }) { add, _ ->
                 check(client.post("$SPEED_HOST/__up") { setBody(chunk) }.status.value in 200..299) { "speed test: upload rejected" }
-                sent += chunk.size
-                push(p.copy(upMbps = sent * 8.0 / 1000.0 / t.elapsedNow().inWholeMilliseconds.coerceAtLeast(1)))
+                add(chunk.size)
             }
+            push(p.copy(upMbps = up))
             push(p.copy(phase = SpeedPhase.Done))
         } catch (e: CancellationException) {
             throw e
@@ -147,4 +141,33 @@ suspend fun runSpeedTest(proxy: SubscriptionFetchProxy?, onUpdate: (SpeedProgres
             client.close()
         }
     }
+}
+
+/**
+ * Runs [STREAMS] copies of [worker] for [PHASE_MS], each looping until the window ends and reporting bytes
+ * through `add`; [onRate] gets Mbit/s as it moves. The first [WARMUP_MS] (TCP slow start, TLS) don't count.
+ * All counting happens on one thread, so the shared totals need no locks.
+ */
+private suspend fun measureRate(
+    onRate: (Double) -> Unit,
+    worker: suspend (add: (Int) -> Unit, over: () -> Boolean) -> Unit
+): Double = withContext(Dispatchers.Default.limitedParallelism(1)) {
+    val t = TimeSource.Monotonic.markNow()
+    var total = 0L
+    var base = -1L
+    var baseMs = 0L
+    var lastPush = 0L
+    fun rate(ms: Long) = if (base >= 0 && ms > baseMs) (total - base) * 8.0 / 1000.0 / (ms - baseMs)
+        else total * 8.0 / 1000.0 / ms.coerceAtLeast(1)
+    val over = { t.elapsedNow().inWholeMilliseconds >= PHASE_MS }
+    val add = { n: Int ->
+        total += n
+        val ms = t.elapsedNow().inWholeMilliseconds
+        if (base < 0 && ms >= WARMUP_MS) { base = total; baseMs = ms }
+        if (base >= 0 && ms - lastPush >= 250) { lastPush = ms; onRate(rate(ms)) }
+    }
+    coroutineScope {
+        repeat(STREAMS) { launch { while (!over()) worker(add, over) } }
+    }
+    rate(t.elapsedNow().inWholeMilliseconds)
 }
