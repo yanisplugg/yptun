@@ -148,6 +148,11 @@ class HomeScreenViewModel(
     }
 
     suspend fun performPingFor(config: LocationConfig): Long? {
+        // Tunnel-only engines are probed through the LIVE tunnel, so for any location other than the
+        // connected one that measures the wrong tunnel (a bogus 0–2 ms) — keep the neutral dash (null).
+        val tunnelOnly = config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns ||
+            config.engine == EngineType.OpenFlux || config.engine == EngineType.Snolc
+        if (tunnelOnly && config.normalized() != _state.value.configData) return null
         return vpnManager.ping(config)
     }
 
