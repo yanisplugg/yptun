@@ -949,6 +949,7 @@ private val LANGUAGE_OPTIONS = listOf(
     AppLanguage.Persian to "فارسی",
     AppLanguage.Chinese to "中文",
     AppLanguage.Slovak to "Slovenčina",
+    AppLanguage.Czech to "Čeština",
     AppLanguage.Belarusian to "Беларуская"
 )
 

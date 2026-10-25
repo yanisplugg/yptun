@@ -4045,6 +4045,7 @@ private fun ApplicationBehaviorContent(
                 AppLanguage.Persian to "🇮🇷 فارسی",
                 AppLanguage.Chinese to "🇨🇳 中文",
                 AppLanguage.Slovak to "🇸🇰 Slovenčina",
+                AppLanguage.Czech to "🇨🇿 Čeština",
                 AppLanguage.Belarusian to "🇧🇾 Беларуская"
             )
             options.forEach { (lang, title) ->

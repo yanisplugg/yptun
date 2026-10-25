@@ -30,6 +30,7 @@ object AppLocale {
             "fa" -> AppLanguage.Persian
             "zh" -> AppLanguage.Chinese
             "sk" -> AppLanguage.Slovak
+            "cs" -> AppLanguage.Czech
             "be" -> AppLanguage.Belarusian
             else -> AppLanguage.English
         }
