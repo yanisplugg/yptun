@@ -152,8 +152,9 @@ class HomeScreenViewModel(
         // connected one that measures the wrong tunnel (a bogus 0–2 ms) — keep the neutral dash (null).
         val tunnelOnly = config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns ||
             config.engine == EngineType.OpenFlux || config.engine == EngineType.Snolc
-        if (tunnelOnly && config.normalized() != _state.value.configData) return null
-        return vpnManager.ping(config)
+        val isActive = config.normalized() == _state.value.configData
+        if (tunnelOnly && !isActive) return null
+        return vpnManager.ping(config, isActive)
     }
 
     /** Budget for one location's whole ping (see [VpnManager.pingBudgetMs]). */

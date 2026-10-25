@@ -224,6 +224,8 @@ class DesktopVpnManager private constructor(
 
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
+    override suspend fun ping(locationConfig: LocationConfig, isActive: Boolean): Long? = pingInternal(locationConfig, isActive)
+
     override suspend fun pingVerified(locationConfig: LocationConfig): Long? {
         val ms = pingInternal(locationConfig) ?: return null
         val behavior = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
@@ -245,17 +247,17 @@ class DesktopVpnManager private constructor(
      * Settings «Точность пинга»: measures [pingRounds] times and keeps the lowest time. A location
      * that does not answer the first time is reported as unreachable right away.
      */
-    private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+    private suspend fun pingInternal(locationConfig: LocationConfig, isActive: Boolean = true): Long? {
         var best: Long? = null
         repeat(pingRounds) {
-            val ms = pingOnce(locationConfig)
+            val ms = pingOnce(locationConfig, isActive)
             if (ms == null) return best
             if (best == null || ms < best!!) best = ms
         }
         return best
     }
 
-    private suspend fun pingOnce(locationConfig: LocationConfig): Long? {
+    private suspend fun pingOnce(locationConfig: LocationConfig, isActive: Boolean = true): Long? {
         val config = locationConfig.normalized()
         val behavior = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
         val profile = config.proxy
@@ -277,10 +279,10 @@ class DesktopVpnManager private constructor(
             // tunnel when connected; otherwise the best standalone probe available.
             config.engine == EngineType.VkTurn -> tunnelPing()
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
-                if (isConnected.value) tunnelPing()
+                if (isActive && isConnected.value) tunnelPing()
                 else awgProbePing(profile?.awgConfig.orEmpty())
             proxyType == ProxyProfile.TYPE_HYSTERIA2 ->
-                if (isConnected.value) tunnelPing()
+                if (isActive && isConnected.value) tunnelPing()
                 else icmpPing(profile?.server.orEmpty())
             config.engine == EngineType.Standard || config.engine == EngineType.Chain ->
                 tcpPing(profile?.server, profile?.serverPort)

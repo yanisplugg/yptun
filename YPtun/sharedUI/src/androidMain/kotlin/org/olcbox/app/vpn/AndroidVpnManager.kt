@@ -768,6 +768,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
 
     override suspend fun ping(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
+    override suspend fun ping(locationConfig: LocationConfig, isActive: Boolean): Long? = pingInternal(locationConfig, isActive)
+
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? = pingInternal(locationConfig)
 
     override suspend fun pingVerified(locationConfig: LocationConfig): Long? {
@@ -783,17 +785,17 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * that does not answer the first time is reported as unreachable right away (re-measuring a dead
      * server would only multiply the timeout).
      */
-    private suspend fun pingInternal(locationConfig: LocationConfig): Long? {
+    private suspend fun pingInternal(locationConfig: LocationConfig, isActive: Boolean = true): Long? {
         var best: Long? = null
         repeat(pingRounds) {
-            val ms = pingOnce(locationConfig)
+            val ms = pingOnce(locationConfig, isActive)
             if (ms == null) return best
             if (best == null || ms < best!!) best = ms
         }
         return best
     }
 
-    private suspend fun pingOnce(locationConfig: LocationConfig): Long? {
+    private suspend fun pingOnce(locationConfig: LocationConfig, isActive: Boolean = true): Long? {
         // User-selected ping method (Settings → «Пинг») overrides the per-engine default probe.
         // TCP/ICMP probe the location's own server; the URL is used ONLY by the proxy GET/HEAD probes.
         val behavior = _appBehavior.value
@@ -837,17 +839,17 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).
-                if (OlcboxVpnState.activeSocks != null) tunnelPing()
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
                 else awgProbePing(locationConfig.proxy?.awgConfig.orEmpty())
             proxyType == ProxyProfile.TYPE_HYSTERIA2 ->
                 // Hysteria2 is UDP/QUIC-only (TCP to the port usually fails), so before connecting
                 // an ICMP probe to the server host gives the truest path RTT; once up, measure through
                 // the live tunnel.
-                if (OlcboxVpnState.activeSocks != null) tunnelPing()
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
                 else icmpPing(locationConfig.proxy?.server.orEmpty())
             // Trust Tunnel: through the live tunnel when up, else TCP to the endpoint decoded from the tt:// link.
             proxyType == ProxyProfile.TYPE_TRUSTTUNNEL ->
-                if (OlcboxVpnState.activeSocks != null) tunnelPing() else tcpPing(server, serverPort)
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing() else tcpPing(server, serverPort)
             // Plain proxies: TCP latency to the (reachable) proxy server.
             locationConfig.engine == EngineType.Standard ->
                 tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
