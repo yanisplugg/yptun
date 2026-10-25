@@ -947,7 +947,9 @@ private val LANGUAGE_OPTIONS = listOf(
     AppLanguage.Russian to "Русский",
     AppLanguage.English to "English",
     AppLanguage.Persian to "فارسی",
-    AppLanguage.Chinese to "中文"
+    AppLanguage.Chinese to "中文",
+    AppLanguage.Slovak to "Slovenčina",
+    AppLanguage.Belarusian to "Беларуская"
 )
 
 private fun languageLabel(language: AppLanguage): String =

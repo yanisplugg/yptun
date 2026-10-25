@@ -30,7 +30,9 @@ enum class AppLanguage(val id: String) {
     English("en"),
     Russian("ru"),
     Persian("fa"),
-    Chinese("zh");
+    Chinese("zh"),
+    Slovak("sk"),
+    Belarusian("be");
 
     companion object {
         fun fromId(id: String?): AppLanguage = entries.firstOrNull { it.id == id } ?: System
@@ -54,6 +56,8 @@ fun stringsFor(language: AppLanguage): Strings = when (language) {
     AppLanguage.English -> EnStrings
     AppLanguage.Persian -> FaStrings
     AppLanguage.Chinese -> ZhStrings
+    AppLanguage.Slovak -> SkStrings
+    AppLanguage.Belarusian -> BeStrings
     else -> RuStrings
 }
 

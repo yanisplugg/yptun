@@ -88,6 +88,8 @@ class DesktopSettingsController {
             "ru" -> AppLanguage.Russian
             "fa" -> AppLanguage.Persian
             "zh" -> AppLanguage.Chinese
+            "sk" -> AppLanguage.Slovak
+            "be" -> AppLanguage.Belarusian
             else -> AppLanguage.English
         }
         val ui = loadUi()

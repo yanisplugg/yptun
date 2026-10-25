@@ -4043,7 +4043,9 @@ private fun ApplicationBehaviorContent(
                 AppLanguage.Russian to "🇷🇺 Русский",
                 AppLanguage.English to "🇺🇸 English",
                 AppLanguage.Persian to "🇮🇷 فارسی",
-                AppLanguage.Chinese to "🇨🇳 中文"
+                AppLanguage.Chinese to "🇨🇳 中文",
+                AppLanguage.Slovak to "🇸🇰 Slovenčina",
+                AppLanguage.Belarusian to "🇧🇾 Беларуская"
             )
             options.forEach { (lang, title) ->
                 FilterChip(
