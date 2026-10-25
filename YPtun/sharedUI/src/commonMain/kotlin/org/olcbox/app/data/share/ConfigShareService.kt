@@ -29,7 +29,7 @@ object ConfigShareService {
         if (normalized.engine == EngineType.VkTurn) {
             val vk = normalized.vkturn
             if (vk?.usesWdtt() == true) return QwdttUriParser.compose(normalized.name, vk)
-            if (vk?.usesCsqtt() == true) return CsqttUriParser.compose(vk)
+            if (vk?.usesCsqtt() == true) return CsqttUriParser.compose(vk, normalized.name)
             return vk?.uri.orEmpty()
         }
         // Standard/Chain run a sing-box/Xray proxy — share the matching proxy link (vless/…/awg),

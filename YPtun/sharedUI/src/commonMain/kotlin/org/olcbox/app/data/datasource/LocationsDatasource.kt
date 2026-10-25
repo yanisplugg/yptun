@@ -2187,7 +2187,7 @@ class LocationsRepositoryImpl(
             .mapNotNull { CsqttUriParser.parse(it) }
             .map { link ->
                 val location = LocationConfig(
-                    name = "csqtt ${link.host}",
+                    name = link.name.ifBlank { "csqtt ${link.host}" },
                     engine = EngineType.VkTurn,
                     vkturn = VkTurnConfig(
                         core = VkTurnConfig.CORE_CSQTT,
