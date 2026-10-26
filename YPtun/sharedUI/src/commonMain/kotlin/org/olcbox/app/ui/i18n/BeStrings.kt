@@ -833,7 +833,7 @@ object BeStrings : Strings {
     override val manualOwnServer = "Ваш уласны сервер"
     override val manualLinkNote = "VLESS, VMess, Trojan, Shadowsocks і Hysteria2 дадаюцца па спасылцы — устаўце яе на папярэднім экране."
     override val engineStealthName = "olcRTC"
-    override val engineStealthDesc = "Тунэль праз пакой відэазванка: Telemost, Jazz, WB Stream, Jitsi"
+    override val engineStealthDesc = "Тунэль праз пакой відэазванка: Telemost, Jazz, MTS Link, VK Calls, Jitsi"
     override val engineChainName = "olcRTC + праксі"
     override val engineChainDesc = "Ваша праксі ўнутры тунэля olcRTC"
     override val engineVkTurnDesc = "WireGuard праз серверы TURN званкоў VK"

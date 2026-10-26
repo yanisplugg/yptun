@@ -840,7 +840,7 @@ object SkStrings : Strings {
     override val manualOwnServer = "Váš vlastný server"
     override val manualLinkNote = "VLESS, VMess, Trojan, Shadowsocks a Hysteria2 sa pridávajú odkazom — vložte ho na predchádzajúcej obrazovke."
     override val engineStealthName = "olcRTC"
-    override val engineStealthDesc = "Tunel cez miestnosť videohovoru: Telemost, Jazz, WB Stream, Jitsi"
+    override val engineStealthDesc = "Tunel cez miestnosť videohovoru: Telemost, Jazz, MTS Link, VK Calls, Jitsi"
     override val engineChainName = "olcRTC + proxy"
     override val engineChainDesc = "Vaše proxy vo vnútri tunela olcRTC"
     override val engineVkTurnDesc = "WireGuard cez servery TURN hovorov VK"

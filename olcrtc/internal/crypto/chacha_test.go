@@ -186,8 +186,8 @@ func TestServerAcceptsIndependentClientPrefixes(t *testing.T) {
 			t.Fatalf("Open(client %s) error = %v", name, openErr)
 		}
 	}
-	if len(server.replay.senders) != 2 {
-		t.Fatalf("sender states = %d, want 2", len(server.replay.senders))
+	if n := len(server.replay.lanes[testDataAAD]); n != 2 {
+		t.Fatalf("sender states on the data lane = %d, want 2", n)
 	}
 }
 
@@ -198,7 +198,11 @@ func TestReplayStateUsesBoundedLRU(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewKeySet(client %d) error = %v", i, err)
 		}
-		binary.BigEndian.PutUint64(client.send.prefix[noncePrefixSize-8:], uint64(i))
+		state, err := client.laneState([]byte(testDataAAD))
+		if err != nil {
+			t.Fatalf("laneState(client %d) error = %v", i, err)
+		}
+		binary.BigEndian.PutUint64(state.prefix[noncePrefixSize-8:], uint64(i))
 		record, err := client.Seal(nil, []byte(testDataAAD))
 		if err != nil {
 			t.Fatalf("Seal(client %d) error = %v", i, err)
@@ -207,11 +211,11 @@ func TestReplayStateUsesBoundedLRU(t *testing.T) {
 			t.Fatalf("Open(client %d) error = %v", i, err)
 		}
 	}
-	if len(server.replay.senders) != maxReplaySenders {
-		t.Fatalf("sender states = %d, want %d", len(server.replay.senders), maxReplaySenders)
+	if n := server.replay.lru.Len(); n != maxReplaySenders {
+		t.Fatalf("sender states = %d, want %d", n, maxReplaySenders)
 	}
 	var first [noncePrefixSize]byte
-	if _, ok := server.replay.senders[first]; ok {
+	if _, ok := server.replay.lanes[testDataAAD][first]; ok {
 		t.Fatal("least-recently-used sender was not evicted")
 	}
 }
@@ -273,7 +277,11 @@ func TestConcurrentSealAndOpen(t *testing.T) {
 
 func TestCounterExhaustionDoesNotWrap(t *testing.T) {
 	client, _ := newKeyPair(t)
-	client.send.counter.Store(math.MaxUint64 - 1)
+	state, err := client.laneState([]byte(testDataAAD))
+	if err != nil {
+		t.Fatalf("laneState() error = %v", err)
+	}
+	state.counter.Store(math.MaxUint64 - 1)
 	record, err := client.Seal(nil, []byte(testDataAAD))
 	if err != nil {
 		t.Fatalf("Seal(max counter) error = %v", err)
@@ -316,5 +324,129 @@ func BenchmarkRecordRoundTrip(b *testing.B) {
 		if _, err := server.Open(record, aad); err != nil {
 			b.Fatalf("Open() error = %v", err)
 		}
+	}
+}
+
+func mustSeal(tb testing.TB, keys *KeySet, plaintext, aad string) []byte {
+	tb.Helper()
+	record, err := keys.Seal([]byte(plaintext), []byte(aad))
+	if err != nil {
+		tb.Fatalf("Seal(%q) error = %v", aad, err)
+	}
+	return record
+}
+
+func recordPrefix(record []byte) [noncePrefixSize]byte {
+	var prefix [noncePrefixSize]byte
+	copy(prefix[:], record[len(recordMagic)+8:recordHeaderSize])
+	return prefix
+}
+
+func recordCounter(record []byte) uint64 {
+	return binary.BigEndian.Uint64(record[len(recordMagic):])
+}
+
+func TestLanesNumberRecordsIndependently(t *testing.T) {
+	_, server := newKeyPair(t)
+	data := mustSeal(t, server, "data", testDataAAD)
+	control := mustSeal(t, server, "control", testControlAAD)
+	if recordPrefix(data) == recordPrefix(control) {
+		t.Fatal("data and control lanes share a sender prefix")
+	}
+	if recordCounter(data) != 1 || recordCounter(control) != 1 {
+		t.Fatalf("counters = %d/%d, want each lane to start at 1", recordCounter(data), recordCounter(control))
+	}
+}
+
+// The data KCP still holds a backlog when the idle control KCP delivers a pong
+// at once; that is the order a client sees under load, and with one window for
+// both lanes it aged the whole backlog out (409 rejects in one 80 s run).
+func TestControlRecordAheadDoesNotAgeOutDataBacklog(t *testing.T) {
+	client, server := newKeyPair(t)
+	backlog := make([][]byte, replayWindowSize*4)
+	for i := range backlog {
+		backlog[i] = mustSeal(t, server, "bulk", testDataAAD)
+	}
+	pong := mustSeal(t, server, "pong", testControlAAD)
+	if _, err := client.Open(pong, []byte(testControlAAD)); err != nil {
+		t.Fatalf("Open(control) error = %v", err)
+	}
+	for i, record := range backlog {
+		if _, err := client.Open(record, []byte(testDataAAD)); err != nil {
+			t.Fatalf("Open(data %d) error = %v; a record on another lane must not age this lane out", i, err)
+		}
+	}
+}
+
+// A peer from before lanes had their own prefixes numbers every lane from one
+// counter. Its backlog must survive a control record too, and a replay within
+// a lane must still be caught.
+func TestReceiverIsolatesLanesOfASharedPrefixSender(t *testing.T) {
+	client, server := newKeyPair(t)
+	shared, err := server.laneState([]byte(testDataAAD))
+	if err != nil {
+		t.Fatalf("laneState() error = %v", err)
+	}
+	backlog := make([][]byte, replayWindowSize*4)
+	for i := range backlog {
+		backlog[i], err = sealWith(shared, nil, []byte("bulk"), []byte(testDataAAD))
+		if err != nil {
+			t.Fatalf("sealWith(data %d) error = %v", i, err)
+		}
+	}
+	pong, err := sealWith(shared, nil, []byte("pong"), []byte(testControlAAD))
+	if err != nil {
+		t.Fatalf("sealWith(control) error = %v", err)
+	}
+	if recordPrefix(pong) != recordPrefix(backlog[0]) {
+		t.Fatal("test setup: the legacy sender must share one prefix across lanes")
+	}
+	if _, err := client.Open(pong, []byte(testControlAAD)); err != nil {
+		t.Fatalf("Open(control) error = %v", err)
+	}
+	for i, record := range backlog {
+		if _, err := client.Open(record, []byte(testDataAAD)); err != nil {
+			t.Fatalf("Open(data %d) error = %v", i, err)
+		}
+	}
+	// Still caught inside the window; backlog[0] is legitimately too old by
+	// now, so the newest record is what proves the lane still tracks replays.
+	newest := len(backlog) - 1
+	if _, err := client.Open(backlog[newest], []byte(testDataAAD)); !errors.Is(err, ErrReplayDuplicate) {
+		t.Fatalf("replayed Open(data %d) error = %v, want %v", newest, err, ErrReplayDuplicate)
+	}
+}
+
+// TestReorderStatsTellLossFromReordering pins what the counters mean: a record
+// that jumps past its predecessor counts the predecessor as skipped, and the
+// predecessor arriving afterwards counts as late. A relay that reorders fills
+// its gaps; one that drops leaves them, which is the difference a session that
+// died of "frame too large" needs explained (olcbox#23).
+func TestReorderStatsTellLossFromReordering(t *testing.T) {
+	client, server := newKeyPair(t)
+	records := make([][]byte, 0, 5)
+	for i := range 5 {
+		rec, err := client.Seal([]byte{byte(i)}, []byte(testDataAAD))
+		if err != nil {
+			t.Fatalf("Seal(%d) error = %v", i, err)
+		}
+		records = append(records, rec)
+	}
+	for _, i := range []int{0, 1, 3, 4} {
+		if _, err := server.Open(records[i], []byte(testDataAAD)); err != nil {
+			t.Fatalf("Open(%d) error = %v", i, err)
+		}
+	}
+	if got := server.ReorderStats([]byte(testDataAAD)); got != (ReorderStats{Skipped: 1}) {
+		t.Fatalf("after a gap: ReorderStats = %+v, want Skipped:1 Late:0", got)
+	}
+	if _, err := server.Open(records[2], []byte(testDataAAD)); err != nil {
+		t.Fatalf("Open(2) late error = %v", err)
+	}
+	if got := server.ReorderStats([]byte(testDataAAD)); got != (ReorderStats{Skipped: 1, Late: 1}) {
+		t.Fatalf("after the gap was filled: ReorderStats = %+v, want Skipped:1 Late:1", got)
+	}
+	if got := server.ReorderStats([]byte(testControlAAD)); got != (ReorderStats{}) {
+		t.Fatalf("control lane ReorderStats = %+v, want zero", got)
 	}
 }

@@ -122,7 +122,7 @@ Enter choice [1-4, default: 1]:
 Recommendations:
 - **datachannel** - fastest, lowest ping. Stable with `jitsi`. **WBStream DC does not work** in the normal guest flow. **Telemost removed DC**.
 - **vp8channel** - works with telemost and wbstream, fast, but high ping.
-- **seichannel** - works only with wbstream, slow, but low ping.
+- **seichannel** - works with wbstream and jitsi, low ping; it keeps several messages in flight, so a relay's round trip no longer divides its throughput.
 - **videochannel** - works with wbstream reliably, with telemost when possible; slowest and highest ping.
 
 **Recommended combo: `jitsi + datachannel`**. Alternative: `wbstream + vp8channel`.

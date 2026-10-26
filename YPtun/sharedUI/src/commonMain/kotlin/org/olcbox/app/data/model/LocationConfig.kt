@@ -1129,11 +1129,15 @@ data class LocationConfig(
     }
 
     companion object {
-        const val PROVIDER_JAZZ = "jazz"
+        /** SaluteJazz (Sber): имя провайдера в ядре — `salutejazz`; старое `jazz` из сохранённых локаций приводится к нему. */
+        const val PROVIDER_JAZZ = "salutejazz"
         const val PROVIDER_TELEMOST = "telemost"
+        /** WB Stream теперь требует токен аккаунта (гости комнаты не создают) — оставлен для старых локаций, по умолчанию не предлагается. */
         const val PROVIDER_WB_STREAM = "wbstream"
         const val PROVIDER_JITSI = "jitsi"
-        const val DEFAULT_BYPASS_PROVIDER = PROVIDER_WB_STREAM
+        const val PROVIDER_VK_CALLS = "vkcalls"
+        const val PROVIDER_MTS_LINK = "mtslink"
+        const val DEFAULT_BYPASS_PROVIDER = PROVIDER_MTS_LINK
 
         const val TRANSPORT_DATACHANNEL = "datachannel"
         const val TRANSPORT_VP8CHANNEL = "vp8channel"
@@ -1153,6 +1157,8 @@ data class LocationConfig(
         const val DEFAULT_BOND_PORT = 7700
 
         val supportedBypassProviders = listOf(
+            PROVIDER_MTS_LINK,
+            PROVIDER_VK_CALLS,
             PROVIDER_JAZZ,
             PROVIDER_TELEMOST,
             PROVIDER_WB_STREAM,
@@ -1179,15 +1185,23 @@ data class LocationConfig(
                     listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
                 PROVIDER_WB_STREAM ->
                     listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_DATACHANNEL)
-                PROVIDER_JITSI, PROVIDER_JAZZ ->
+                PROVIDER_JITSI ->
                     listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL)
+                // Эти три сервиса пропускают не всё (docs/about.md ядра): у SaluteJazz только data-каналы,
+                // у MTS Link и VK Calls SFU не мостит произвольный data-канал — тоннель едет видеотреками.
+                PROVIDER_JAZZ -> listOf(TRANSPORT_DATACHANNEL)
+                PROVIDER_MTS_LINK -> listOf(TRANSPORT_VP8CHANNEL)
+                PROVIDER_VK_CALLS ->
+                    listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL)
                 else -> supportedTransports
             }
         }
 
         fun normalizeProvider(value: String): String {
             return when (value.trim().lowercase()) {
-                PROVIDER_JAZZ, "sberjazz", "sber_jazz" -> PROVIDER_JAZZ
+                PROVIDER_JAZZ, "jazz", "sberjazz", "sber_jazz" -> PROVIDER_JAZZ
+                PROVIDER_VK_CALLS, "vk", "vk_calls", "vk-calls" -> PROVIDER_VK_CALLS
+                PROVIDER_MTS_LINK, "mts", "mts_link", "mts-link" -> PROVIDER_MTS_LINK
                 PROVIDER_TELEMOST, "yandex", "yandex_telemost" -> PROVIDER_TELEMOST
                 PROVIDER_WB_STREAM, "wbstream", "wb-stream", "wildberries" -> PROVIDER_WB_STREAM
                 PROVIDER_JITSI, "jitsi-meet", "jitsi_meet", "meet" -> PROVIDER_JITSI
@@ -1215,7 +1229,9 @@ data class LocationConfig(
                 PROVIDER_TELEMOST -> "Telemost"
                 PROVIDER_WB_STREAM -> "WB Stream"
                 PROVIDER_JITSI -> "Jitsi"
-                else -> "WB Stream"
+                PROVIDER_VK_CALLS -> "VK Calls"
+                PROVIDER_MTS_LINK -> "MTS Link"
+                else -> "MTS Link"
             }
         }
 

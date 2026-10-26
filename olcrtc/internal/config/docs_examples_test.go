@@ -115,6 +115,9 @@ func validateDocumentationConfig(t *testing.T, name string, file File) {
 	if base.Mode == "" {
 		return
 	}
+	if leanBuild && base.Transport == "videochannel" {
+		t.Skip("a lean build does not register videochannel")
+	}
 	// Mirror the CLI: with profiles configured it is the merged profiles that
 	// have to be complete, and the top level is only a set of shared defaults.
 	if len(file.Profiles) > 0 {

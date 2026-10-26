@@ -119,3 +119,21 @@ func TestHealthTrackerNilNotifyOK(t *testing.T) {
 		t.Fatal("Status() did not record without notify")
 	}
 }
+
+// The two CONNECT deadlines come from one place and the server's is the
+// longer: the client is the side that gives up, and it closes the stream when
+// it does. A server that gave up first closed the stream under the client
+// with no ack at all, which read as a broken server (olcbox#23).
+func TestConnectRequestDeadlineOutlivesTheAckDeadline(t *testing.T) {
+	ack, request := runtime.ConnectAckTimeout(), runtime.ConnectRequestTimeout()
+	if request <= ack {
+		t.Fatalf("ConnectRequestTimeout() = %v, must be longer than ConnectAckTimeout() = %v", request, ack)
+	}
+	// The ack wait covers the exit's dial (10 s, answered with a negative ack
+	// on failure) and the queueing of two small frames behind bulk data on a
+	// saturated relay, once per direction. 15 s was measured to fail every
+	// connect opened during a download.
+	if ack < 60*time.Second {
+		t.Fatalf("ConnectAckTimeout() = %v, too short for a saturated relay in both directions", ack)
+	}
+}

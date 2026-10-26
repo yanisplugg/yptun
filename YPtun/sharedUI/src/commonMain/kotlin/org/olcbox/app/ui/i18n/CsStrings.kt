@@ -840,7 +840,7 @@ object CsStrings : Strings {
     override val manualOwnServer = "Váš vlastní server"
     override val manualLinkNote = "VLESS, VMess, Trojan, Shadowsocks a Hysteria2 se přidávají odkazem — vložte jej na předchozí obrazovce."
     override val engineStealthName = "olcRTC"
-    override val engineStealthDesc = "Tunel přes místnost videohovoru: Telemost, Jazz, WB Stream, Jitsi"
+    override val engineStealthDesc = "Tunel přes místnost videohovoru: Telemost, Jazz, MTS Link, VK Calls, Jitsi"
     override val engineChainName = "olcRTC + proxy"
     override val engineChainDesc = "Vaše proxy uvnitř tunelu olcRTC"
     override val engineVkTurnDesc = "WireGuard přes servery TURN hovorů VK"

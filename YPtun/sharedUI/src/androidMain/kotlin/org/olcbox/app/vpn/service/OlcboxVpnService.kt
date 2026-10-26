@@ -650,7 +650,7 @@ class OlcboxVpnService : VpnService() {
                 }
             })
         }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
-        mobileRuntime.setLogWriter(object : LogWriter {
+        Mobile.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
                 val line = msg.trimEnd()
                 addLog("rtc: $line")

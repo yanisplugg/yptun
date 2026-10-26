@@ -15,6 +15,7 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/crypto"
+	"github.com/openlibrecommunity/olcrtc/internal/hostprofile"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 )
 
@@ -33,7 +34,48 @@ const (
 	smuxMaxFrameSize     = 32 * 1024
 	smuxMaxReceiveBuffer = 32 * 1024 * 1024
 	smuxMaxStreamBuffer  = 4 * 1024 * 1024
+
+	// A mobile VPN extension is a much smaller box than a server. Apple gives
+	// a packet tunnel provider roughly 50 MB and terminates it for exceeding
+	// that, and the same process also carries sing-box and Xray. The windows
+	// above do not fit: 32 MB of session buffer plus 4 MB per stream is the
+	// budget on its own, and a speed test with a dozen parallel streams fills
+	// it. A window only has to cover the bandwidth-delay product, which on a
+	// 5 Mbit/s relay at 300 ms is about 200 KB, so these are still several
+	// times larger than the link can keep in flight.
+	smuxConstrainedReceiveBuffer = 4 * 1024 * 1024
+	smuxConstrainedStreamBuffer  = 512 * 1024
 )
+
+// UseConstrainedBuffers shrinks every receive window this process advertises,
+// for hosts that are killed rather than swapped when they grow: the iOS
+// packet tunnel extension, and the Android VPN service beside it.
+//
+// Receive windows are local. smux announces its per-stream window to the peer
+// with a window update, and KCP carries its receive window in every segment
+// header, so a client can shrink unilaterally and an unchanged server simply
+// sends less at a time.
+//
+// The flag itself lives in [hostprofile], a leaf every package can import;
+// these are the names the transports and the client library have always
+// used for it.
+func UseConstrainedBuffers() { hostprofile.UseConstrainedBuffers() }
+
+// BuffersAreConstrained reports the profile chosen for this process.
+func BuffersAreConstrained() bool { return hostprofile.BuffersAreConstrained() }
+
+// ResetBufferProfileForTest restores the server profile. Tests only: the
+// switch is one-way in a running process, which is what a host that never
+// changes shape mid-flight wants. Exported because the transports that read
+// the profile test it from their own packages.
+func ResetBufferProfileForTest() { hostprofile.ResetForTest() }
+
+func receiveBufferSizes() (int, int) {
+	if hostprofile.BuffersAreConstrained() {
+		return smuxConstrainedReceiveBuffer, smuxConstrainedStreamBuffer
+	}
+	return smuxMaxReceiveBuffer, smuxMaxStreamBuffer
+}
 
 // ErrKeyRequired is returned when no encryption key is provided.
 var ErrKeyRequired = errors.New("key required (use -key <hex>)")
@@ -70,8 +112,7 @@ func SmuxConfig(maxWirePayload int) *smux.Config {
 	cfg.KeepAliveDisabled = false
 	cfg.MaxFrameSize = smuxMaxFrameSize
 	clampMaxFrameSize(cfg, maxWirePayload)
-	cfg.MaxReceiveBuffer = smuxMaxReceiveBuffer
-	cfg.MaxStreamBuffer = smuxMaxStreamBuffer
+	cfg.MaxReceiveBuffer, cfg.MaxStreamBuffer = receiveBufferSizes()
 	cfg.KeepAliveInterval = 10 * time.Second
 	cfg.KeepAliveTimeout = 30 * time.Second
 	return cfg
@@ -121,16 +162,42 @@ func LivenessTimeout(tr transport.Transport) time.Duration {
 	return control.DefaultTimeout
 }
 
-// ConnectAckTimeout returns the tunnel CONNECT ack read deadline for a
-// transport. ControlPlane transports (SFU renegotiation) may take ~30s to
-// start forwarding data frames, so they get a generous window; conventional
-// providers use the conservative default.
-func ConnectAckTimeout(tr transport.Transport) time.Duration {
-	if IsControlPlane(tr) {
-		return 90 * time.Second
-	}
-	return 15 * time.Second
-}
+// The tunnel CONNECT exchange has one deadline on each side: the client waits
+// for the one-byte ack, the server waits for the request that follows the
+// stream's SYN. Both live here so they cannot drift apart again.
+//
+// The server's must be the longer of the two. The client is the side that
+// gives up: when it does, it closes the stream, and the server's read ends in
+// FIN rather than on a timer. A server timer that fires first produces the
+// other failure - the stream closed under the client with no ack at all,
+// "remote not ready (read_err=EOF)" - which reads like a broken server when
+// it is only an impatient one (olcbox#23).
+//
+// Neither depends on the transport. What the ack waits for is the dial on the
+// exit (bounded by the dialer's own timeout, answered with a negative ack on
+// failure) plus the queueing of two small frames behind bulk data, once in
+// each direction. The old split - 90 s for transports with a control plane,
+// 15 s for the rest - keyed the wait on a property that has nothing to do
+// with queueing: a datachannel got 15 s because it has no control channel,
+// not because it is fast. Measured through a Jitsi SCTP bridge at ~5 Mbit/s
+// with the sender's backlog unbounded, every connect opened during a
+// download waited out the 15 s and failed, and the backlog took minutes to
+// drain. Bounding that backlog is the jitsi engine's job (see
+// bridgeBacklogHighWater); the number here only has to be generous, because a
+// live link always answers eventually, and a dead one is torn down by
+// liveness, which fails the waiting read at once.
+const (
+	connectAckWait     = 90 * time.Second
+	connectRequestWait = 120 * time.Second
+)
+
+// ConnectAckTimeout is how long the client waits for the CONNECT ack.
+func ConnectAckTimeout() time.Duration { return connectAckWait }
+
+// ConnectRequestTimeout is how long the server waits, after accepting a
+// stream, for the CONNECT request to arrive whole. Always longer than
+// ConnectAckTimeout; see the note above.
+func ConnectRequestTimeout() time.Duration { return connectRequestWait }
 
 // ControlSmuxConfig returns a lean smux config for the isolated control-plane
 // session. The control session carries only tiny ping/pong frames so we use

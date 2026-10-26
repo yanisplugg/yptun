@@ -1,6 +1,5 @@
 <div align="center">
 
-<img src="https://github.com/openlibrecommunity/material/blob/master/olcrtc.png" width="250" height="250">
 
 ![License](https://img.shields.io/badge/license-WTFPL-0D1117?style=flat-square&logo=open-source-initiative&logoColor=green&labelColor=0D1117)
 ![Golang](https://img.shields.io/badge/-Golang-0D1117?style=flat-square&logo=go&logoColor=00A7D0)
@@ -13,9 +12,9 @@
 
 # olcRTC - overview
 
-`olcRTC` (OpenLibreCommunity RTC) is an encrypted TCP-over-WebRTC tunnel. It disguises traffic as ordinary participation in a WebRTC/SFU service: Jitsi Meet, Yandex Telemost or WbStream.
+`olcRTC` (OpenLibreCommunity RTC) is an encrypted TCP-over-WebRTC tunnel. It disguises traffic as ordinary participation in a WebRTC/SFU service: Jitsi Meet, Yandex Telemost, WbStream or Sber SaluteJazz.
 
-Project: [github.com/openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)  
+Project: [github.com/ghostlane-project/olcrtc](https://github.com/ghostlane-project/olcrtc), a maintained fork of the archived [openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)  
 License: WTFPL  
 Status: **Beta**
 
@@ -77,6 +76,9 @@ olcrtc client.yaml
 | `jitsi` | `jitsi` | Jitsi room URL, instances in docs/jitsi.instances.yaml, no separate registration |
 | `telemost` | `goolom` | credentials via Yandex Telemost API, separate registration |
 | `wbstream` | `livekit` | credentials via WbBStream API, separate registration |
+| `salutejazz` | `salutejazz` | room reference `<code>:<password>`; joins as an anonymous guest, no registration; a room is one anonymous create call; data channels only, and every byte crosses Sber's TURN relay |
+| `vkcalls` | `vkcalls` | VK Calls join link `https://vk.ru/call/join/<id>`; joins as an anonymous guest, no registration; video tracks only — the SFU bridges no arbitrary data channel |
+| `mtslink` | `mtslink` | MTS Link join link of an endless meeting, `https://my.mts-link.ru/j/<owner>/<event>`; joins as a guest, no registration; video tracks only, and the SFU forwards VP9 and H264 but no VP8, so `vp8channel` rides it dressed as VP9 |
 | `none` | set in `engine.name` | direct engine mode with `engine.url` and `engine.token`, separate registration |
 
 The same name is used in Go configs, logs, flags and tests: `Provider` in Go and `auth.provider` in YAML.
@@ -90,6 +92,9 @@ The same name is used in Go configs, logs, flags and tests: `Provider` in Go and
 | `livekit` | `internal/engine/livekit` | data packets/video tracks/LiveKit SDK |
 | `goolom` | `internal/engine/goolom` | Telemost/Goolom signaling, publisher/subscriber PeerConnection |
 | `jitsi` | `internal/engine/jitsi` | Jitsi MUC/Jingle/colibri-ws, datachannel/best-effort video |
+| `salutejazz` | `internal/engine/salutejazz` | Sber's JSON connector (LiveKit-as-JSON over pion), data over the publisher PeerConnection |
+| `vkcalls` | `internal/engine/vkcalls` | VK Calls SERVER topology: signaling WebSocket, one bundled PeerConnection with a browser-shaped answer, media over its single video layer |
+| `mtslink` | `internal/engine/mtslink` | MTS Link's SFU: one SDP exchange over HTTP, one PeerConnection - a published VP9 track and nine receive slots the SFU fills with the room's publishers; answers the SFU's keyframe requests |
 
 `internal/engine/builtin` binds `auth.provider` to the proper engine. There is no separate `internal/provider` package in the current project.
 
@@ -99,7 +104,7 @@ The same name is used in Go configs, logs, flags and tests: `Provider` in Go and
 
 | Transport | How it carries data | Main scenario |
 |---|---|---|
-| `datachannel` | native byte/data path of the engine | simplest and fastest path, stable with Jitsi |
+| `datachannel` | native byte/data path of the engine | simplest and fastest path, stable with Jitsi; the only one SaluteJazz carries |
 | `vp8channel` | KCP over VP8-like video frames | main video path for WB Stream and Telemost |
 | `seichannel` | payload in H264 SEI NAL units, ACK/retry | fallback for WB Stream / Jitsi |
 | `videochannel` | QR/tile frames encoded as VP8 in pure Go, ACK/retry | experimental visual transport |
@@ -123,6 +128,8 @@ Authenticated records pass through a 64-record replay window per sender prefix. 
 OLC2 has no v1 fallback. Builds that use the old record format cannot connect to current builds.
 
 The shared OLVC video frame format used by `seichannel` and `videochannel` is version 5. It carries sender role, session binding, per-fragment ACK data, a per-fragment checksum and a whole-message CRC. A fragment that fails its own checksum is never acknowledged, so it is retransmitted instead of being lost with the message. Older frames are rejected by magic or version checks, so old video transport builds are incompatible.
+
+Within version 5 a sender may keep several messages in flight at once. A hello announces the feature, a stream fragment carries the sender's stream id and floor next to the fragmentation fields, and the receiver delivers messages in the order they were queued. A peer whose hello announces nothing gets one message at a time, which is what a build without the feature can reassemble, so old and new peers still talk.
 
 `smux` runs on top of the encrypted `muxconn`. The first smux stream is occupied by the handshake and the control protocol:
 
@@ -322,6 +329,7 @@ E2E_PROVIDERS=wbstream E2E_TRANSPORTS=vp8channel mage e2e
 | SOCKS5 not listening | `mode: cnc`, `socks.host`, `socks.port`, client logs |
 | Jitsi does not connect without a second participant | server and client must be in the same room |
 | WB Stream + datachannel does not work | guest flow has no `canPublishData`; use `vp8channel`, `seichannel` or `videochannel` |
+| SaluteJazz + a video transport does not work | Sber admits a guest to the room's data channels only, never to a media track; use `datachannel` |
 | `seichannel ack timeout` | the provider throttles/does not route the video path; change transport/provider |
 
 ## Links

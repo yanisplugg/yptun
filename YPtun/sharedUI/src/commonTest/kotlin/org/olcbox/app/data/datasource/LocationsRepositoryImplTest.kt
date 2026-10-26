@@ -481,15 +481,28 @@ class LocationsRepositoryImplTest {
             ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_TELEMOST)
         )
+        // Эти сервисы пропускают не всё (docs/about.md ядра): SaluteJazz — только data-каналы,
+        // MTS Link — vp8channel (в виде VP9), VK Calls — только видеотреки.
+        assertEquals(
+            listOf(LocationConfig.TRANSPORT_DATACHANNEL),
+            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
+        )
+        assertEquals(
+            listOf(LocationConfig.TRANSPORT_VP8CHANNEL),
+            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_MTS_LINK)
+        )
         assertEquals(
             listOf(
-                LocationConfig.TRANSPORT_DATACHANNEL,
                 LocationConfig.TRANSPORT_VP8CHANNEL,
                 LocationConfig.TRANSPORT_SEICHANNEL,
                 LocationConfig.TRANSPORT_VIDEOCHANNEL
             ),
-            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
+            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_VK_CALLS)
         )
+        // Старые имена из сохранённых локаций приводятся к именам ядра.
+        assertEquals(LocationConfig.PROVIDER_JAZZ, LocationConfig.normalizeProvider("jazz"))
+        assertEquals(LocationConfig.PROVIDER_MTS_LINK, LocationConfig.normalizeProvider("mtslink"))
+        assertEquals(LocationConfig.PROVIDER_VK_CALLS, LocationConfig.normalizeProvider("vkcalls"))
         assertEquals(
             listOf(
                 LocationConfig.TRANSPORT_VP8CHANNEL,

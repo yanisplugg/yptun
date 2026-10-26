@@ -160,3 +160,111 @@ func TestDebugAndProtectorProcessState(t *testing.T) {
 		t.Fatal("SetProtector(nil) did not clear process-wide protection")
 	}
 }
+
+func TestSetDNSTakesAListAndAppliesItToTheRuntimeResolver(t *testing.T) {
+	runtime := New()
+	if err := runtime.SetDNS("10.0.0.53, 10.0.0.54:53"); err != nil {
+		t.Fatalf("SetDNS() error = %v", err)
+	}
+	if err := runtime.SetDNS(""); err == nil {
+		t.Fatal("SetDNS(\"\") accepted an empty list")
+	}
+	if err := runtime.SetDNS("not a server:xyz"); err == nil {
+		t.Fatal("SetDNS accepted a bad entry")
+	}
+	got := runtime.defaults.dns.Servers()
+	if len(got) < 2 || got[0] != "10.0.0.53:53" || got[1] != "10.0.0.54:53" {
+		t.Fatalf("Servers() = %v, want the list in order with the default port filled in", got)
+	}
+}
+
+func TestSetUDPReachesTheClientConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		set          func(*Runtime)
+		wantDisabled bool
+	}{
+		{name: "on by default", set: func(*Runtime) {}, wantDisabled: false},
+		{name: "SetUDP(false) turns it off", set: func(r *Runtime) { r.SetUDP(false) }, wantDisabled: true},
+		{name: "SetUDP(true) turns it back on", set: func(r *Runtime) { r.SetUDP(false); r.SetUDP(true) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configs := make(chan client.Config, 1)
+			runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
+				configs <- cfg
+				onReady(cfg.LocalAddr)
+				<-ctx.Done()
+				return ctx.Err()
+			})
+			tc.set(runtime)
+			if err := runtime.Start(); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			if err := runtime.WaitReady(100); err != nil {
+				t.Fatalf("WaitReady() error = %v", err)
+			}
+			if cfg := <-configs; cfg.UDPDisabled != tc.wantDisabled {
+				t.Fatalf("UDPDisabled = %v, want %v", cfg.UDPDisabled, tc.wantDisabled)
+			}
+			_ = runtime.Stop(100)
+		})
+	}
+}
+
+func TestSetDirectRulesParsesNow(t *testing.T) {
+	configs := make(chan client.Config, 1)
+	runtime := configuredRuntime(t, func(ctx context.Context, cfg client.Config, onReady func(string)) error {
+		configs <- cfg
+		onReady(cfg.LocalAddr)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err := runtime.SetDirectRules("domain:ru\nkeyword:x\n"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("SetDirectRules(bad) error = %v, want ErrInvalidConfig", err)
+	}
+	const rules = "domain:ru\n10.0.0.0/8\n"
+	if err := runtime.SetDirectRules(rules); err != nil {
+		t.Fatalf("SetDirectRules() error = %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := runtime.WaitReady(100); err != nil {
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+	if cfg := <-configs; cfg.DirectRules != rules {
+		t.Fatalf("DirectRules = %q, want %q", cfg.DirectRules, rules)
+	}
+	if err := runtime.Stop(1000); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	// An empty text clears the rules for the next start.
+	if err := runtime.SetDirectRules(""); err != nil {
+		t.Fatalf("SetDirectRules(empty) error = %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("second Start() error = %v", err)
+	}
+	if cfg := <-configs; cfg.DirectRules != "" {
+		t.Fatalf("DirectRules after clearing = %q", cfg.DirectRules)
+	}
+	_ = runtime.Stop(1000)
+}
+
+func TestSetDTLSProfileValidatesBeforeStoring(t *testing.T) {
+	rt := New()
+	if err := rt.SetDTLSProfile("chrome-linux-138-compat-v1"); err != nil {
+		t.Fatalf("known profile rejected: %v", err)
+	}
+	if err := rt.SetDTLSProfile("off"); err != nil {
+		t.Fatalf("off rejected: %v", err)
+	}
+	if err := rt.SetDTLSProfile(""); err != nil {
+		t.Fatalf("empty rejected: %v", err)
+	}
+	for _, bad := range []string{"random", "auto", "chrome-linux-138.0.7204.94"} {
+		if err := rt.SetDTLSProfile(bad); err == nil {
+			t.Fatalf("invalid profile %q accepted", bad)
+		}
+	}
+}

@@ -4,13 +4,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/auth/telemost"
+	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
 	"github.com/openlibrecommunity/olcrtc/internal/protect"
+	"github.com/openlibrecommunity/olcrtc/internal/route"
 	"github.com/openlibrecommunity/olcrtc/pkg/olcrtc/client"
 )
 
@@ -23,10 +26,7 @@ const (
 
 const (
 	defaultTransport        = transportVP8
-	// defaultDNSServer is a comma-separated preference list (protect.NewResolver probes and
-	// sticks to the first that answers): Yandex first so DNS keeps working on RU IPv4-only
-	// mobile networks where Cloudflare/Google UDP/53 are frequently blocked.
-	defaultDNSServer        = "77.88.8.8:53,8.8.8.8:53,1.1.1.1:53"
+	defaultDNSServer        = "8.8.8.8:53"
 	defaultSOCKSHost        = "127.0.0.1"
 	defaultSOCKSPort        = 1080
 	defaultVP8FPS           = 30
@@ -47,16 +47,25 @@ const (
 	defaultLivenessTimeout  = 15 * time.Second
 	defaultLivenessFailures = 4
 	minTrafficPayloadSize   = 53
+	// providerNone is the auth provider that talks to an engine directly.
+	providerNone = "none"
 )
 
 type runtimeConfig struct {
-	provider      string
-	transport     string
-	roomURL       string
-	channelID     string
-	keyHex        string
-	dnsServer     string
-	resolver      *net.Resolver
+	provider  string
+	transport string
+	roomURL   string
+	channelID string
+	keyHex    string
+	dnsServer string
+	// failoverRooms are the extra rooms a generation may move to when the
+	// one it is in ends; roomURL always comes first. The list may grow while
+	// a session is live: the supervisor re-reads it at every hop.
+	failoverRooms []string
+	// resolver is an override handed in by SetResolver; dns is the runtime's
+	// own, which SetDNS steers and every run without an override uses.
+	resolver      protect.Lookup
+	dns           *protect.Resolver
 	socksHost     string
 	socksPort     int
 	socksUser     string
@@ -72,15 +81,23 @@ type runtimeConfig struct {
 	vp8           client.VP8Options
 	sei           client.SEIOptions
 	video         client.VideoOptions
+	// udpDisabled turns the SOCKS5 UDP relay off; SetUDP steers it.
+	udpDisabled bool
+	// directRules is the text SetDirectRules validated; empty tunnels everything.
+	directRules string
+	// dtlsProfile selects the engine handshake's ClientHello profile; empty
+	// keeps the stock Pion handshake.
+	dtlsProfile engine.DTLSProfile
 }
 
 func defaultRuntimeConfig() runtimeConfig {
 	return runtimeConfig{
-		transport: defaultTransport,
-		dnsServer: defaultDNSServer,
-		resolver:  protect.NewResolver(defaultDNSServer),
-		socksHost: defaultSOCKSHost,
-		socksPort: defaultSOCKSPort,
+		transport:   defaultTransport,
+		dnsServer:   defaultDNSServer,
+		dtlsProfile: engine.DTLSProfileOff,
+		dns:         protect.NewResolver(defaultDNSServer),
+		socksHost:   defaultSOCKSHost,
+		socksPort:   defaultSOCKSPort,
 		liveness: client.LivenessConfig{
 			Interval: defaultLivenessInterval,
 			Timeout:  defaultLivenessTimeout,
@@ -133,6 +150,49 @@ func (r *Runtime) SetRoom(roomURL string) error {
 	return nil
 }
 
+// AddFailoverRoom appends a room the client may move to when the one it is in
+// ends. The primary set with SetRoom always comes first; extras follow in the
+// order added, the shape a `##rooms` subscription header has. Safe to call
+// while running: the supervisor re-reads the list at every hop, which is how a
+// server hands a connected client its next room without a restart.
+//
+// ai-generated: the failover room list (AddFailoverRoom, ClearFailoverRooms
+// and rooms).
+func (r *Runtime) AddFailoverRoom(roomURL string) error {
+	roomURL = strings.TrimSpace(roomURL)
+	if roomURL == "" {
+		return fmt.Errorf("%w: failover room is required", ErrInvalidConfig)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if roomURL == r.defaults.roomURL || slices.Contains(r.defaults.failoverRooms, roomURL) {
+		return nil
+	}
+	r.defaults.failoverRooms = append(r.defaults.failoverRooms, roomURL)
+	return nil
+}
+
+// ClearFailoverRooms drops every extra room, keeping the primary.
+func (r *Runtime) ClearFailoverRooms() {
+	r.mu.Lock()
+	r.defaults.failoverRooms = nil
+	r.mu.Unlock()
+}
+
+// rooms is the ordered, de-duplicated room list: the primary, then the extras.
+// The primary is always present, so a configuration without a room (the "none"
+// provider) still yields exactly one profile, as it did before failover.
+func (cfg runtimeConfig) rooms() []string {
+	out := make([]string, 0, 1+len(cfg.failoverRooms))
+	out = append(out, cfg.roomURL)
+	for _, room := range cfg.failoverRooms {
+		if room != "" && !slices.Contains(out, room) {
+			out = append(out, room)
+		}
+	}
+	return out
+}
+
 // SetChannel sets the optional peer-routing channel ID.
 func (r *Runtime) SetChannel(channelID string) {
 	r.mu.Lock()
@@ -151,29 +211,54 @@ func (r *Runtime) SetKey(keyHex string) error {
 	return nil
 }
 
-// SetDNS sets the protected DNS resolver used by this Runtime's future runs. dnsServer may be a
-// single "ip:port" or a comma-separated preference list (see protect.NewResolver): on restrictive
-// IPv4-only mobile networks the international resolvers are frequently UDP/53-blocked while a RU
-// resolver still answers, so pinning a single dead server would leave olcRTC unable to resolve.
+// SetTelemostCookies sets (or clears, when empty) the Yandex auth cookie header sent with Telemost
+// API requests, so a signed-in account can join restricted conferences. Process-wide (telemost.cookies
+// is a package global).
+func (r *Runtime) SetTelemostCookies(cookies string) {
+	telemost.SetCookies(cookies)
+}
+
+// SetDNS sets the DNS servers this Runtime resolves names through: one
+// "host:port", or several separated by commas, semicolons or spaces, asked in
+// that order. The platform passes the resolvers of the network it stands on
+// first and a public operator behind them; the engine adds that operator's
+// IPv6 twin and the other public operators after it, and asks the host's own
+// resolver when none of them answers.
+//
+// A running generation follows the change at once: the platform calls this
+// when the network under the tunnel changes, and the next lookup should ask
+// that network's resolvers rather than the previous one's.
 func (r *Runtime) SetDNS(dnsServer string) error {
-	if err := validateDNSServerList(dnsServer); err != nil {
-		return fmt.Errorf("%w: DNS server: %w", ErrInvalidConfig, err)
+	if err := validateDNSServers(dnsServer); err != nil {
+		return err
 	}
 	r.mu.Lock()
 	r.defaults.dnsServer = dnsServer
-	r.defaults.resolver = protect.NewResolver(dnsServer)
+	r.defaults.dns.SetServers(dnsServer)
 	r.mu.Unlock()
 	return nil
 }
 
-// SetResolver overrides the resolver used by future runs. Nil restores the DNS resolver.
-func (r *Runtime) SetResolver(resolver *net.Resolver) {
+// SetResolver overrides the resolver used by future runs. Nil restores the
+// runtime's own DNS resolver.
+func (r *Runtime) SetResolver(resolver protect.Lookup) {
 	r.mu.Lock()
-	if resolver == nil {
-		resolver = protect.NewResolver(r.defaults.dnsServer)
-	}
 	r.defaults.resolver = resolver
 	r.mu.Unlock()
+}
+
+// SetDTLSProfile selects the ClientHello profile for future runs. Empty or
+// "off" keeps the stock Pion handshake; unknown ids are rejected before any
+// run starts. A running generation keeps its profile until it reconnects.
+func (r *Runtime) SetDTLSProfile(profile string) error {
+	p := engine.DTLSProfile(profile)
+	if err := engine.ValidateDTLSProfile(p); err != nil {
+		return fmt.Errorf("dtls profile %q: %w", profile, err)
+	}
+	r.mu.Lock()
+	r.defaults.dtlsProfile = p
+	r.mu.Unlock()
+	return nil
 }
 
 // SetSocksListenHost sets the local SOCKS5 bind host.
@@ -216,13 +301,6 @@ func (r *Runtime) SetProviderToken(token string) {
 	r.mu.Lock()
 	r.defaults.providerToken = strings.TrimSpace(token)
 	r.mu.Unlock()
-}
-
-// SetTelemostCookies sets (or clears, when empty) the Yandex auth cookie header sent with Telemost
-// API requests, so a signed-in account can join restricted conferences. Process-wide (telemost.cookies
-// is a package global), independent of which Runtime instance calls it.
-func (r *Runtime) SetTelemostCookies(cookies string) {
-	telemost.SetCookies(cookies)
 }
 
 // SetDeviceID sets the in-memory device identity used by future runs.
@@ -338,6 +416,32 @@ func (r *Runtime) SetDebug(enabled bool) {
 	logger.SetVerbose(enabled)
 }
 
+// SetUDP turns the SOCKS5 UDP ASSOCIATE relay on or off for the next Start.
+// It is on by default.
+func (r *Runtime) SetUDP(enabled bool) {
+	r.mu.Lock()
+	r.defaults.udpDisabled = !enabled
+	r.mu.Unlock()
+}
+
+// SetDirectRules names the destinations the next Start dials from this
+// process instead of through the tunnel: one rule per line, `domain:<name>`
+// for a name and everything under it, `full:<name>` for that name only, an
+// address or a CIDR prefix for addresses; blank lines and # comments are
+// skipped. The text is parsed now, so a bad line is refused here rather than
+// at Start. An empty text, the default, sends everything through the tunnel.
+//
+// ai-generated: added for olcbox#28.
+func (r *Runtime) SetDirectRules(text string) error {
+	if _, err := route.Parse(text); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	r.mu.Lock()
+	r.defaults.directRules = text
+	r.mu.Unlock()
+	return nil
+}
+
 func (cfg runtimeConfig) clientConfig() client.Config {
 	return client.Config{
 		Transport: cfg.transport, Provider: cfg.provider, RoomURL: cfg.roomURL,
@@ -345,10 +449,19 @@ func (cfg runtimeConfig) clientConfig() client.Config {
 		ProviderToken: cfg.providerToken, KeyHex: cfg.keyHex,
 		LocalAddr: net.JoinHostPort(cfg.socksHost, strconv.Itoa(cfg.socksPort)),
 		SOCKSUser: cfg.socksUser, SOCKSPass: cfg.socksPass,
-		DNSServer: cfg.dnsServer, Resolver: cfg.resolver,
+		DNSServer: cfg.dnsServer, DTLSProfile: cfg.dtlsProfile, Resolver: cfg.lookup(),
 		TransportOptions: cfg.transportOptions(), Liveness: cfg.liveness, Traffic: cfg.traffic,
 		DeviceID: cfg.deviceID, DeviceIDPath: cfg.deviceIDPath,
+		UDPDisabled: cfg.udpDisabled, DirectRules: cfg.directRules,
 	}
+}
+
+// lookup is what a run resolves names with: the override, else the runtime's own.
+func (cfg runtimeConfig) lookup() protect.Lookup {
+	if cfg.resolver != nil {
+		return cfg.resolver
+	}
+	return cfg.dns
 }
 
 func (cfg runtimeConfig) transportOptions() client.TransportOptions {
@@ -371,7 +484,7 @@ func validateRuntimeConfig(cfg runtimeConfig) error {
 	if !supportedTransport(cfg.transport) {
 		return fmt.Errorf("%w: transport %q", ErrInvalidConfig, cfg.transport)
 	}
-	if cfg.provider != "none" && cfg.roomURL == "" {
+	if cfg.provider != providerNone && cfg.roomURL == "" {
 		return fmt.Errorf("%w: room is required", ErrInvalidConfig)
 	}
 	if err := validateKey(cfg.keyHex); err != nil {
@@ -427,39 +540,43 @@ func validateKey(keyHex string) error {
 	return nil
 }
 
-func validateHostPort(address string) error {
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: split host and port: %w", ErrInvalidConfig, err)
+// validateDNSServers accepts the list shapes SetDNS documents and rejects an
+// empty list, a bad port or an empty host.
+func validateDNSServers(list string) error {
+	entries := protect.SplitDNSServers(list)
+	if len(entries) == 0 {
+		return fmt.Errorf("%w: DNS server is required", ErrInvalidConfig)
 	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || host == "" || port < 1 || port > 65535 {
-		return ErrInvalidConfig
-	}
-	return nil
-}
-
-// validateDNSServerList validates a single "host:port" or a comma-separated preference list of them.
-func validateDNSServerList(dnsServer string) error {
-	found := false
-	for _, s := range strings.Split(dnsServer, ",") {
-		if s = strings.TrimSpace(s); s == "" {
-			continue
-		}
-		if err := validateHostPort(s); err != nil {
+	for _, entry := range entries {
+		if err := validateDNSEntry(entry); err != nil {
 			return err
 		}
-		found = true
-	}
-	if !found {
-		return fmt.Errorf("%w: DNS server list is empty", ErrInvalidConfig)
 	}
 	return nil
 }
 
+func validateDNSEntry(entry string) error {
+	host, portText, err := net.SplitHostPort(entry)
+	if err != nil {
+		host, portText = strings.Trim(entry, "[]"), "53"
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%w: DNS server %q has no host", ErrInvalidConfig, entry)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%w: DNS server %q has a bad port", ErrInvalidConfig, entry)
+	}
+	return nil
+}
+
+// supportedProvider reports whether an app may name this provider. It is the
+// phone side's own list of what the bind offers, and every provider
+// RegisterDefaults wires has to be on it: one that is in the binary and not
+// here cannot be selected at all.
 func supportedProvider(provider string) bool {
 	switch provider {
-	case "jitsi", "telemost", "wbstream", "none":
+	case "jitsi", "telemost", "wbstream", "salutejazz", "vkcalls", "mtslink", "max", providerNone:
 		return true
 	default:
 		return false

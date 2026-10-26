@@ -258,3 +258,9 @@ package-lock.json
 .opencode
 .direnv
 .kb
+
+# release gate artifacts (go test ./internal/gate -olcrtc.gate)
+/gate-artifacts/
+
+# golangci-lint cache (GOLANGCI_LINT_CACHE pointed into the tree)
+.golangci-cache/

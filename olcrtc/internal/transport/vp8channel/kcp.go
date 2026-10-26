@@ -8,7 +8,50 @@ import (
 	"sync"
 
 	kcp "github.com/xtaci/kcp-go/v5"
+
+	runtimecfg "github.com/openlibrecommunity/olcrtc/internal/runtime"
 )
+
+// kcpRcvWindow returns the receive window in segments for this host's memory
+// profile.
+func kcpRcvWindow() int {
+	if runtimecfg.BuffersAreConstrained() {
+		return kcpConstrainedRcvWnd
+	}
+	return kcpRcvWnd
+}
+
+// kcpSendWindow returns the send window in segments: this host's profile, cut
+// to a round trip of the ceiling when the writer publishes under one.
+// ai-generated: kcpSendWindow (olcrtc#26).
+func kcpSendWindow(paced bool) int {
+	wnd := kcpSndWnd
+	if runtimecfg.BuffersAreConstrained() {
+		wnd = kcpConstrainedSndWnd
+	}
+	if paced && kcpPacedSndWnd < wnd {
+		wnd = kcpPacedSndWnd
+	}
+	return wnd
+}
+
+// inboundQueueSizeFor is the packet queue between the track reader and KCP
+// for this host's memory profile; see constrainedInboundQueueSize.
+func inboundQueueSizeFor() int {
+	if runtimecfg.BuffersAreConstrained() {
+		return constrainedInboundQueueSize
+	}
+	return inboundQueueSize
+}
+
+// outboundQueueSizeFor is the data plane's queue between KCP and the paced
+// writer for this host's memory profile; see constrainedOutboundQueueSize.
+func outboundQueueSizeFor() int {
+	if runtimecfg.BuffersAreConstrained() {
+		return constrainedOutboundQueueSize
+	}
+	return outboundQueueSize
+}
 
 // Both peers establish a KCP session with the same convid. KCP does not
 // require a handshake - packets are matched by conv field, so a static
@@ -32,6 +75,35 @@ const (
 	// instead of being clamped to a fraction of it.
 	kcpSndWnd = 4096
 	kcpRcvWnd = 4096
+
+	// ai-generated: kcpPacedSndWnd and this comment (olcrtc#26).
+	// kcpPacedSndWnd is the send window when the writer publishes under a
+	// ceiling the engine's service polices. The send window is what a sender
+	// can have unacknowledged, so at a fixed publish rate it is also how long
+	// a byte handed to KCP waits behind the bulk already queued: 4096
+	// segments is 5.7 MB, which an unpoliced SFU drains at whatever rate it
+	// takes but a paced writer turns into 5 s of buffer in front of every new
+	// stream - the gate's connect on top of six downloads went from under
+	// 4 s to 9.75 s, past its 5 s bound, with nothing else changed. 512
+	// segments is ~0.7 MB: a round trip of the ceiling even on WB Stream's
+	// 380 ms path, and well under a second of standing queue.
+	kcpPacedSndWnd = 512
+
+	// The same windows on a host that is killed for using memory rather than
+	// swapped: 4096 segments is about 5.7 MB per direction, and this
+	// transport runs two KCP sessions (data and control), which on its own
+	// is more than an iOS packet tunnel extension is allowed in total. 512
+	// segments is ~0.7 MB, still several times the bandwidth-delay product
+	// of the relays this transport rides: 5-10 Mbit/s at 100-200 ms is 90-180
+	// segments. Measured on the phone profile (mobile.Runtime, lean build,
+	// Telemost room, six downloads then three uploads through the DE origin):
+	// the upload peak's live heap 9.1 -> 8.3 MB and HeapInuse 11.5 -> 10.8,
+	// with kcp-go's segment pool the item that shrank; the download peak
+	// unchanged, and every stream's speed inside the run-to-run noise
+	// (downloads 170-200 KB/s, uploads 350-390 KB/s either way). 1024 had
+	// been the previous step down from 4096. See runtime.UseConstrainedBuffers.
+	kcpConstrainedSndWnd = 512
+	kcpConstrainedRcvWnd = 512
 
 	// Length prefix for our message framing on top of KCP stream mode.
 	// We use stream mode because UDPSession.Write fragments messages > MSS
@@ -61,8 +133,24 @@ type kcpRuntime struct {
 	closeOnce sync.Once
 }
 
-func startKCP(out chan<- *packetBuffer, onData func([]byte), epochHdr [epochHdrLen]byte) (*kcpRuntime, error) {
-	c := newKCPConn(out, inboundQueueSize, epochHdr)
+// startKCP brings up one KCP session. sndWnd is the send window in segments;
+// 0 takes this host's profile. ai-generated: the sndWnd parameter (olcrtc#26).
+func startKCP(
+	out chan<- *packetBuffer, onData func([]byte), epochHdr [epochHdrLen]byte, sndWnd int,
+) (*kcpRuntime, error) {
+	return startKCPAcks(out, nil, onData, epochHdr, sndWnd)
+}
+
+// startKCPAcks is startKCP with the packets that only acknowledge the peer
+// queued on acks, apart from the data (see kcpConn.acks). A nil acks queues
+// them with the data.
+//
+// ai-generated: the acks queue (issue #12).
+func startKCPAcks(
+	out, acks chan<- *packetBuffer, onData func([]byte), epochHdr [epochHdrLen]byte, sndWnd int,
+) (*kcpRuntime, error) {
+	c := newKCPConn(out, inboundQueueSizeFor(), epochHdr)
+	c.acks = acks
 
 	sess, err := kcp.NewConn3(kcpConvID, fakeUDPAddr(), nil, 0, 0, c)
 	if err != nil {
@@ -79,7 +167,10 @@ func startKCP(out chan<- *packetBuffer, onData func([]byte), epochHdr [epochHdrL
 	// the wire. With nc=1 KCP keeps the window full and retransmits the few
 	// losses, letting throughput reach the SFU's real ceiling.
 	sess.SetNoDelay(1, 5, 2, 1)
-	sess.SetWindowSize(kcpSndWnd, kcpRcvWnd)
+	if sndWnd <= 0 {
+		sndWnd = kcpSendWindow(false)
+	}
+	sess.SetWindowSize(sndWnd, kcpRcvWindow())
 	sess.SetMtu(kcpMTU)
 	// Upstream marked SetStreamMode deprecated without providing a replacement;
 	// stream framing is still required for our wire format.
@@ -176,8 +267,14 @@ func (r *kcpRuntime) close() {
 // identical lifecycle rules, so start/restart/drain/close live here once
 // instead of being written twice with only the field names changed.
 type kcpPlane struct {
-	out    chan *packetBuffer
+	out chan *packetBuffer
+	// acks queues what only acknowledges the peer on a data plane, nil on
+	// the control plane (ai-generated: issue #12).
+	acks   chan *packetBuffer
 	onData func([]byte)
+	// sndWnd is the KCP send window its sessions run with; 0 takes this
+	// host's profile. The transport sets it. ai-generated (olcrtc#26).
+	sndWnd int
 
 	// lifecycleMu serializes start/restart/close. Without it two concurrent
 	// restarts - a provider reconnect and an upper-layer ResetPeer fire
@@ -195,6 +292,16 @@ type kcpPlane struct {
 
 func newKCPPlane(queueSize int, onData func([]byte)) *kcpPlane {
 	return &kcpPlane{out: make(chan *packetBuffer, queueSize), onData: onData}
+}
+
+// newDataPlane is a plane whose runtimes queue what only acknowledges the
+// peer on acks, for the data lane to write ahead of the data.
+//
+// ai-generated: the whole function (issue #12).
+func newDataPlane(queueSize int, onData func([]byte)) *kcpPlane {
+	p := newKCPPlane(queueSize, onData)
+	p.acks = make(chan *packetBuffer, ackQueueSize)
+	return p
 }
 
 // get returns the live runtime, or nil when the plane has not started (or is
@@ -228,7 +335,7 @@ func (p *kcpPlane) start(hdr [epochHdrLen]byte) (bool, error) {
 			return
 		}
 		var rt *kcpRuntime
-		rt, err = startKCP(p.out, p.onData, hdr)
+		rt, err = startKCPAcks(p.out, p.acks, p.onData, hdr, p.sndWnd)
 		if err != nil {
 			return
 		}
@@ -260,7 +367,7 @@ func (p *kcpPlane) restart(hdr [epochHdrLen]byte) {
 		old.close()
 	}
 
-	rt, err := startKCP(p.out, p.onData, hdr)
+	rt, err := startKCPAcks(p.out, p.acks, p.onData, hdr, p.sndWnd)
 	if err != nil {
 		return
 	}
@@ -272,6 +379,8 @@ func (p *kcpPlane) drain() {
 	for {
 		select {
 		case packet := <-p.out:
+			packet.release()
+		case packet := <-p.acks: // ai-generated: never ready on a plane without acks
 			packet.release()
 		default:
 			return

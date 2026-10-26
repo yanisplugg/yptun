@@ -22,6 +22,7 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 	if src == p.localEpochValue() || src == (p.localEpochValue()|controlEpochFlag) {
 		return // own loopback (data or control)
 	}
+	p.peerSeen.Store(true)
 	// Drop frames addressed to a different participant. dst==0 broadcasts are
 	// always accepted (bootstrap before the sender learns our epoch).
 	if !p.acceptsDst(dst) {
@@ -32,6 +33,14 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 	// Route them to the control plane and never mix them with bulk data.
 	if src&controlEpochFlag != 0 {
 		p.handleControlFrame(src, dst, kcpPayload)
+		return
+	}
+	if packets, ok := splitDatagramBatchPayload(kcpPayload); ok {
+		p.handleDatagramBatchFrame(src, packets)
+		return
+	}
+	if payload, ok := splitDatagramPayload(kcpPayload); ok {
+		p.handleDatagramFrame(src, payload)
 		return
 	}
 

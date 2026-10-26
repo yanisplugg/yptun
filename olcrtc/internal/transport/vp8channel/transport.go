@@ -17,7 +17,10 @@
 // peerRestartGrace, that COULD mean the server restarted and rejoined the SFU -
 // but in a shared room it just as easily means an unrelated participant (a
 // second olcrtc client) joined or reconnected and the SFU is broadcasting its
-// epoch to everyone. Epoch churn alone cannot tell the two apart.
+// epoch to everyone. Epoch churn alone cannot tell the two apart. A server
+// whose provider rebuilds rotates its epoch into every frame it sends from
+// then on, its per-peer sessions' too (readdressPeers): one frame left under
+// the old epoch keeps the latched peer looking alive.
 //
 // So a rebuild also requires corroboration: linkUnhealthy, pushed in by the
 // client's own control-plane liveness loop through NotifyLinkHealth. A real
@@ -53,7 +56,12 @@ import (
 const (
 	defaultMaxPayloadSize = 60 * 1024
 	defaultConnectTimeout = 60 * time.Second
-	rtpBufSize            = 65536
+	// rtpBufSize is the read buffer each track reader holds. pion cannot hand
+	// over a packet larger than its own receive MTU of 8192 bytes - ICE reads
+	// every candidate with that, and so does the SRTP session above it - so
+	// the 64 KB this used to be was 56 KB of dead space per track, on every
+	// reader the server keeps per peer and on the two the phone keeps.
+	rtpBufSize = 8192
 	// outboundQueueSize bounds KCP packets waiting for the paced writer. Sized
 	// to a couple of send windows so KCP's flush never blocks (a blocked
 	// WriteTo would stall KCP's update loop and delay ACKs); the paced writer
@@ -64,13 +72,41 @@ const (
 	// suffices. We keep it separate from bulk data to guarantee forward
 	// progress even when the data outbound queue is saturated.
 	controlOutboundQueueSize = 2048 // sized for ~20s publisher reconnect window at 20ms tick
-	inboundQueueSize         = 4096
-	canSendHighWatermark     = 90 // percent
-	keepaliveIdlePeriod      = 100 * time.Millisecond
+	// ackQueueSize bounds the packets that only acknowledge the peer, which
+	// the data lane writes ahead of the data, a batch a frame; beyond it they
+	// wait with the data. ai-generated: issue #12.
+	ackQueueSize     = 256
+	inboundQueueSize = 4096
+	// The same queues on a host that is killed for using memory. Each slot is
+	// a pooled ~1.4 KB packet, so 4096 inbound and 1536 outbound are 8 MB of
+	// headroom the server profile can afford and a packet tunnel extension
+	// cannot: measured with the phone's own runtime profile against a
+	// Telemost room, an Ookla-shaped load (six downloads, then three uploads)
+	// took the client from 45 MB to 61 MB of RSS, and the extension that
+	// carries it dies at about 48. 1024 slots each way is one KCP window
+	// (kcpConstrainedRcvWnd) of packets, which is all the inbound side can
+	// hold before KCP's own window stops the sender anyway.
+	constrainedInboundQueueSize  = 1024
+	constrainedOutboundQueueSize = 1024
+	canSendHighWatermark         = 90 // percent
+	keepaliveIdlePeriod          = 100 * time.Millisecond
 	// forceKeepalivePeriod is how often a bare, fully decodable VP8 keyframe
 	// is injected even while bulk data flows, so the SFU decoder never times
 	// out and stops forwarding the track.
 	forceKeepalivePeriod = 2 * time.Second
+	// keyframeRequestGap is the least time between two keyframes written
+	// because the relay asked: a tenth of a second answers a request about as
+	// fast as its round trip, and a relay that takes none of our keyframes -
+	// and so asks without end - gets ten a second, not one a tick.
+	keyframeRequestGap = 100 * time.Millisecond
+	// ai-generated: publishBurstBytes and this comment (olcrtc#26).
+	// publishBurstBytes is what the writer's token bucket holds when the
+	// engine's service polices how fast a participant may publish (see
+	// engine.PublishRateLimited): two full samples, so both a peer pump and
+	// the writer loop can pass one in the same tick, and at the ceilings we
+	// meet a tenth of a second of traffic, far too short to look sustained.
+	// The rate itself is the service's, not this transport's.
+	publishBurstBytes = 2 * defaultMaxPayloadSize
 	// defaultPeerRestartGrace is how long the latched peer must be silent
 	// before a frame from a different epoch is read as a server restart. The
 	// server emits a decodable keepalive every ~2s, so a few missed beats is
@@ -96,6 +132,14 @@ type streamTransport struct {
 
 	stream videoSession
 	track  *webrtc.TrackLocalStaticSample
+	// carrier is the codec the frames ride as; nil is the transport's own VP8
+	// (carrier.go). dressBuf is the sample a carrier that re-heads its frames
+	// builds, reused under writeMu.
+	carrier  *carrier
+	dressBuf []byte
+	// keyframeWanted is a relay's request for a keyframe, answered by the
+	// writer on its next tick (requestKeyframe).
+	keyframeWanted atomic.Bool
 	// writeMu serializes all track.WriteSample calls. pion's WriteSample is
 	// not safe for concurrent use (see writeSampleLocked); the server writes
 	// bulk data from per-peer pumps while writerLoop writes control frames
@@ -106,9 +150,11 @@ type streamTransport struct {
 	// reaches the track and to assert that writeSampleLocked serializes
 	// concurrent callers. It must consume data before returning, matching
 	// TrackLocalStaticSample.WriteSample. Always invoked under writeMu.
-	sampleWriter func([]byte) bool
-	onData       func([]byte)
-	onPeerData   func(peerID string, data []byte)
+	sampleWriter   func([]byte) bool
+	onData         func([]byte)
+	onPeerData     func(peerID string, data []byte)
+	onDatagram     func([]byte)
+	onPeerDatagram func(peerID string, data []byte)
 	// serverMode records which side of the link this is. The multi-peer
 	// (server) side keeps one session per remote epoch; the single-peer
 	// (client) side latches onto exactly one. Routing decisions read this
@@ -119,6 +165,9 @@ type streamTransport struct {
 	// Both are plain KCP planes with independent epochs and queues.
 	data    *kcpPlane
 	control *kcpPlane
+	// datagram is the lossy lane: whole frames the writer sends as they are,
+	// bypassing KCP, after control and before bulk data (see datagram.go).
+	datagram chan []byte
 
 	// onControlData / onPeerControlData are swapped in by the upper layer at
 	// any time and read on every received control frame, so they are atomic
@@ -154,11 +203,32 @@ type streamTransport struct {
 	peerRestartGrace  time.Duration
 	linkUnhealthy     atomic.Bool
 
+	// blackoutAfter, probeEvery and growEvery tune when a data lane counts
+	// its direction as dark, how often it probes it then, and how fast a
+	// capped lane grows back (lane.go). Zero means the default; tests
+	// shorten them. ai-generated: issue #12.
+	blackoutAfter time.Duration
+	probeEvery    time.Duration
+	growEvery     time.Duration
+
 	peerConfirmed atomic.Bool
+	// peerSeen records that any foreign epoch sent a well-formed frame with
+	// our binding token since the last plane restart (transport.PeerObserver).
+	peerSeen atomic.Bool
 
 	// shaper applies the optional traffic policy to the bulk data path only;
 	// the control plane must stay unpaced.
 	shaper *transport.Shaper
+
+	// limiter holds the whole track under the rate the engine's service
+	// tolerates from one publisher, and is nil when it polices none. Every
+	// write charges it; the bulk writers ask it first.
+	// ai-generated: this field (olcrtc#26).
+	limiter *common.PublishLimiter
+	// sendWindow is the KCP send window every plane of this transport runs
+	// with: a round trip of the ceiling when there is one, the relay's own
+	// appetite when there is not. ai-generated: this field (olcrtc#26).
+	sendWindow int
 
 	// peers holds one session per remote epoch in server mode. Each session
 	// owns an isolated bulk KCP plus, once the peer starts handshaking, its
@@ -192,15 +262,24 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		return nil, fmt.Errorf("open video session: %w", err)
 	}
 
-	track, err := common.NewVideoTrack(webrtc.RTPCodecCapability{
-		MimeType:  webrtc.MimeTypeVP8,
-		ClockRate: 90000,
-	}, "vp8channel")
+	// The relay behind the engine decides what the frames ride as: VP8 unless
+	// the engine names another codec.
+	ride, err := carrierFor(stream.VideoCodec())
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+
+	track, err := common.NewVideoTrack(ride.capability, "vp8channel", ride.trackOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("build video track: %w", err)
 	}
 
 	tr := newStreamTransport(stream, track, cfg, opts)
+	tr.carrier = ride
+	if ride.answersKeyframeRequests() {
+		stream.SetKeyframeRequestHandler(tr.requestKeyframe)
+	}
 
 	if err := stream.AddTrack(track); err != nil {
 		return nil, fmt.Errorf("attach local video track: %w", err)
@@ -216,28 +295,39 @@ func newStreamTransport(
 	cfg transport.Config,
 	opts Options,
 ) *streamTransport {
+	// ai-generated: limiter and sendWindow (olcrtc#26). The ceiling comes
+	// from the engine, so a service that polices publishers paces this
+	// transport and one that does not leaves it alone.
+	limiter := common.NewPublishLimiter(common.PublishRateLimit(stream), publishBurstBytes)
 	tr := &streamTransport{
 		Lifecycle:        common.NewLifecycle(stream),
 		stream:           stream,
 		track:            track,
 		onData:           cfg.OnData,
 		onPeerData:       cfg.OnPeerData,
+		onDatagram:       cfg.OnDatagram,
+		onPeerDatagram:   cfg.OnPeerDatagram,
 		serverMode:       cfg.OnPeerData != nil,
+		datagram:         make(chan []byte, datagramQueueSize),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		frameInterval:    time.Second / time.Duration(opts.FPS),
 		batchSize:        opts.BatchSize,
 		bindingToken:     channelBindingToken(cfg),
+		limiter:          limiter,
+		sendWindow:       kcpSendWindow(limiter != nil),
 		localEpoch:       randomEpoch(),
 		peerRestartGrace: defaultPeerRestartGrace,
 	}
 
-	tr.data = newKCPPlane(outboundQueueSize, func(data []byte) {
+	tr.data = newDataPlane(outboundQueueSizeFor(), func(data []byte) {
 		if tr.onData != nil {
 			tr.onData(data)
 		}
 	})
 	tr.control = newKCPPlane(controlOutboundQueueSize, tr.deliverControlData)
+	// ai-generated: both planes run with this transport's window (olcrtc#26).
+	tr.data.sndWnd, tr.control.sndWnd = tr.sendWindow, tr.sendWindow
 
 	tr.shaper = transport.NewShaper(cfg.Traffic, tr.Features())
 
@@ -326,8 +416,9 @@ func (p *streamTransport) sendToPeer(peerID string, data []byte, pick func(uint3
 }
 
 // peerDataFor returns the bulk KCP of a known peer, without creating one.
+// ai-generated: lookup instead of get; a data send does not claim the epoch.
 func (p *streamTransport) peerDataFor(epoch uint32) *kcpRuntime {
-	sess := p.peers.get(epoch)
+	sess := p.peers.lookup(epoch)
 	if sess == nil {
 		return nil
 	}
@@ -374,6 +465,7 @@ func (p *streamTransport) Close() error {
 		p.data.close()
 		p.control.close()
 		p.peers.closeAll()
+		p.drainDatagramQueue()
 
 		if p.writerUp.Load() {
 			<-p.writerDone
@@ -399,13 +491,20 @@ func (p *streamTransport) ResetPeer() {
 // restartPlanes rotates the data epoch and restarts both KCP planes on it.
 // controlEpochValue() derives live from the new data epoch, so the control
 // header follows automatically and the peer re-correlates the two by
-// arithmetic.
+// arithmetic. On the server the per-peer sessions go on under the new epoch
+// too (see readdressPeers).
 func (p *streamTransport) restartPlanes() {
 	p.peerConfirmed.Store(false)
+	p.peerSeen.Store(false)
 	p.peerEpoch.Store(0)
 	p.data.restart(p.rotateEpochHeader())
 	p.control.restart(p.controlEpochHeader())
+	p.readdressPeers()
 }
+
+// PeerSeen implements transport.PeerObserver: a frame with our binding token
+// from a foreign epoch has arrived since the last plane restart.
+func (p *streamTransport) PeerSeen() bool { return p.peerSeen.Load() }
 
 // NotifyLinkHealth implements transport.LinkHealthObserver. The client wires
 // its control-plane liveness loop to this so the peer-restart watchdog has
@@ -456,5 +555,5 @@ func (p *streamTransport) CanSend() bool {
 
 // Features describes the current vp8channel transport semantics.
 func (p *streamTransport) Features() transport.Features {
-	return p.shaper.Features(transport.Features{MaxPayloadSize: defaultMaxPayloadSize})
+	return p.shaper.Features(transport.Features{MaxPayloadSize: defaultMaxPayloadSize, Datagram: true})
 }

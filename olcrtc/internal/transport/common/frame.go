@@ -24,9 +24,12 @@ import (
 //	[11:15] seq  (hello stops here)
 //	[15:19] crc32 of the whole message
 //
-//	ack:  [19:21] fragIdx
-//	data: [19:23] totalLen, [23:25] fragIdx, [25:27] fragTotal,
-//	      [27:31] crc32 of this fragment, [31:] payload
+//	ack:    [19:21] fragIdx
+//	data:   [19:23] totalLen, [23:25] fragIdx, [25:27] fragTotal,
+//	        [27:31] crc32 of this fragment, [31:] payload
+//	stream: data, then [31:35] stream id, [35:39] floor, [39:] payload
+//	hello:  [11] features, when the sender writes any (a peer that writes
+//	        none stops at [11] and reads as no feature at all)
 //
 // fragIdx is present on acks so a receiver acknowledges each fragment of a
 // multi-fragment message independently and the sender retransmits only what
@@ -51,6 +54,13 @@ const (
 	FrameTypeAck byte = 2
 	// FrameTypeHello announces presence; it carries no message payload.
 	FrameTypeHello byte = 3
+	// FrameTypeStream carries one fragment of a message on an ordered
+	// stream: a data frame plus the sender's stream id and floor, the two
+	// the receiver needs to deliver messages in the order they were sent
+	// while several of them are in flight at once.
+	//
+	// ai-generated: this frame type and its codec.
+	FrameTypeStream byte = 4
 
 	// RoleAny matches any receiver role.
 	RoleAny byte = 0
@@ -58,6 +68,14 @@ const (
 	RoleServer byte = 1
 	// RoleClient marks a frame sent by the client side.
 	RoleClient byte = 2
+
+	// FeatureOrdered is the hello bit a receiver sets to say it delivers
+	// FrameTypeStream fragments in the sender's order, so the peer may keep
+	// several messages in flight. A peer that sets none gets one message at
+	// a time, the only thing a receiver without the feature can take.
+	//
+	// ai-generated: this feature bit.
+	FeatureOrdered byte = 1 << 0
 )
 
 // Frame header offsets.
@@ -74,6 +92,12 @@ const (
 	frameFragTotOff  = 25
 	frameFragCRCOff  = 27
 	frameDataHdrLen  = 31
+	// ai-generated: the stream frame's own fields and the hello's features.
+	frameStreamIDOff    = 31
+	frameStreamFloorOff = 35
+	frameStreamHdrLen   = 39
+	frameHelloFeatOff   = 11
+	frameHelloFeatLen   = 12
 )
 
 var (
@@ -89,6 +113,8 @@ var (
 	ErrDataTooShort = errors.New("data frame too short")
 	// ErrHelloTooShort is returned when the hello frame is shorter than expected.
 	ErrHelloTooShort = errors.New("hello frame too short")
+	// ErrStreamTooShort is returned when the stream frame is shorter than expected.
+	ErrStreamTooShort = errors.New("stream frame too short")
 	// ErrUnexpectedFrameType is returned for unknown frame type bytes.
 	ErrUnexpectedFrameType = errors.New("unexpected frame type")
 )
@@ -123,7 +149,17 @@ type Frame struct {
 	// FragCRC is the crc32 of Payload alone, checked before the fragment is
 	// stored or acknowledged.
 	FragCRC uint32
-	Payload []byte
+	// Stream and Floor are a stream fragment's own fields: the sender's
+	// incarnation and the lowest sequence number it still holds unacked, so
+	// the receiver knows which messages may still arrive before this one.
+	//
+	// ai-generated: these two fields and Features.
+	Stream uint32
+	Floor  uint32
+	// Features is what a hello announces about its sender, see
+	// FeatureOrdered. Zero for a hello that carries none.
+	Features byte
+	Payload  []byte
 }
 
 // AcceptedBy reports whether a receiver expecting remoteRole and holding
@@ -153,14 +189,21 @@ func EncodeData(
 ) []byte {
 	out := make([]byte, frameDataHdrLen+len(payload))
 	putFrameHeader(out, FrameTypeData, role, binding)
+	putDataBody(out, seq, crc, totalLen, fragIdx, fragTotal, payload)
+	copy(out[frameDataHdrLen:], payload)
+	return out
+}
+
+// putDataBody writes the fragmentation fields both data flavours share.
+//
+// ai-generated: split out of EncodeData for the stream frame.
+func putDataBody(out []byte, seq, crc uint32, totalLen, fragIdx, fragTotal int, payload []byte) {
 	binary.BigEndian.PutUint32(out[frameSeqOff:frameCRCOff], seq)
 	binary.BigEndian.PutUint32(out[frameCRCOff:frameTotalLenOff], crc)
 	binary.BigEndian.PutUint32(out[frameTotalLenOff:frameFragIdxOff], uint32(totalLen)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
 	binary.BigEndian.PutUint16(out[frameFragIdxOff:frameFragTotOff], uint16(fragIdx))   //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
 	binary.BigEndian.PutUint16(out[frameFragTotOff:frameFragCRCOff], uint16(fragTotal)) //nolint:gosec,lll // G115: bounded conversion verified by surrounding logic
 	binary.BigEndian.PutUint32(out[frameFragCRCOff:frameDataHdrLen], crc32.ChecksumIEEE(payload))
-	copy(out[frameDataHdrLen:], payload)
-	return out
 }
 
 // EncodeAck serialises the acknowledgement of a single fragment.
@@ -173,10 +216,40 @@ func EncodeAck(role byte, binding, seq, crc uint32, fragIdx uint16) []byte {
 	return out
 }
 
+// EncodeStreamData serialises one fragment of a message on an ordered stream.
+//
+// ai-generated: this encoder.
+func EncodeStreamData(
+	role byte,
+	binding, stream, floor, seq, crc uint32,
+	totalLen, fragIdx, fragTotal int,
+	payload []byte,
+) []byte {
+	out := make([]byte, frameStreamHdrLen+len(payload))
+	putFrameHeader(out, FrameTypeStream, role, binding)
+	putDataBody(out, seq, crc, totalLen, fragIdx, fragTotal, payload)
+	binary.BigEndian.PutUint32(out[frameStreamIDOff:frameStreamFloorOff], stream)
+	binary.BigEndian.PutUint32(out[frameStreamFloorOff:frameStreamHdrLen], floor)
+	copy(out[frameStreamHdrLen:], payload)
+	return out
+}
+
 // EncodeHello serialises the presence beacon transports emit while idle.
 func EncodeHello(role byte, binding uint32) []byte {
 	out := make([]byte, frameHelloLen)
 	putFrameHeader(out, FrameTypeHello, role, binding)
+	return out
+}
+
+// EncodeHelloFeatures is EncodeHello with the features this side announces.
+// A zero features byte is still written: it is one byte, and a peer that
+// reads none of it reads a plain hello.
+//
+// ai-generated: this encoder.
+func EncodeHelloFeatures(role byte, binding uint32, features byte) []byte {
+	out := make([]byte, frameHelloFeatLen)
+	putFrameHeader(out, FrameTypeHello, role, binding)
+	out[frameHelloFeatOff] = features
 	return out
 }
 
@@ -198,11 +271,16 @@ func DecodeFrame(data []byte) (Frame, error) {
 
 	switch frame.Type {
 	case FrameTypeHello:
+		if len(data) >= frameHelloFeatLen {
+			frame.Features = data[frameHelloFeatOff]
+		}
 		return frame, nil
 	case FrameTypeAck:
 		return decodeAckBody(frame, data)
 	case FrameTypeData:
 		return decodeDataBody(frame, data)
+	case FrameTypeStream:
+		return decodeStreamBody(frame, data)
 	default:
 		return Frame{}, ErrUnexpectedFrameType
 	}
@@ -227,6 +305,8 @@ func shortFrameError(typ byte) error {
 		return ErrAckTooShort
 	case FrameTypeData:
 		return ErrDataTooShort
+	case FrameTypeStream:
+		return ErrStreamTooShort
 	case FrameTypeHello:
 		return ErrHelloTooShort
 	default:
@@ -248,12 +328,32 @@ func decodeDataBody(frame Frame, data []byte) (Frame, error) {
 	if len(data) < frameDataHdrLen {
 		return Frame{}, ErrDataTooShort
 	}
+	takeDataBody(&frame, data)
+	frame.Payload = data[frameDataHdrLen:]
+	return frame, nil
+}
+
+// decodeStreamBody parses a stream fragment: the data body plus the sender's
+// stream id and floor.
+//
+// ai-generated: this decoder.
+func decodeStreamBody(frame Frame, data []byte) (Frame, error) {
+	if len(data) < frameStreamHdrLen {
+		return Frame{}, ErrStreamTooShort
+	}
+	takeDataBody(&frame, data)
+	frame.Stream = binary.BigEndian.Uint32(data[frameStreamIDOff:frameStreamFloorOff])
+	frame.Floor = binary.BigEndian.Uint32(data[frameStreamFloorOff:frameStreamHdrLen])
+	frame.Payload = data[frameStreamHdrLen:]
+	return frame, nil
+}
+
+// takeDataBody reads the fragmentation fields both data flavours share.
+func takeDataBody(frame *Frame, data []byte) {
 	frame.Seq = binary.BigEndian.Uint32(data[frameSeqOff:frameCRCOff])
 	frame.CRC = binary.BigEndian.Uint32(data[frameCRCOff:frameTotalLenOff])
 	frame.TotalLen = binary.BigEndian.Uint32(data[frameTotalLenOff:frameFragIdxOff])
 	frame.FragIdx = binary.BigEndian.Uint16(data[frameFragIdxOff:frameFragTotOff])
 	frame.FragTotal = binary.BigEndian.Uint16(data[frameFragTotOff:frameFragCRCOff])
 	frame.FragCRC = binary.BigEndian.Uint32(data[frameFragCRCOff:frameDataHdrLen])
-	frame.Payload = data[frameDataHdrLen:]
-	return frame, nil
 }

@@ -19,7 +19,7 @@ data class OlcRtcInstallOptions(
     val sshKey: String = "",
     /** Passphrase for an encrypted [sshKey]; empty for an unencrypted key. */
     val sshKeyPassphrase: String = "",
-    /** Сервис видеозвонков: `jitsi` | `telemost` | `wbstream` (что умеет вендоренный бинарник). */
+    /** Сервис видеозвонков: см. [OLCRTC_PROVIDERS] (что умеет вендоренный бинарник без токена аккаунта). */
     val provider: String = "jitsi",
     /** Транспорт внутри звонка: `datachannel` | `vp8channel` | `seichannel`. */
     val transport: String = "vp8channel",
@@ -59,9 +59,10 @@ interface OlcRtcServerInstaller {
 expect fun rememberOlcRtcServerInstaller(): OlcRtcServerInstaller
 
 /** Сервисы, которые умеет вендоренный бинарник (`internal/auth`). */
-val OLCRTC_PROVIDERS = listOf("jitsi", "telemost", "wbstream")
+// wbstream сюда не входит: сервису нужен токен аккаунта WB, а установщик его не спрашивает.
+val OLCRTC_PROVIDERS = listOf("mtslink", "vkcalls", "salutejazz", "jitsi", "telemost")
 
-/** Транспорты, общие для сервера и нашего клиента. */
+/** Транспорты, общие для сервера и нашего клиента; какие из них идут через сервис — `LocationConfig.supportedTransportsForProvider`. */
 val OLCRTC_TRANSPORTS = listOf("datachannel", "vp8channel", "seichannel", "videochannel")
 
 /** Сколько комнат максимум — столько же тянет мультирум на клиенте. */
@@ -90,7 +91,7 @@ internal fun sanitizeDns(dns: String): String {
 /**
  * Генерирует имена комнат для jitsi: там комната создаётся самим фактом захода, отдельного API нет
  * (в вендоренном дереве ни один провайдер не реализует room-creation, `mode: gen` для них не работает).
- * Для telemost/wbstream ссылку выдаёт сам сервис — её пользователь вставляет руками.
+ * Для остальных (mtslink, vkcalls, salutejazz, telemost) ссылку выдаёт сам сервис — её пользователь вставляет руками.
  */
 fun generateJitsiRooms(instance: String, count: Int): List<String> {
     val host = instance.trim().trimEnd('/').ifBlank { "https://meet.jit.si" }

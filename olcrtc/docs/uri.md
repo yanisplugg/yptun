@@ -41,7 +41,7 @@ The `<key=value&...>` block is the transport parameter payload in angle brackets
 
 | Field | Meaning |
 |------|----------|
-| `<Provider>` | Provider name, e.g. `telemost`, `wbstream`, `jitsi` |
+| `<Provider>` | Provider name, e.g. `telemost`, `wbstream`, `jitsi`, `salutejazz`, `vkcalls`, `mtslink` |
 | `<Transport>` | Transport name, e.g. `datachannel`, `vp8channel`, `seichannel`, `videochannel` |
 | payload | Transport parameters in `<key=value&...>`. Keys match the YAML fields. The block is dropped when defaults are used |
 | `<RoomID>` | Room identifier or provider-specific room URL/ID |

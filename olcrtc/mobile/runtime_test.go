@@ -102,20 +102,37 @@ func TestTimeoutConversionDoesNotOverflow(t *testing.T) {
 	}
 }
 
-func TestStopTimeoutKeepsStoppingState(t *testing.T) {
+// A stop that misses its deadline reports the miss and releases the runtime.
+//
+// This used to assert the opposite — that the state stayed "stopping" until the
+// generation finished on its own. Nothing needed that, and a phone paid for it:
+// "stopping" counts as active, so a teardown that outran its deadline refused
+// every later Start with ErrAlreadyRunning, and the tunnel could not be pointed
+// at another room until the app was force-stopped. What a caller actually needs
+// to know from State() is whether it may start again.
+func TestStopTimeoutReleasesTheRuntime(t *testing.T) {
 	release := make(chan struct{})
+	started := make(chan struct{})
 	runtime := configuredRuntime(t, func(context.Context, client.Config, func(string)) error {
+		close(started)
 		<-release
 		return nil
 	})
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	// Stop has to find the runner alive for this test to mean anything: a
+	// stop that lands before the session starts is honoured without running
+	// it at all, and then there is nothing to time out on.
+	<-started
 	if err := runtime.Stop(1); !errors.Is(err, ErrStopTimeout) {
 		t.Fatalf("Stop() error = %v, want %v", err, ErrStopTimeout)
 	}
-	if runtime.State() != "stopping" {
-		t.Fatalf("State() = %q, want stopping", runtime.State())
+	if runtime.State() != "stopped" {
+		t.Fatalf("State() = %q, want stopped", runtime.State())
+	}
+	if runtime.IsRunning() {
+		t.Fatal("IsRunning() = true after a stop that gave up waiting")
 	}
 	close(release)
 	waitForState(t, runtime, "stopped")
@@ -145,11 +162,15 @@ func TestRapidRestartUsesNewGenerations(t *testing.T) {
 func TestStaleWaiterCannotObserveRestart(t *testing.T) {
 	var calls int
 	var callsMu sync.Mutex
+	firstStarted := make(chan struct{})
 	runtime := configuredRuntime(t, func(ctx context.Context, _ client.Config, onReady func(string)) error {
 		callsMu.Lock()
 		calls++
 		call := calls
 		callsMu.Unlock()
+		if call == 1 {
+			close(firstStarted)
+		}
 		if call > 1 {
 			onReady("127.0.0.1:1080")
 		}
@@ -159,6 +180,10 @@ func TestStaleWaiterCannotObserveRestart(t *testing.T) {
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("first Start() error = %v", err)
 	}
+	// The first session must be running before it is stopped: a stop that
+	// lands first is honoured without a run, and the call count the runner
+	// keys its behaviour on would then be off by one.
+	<-firstStarted
 	runtime.mu.Lock()
 	first := runtime.current
 	runtime.mu.Unlock()

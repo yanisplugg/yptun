@@ -724,6 +724,9 @@ private fun MultiRoomSection(
     onBondPortChange: (String) -> Unit
 ) {
     val providers = listOf(
+        LocationConfig.PROVIDER_MTS_LINK,
+        LocationConfig.PROVIDER_VK_CALLS,
+        LocationConfig.PROVIDER_JAZZ,
         LocationConfig.PROVIDER_TELEMOST,
         LocationConfig.PROVIDER_WB_STREAM,
         LocationConfig.PROVIDER_JITSI
@@ -4355,7 +4358,9 @@ private fun ActionsBar(
 private fun roomIdPlaceholder(provider: String): String {
     return when (LocationConfig.normalizeProvider(provider)) {
         LocationConfig.PROVIDER_TELEMOST -> "12345678901234"
-        LocationConfig.PROVIDER_JAZZ -> "room id or any"
+        LocationConfig.PROVIDER_JAZZ -> "code:password"
+        LocationConfig.PROVIDER_VK_CALLS -> "https://vk.ru/call/join/…"
+        LocationConfig.PROVIDER_MTS_LINK -> "https://my.mts-link.ru/j/…/…"
         LocationConfig.PROVIDER_WB_STREAM -> "123e4567-e89b-12d3-a456-426614174000"
         LocationConfig.PROVIDER_JITSI -> "https://meet.example.com/room"
         else -> "room id"
@@ -4363,11 +4368,17 @@ private fun roomIdPlaceholder(provider: String): String {
 }
 
 private fun roomIdLabel(provider: String): String {
-    return if (isJitsiProvider(provider)) "Room URL" else "Room ID"
+    return if (isLinkRoomProvider(provider)) "Room URL" else "Room ID"
 }
 
 private fun roomKeyboardType(provider: String): KeyboardType {
-    return if (isJitsiProvider(provider)) KeyboardType.Uri else KeyboardType.Text
+    return if (isLinkRoomProvider(provider)) KeyboardType.Uri else KeyboardType.Text
+}
+
+/** Комната задаётся ссылкой, а не id: Jitsi, VK Calls, MTS Link. */
+private fun isLinkRoomProvider(provider: String): Boolean = when (LocationConfig.normalizeProvider(provider)) {
+    LocationConfig.PROVIDER_JITSI, LocationConfig.PROVIDER_VK_CALLS, LocationConfig.PROVIDER_MTS_LINK -> true
+    else -> false
 }
 
 private fun isJitsiProvider(provider: String): Boolean {

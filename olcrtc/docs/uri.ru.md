@@ -41,7 +41,7 @@ olcrtc://<Provider>?<Transport><key=value&key=value>@<RoomID>#<EncryptionKey>$<M
 
 | Поле | Значение |
 |------|----------|
-| `<Provider>` | Имя провайдера, например `telemost`, `wbstream`, `jitsi` |
+| `<Provider>` | Имя провайдера, например `telemost`, `wbstream`, `jitsi`, `vkcalls`, `mtslink` |
 | `<Transport>` | Имя транспорта, например `datachannel`, `vp8channel`, `seichannel`, `videochannel` |
 | payload | Параметры транспорта в `<key=value&...>`. Ключи совпадают с YAML полями. Блок опускается если используются defaults |
 | `<RoomID>` | Идентификатор комнаты или provider-specific room URL/ID |
