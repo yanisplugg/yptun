@@ -137,7 +137,7 @@ data class VkTurnConfig(
     /** csqtt connection password — the WRAP key is derived from it on both sides. */
     @SerialName("csqtt_password")
     val csqttPassword: String = "",
-    /** csqtt worker count; 0 → 27 per VK hash (capped at 72). The core rounds to a multiple of 9, max 126. */
+    /** csqtt worker count; 0 → 27 per VK hash (capped at 72). The core rounds to a multiple of 9, max 100 (csqtt 2.5.0; was 126). */
     @SerialName("csqtt_workers")
     val csqttWorkers: Int = 0,
     /** The csqtt core's advanced knobs (camouflage, TURN over TCP, fingerprint, VK app ids…). */
@@ -234,6 +234,8 @@ data class VkTurnConfig(
         const val CORE_FREETURN = "freeturn"
         const val CORE_WDTT = "wdtt"
         const val CORE_CSQTT = "csqtt"
+        /** Worker cap of the csqtt client since 2.5.0 (`MAX_WORKERS` in rust-client/main.rs). */
+        const val CSQTT_MAX_WORKERS = 100
 
         /** Default WDTT server port (matches the wdtt-server default). */
         const val DEFAULT_WDTT_PORT = 56000
@@ -287,7 +289,7 @@ data class VkTurnConfig(
         val o = csqtt
         val hashes = vkLink.split('\n', '\r', '\t', ' ', ',', ';').filter { it.isNotBlank() }
         // 27 workers per hash, capped like the csqtt app's own default maximum.
-        val workers = csqttWorkers.takeIf { it > 0 } ?: (hashes.size.coerceAtLeast(1) * 27).coerceAtMost(72)
+        val workers = csqttWorkers.takeIf { it > 0 }?.coerceAtMost(CSQTT_MAX_WORKERS) ?: (hashes.size.coerceAtLeast(1) * 27).coerceAtMost(72)
         return buildJsonObject {
             put("client", client)
             put("listen", listen)

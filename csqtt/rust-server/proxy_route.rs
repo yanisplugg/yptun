@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::model::LocalProxyProfile;
 use anyhow::{Context, Result, bail};
 use std::io::{Read, Write};
@@ -502,6 +499,9 @@ pub(crate) fn socks_udp_response(packet: &[u8]) -> Result<(SocketAddr, &[u8])> {
 async fn activate_tproxy(runtime_id: u64, port: u16) -> Result<()> {
     let _guard = POLICY_LOCK.lock().await;
     cleanup_legacy_proxy_policy().await;
+    let _ = command_output("sysctl", &["-w", "net.ipv4.ip_forward=1"]).await;
+    let _ = command_output("sysctl", &["-w", "net.ipv4.conf.all.rp_filter=2"]).await;
+    let _ = command_output("sysctl", &["-w", "net.ipv4.conf.default.rp_filter=2"]).await;
     let _ = command_output("sysctl", &["-w", "net.ipv4.conf.csqtt1.rp_filter=2"]).await;
     add_tproxy_shared_rules().await?;
     add_tproxy_rules(port).await?;
@@ -607,7 +607,6 @@ async fn tproxy_interception_present(port: u16) -> bool {
                 .lines()
                 .any(|line| line.contains(&format!("fwmark {mark}")) && line.contains(TPROXY_TABLE))
         }
-        // Cannot verify: avoid repair churn on transient failures.
         Err(_) => true,
     }
 }
@@ -621,16 +620,25 @@ fn spawn_rule_watchdog(port: u16, engine: tokio_util::sync::CancellationToken, l
             tokio::select! {
                 _ = engine.cancelled() => break,
                 _ = ticker.tick() => {
+                    let _guard = POLICY_LOCK.lock().await;
+                    if engine.is_cancelled() {
+                        break;
+                    }
                     if !tproxy_interception_present(port).await {
                         log(
                             "WARNING",
                             "TPROXY interception rules vanished (firewalld reload?); re-installing",
                         );
-                        let _guard = POLICY_LOCK.lock().await;
-                        if add_tproxy_shared_rules().await.is_err()
-                            || add_tproxy_rules(port).await.is_err()
-                        {
-                            log("ERROR", "Failed to re-install TPROXY interception rules");
+                        let reinstalled: Result<()> = async {
+                            add_tproxy_shared_rules().await?;
+                            add_tproxy_rules(port).await
+                        }
+                        .await;
+                        if let Err(error) = reinstalled {
+                            log(
+                                "ERROR",
+                                &format!("Failed to re-install TPROXY interception rules: {error:#}"),
+                            );
                         }
                     }
                 }
@@ -640,7 +648,7 @@ fn spawn_rule_watchdog(port: u16, engine: tokio_util::sync::CancellationToken, l
 }
 
 async fn add_tproxy_rules(port: u16) -> Result<()> {
-    cleanup_stale_tproxy_rules().await;
+    cleanup_stale_tproxy_rules().await?;
     let port_arg = port.to_string();
     let comment = tproxy_comment(port);
     for protocol in ["tcp", "udp"] {
@@ -676,27 +684,6 @@ async fn add_tproxy_rules(port: u16) -> Result<()> {
         "iptables",
         &[
             "-t",
-            "raw",
-            "-I",
-            "PREROUTING",
-            "1",
-            "-i",
-            crate::tun_device::TUN_IFACE,
-            "-s",
-            crate::tun_device::TUN_SUBNET,
-            "-m",
-            "comment",
-            "--comment",
-            &comment,
-            "-j",
-            "NOTRACK",
-        ],
-    )
-    .await?;
-    command_required(
-        "iptables",
-        &[
-            "-t",
             "filter",
             "-I",
             "INPUT",
@@ -717,41 +704,77 @@ async fn add_tproxy_rules(port: u16) -> Result<()> {
     Ok(())
 }
 
-async fn cleanup_stale_tproxy_rules() {
+async fn cleanup_stale_tproxy_rules() -> Result<()> {
     for (table, chain) in [
         ("mangle", "PREROUTING"),
         ("raw", "PREROUTING"),
         ("filter", "INPUT"),
     ] {
+        let mut cleared = false;
         for _ in 0..8 {
-            let Ok(rules) = command_output("iptables", &["-t", table, "-S", chain]).await else {
-                break;
-            };
-            let numbers = marked_rule_numbers(&rules, chain, &["CSQTT_TPROXY"]);
-            if numbers.is_empty() {
+            let rules = command_output("iptables", &["-t", table, "-S", chain]).await?;
+            let specs = marked_rule_specs(&rules, chain, &["CSQTT_TPROXY"]);
+            if specs.is_empty() {
+                cleared = true;
                 break;
             }
-            for number in numbers.into_iter().rev() {
-                let number = number.to_string();
-                let _ = command_output("iptables", &["-t", table, "-D", chain, &number]).await;
+            for spec in specs {
+                let mut args = vec!["-t", table, "-D", chain];
+                args.extend(spec.iter().map(String::as_str));
+                command_output("iptables", &args).await?;
             }
         }
+        if !cleared {
+            bail!("stale TPROXY rules remain in {table} {chain}");
+        }
     }
+    Ok(())
 }
 
-fn marked_rule_numbers(rules: &str, chain: &str, markers: &[&str]) -> Vec<usize> {
+fn marked_rule_specs(rules: &str, chain: &str, markers: &[&str]) -> Vec<Vec<String>> {
     let prefix = format!("-A {chain}");
-    let mut number = 0;
-    let mut matches = Vec::new();
-    for line in rules.lines() {
-        if line == prefix || line.starts_with(&format!("{prefix} ")) {
-            number += 1;
-            if markers.iter().any(|marker| line.contains(marker)) {
-                matches.push(number);
+    rules
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix(prefix.as_str())?;
+            if !(rest.is_empty() || rest.starts_with(' ')) {
+                return None;
+            }
+            markers
+                .iter()
+                .any(|marker| line.contains(marker))
+                .then(|| iptables_spec_tokens(rest))
+        })
+        .collect()
+}
+
+fn iptables_spec_tokens(spec: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut in_token = false;
+    for ch in spec.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                in_token = true;
+            }
+            ch if ch.is_whitespace() && !in_quotes => {
+                if in_token {
+                    tokens.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            ch => {
+                current.push(ch);
+                in_token = true;
             }
         }
     }
-    matches
+    if in_token {
+        tokens.push(current);
+    }
+    tokens
 }
 
 async fn remove_from_subnet_rule() {
@@ -910,7 +933,6 @@ async fn cleanup_legacy_quic_rule() {
 }
 
 async fn cleanup_legacy_proxy_policy() {
-    // Independent legacy rule groups delete concurrently.
     tokio::join!(
         cleanup_legacy_quic_rule(),
         cleanup_mark_rules(),
@@ -939,7 +961,10 @@ async fn cleanup_shared_policy() {
         .await
         {}
     };
-    tokio::join!(stale_rules, policy_rule);
+    let (stale_result, ()) = tokio::join!(stale_rules, policy_rule);
+    if let Err(error) = stale_result {
+        eprintln!("[LOCAL-PROXY] stale TPROXY rule cleanup failed: {error:#}");
+    }
     let _ = command_output("ip", &["route", "flush", "table", TPROXY_TABLE]).await;
     let _ = command_output("ip", &["route", "flush", "cache"]).await;
 }
@@ -1015,8 +1040,8 @@ async fn command_required(program: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        marked_rule_numbers, read_tproxy_child_error, remove_tproxy_status_file,
-        socks_udp_response, tproxy_error_path, tproxy_start_error_is_retryable, validate_config,
+        marked_rule_specs, read_tproxy_child_error, remove_tproxy_status_file, socks_udp_response,
+        tproxy_error_path, tproxy_start_error_is_retryable, validate_config,
         write_tproxy_child_error,
     };
     use crate::model::LocalProxyProfile;
@@ -1058,20 +1083,34 @@ mod tests {
             "-A PREROUTING -p tcp -j ACCEPT\n",
             "-A PREROUTING -i csqtt1 -p tcp -m comment --comment \"CSQTT_TPROXY:10669\" -j TPROXY\n",
         );
+        let specs = marked_rule_specs(rules, "PREROUTING", &["CSQTT_TPROXY"]);
+        assert_eq!(specs.len(), 2);
         assert_eq!(
-            marked_rule_numbers(rules, "PREROUTING", &["CSQTT_TPROXY"]),
-            vec![1, 3]
+            specs[0],
+            [
+                "-i",
+                "csqtt1",
+                "-p",
+                "udp",
+                "-m",
+                "comment",
+                "--comment",
+                "CSQTT_TPROXY:10669",
+                "-j",
+                "TPROXY"
+            ]
         );
+        assert_eq!(specs[1][3], "tcp");
     }
 
     #[test]
-    fn ignores_other_chains_and_is_idempotent_after_cleanup() {
+    fn ignores_other_chains_and_empty_output() {
         let rules = concat!(
             "-A INPUT -m comment --comment \"CSQTT_TPROXY:10669\" -j ACCEPT\n",
             "-A PREROUTING -p tcp -j ACCEPT\n",
         );
-        assert!(marked_rule_numbers(rules, "PREROUTING", &["CSQTT_TPROXY"]).is_empty());
-        assert!(marked_rule_numbers("", "PREROUTING", &["CSQTT_TPROXY"]).is_empty());
+        assert!(marked_rule_specs(rules, "PREROUTING", &["CSQTT_TPROXY"]).is_empty());
+        assert!(marked_rule_specs("", "PREROUTING", &["CSQTT_TPROXY"]).is_empty());
     }
 
     #[test]

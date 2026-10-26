@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::captcha::{
     CaptchaSession, RateLimit, device_info, response_object, slider_check, slider_request,
     slider_saved_profile, value_string,
@@ -43,7 +40,7 @@ pub(crate) async fn solve_slider(
         "captchaNotRobot.getContent",
         &[
             ("session_token", session_token),
-            ("domain", "vk.com"),
+            ("domain", "vk.ru"),
             ("adFp", ""),
             ("access_token", ""),
             ("captcha_settings", settings),
@@ -79,7 +76,7 @@ pub(crate) async fn solve_slider(
         "captchaNotRobot.componentDone",
         &[
             ("session_token", session_token),
-            ("domain", "vk.com"),
+            ("domain", "vk.ru"),
             ("adFp", ""),
             ("access_token", ""),
             ("browser_fp", browser_fp),
@@ -142,6 +139,10 @@ fn parse_puzzle(raw: &Value) -> Result<SliderPuzzle> {
         .map_err(|error| anyhow!("decode slider image: {error}"))?;
     let image =
         image::load_from_memory(&data).map_err(|error| anyhow!("decode slider image: {error}"))?;
+    let (image_width, image_height) = image.dimensions();
+    if image_width < size as u32 || image_height < size as u32 {
+        bail!("slider image {image_width}x{image_height} smaller than grid {size}");
+    }
     Ok(SliderPuzzle {
         image,
         size,
@@ -160,8 +161,6 @@ fn parse_number(value: &Value) -> Result<usize> {
     bail!("invalid numeric value: {value}")
 }
 
-// Real slider puzzles are 3..8 tiles per side; anything larger is either a
-// protocol change or hostile input that would allocate a huge swap mapping.
 const MAX_SLIDER_GRID: usize = 16;
 
 fn split_steps(steps: &[usize]) -> Result<(usize, Vec<usize>, usize)> {
@@ -319,8 +318,6 @@ fn tile_rect(image: &DynamicImage, grid_size: usize, index: usize) -> Rect {
 fn sample(image: &DynamicImage, destination: Rect, source: Rect, x: u32, y: u32) -> Rgba<u8> {
     let width = destination.width().max(1);
     let height = destination.height().max(1);
-    // Rect math can round past the image edge when the grid exceeds the
-    // bitmap; get_pixel would panic there, so clamp to the last pixel.
     let (image_width, image_height) = image.dimensions();
     let source_x = (source.min_x + (x - destination.min_x) * source.width() / width)
         .min(image_width.saturating_sub(1));
@@ -355,7 +352,7 @@ fn seam_score_luma(image: &DynamicImage, grid_size: usize, mapping: &[usize]) ->
                     image,
                     left_destination,
                     left_source,
-                    left_destination.max_x - 1,
+                    left_destination.max_x.saturating_sub(1),
                     y,
                 ));
                 let right = luma(sample(
@@ -384,7 +381,7 @@ fn seam_score_luma(image: &DynamicImage, grid_size: usize, mapping: &[usize]) ->
                     top_destination,
                     top_source,
                     x,
-                    top_destination.max_y - 1,
+                    top_destination.max_y.saturating_sub(1),
                 ));
                 let bottom = luma(sample(
                     image,
@@ -431,7 +428,7 @@ fn seam_score_rgb_text(image: &DynamicImage, grid_size: usize, mapping: &[usize]
                     image,
                     left_destination,
                     left_source,
-                    left_destination.max_x - 1,
+                    left_destination.max_x.saturating_sub(1),
                     y,
                 );
                 let right = sample(
@@ -461,7 +458,7 @@ fn seam_score_rgb_text(image: &DynamicImage, grid_size: usize, mapping: &[usize]
                     top_destination,
                     top_source,
                     x,
-                    top_destination.max_y - 1,
+                    top_destination.max_y.saturating_sub(1),
                 );
                 let bottom = sample(
                     image,

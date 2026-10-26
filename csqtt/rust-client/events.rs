@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -44,61 +41,79 @@ impl Events {
         self.enabled
     }
 
-    fn emit<T: Serialize>(&self, kind: &str, payload: &T) {
+    fn emit<T: Serialize>(&self, kind: &str, payload: impl FnOnce() -> T) {
         if !self.enabled {
             return;
         }
-        if let Some(line) = encode_event(kind, payload) {
+        if let Some(line) = encode_event(kind, &payload()) {
             crate::log_output!("{line}");
         }
     }
 
     pub fn ready(&self, worker: usize) {
-        self.emit("READY", &serde_json::json!({"worker": worker}));
+        self.emit("READY", || serde_json::json!({"worker": worker}));
     }
 
     pub fn stopped(&self) {
-        self.emit("STOPPED", &serde_json::json!({}));
+        self.emit("STOPPED", || serde_json::json!({}));
     }
 
     pub fn process(&self, pid: u32) {
-        self.emit("PROCESS", &serde_json::json!({"pid": pid}));
+        self.emit("PROCESS", || serde_json::json!({"pid": pid}));
     }
 
     pub fn config(&self, config: &str) {
-        self.emit("CONFIG", &serde_json::json!({"config": config}));
+        self.emit("CONFIG", || serde_json::json!({"config": config}));
+    }
+
+    pub fn routing(&self, routing_json: &str) {
+        self.emit("ROUTING", || serde_json::json!({"routing": routing_json}));
+    }
+
+    pub fn workers(&self, workers: u32) {
+        self.emit("WORKERS", || serde_json::json!({"workers": workers}));
     }
 
     pub fn error(&self, code: &str, message: &str, fatal: bool) {
         self.emit(
             "ERROR",
-            &serde_json::json!({"code": code, "message": message, "fatal": fatal}),
+            || serde_json::json!({"code": code, "message": message, "fatal": fatal}),
         );
     }
 
     pub fn stats(&self, active: i32, bytes_up: i64, bytes_down: i64) {
-        self.emit(
-            "STATS",
-            &serde_json::json!({
+        self.emit("STATS", || {
+            serde_json::json!({
                 "active": active,
                 "bytes_up": bytes_up,
                 "bytes_down": bytes_down
-            }),
-        );
+            })
+        });
     }
 
     pub fn active_zero(&self) {
-        self.emit("ACTIVE_ZERO", &serde_json::json!({}));
+        self.emit("ACTIVE_ZERO", || serde_json::json!({}));
+    }
+
+    pub fn tun_lost(&self) {
+        self.emit("TUN_LOST", || serde_json::json!({}));
+    }
+
+    pub fn dtls(&self, worker: usize, message: &str) {
+        self.emit(
+            "DTLS",
+            || serde_json::json!({"worker": worker, "message": message}),
+        );
     }
 
     pub fn panel_restart(&self) {
         if !self.panel_restart_emitted.swap(true, Ordering::AcqRel) {
-            self.emit("SERVER_RESTART", &serde_json::json!({"source": "panel"}));
+            self.emit("SERVER_RESTART", || serde_json::json!({"source": "panel"}));
         }
     }
 
     pub fn progress(&self, kind: &str) {
-        self.emit("PROGRESS", &serde_json::json!({"kind": kind}));
+        self.emit("PROGRESS", || serde_json::json!({"kind": kind}));
     }
 
     pub fn network_timeout(&self) {
@@ -118,7 +133,7 @@ impl Events {
             && !self.network_suspect_emitted.swap(true, Ordering::AcqRel);
         drop(window);
         if should_emit {
-            self.emit("NETWORK_SUSPECT", &serde_json::json!({}));
+            self.emit("NETWORK_SUSPECT", || serde_json::json!({}));
         }
     }
 
@@ -133,15 +148,23 @@ impl Events {
     }
 
     pub fn call_unavailable(&self, hash: &str, code: i64) {
+        const MAX_UNAVAILABLE_HASHES: usize = 512;
         let should_emit = self
             .unavailable_hashes
             .lock()
-            .map(|mut hashes| hashes.insert(hash.to_owned()))
+            .map(|mut hashes| {
+                let inserted = hashes.insert(hash.to_owned());
+                if hashes.len() > MAX_UNAVAILABLE_HASHES {
+                    hashes.clear();
+                    hashes.insert(hash.to_owned());
+                }
+                inserted
+            })
             .unwrap_or(false);
         if should_emit {
             self.emit(
                 "CALL_UNAVAILABLE",
-                &serde_json::json!({"hash": hash, "code": code}),
+                || serde_json::json!({"hash": hash, "code": code}),
             );
         }
     }
@@ -170,6 +193,10 @@ mod tests {
             encode_event("ACTIVE_ZERO", &serde_json::json!({})).as_deref(),
             Some("__CSQTT_EVENT__|ACTIVE_ZERO|{}")
         );
+        assert_eq!(
+            encode_event("TUN_LOST", &serde_json::json!({})).as_deref(),
+            Some("__CSQTT_EVENT__|TUN_LOST|{}")
+        );
     }
 
     #[test]
@@ -178,16 +205,27 @@ mod tests {
             encode_event(
                 "ERROR",
                 &serde_json::json!({
-                    "code": "handshake_timeout",
-                    "message": "FATAL_HANDSHAKE: no response",
+                    "code": "authentication_rejected",
+                    "message": "FATAL_AUTH: invalid password",
                     "fatal": true
                 }),
             )
             .as_deref(),
             Some(
-                "__CSQTT_EVENT__|ERROR|{\"code\":\"handshake_timeout\",\"fatal\":true,\"message\":\"FATAL_HANDSHAKE: no response\"}"
+                "__CSQTT_EVENT__|ERROR|{\"code\":\"authentication_rejected\",\"fatal\":true,\"message\":\"FATAL_AUTH: invalid password\"}"
             )
         );
+    }
+
+    #[test]
+    fn disabled_events_do_not_build_payloads() {
+        let events = Events::new(false);
+        let built = AtomicBool::new(false);
+        events.emit("STATS", || {
+            built.store(true, Ordering::Release);
+            serde_json::json!({})
+        });
+        assert!(!built.load(Ordering::Acquire));
     }
 
     #[test]

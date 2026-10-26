@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::stun_codec::{Class, Message};
 use anyhow::{Context, Result, bail};
 use hmac::{Hmac, Mac};
@@ -13,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const RESULT_EMPTY: i32 = -1;
 pub(crate) const RESULT_BUFFER_TOO_SMALL: i32 = -2;
 pub(crate) const RESULT_INVALID_ARGUMENT: i32 = -3;
 pub(crate) const RESULT_CLOSED: i32 = -4;
@@ -22,12 +18,13 @@ pub(crate) const RESULT_TIMEOUT: i32 = -6;
 pub(crate) const RESULT_AUTHENTICATION: i32 = -7;
 pub(crate) const RESULT_PROTOCOL: i32 = -8;
 
+pub(crate) const MAX_AUTH_ATTRIBUTE_LEN: usize = 256;
+
 pub(crate) const EVENT_STATE: u32 = 1;
 pub(crate) const EVENT_REQUEST_COMPLETE: u32 = 2;
 pub(crate) const EVENT_CHANNEL_BOUND: u32 = 3;
 pub(crate) const EVENT_RELAY_ADDRESS: u32 = 4;
 pub(crate) const EVENT_CONTROL_OVERFLOW: u32 = 5;
-pub(crate) const EVENT_DATA_REJECTED: u32 = 6;
 pub(crate) const EVENT_FORCED_DESTROY: u32 = 7;
 pub(crate) const EVENT_EVENT_OVERFLOW: u32 = 8;
 pub(crate) const EVENT_STUN_RESPONSE_ERROR: u32 = 9;
@@ -59,6 +56,8 @@ const ATTR_NONCE: u16 = 0x0015;
 const ATTR_XOR_RELAYED_ADDRESS: u16 = 0x0016;
 const ATTR_REQUESTED_ADDRESS_FAMILY: u16 = 0x0017;
 const ATTR_REQUESTED_TRANSPORT: u16 = 0x0019;
+pub(crate) const ATTR_VK_STUN_CUSTOM: u16 = 0x8021;
+pub(crate) const VK_STUN_CUSTOM_VALUE: [u8; 4] = [0xfc, 0x09, 0xb4, 0x6f];
 const ATTR_FINGERPRINT: u16 = 0x8028;
 const MAGIC_COOKIE: u32 = 0x2112_a442;
 const FINGERPRINT_XOR: u32 = 0x5354_554e;
@@ -379,11 +378,9 @@ impl NativeCore {
             return RESULT_NOT_CONTROL;
         };
         let authenticated = inner.pending[index].authenticated;
-        if authenticated
-            && response_requires_integrity(&message)
-            && !verify_integrity(packet, &message, inner.key.as_ref())
-            && !is_fingerprinted_allocation_mismatch(&message)
-        {
+        let must_verify = (authenticated || error_code(&message) == Some(437))
+            && response_requires_integrity(&message);
+        if must_verify && !verify_integrity(packet, &message, inner.key.as_ref()) {
             if message.class() == Class::Error
                 && let Some(code) = error_code(&message)
             {
@@ -443,6 +440,8 @@ impl NativeCore {
             if matches!(code, 401 | 438)
                 && pending.nonce_retries < inner.profile.max_nonce_retries
                 && let (Some(realm), Some(nonce)) = (realm, nonce)
+                && realm.len() <= MAX_AUTH_ATTRIBUTE_LEN
+                && nonce.len() <= MAX_AUTH_ATTRIBUTE_LEN
             {
                 inner.set_auth(realm, nonce);
                 if inner
@@ -467,6 +466,12 @@ impl NativeCore {
         if result.is_err() {
             inner.complete_failure(pending.operation, RESULT_PROTOCOL, 0, now);
             return RESULT_PROTOCOL;
+        }
+        if let Some(nonce) = message.attribute(ATTR_NONCE)
+            && nonce.value.len() <= MAX_AUTH_ATTRIBUTE_LEN
+            && let Some(realm) = inner.realm.clone()
+        {
+            inner.set_auth(realm, nonce.value.to_vec());
         }
         0
     }
@@ -536,20 +541,17 @@ impl NativeCore {
 
     pub(crate) fn pull_control(
         &self,
-        buffer: &mut [u8; 1024],
+        buffer: &mut [u8; 2048],
     ) -> Result<Option<(usize, SocketAddr)>> {
         let mut inner = self.lock();
-        let Some(control) = inner.controls.pop_front() else {
-            return Ok(None);
-        };
-        if control.packet.len() > buffer.len() {
-            bail!(
-                "TURN control dequeue: {}",
-                native_status_text(RESULT_BUFFER_TOO_SMALL)
-            );
+        while let Some(control) = inner.controls.pop_front() {
+            if control.packet.len() > buffer.len() {
+                continue;
+            }
+            buffer[..control.packet.len()].copy_from_slice(&control.packet);
+            return Ok(Some((control.packet.len(), control.destination)));
         }
-        buffer[..control.packet.len()].copy_from_slice(&control.packet);
-        Ok(Some((control.packet.len(), control.destination)))
+        Ok(None)
     }
 
     pub(crate) fn pull_event(&self) -> Result<Option<NativeEvent>> {
@@ -707,6 +709,7 @@ impl Inner {
         authenticated: bool,
     ) -> Result<Vec<u8>> {
         let mut builder = MessageBuilder::with_transaction(operation.method() as u16, transaction);
+        builder = builder.attribute(ATTR_VK_STUN_CUSTOM, &VK_STUN_CUSTOM_VALUE);
         match operation {
             Operation::Allocate => {
                 builder = builder.attribute(ATTR_REQUESTED_TRANSPORT, &[17, 0, 0, 0]);
@@ -1060,8 +1063,6 @@ struct MessageBuilder {
 }
 
 fn set_message_length(bytes: &mut [u8], trailing: usize) -> Result<()> {
-    // The STUN length field is u16; a silent `as u16` truncation would
-    // corrupt the packet header instead of failing the build attempt.
     let length = u16::try_from(bytes.len() - 20 + trailing)
         .context("STUN message too large for u16 length")?;
     bytes[2..4].copy_from_slice(&length.to_be_bytes());
@@ -1147,12 +1148,6 @@ fn response_requires_integrity(message: &Message<'_>) -> bool {
     }
 }
 
-fn is_fingerprinted_allocation_mismatch(message: &Message<'_>) -> bool {
-    message.class() == Class::Error
-        && error_code(message) == Some(437)
-        && message.fingerprint_valid() == Some(true)
-}
-
 fn requires_allocation_recreate(operation: Operation, code: u16) -> bool {
     code == 437 || (operation == Operation::Channel && code == 400)
 }
@@ -1219,7 +1214,6 @@ fn decode_xor_address(value: &[u8], transaction: &[u8; 12]) -> Result<SocketAddr
 pub(crate) fn native_status_text(status: i32) -> String {
     let text = match status {
         0 => "success",
-        RESULT_EMPTY => "empty",
         RESULT_BUFFER_TOO_SMALL => "buffer too small",
         RESULT_INVALID_ARGUMENT => "invalid argument",
         RESULT_CLOSED => "closed",
@@ -1250,7 +1244,7 @@ mod tests {
         )
         .unwrap();
         core.start_allocation().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let initial = Message::decode(&wire[..length]).unwrap();
         let challenge = MessageBuilder::with_transaction(0x0113, initial.transaction())
@@ -1274,7 +1268,7 @@ mod tests {
     }
 
     fn complete_empty_success(core: &NativeCore, method: u16, key: &[u8; 16]) {
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let request = Message::decode(&wire[..length]).unwrap();
         assert_eq!(request.method(), method);
@@ -1302,7 +1296,7 @@ mod tests {
         )
         .unwrap();
         core.start_allocation().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let message = Message::decode(&wire[..length]).unwrap();
         assert_eq!(message.method(), METHOD_ALLOCATE as u16);
@@ -1321,6 +1315,10 @@ mod tests {
         assert_eq!(
             message.attribute(ATTR_LIFETIME).unwrap().value,
             REQUESTED_ALLOCATION_LIFETIME_SECS.to_be_bytes()
+        );
+        assert_eq!(
+            message.attribute(ATTR_VK_STUN_CUSTOM).unwrap().value,
+            VK_STUN_CUSTOM_VALUE
         );
     }
 
@@ -1342,7 +1340,7 @@ mod tests {
         )
         .unwrap();
         core.start_allocation().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let initial = Message::decode(&wire[..length]).unwrap();
         let challenge = MessageBuilder::with_transaction(0x0113, initial.transaction())
@@ -1380,17 +1378,34 @@ mod tests {
     }
 
     #[test]
-    fn fingerprinted_unverified_allocation_mismatch_destroys_allocation() {
+    fn unauthenticated_allocation_mismatch_is_ignored() {
         let (core, _) = ready_core();
         core.lock()
             .start_operation(Operation::Refresh, true, 0)
             .unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let refresh = Message::decode(&wire[..length]).unwrap();
         let mismatch = MessageBuilder::with_transaction(0x0114, refresh.transaction())
             .attribute(ATTR_ERROR_CODE, &[0, 0, 4, 37])
             .finish()
+            .unwrap();
+        assert_eq!(core.input_stun(&mismatch), RESULT_AUTHENTICATION);
+        assert_eq!(core.lock().state, STATE_READY);
+    }
+
+    #[test]
+    fn authenticated_allocation_mismatch_destroys_allocation() {
+        let (core, key) = ready_core();
+        core.lock()
+            .start_operation(Operation::Refresh, true, 0)
+            .unwrap();
+        let mut wire = [0u8; 2048];
+        let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
+        let refresh = Message::decode(&wire[..length]).unwrap();
+        let mismatch = MessageBuilder::with_transaction(0x0114, refresh.transaction())
+            .attribute(ATTR_ERROR_CODE, &[0, 0, 4, 37])
+            .finish_authenticated(&key)
             .unwrap();
         assert_eq!(core.input_stun(&mismatch), 0);
         assert_eq!(core.lock().state, STATE_DESTROYING);
@@ -1400,7 +1415,7 @@ mod tests {
     fn channel_bind_bad_request_destroys_allocation() {
         let (core, key) = ready_core();
         core.start_channel().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let bind = Message::decode(&wire[..length]).unwrap();
         let bad_request = MessageBuilder::with_transaction(0x0119, bind.transaction())
@@ -1421,7 +1436,7 @@ mod tests {
         )
         .unwrap();
         core.start_allocation().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         core.pull_control(&mut wire).unwrap().unwrap();
         let mut inner = core.lock();
         for expected in [400, 800, 1600, 1600, 1600, 1600] {
@@ -1455,7 +1470,7 @@ mod tests {
         )
         .unwrap();
         core.start_allocation().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         core.pull_control(&mut wire).unwrap().unwrap();
         let mut inner = core.lock();
         let deadline = inner.pending[0].next_attempt;
@@ -1482,7 +1497,7 @@ mod tests {
             inner.keepalive = Some(now + Duration::from_secs(1));
         }
         core.poll().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let mut requests = Vec::new();
         while let Some((length, _)) = core.pull_control(&mut wire).unwrap() {
             let request = Message::decode(&wire[..length]).unwrap();
@@ -1556,7 +1571,7 @@ mod tests {
             inner.maintenance_refresh = Some(maintenance_deadline);
         }
         core.start_permission().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         core.pull_control(&mut wire).unwrap().unwrap();
         let mut inner = core.lock();
         for _ in 0..MAX_TRANSMISSIONS {
@@ -1583,7 +1598,7 @@ mod tests {
             inner.maintenance_refresh = Some(now + Duration::from_secs(1));
         }
         core.poll().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         assert_eq!(&wire[..length], &[0x40, 0, 0, 1, 0xff, 0, 0, 0]);
     }
@@ -1609,7 +1624,7 @@ mod tests {
     fn long_scheduler_pause_retransmits_once_and_rebases_the_deadline() {
         let (core, key) = ready_core();
         core.start_channel().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         core.pull_control(&mut wire).unwrap().unwrap();
         let mut inner = core.lock();
         let wake = Instant::now() + Duration::from_secs(11 * 60 * 60);
@@ -1634,7 +1649,7 @@ mod tests {
         let (core, key) = ready_core();
         bind_ready_channel(&core, &key);
         core.start_channel().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         core.pull_control(&mut wire).unwrap().unwrap();
         let mut inner = core.lock();
         for _ in 0..MAX_TRANSMISSIONS {
@@ -1665,7 +1680,7 @@ mod tests {
         let (core, key) = ready_core();
         bind_ready_channel(&core, &key);
         while core.pull_event().unwrap().is_some() {}
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
 
         for attempt in 1..=MAX_CHANNEL_MAINTENANCE_FAILURES {
             core.start_channel().unwrap();
@@ -1741,7 +1756,7 @@ mod tests {
     fn invalid_integrity_keeps_the_existing_transaction_for_retransmission() {
         let (core, _) = ready_core();
         core.start_channel().unwrap();
-        let mut wire = [0u8; 1024];
+        let mut wire = [0u8; 2048];
         let (length, _) = core.pull_control(&mut wire).unwrap().unwrap();
         let request = Message::decode(&wire[..length]).unwrap();
         let response = MessageBuilder::with_transaction(0x0109, request.transaction())

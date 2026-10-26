@@ -1,0 +1,60 @@
+[package]
+edition = "2021"
+rust-version = "1.75.0"
+name = "netstack-smoltcp"
+version = "0.2.4"
+authors = ["cavivie <cavivie@gmail.com>"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "netstack_smoltcp"
+path = "src/lib.rs"
+
+[dependencies.etherparse]
+version = "0.16"
+
+[dependencies.futures]
+version = "0.3"
+
+[dependencies.rand]
+version = "0.8"
+
+[dependencies.smoltcp]
+version = "0.12"
+features = [
+    "std",
+    "log",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv6",
+    "socket-icmp",
+    "socket-udp",
+    "socket-tcp",
+]
+default-features = false
+
+[dependencies.spin]
+version = "0.9"
+
+[dependencies.tokio]
+version = "1"
+features = [
+    "sync",
+    "time",
+    "rt",
+    "macros",
+]
+
+[dependencies.tokio-util]
+version = "0.7.10"
+
+[dependencies.tracing]
+version = "0.1"
+features = ["std"]
+default-features = false

@@ -1,18 +1,19 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
+use crate::model::secret_eq;
 use crate::{
     App, lock_unpoison, log_event,
-    model::{MAX_PASSWORDS, PasswordEntry, is_expired, now, random_password, random_token},
+    model::{
+        self, ClientGroup, PasswordEntry, RoutingRule, is_expired, now, random_password,
+        random_token,
+    },
     protocol, read_unpoison,
 };
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State},
     http::{HeaderMap, Request, StatusCode, header},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post, put},
 };
 use base64::Engine as _;
@@ -21,10 +22,13 @@ use sha2::{Digest, Sha256};
 use std::{
     io::Read,
     net::{Ipv4Addr, SocketAddr},
-    sync::{Arc, LazyLock, Mutex, atomic::Ordering},
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
-use subtle::ConstantTimeEq;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Clone)]
 struct WebState {
@@ -41,10 +45,33 @@ struct LoginRequest {
 struct CreateClientRequest {
     name: String,
     days: i64,
+    #[serde(default)]
+    workers: Option<u32>,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
     hash: String,
-    dtls_port: Option<u16>,
-    wg_port: Option<u16>,
+    #[serde(default)]
+    vk_token: bool,
+    #[serde(default, alias = "dtls_port")]
+    peer_port: Option<u16>,
+    #[serde(default)]
     local_port: Option<u16>,
+    #[serde(default)]
+    group_id: Option<String>,
+}
+
+fn validate_workers(workers: Option<u32>) -> Result<Option<u32>, &'static str> {
+    match workers {
+        None | Some(0) => Ok(None),
+        Some(w) if (3..=100).contains(&w) => Ok(Some(w)),
+        _ => Err("workers must be 0 (default) or between 3 and 100"),
+    }
+}
+
+#[derive(Deserialize)]
+struct ExtendClientRequest {
+    days: i64,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +86,10 @@ struct SettingsRequest {
     dns_secondary: Option<String>,
     #[serde(default)]
     auto_restart_interval_hours: Option<u8>,
+    #[serde(default)]
+    vk_token: Option<String>,
+    #[serde(default)]
+    vk_hashes: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +122,8 @@ const DNS_PROVIDERS: [DnsProvider; 13] = [
     },
     DnsProvider {
         id: "xbox",
-        primary: "111.88.96.50",
-        secondary: "111.88.96.51",
+        primary: "111.88.96.54",
+        secondary: "111.88.96.55",
     },
     DnsProvider {
         id: "comms",
@@ -101,8 +132,8 @@ const DNS_PROVIDERS: [DnsProvider; 13] = [
     },
     DnsProvider {
         id: "geohide",
-        primary: "95.182.120.241",
-        secondary: "37.230.192.51",
+        primary: "193.233.112.67",
+        secondary: "193.233.112.88",
     },
     DnsProvider {
         id: "quad9",
@@ -143,7 +174,11 @@ fn dns_provider_by_id(id: &str) -> Option<DnsProvider> {
         .find(|provider| provider.id == id)
 }
 
-fn dns_provider_id(dns: &str) -> Option<&'static str> {
+pub(crate) fn dns_provider_is_known(id: &str) -> bool {
+    dns_provider_by_id(id).is_some()
+}
+
+pub(crate) fn dns_provider_id(dns: &str) -> Option<&'static str> {
     DNS_PROVIDERS
         .iter()
         .find(|provider| dns == format!("{},{}", provider.primary, provider.secondary))
@@ -154,12 +189,49 @@ fn provider_dns(provider: DnsProvider) -> String {
     format!("{},{}", provider.primary, provider.secondary)
 }
 
+pub(crate) fn provider_dns_by_id(id: &str) -> Option<String> {
+    dns_provider_by_id(id).map(provider_dns)
+}
+
+fn manual_dns(primary: Option<&str>, secondary: Option<&str>) -> Result<String, &'static str> {
+    let Some(primary) = primary else {
+        return Err("primary DNS is required");
+    };
+    let primary = primary.trim();
+    let secondary = secondary.unwrap_or_default().trim();
+    if primary.is_empty() {
+        return Err("primary DNS is required");
+    }
+    if primary.parse::<Ipv4Addr>().is_err()
+        || (!secondary.is_empty() && secondary.parse::<Ipv4Addr>().is_err())
+    {
+        return Err("DNS must be a valid IPv4 address");
+    }
+    Ok(if secondary.is_empty() {
+        primary.to_owned()
+    } else {
+        format!("{primary},{secondary}")
+    })
+}
+
 pub(crate) fn deploy_dns_profile_or_yandex(existing_dns: &str) -> String {
     let addresses: Vec<_> = existing_dns
         .split(',')
         .map(str::trim)
         .filter(|address| !address.is_empty())
         .collect();
+    if addresses
+        .iter()
+        .any(|&a| a == "95.182.120.241" || a == "37.230.192.51")
+    {
+        return "193.233.112.67,193.233.112.88".to_owned();
+    }
+    if addresses
+        .iter()
+        .any(|&a| a == "111.88.96.50" || a == "111.88.96.51")
+    {
+        return "111.88.96.54,111.88.96.55".to_owned();
+    }
     let first = addresses.first().copied();
     let selected = DNS_PROVIDERS
         .iter()
@@ -238,13 +310,199 @@ struct ClientInfo {
     active_sessions: usize,
     vk_hash: String,
     ports: String,
-    device_id: String,
     ip: String,
     name: String,
     vk_hashes: String,
-    dtls_port: u16,
-    wg_port: u16,
+    vk_token: bool,
+    peer_port: u16,
     local_port: u16,
+    #[serde(default)]
+    group_id: String,
+    #[serde(default)]
+    routing_rule_id: String,
+    #[serde(default)]
+    link: String,
+    #[serde(default)]
+    sub_uuid: String,
+    #[serde(default)]
+    workers: Option<u32>,
+}
+
+fn url_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
+}
+
+pub const CSQTT_CIPHER_KEY_SEED: &str = "csqtt-chiper-key";
+
+pub fn encrypt_csqtt_link(payload: &str) -> String {
+    use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+    use base64::Engine;
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::{Digest, Sha256};
+
+    let key_hash = Sha256::digest(CSQTT_CIPHER_KEY_SEED.as_bytes());
+    let unbound = match UnboundKey::new(&AES_256_GCM, &key_hash) {
+        Ok(k) => k,
+        Err(_) => {
+            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+            return format!("csqtt://{b64}");
+        }
+    };
+    let key = LessSafeKey::new(unbound);
+
+    let mut iv = [0u8; 12];
+    type HmacSha256 = Hmac<Sha256>;
+    if let Ok(mut mac) = HmacSha256::new_from_slice(&key_hash) {
+        mac.update(payload.as_bytes());
+        let result = mac.finalize().into_bytes();
+        iv.copy_from_slice(&result[..12]);
+    } else {
+        use rand::RngCore;
+        rand::rngs::OsRng.fill_bytes(&mut iv);
+    }
+    let nonce = match Nonce::try_assume_unique_for_key(&iv) {
+        Ok(n) => n,
+        Err(_) => {
+            let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+            return format!("csqtt://{b64}");
+        }
+    };
+
+    let mut in_out = payload.as_bytes().to_vec();
+    if key
+        .seal_in_place_append_tag(nonce, Aad::empty(), &mut in_out)
+        .is_err()
+    {
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        return format!("csqtt://{b64}");
+    }
+
+    let mut combined = Vec::with_capacity(12 + in_out.len());
+    combined.extend_from_slice(&iv);
+    combined.extend_from_slice(&in_out);
+
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&combined);
+    format!("csqtt://{b64}")
+}
+
+#[allow(dead_code)]
+pub fn decrypt_csqtt_link(raw_link: &str) -> Option<String> {
+    use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    let payload = raw_link.trim().strip_prefix("csqtt://")?.trim();
+    let clean = payload.replace(['\n', '\r'], "");
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&clean)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&clean))
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&clean))
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(&clean))
+        .ok()?;
+
+    if bytes.len() >= 28 {
+        let key_hash = Sha256::digest(CSQTT_CIPHER_KEY_SEED.as_bytes());
+        if let Ok(unbound) = UnboundKey::new(&AES_256_GCM, &key_hash) {
+            let key = LessSafeKey::new(unbound);
+            let mut iv = [0u8; 12];
+            iv.copy_from_slice(&bytes[..12]);
+            if let Ok(nonce) = Nonce::try_assume_unique_for_key(&iv) {
+                let mut ciphertext = bytes[12..].to_vec();
+                if let Ok(decrypted) = key.open_in_place(nonce, Aad::empty(), &mut ciphertext)
+                    && let Ok(s) = String::from_utf8(decrypted.to_vec())
+                {
+                    return Some(s);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn make_client_link(
+    host: &str,
+    port: u16,
+    password: &str,
+    vk_hashes: &str,
+    vk_token: bool,
+    shared_token: &str,
+) -> String {
+    let mut payload = format!(
+        "connect?v=2&host={}&peer={}",
+        url_encode(host),
+        if port == 0 { 46000 } else { port },
+    );
+    if !password.is_empty() {
+        payload.push_str("&password=");
+        payload.push_str(&url_encode(password));
+    }
+    let hashes: Vec<&str> = vk_hashes
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !hashes.is_empty() {
+        payload.push_str("&hashes=");
+        payload.push_str(
+            &hashes
+                .iter()
+                .map(|h| url_encode(h))
+                .collect::<Vec<_>>()
+                .join("+"),
+        );
+    } else if vk_token && !shared_token.is_empty() {
+        payload.push_str("&token=");
+        payload.push_str(&url_encode(shared_token));
+    }
+    encrypt_csqtt_link(&payload)
+}
+
+#[inline]
+fn make_main_link(host: &str, port: u16, db: &model::Database) -> String {
+    let vk_hashes = if db.main_vk_hashes.is_empty() {
+        &db.vk_hashes
+    } else {
+        &db.main_vk_hashes
+    };
+    make_client_link(
+        host,
+        port,
+        &db.main_password,
+        vk_hashes,
+        db.main_vk_token_enabled,
+        &db.vk_access_token,
+    )
+}
+
+#[inline]
+fn make_entry_link(
+    host: &str,
+    port: u16,
+    password: &str,
+    entry: &model::PasswordEntry,
+    shared_token: &str,
+) -> String {
+    make_client_link(
+        host,
+        port,
+        password,
+        &entry.vk_hashes,
+        entry.vk_token_enabled,
+        shared_token,
+    )
 }
 
 const CAESAR_SHIFT: u8 = 47;
@@ -281,20 +539,68 @@ fn cookie_tokens(headers: &HeaderMap) -> Vec<String> {
         .collect()
 }
 
-fn constant_equal(left: &str, right: &str) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.as_bytes().ct_eq(right.as_bytes()).into()
-}
-
 fn authorized(app: &App, headers: &HeaderMap) -> bool {
-    cookie_tokens(headers).iter().any(|token| {
+    if cookie_tokens(headers).iter().any(|token| {
         app.web_sessions
             .get(&hash_token(token))
             .map(|expiry| *expiry > now())
             .unwrap_or(false)
-    })
+    }) {
+        return true;
+    }
+
+    if let Some(key) = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        && !key.is_empty()
+    {
+        if secret_eq(key, &app.web_pass) || secret_eq(key, &app.startup_main_password) {
+            return true;
+        }
+        if let Ok(db) = app.db.try_read()
+            && secret_eq(key, &db.main_password)
+        {
+            return true;
+        }
+        if app
+            .web_sessions
+            .get(&hash_token(key))
+            .is_some_and(|expiry| *expiry > now())
+        {
+            return true;
+        }
+    }
+
+    if let Some(auth) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        && let Some(token) = auth
+            .strip_prefix("Bearer ")
+            .or_else(|| auth.strip_prefix("bearer "))
+    {
+        let token = token.trim();
+        if !token.is_empty() {
+            if secret_eq(token, &app.web_pass) || secret_eq(token, &app.startup_main_password) {
+                return true;
+            }
+            if let Ok(db) = app.db.try_read()
+                && secret_eq(token, &db.main_password)
+            {
+                return true;
+            }
+            if app
+                .web_sessions
+                .get(&hash_token(token))
+                .is_some_and(|expiry| *expiry > now())
+            {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 async fn auth_middleware(
@@ -305,9 +611,23 @@ async fn auth_middleware(
     if authorized(&state.app, request.headers()) {
         return next.run(request).await;
     }
+    let has_auth_header = request.headers().contains_key("x-api-key")
+        || request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.starts_with("Bearer ") || s.starts_with("bearer "))
+            .unwrap_or(false)
+        || !cookie_tokens(request.headers()).is_empty();
+
+    if !has_auth_header {
+        if let Some(token) = request.extensions().get::<Arc<StealthAbortController>>() {
+            token.abort();
+        }
+        return stealth_abort_response();
+    }
+
     let mut response = StatusCode::UNAUTHORIZED.into_response();
-    // Clear the cookie only when the client actually presented one; an
-    // unconditional delete header on every 401 fights concurrent sessions.
     if !cookie_tokens(request.headers()).is_empty() {
         response.headers_mut().insert(
             header::SET_COOKIE,
@@ -318,40 +638,38 @@ async fn auth_middleware(
 }
 
 fn expired_session_cookie() -> &'static str {
-    "csqtt_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure"
+    "csqtt_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure"
 }
 
-// The plain-HTTP redirect echoes the client Host header into Location.
-// Restrict it to plausible host forms and an optional configured allowlist so
-// a crafted Host cannot bounce visitors to a third-party origin.
-fn is_safe_redirect_host(host: &str) -> bool {
-    if host.is_empty() || host.len() > 255 {
-        return false;
-    }
-    if !host.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
-    }) {
-        return false;
-    }
-    if let Ok(allowed) = std::env::var("CSQTT_WEB_HOSTS") {
-        let allowed = allowed.trim();
-        if !allowed.is_empty() {
-            return allowed
-                .split(',')
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-                .any(|entry| entry.eq_ignore_ascii_case(host));
-        }
-    }
-    true
+const STEALTH_ABORT_HEADER: &str = "x-csqtt-stealth-rst";
+
+fn stealth_abort_response() -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::HeaderName::from_static(STEALTH_ABORT_HEADER), "1"),
+            (header::CONNECTION, "close"),
+        ],
+        "",
+    )
+        .into_response()
 }
 
-async fn root(State(state): State<WebState>, headers: HeaderMap) -> Response {
-    if authorized(&state.app, &headers) {
-        return Html(PANEL_HTML).into_response();
+fn render_root(state: &WebState, headers: &HeaderMap) -> Response {
+    if authorized(&state.app, headers) {
+        let mut response = Html(PANEL_HTML).into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
+        );
+        return response;
     }
-    let mut response = (StatusCode::UNAUTHORIZED, Html(LOGIN_HTML)).into_response();
-    if !cookie_tokens(&headers).is_empty() {
+    let mut response = Html(LOGIN_HTML).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
+    );
+    if !cookie_tokens(headers).is_empty() {
         response.headers_mut().insert(
             header::SET_COOKIE,
             expired_session_cookie().parse().unwrap(),
@@ -360,8 +678,23 @@ async fn root(State(state): State<WebState>, headers: HeaderMap) -> Response {
     response
 }
 
+async fn panel_root(State(state): State<WebState>, headers: HeaderMap) -> Response {
+    render_root(&state, &headers)
+}
+
+async fn favicon() -> Response {
+    pwa_response(PWA_ICON_SVG, "image/svg+xml", "public, max-age=604800")
+}
+
+async fn fallback_reject(token: Option<Extension<Arc<StealthAbortController>>>) -> Response {
+    if let Some(Extension(controller)) = token {
+        controller.abort();
+    }
+    stealth_abort_response()
+}
+
 fn pwa_response(
-    body: &'static str,
+    body: impl IntoResponse,
     content_type: &'static str,
     cache_control: &'static str,
 ) -> Response {
@@ -396,12 +729,56 @@ fn pwa_binary_response(
     response
 }
 
-async fn pwa_manifest() -> Response {
-    pwa_response(
-        PWA_MANIFEST,
-        "application/manifest+json; charset=utf-8",
-        "no-cache",
-    )
+async fn root_with_secret(
+    State(state): State<WebState>,
+    headers: HeaderMap,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    if authorized(&state.app, &headers) {
+        let secret = state.app.web_secret_path.trim().trim_matches('/');
+        let target = if secret.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}/", secret)
+        };
+        return Redirect::temporary(&target).into_response();
+    }
+    fallback_reject(token).await
+}
+
+async fn pwa_manifest(State(state): State<WebState>) -> Response {
+    let secret = state.app.web_secret_path.trim().trim_matches('/');
+    if secret.is_empty() {
+        pwa_response(
+            PWA_MANIFEST,
+            "application/manifest+json; charset=utf-8",
+            "no-cache",
+        )
+    } else {
+        let prefix = format!("/{}", secret);
+        let base = format!("{}/", prefix);
+        let manifest = PWA_MANIFEST
+            .replace("\"id\": \"/\"", &format!("\"id\": \"{}\"", base))
+            .replace(
+                "\"start_url\": \"/\"",
+                &format!("\"start_url\": \"{}\"", base),
+            )
+            .replace("\"scope\": \"/\"", &format!("\"scope\": \"{}\"", base))
+            .replace(
+                "\"/pwa-icon-192.png\"",
+                &format!("\"{}/pwa-icon-192.png\"", prefix),
+            )
+            .replace(
+                "\"/pwa-icon-512.png\"",
+                &format!("\"{}/pwa-icon-512.png\"", prefix),
+            )
+            .replace("\"/pwa-icon.svg\"", &format!("\"{}/pwa-icon.svg\"", prefix));
+        pwa_response(
+            manifest,
+            "application/manifest+json; charset=utf-8",
+            "no-cache",
+        )
+    }
 }
 
 async fn pwa_service_worker() -> Response {
@@ -437,6 +814,14 @@ async fn pwa_icon_512() -> Response {
     )
 }
 
+async fn qrcode_js() -> Response {
+    pwa_response(
+        QRCODE_JS,
+        "application/javascript; charset=utf-8",
+        "public, max-age=604800, immutable",
+    )
+}
+
 async fn login(
     State(state): State<WebState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -446,9 +831,6 @@ async fn login(
     if let Err(message) = validate_login_request(&request) {
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
-    // Rate-limit by the real socket address: a client-supplied XFF value can
-    // mint fresh lockout buckets, and a shared XFF value would lock out whole
-    // NAT networks. XFF is informational only.
     let source = addr.ip().to_string();
     if let Ok(forwarded) = std::env::var("CSQTT_TRUST_XFF")
         && (forwarded == "1" || forwarded.eq_ignore_ascii_case("true"))
@@ -477,8 +859,7 @@ async fn login(
 
     let user = caesar_decode(&request.user);
     let pass = caesar_decode(&request.pass);
-    let valid =
-        constant_equal(&user, &state.app.web_user) & constant_equal(&pass, &state.app.web_pass);
+    let valid = secret_eq(&user, &state.app.web_user) & secret_eq(&pass, &state.app.web_pass);
 
     if !valid {
         if !state.record_failed_login(source, current) {
@@ -497,8 +878,13 @@ async fn login(
             .into_response();
     }
     let cookie =
-        format!("csqtt_session={token}; Path=/; Max-Age=86400; HttpOnly; SameSite=Strict; Secure");
-    (StatusCode::OK, [(header::SET_COOKIE, cookie)], "ok").into_response()
+        format!("csqtt_session={token}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure");
+    let mut response = (StatusCode::OK, [(header::SET_COOKIE, cookie)], "ok").into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
+    );
+    response
 }
 
 impl WebState {
@@ -562,9 +948,6 @@ async fn logout_all(State(state): State<WebState>) -> Response {
         .into_response()
 }
 
-// Handlers call this after the DB change is committed. A failed engine reload
-// must not read as a failed request — the client would retry and duplicate the
-// change — so the error is reported as a warning instead of a 500.
 async fn refresh_credentials_report(state: &WebState) -> Result<(), String> {
     match crate::protocol::refresh_credentials(&state.app).await {
         Ok(()) => Ok(()),
@@ -581,10 +964,6 @@ async fn refresh_credentials_report(state: &WebState) -> Result<(), String> {
     }
 }
 
-/// A mutating API must not report success until its SQLite transaction has
-/// completed.  The in-memory state remains available if persistence fails, but
-/// callers receive a clear 5xx instead of a misleading 200 that vanishes on
-/// the next restart.
 async fn wait_for_persistence(state: &WebState, revision: u64) -> Result<(), Response> {
     match tokio::time::timeout(
         Duration::from_secs(15),
@@ -812,6 +1191,8 @@ async fn stats(State(state): State<WebState>, _headers: HeaderMap) -> impl IntoR
         "cpu_capacity": cpu_capacity,
         "cpu_normalized": cpu_normalized,
         "status": "Active",
+        "peer_port": state.app.listen.port(),
+        "public_ip": state.app.public_ip.read().await.clone(),
         "uptime": now().saturating_sub(state.app.started),
         "active": state.app.sessions.len(),
         "total": state.app.total_connections.load(Ordering::Relaxed),
@@ -824,8 +1205,7 @@ async fn stats(State(state): State<WebState>, _headers: HeaderMap) -> impl IntoR
         "udp_tx_bytes": io.udp_tx_bytes,
         "udp_tx_errors": io.udp_tx_errors,
         "passwords": db.passwords.len(),
-        "devices": db.devices.len(),
-        "transport": "RTP/ChaCha20-Poly1305",
+        "transport": "RTP/SRTP",
         "tunnel": "userspace-tun",
         "allocator": crate::allocator_name(),
         "local_proxy_enabled": !db.local_proxy.active_profile_id.is_empty(),
@@ -843,8 +1223,8 @@ async fn stats(State(state): State<WebState>, _headers: HeaderMap) -> impl IntoR
         "hot_session_capacity": protocol::HOT_SESSION_CAPACITY_GAUGE.load(Ordering::Relaxed),
         "public_session_capacity": state.app.sessions.capacity(),
         "mem_engine_epochs": protocol::epoch_snapshot_len(),
-        "mem_device_epochs": state.app.device_epochs.len(),
-        "mem_device_epoch_capacity": state.app.device_epochs.capacity(),
+        "mem_password_epochs": state.app.password_epochs.len(),
+        "mem_password_epoch_capacity": state.app.password_epochs.capacity(),
         "mem_derived_keys": state.app.derived_keys.len(),
         "mem_web_sessions": state.app.web_sessions.len(),
         "mem_web_session_capacity": MAX_WEB_SESSIONS,
@@ -864,8 +1244,6 @@ async fn memory_trim(State(state): State<WebState>) -> Response {
     match crate::trim_memory(&state.app).await {
         Ok(allocator_collected) => Json(serde_json::json!({
             "compacted": true,
-            // Application buffers and tables are compacted on the dataplane
-            // thread. The system allocator has no portable explicit trim API.
             "allocator_collected": allocator_collected,
             "allocator_collection_scope": "not-supported-by-system-allocator",
             "trim_count": state.app.memory_trim_count.load(Ordering::Relaxed),
@@ -894,13 +1272,30 @@ async fn settings_get(State(state): State<WebState>) -> impl IntoResponse {
     let mut parts = dns.splitn(2, ',');
     let primary = parts.next().unwrap_or("77.88.8.8").trim().to_owned();
     let secondary = parts.next().unwrap_or("77.88.8.1").trim().to_owned();
-    let provider = dns_provider_id(&dns).unwrap_or("custom");
+    let provider = if db.dns_provider == "custom" || dns_provider_by_id(&db.dns_provider).is_some()
+    {
+        db.dns_provider.as_str()
+    } else {
+        dns_provider_id(&dns).unwrap_or("custom")
+    };
+    let vk_hashes = if !db.vk_hashes.is_empty() {
+        db.vk_hashes.clone()
+    } else {
+        db.passwords
+            .values()
+            .find(|p| !p.vk_hashes.is_empty())
+            .map(|p| p.vk_hashes.clone())
+            .unwrap_or_default()
+    };
     Json(serde_json::json!({
         "main_password": db.main_password,
         "dns_provider": provider,
         "dns_primary": primary,
         "dns_secondary": secondary,
         "auto_restart_interval_hours": db.auto_restart_interval_hours(),
+        "vk_token": db.vk_access_token,
+        "vk_hashes": vk_hashes,
+        "peer_port": state.app.listen.port(),
         "restart_required": db.main_password != state.app.startup_main_password
     }))
 }
@@ -911,44 +1306,36 @@ async fn settings_post(
 ) -> Response {
     if let Some(password) = request.main_password.as_ref()
         && !password.is_empty()
-        && (password.len() < 4 || password.len() > 128)
+        && password.len() > 128
     {
         return (
             StatusCode::BAD_REQUEST,
-            "password length must be 4..128 or empty",
+            "password length must be 1..128 or empty",
         )
             .into_response();
     }
-    let dns = if let Some(provider_id) = request.dns_provider.as_deref() {
-        let Some(provider) = dns_provider_by_id(provider_id) else {
-            return (StatusCode::BAD_REQUEST, "unknown DNS provider").into_response();
-        };
-        Some(provider_dns(provider))
-    } else {
-        match (&request.dns_primary, &request.dns_secondary) {
-            (None, None) => None,
-            (Some(primary), secondary) => {
-                let primary = primary.trim();
-                let secondary = secondary.as_deref().unwrap_or_default().trim();
-                if primary.is_empty() {
-                    return (StatusCode::BAD_REQUEST, "primary DNS is required").into_response();
-                }
-                if primary.parse::<Ipv4Addr>().is_err()
-                    || (!secondary.is_empty() && secondary.parse::<Ipv4Addr>().is_err())
-                {
-                    return (StatusCode::BAD_REQUEST, "DNS must be a valid IPv4 address")
-                        .into_response();
-                }
-                Some(if secondary.is_empty() {
-                    primary.to_owned()
-                } else {
-                    format!("{primary},{secondary}")
-                })
-            }
-            (None, Some(_)) => {
-                return (StatusCode::BAD_REQUEST, "primary DNS is required").into_response();
+    let dns = match request.dns_provider.as_deref() {
+        Some("custom") | None
+            if request.dns_primary.is_some() || request.dns_secondary.is_some() =>
+        {
+            match manual_dns(
+                request.dns_primary.as_deref(),
+                request.dns_secondary.as_deref(),
+            ) {
+                Ok(dns) => Some((dns, "custom".to_owned())),
+                Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
             }
         }
+        Some("custom") => {
+            return (StatusCode::BAD_REQUEST, "primary DNS is required").into_response();
+        }
+        Some(provider_id) => {
+            let Some(provider) = dns_provider_by_id(provider_id) else {
+                return (StatusCode::BAD_REQUEST, "unknown DNS provider").into_response();
+            };
+            Some((provider_dns(provider), provider_id.to_owned()))
+        }
+        None => None,
     };
     if let Some(hours) = request.auto_restart_interval_hours
         && !matches!(hours, 0 | 12 | 24 | 48 | 72)
@@ -959,21 +1346,51 @@ async fn settings_post(
         )
             .into_response();
     }
+    let requested_vk_access_token = match request.vk_token {
+        Some(token) => match normalize_vk_access_token(&token) {
+            Ok(token) => Some(token),
+            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        },
+        None => None,
+    };
+    let requested_vk_hashes = match request.vk_hashes {
+        Some(raw) => match normalize_client_vk_hashes(&raw) {
+            Ok(hashes) => Some(hashes),
+            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        },
+        None => None,
+    };
     let requested_auto_restart_interval = request.auto_restart_interval_hours;
     let (revision, retired_main_password, applied_dns) = {
         let mut db = state.app.db.write().await;
         let retired_main_password = if let Some(password) = request.main_password {
+            if db.passwords.contains_key(&password) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Пароль совпадает с паролем клиента",
+                )
+                    .into_response();
+            }
             (db.main_password != password)
                 .then(|| std::mem::replace(&mut db.main_password, password))
         } else {
             None
         };
-        let applied_dns = dns.filter(|dns| db.dns != *dns);
-        if let Some(dns) = applied_dns.as_ref() {
+        let applied_dns = dns
+            .as_ref()
+            .and_then(|(dns, _)| (db.dns != *dns).then(|| dns.clone()));
+        if let Some((dns, provider)) = dns.as_ref() {
             db.dns.clone_from(dns);
+            db.dns_provider.clone_from(provider);
         }
         if let Some(hours) = requested_auto_restart_interval {
             db.set_auto_restart_interval_hours(hours);
+        }
+        if let Some(token) = requested_vk_access_token {
+            db.vk_access_token = token;
+        }
+        if let Some(hashes) = requested_vk_hashes {
+            db.vk_hashes = hashes;
         }
         (
             state.app.db_persistence.submit(db.clone()),
@@ -1028,77 +1445,282 @@ async fn settings_post(
     Json(serde_json::json!({ "restart_required": restart_required })).into_response()
 }
 
-async fn clients_get(State(state): State<WebState>) -> impl IntoResponse {
-    let db = state.app.db.read().await;
-    let mut session_counts = std::collections::HashMap::new();
-    for entry in state.app.sessions.iter() {
-        *session_counts
-            .entry(entry.value().password.clone())
-            .or_insert(0) += 1;
+fn is_valid_hostname(name: &str) -> bool {
+    if name.is_empty() || name.len() > 253 {
+        return false;
     }
+    name.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    })
+}
+
+fn parse_host_header(host: &str) -> Option<(String, Option<String>)> {
+    let host = host.trim();
+    if host.is_empty() || host.len() > 255 {
+        return None;
+    }
+    let (name, port) = if let Some(rest) = host.strip_prefix('[') {
+        let (name, rest) = rest.split_once(']')?;
+        let port = match rest.strip_prefix(':') {
+            Some(p) => Some(p.to_string()),
+            None if rest.is_empty() => None,
+            None => return None,
+        };
+        (name.to_string(), port)
+    } else if let Some((name, port)) = host.rsplit_once(':') {
+        (name.to_string(), Some(port.to_string()))
+    } else {
+        (host.to_string(), None)
+    };
+
+    if let Some(port) = port.as_deref()
+        && (port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+
+    if name.parse::<std::net::IpAddr>().is_err() && !is_valid_hostname(&name) {
+        return None;
+    }
+    Some((name, port))
+}
+
+async fn resolve_client_host(headers: &HeaderMap, state: &WebState) -> String {
+    let host_header = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .and_then(parse_host_header)
+        .map(|(name, _)| name)
+        .unwrap_or_default();
+
+    let is_local_or_unspecified = host_header.is_empty()
+        || host_header == "0.0.0.0"
+        || host_header == "127.0.0.1"
+        || host_header == "localhost"
+        || host_header == "::1";
+
+    if !is_local_or_unspecified {
+        return host_header.to_string();
+    }
+
+    let public_ip = state.app.public_ip.read().await.clone();
+    if !public_ip.is_empty() && public_ip != "0.0.0.0" && public_ip != "127.0.0.1" {
+        return public_ip;
+    }
+
+    let listen_ip = state.app.listen.ip().to_string();
+    if listen_ip != "0.0.0.0" && listen_ip != "127.0.0.1" {
+        return listen_ip;
+    }
+
+    if !host_header.is_empty() {
+        return host_header.to_string();
+    }
+
+    "0.0.0.0".to_string()
+}
+
+#[derive(Deserialize, Default)]
+struct ClientListQuery {
+    #[serde(default)]
+    group_id: Option<String>,
+    #[serde(default)]
+    active: Option<bool>,
+    #[serde(default)]
+    search: Option<String>,
+}
+
+fn count_active_sessions(
+    sessions: &dashmap::DashMap<u64, Arc<crate::protocol::Session>>,
+    password: &str,
+) -> usize {
+    if password.is_empty() {
+        return 0;
+    }
+    let mut count = 0;
+    for entry in sessions.iter() {
+        if entry.value().password == password {
+            count += 1;
+        }
+    }
+    count
+}
+
+async fn clients_get(
+    State(state): State<WebState>,
+    headers: HeaderMap,
+    Query(query): Query<ClientListQuery>,
+) -> impl IntoResponse {
+    let db = state.app.db.read().await;
+    let host = resolve_client_host(&headers, &state).await;
 
     let mut list: Vec<ClientInfo> = db
         .passwords
         .iter()
-        .map(|(password, entry)| ClientInfo {
-            password: password.clone(),
-            down: entry.down_bytes,
-            up: entry.up_bytes,
-            expires: entry.expires_at,
-            active: !entry.is_deactivated && !is_expired(entry),
-            active_sessions: session_counts.get(password).copied().unwrap_or(0),
-            vk_hash: entry.vk_hash.clone(),
-            ports: entry.ports.clone(),
-            device_id: entry.device_id.clone(),
-            ip: db
-                .devices
-                .get(&entry.device_id)
-                .map(|d| d.ip.clone())
-                .unwrap_or_default(),
-            name: entry.name.clone(),
-            vk_hashes: entry.vk_hashes.clone(),
-            dtls_port: entry.dtls_port,
-            wg_port: entry.wg_port,
-            local_port: entry.local_port,
+        .map(|(password, entry)| {
+            let client_peer_port = if entry.dtls_port == 0 {
+                state.app.listen.port()
+            } else {
+                entry.dtls_port
+            };
+            ClientInfo {
+                password: password.clone(),
+                down: entry.down_bytes,
+                up: entry.up_bytes,
+                expires: entry.expires_at,
+                active: !entry.is_deactivated && !is_expired(entry),
+                active_sessions: count_active_sessions(&state.app.sessions, password),
+                vk_hash: entry.vk_hash.clone(),
+                ports: entry.ports.clone(),
+                ip: if entry.ip.is_empty() {
+                    "10.66.67.3".to_string()
+                } else {
+                    entry.ip.clone()
+                },
+                name: entry.name.clone(),
+                vk_hashes: entry.vk_hashes.clone(),
+                vk_token: entry.vk_token_enabled,
+                peer_port: client_peer_port,
+                local_port: entry.local_port,
+                group_id: entry.group_id.clone(),
+                routing_rule_id: entry.routing_rule_id.clone(),
+                link: make_entry_link(
+                    &host,
+                    client_peer_port,
+                    password,
+                    entry,
+                    &db.vk_access_token,
+                ),
+                sub_uuid: entry.sub_uuid.clone(),
+                workers: entry.workers,
+            }
         })
         .collect();
     if !db.main_password.is_empty() {
         let mut session_up = 0;
         let mut session_down = 0;
-        if let Some(s) = state
-            .app
-            .sessions
-            .iter()
-            .find(|s| s.password == db.main_password)
-        {
-            session_up = s.up_bytes.load(Ordering::Relaxed) as i64;
-            session_down = s.down_bytes.load(Ordering::Relaxed) as i64;
+        for s in state.app.sessions.iter() {
+            let sess = s.value();
+            if secret_eq(&sess.password, &db.main_password) {
+                session_up += sess.up_bytes.load(Ordering::Relaxed) as i64;
+                session_down += sess.down_bytes.load(Ordering::Relaxed) as i64;
+            }
         }
 
+        let main_peer_port = state.app.listen.port();
         list.push(ClientInfo {
             password: db.main_password.clone(),
             down: db.main_down_bytes + session_down,
             up: db.main_up_bytes + session_up,
             expires: 0,
             active: true,
-            active_sessions: session_counts.get(&db.main_password).copied().unwrap_or(0),
+            active_sessions: count_active_sessions(&state.app.sessions, &db.main_password),
             vk_hash: String::new(),
             ports: String::new(),
-            device_id: db.main_device_id.clone(),
-            ip: db
-                .devices
-                .get(&db.main_device_id)
-                .map(|d| d.ip.clone())
-                .unwrap_or_else(|| "Сервер".to_string()),
-            name: "Главный пароль".to_string(),
-            vk_hashes: String::new(),
-            dtls_port: 0,
-            wg_port: 0,
+            ip: "10.66.67.2".to_string(),
+            name: "Владелец".to_string(),
+            vk_hashes: if db.main_vk_hashes.is_empty() {
+                db.vk_hashes.clone()
+            } else {
+                db.main_vk_hashes.clone()
+            },
+            vk_token: db.main_vk_token_enabled,
+            peer_port: main_peer_port,
             local_port: 0,
+            group_id: String::new(),
+            routing_rule_id: db.main_routing_rule_id.clone(),
+            link: make_main_link(&host, main_peer_port, &db),
+            sub_uuid: db.main_sub_uuid.clone(),
+            workers: db.main_workers,
         });
     }
 
+    if let Some(ref gid) = query.group_id {
+        let g = gid.trim();
+        if g == "root" || g == "ungrouped" {
+            list.retain(|c| c.group_id.is_empty());
+        } else {
+            list.retain(|c| c.group_id == g);
+        }
+    }
+    if let Some(act) = query.active {
+        list.retain(|c| c.active == act);
+    }
+    if let Some(ref s) = query.search {
+        let q = s.trim().to_lowercase();
+        if !q.is_empty() {
+            list.retain(|c| {
+                c.name.to_lowercase().contains(&q) || c.password.to_lowercase().contains(&q)
+            });
+        }
+    }
+
     Json(list)
+}
+
+async fn group_clients_get(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let db = state.app.db.read().await;
+    if !db.groups.contains_key(&id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "group not found" })),
+        )
+            .into_response();
+    }
+    let host = resolve_client_host(&headers, &state).await;
+    let effective_vk_token = db
+        .groups
+        .get(&id)
+        .and_then(|g| g.vk_token.as_deref())
+        .unwrap_or(&db.vk_access_token);
+    let list: Vec<ClientInfo> = db
+        .passwords
+        .iter()
+        .filter(|(_, entry)| entry.group_id == id)
+        .map(|(password, entry)| {
+            let client_peer_port = if entry.dtls_port == 0 {
+                state.app.listen.port()
+            } else {
+                entry.dtls_port
+            };
+            ClientInfo {
+                password: password.clone(),
+                down: entry.down_bytes,
+                up: entry.up_bytes,
+                expires: entry.expires_at,
+                active: !entry.is_deactivated && !is_expired(entry),
+                active_sessions: count_active_sessions(&state.app.sessions, password),
+                vk_hash: entry.vk_hash.clone(),
+                ports: entry.ports.clone(),
+                ip: if entry.ip.is_empty() {
+                    "10.66.67.3".to_string()
+                } else {
+                    entry.ip.clone()
+                },
+                name: entry.name.clone(),
+                vk_hashes: entry.vk_hashes.clone(),
+                vk_token: entry.vk_token_enabled,
+                peer_port: client_peer_port,
+                local_port: entry.local_port,
+                group_id: entry.group_id.clone(),
+                routing_rule_id: entry.routing_rule_id.clone(),
+                link: make_entry_link(&host, client_peer_port, password, entry, effective_vk_token),
+                sub_uuid: entry.sub_uuid.clone(),
+                workers: entry.workers,
+            }
+        })
+        .collect();
+    Json(list).into_response()
 }
 
 fn normalize_client_vk_hashes(raw: &str) -> Result<String, &'static str> {
@@ -1119,8 +1741,20 @@ fn normalize_client_vk_hashes(raw: &str) -> Result<String, &'static str> {
     Ok(hashes.join(","))
 }
 
+fn normalize_vk_access_token(raw: &str) -> Result<String, &'static str> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return Ok(String::new());
+    }
+    if token.len() > 4096 || token.chars().any(char::is_whitespace) {
+        return Err("VK token is too long or contains whitespace");
+    }
+    Ok(token.to_owned())
+}
+
 async fn clients_create(
     State(state): State<WebState>,
+    headers: HeaderMap,
     Json(request): Json<CreateClientRequest>,
 ) -> Response {
     if let Err(message) = validate_client_name(&request.name) {
@@ -1133,24 +1767,69 @@ async fn clients_create(
         Ok(value) => value,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
+    if request.vk_token && !vk_hashes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "choose VK hashes or VK token").into_response();
+    }
 
-    let dtls_port = request.dtls_port.unwrap_or(46000);
-    let wg_port = request.wg_port.unwrap_or(46001);
+    let default_peer_port = state.app.listen.port();
+    let peer_port = request.peer_port.unwrap_or(default_peer_port);
     let local_port = request.local_port.unwrap_or(0);
-    let ports = format!("{},{},{}", dtls_port, wg_port, local_port);
+    let ports = format!("{},0,{}", peer_port, local_port);
+    let group_id = request.group_id.unwrap_or_default();
+    let validated_workers = match validate_workers(request.workers) {
+        Ok(w) => w,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
 
-    let result = {
+    let host = resolve_client_host(&headers, &state).await;
+
+    let (password, expires, revision, link, sub_uuid) = {
         let mut db = state.app.db.write().await;
-        db.passwords.retain(|_, entry| !is_expired(entry));
-        if db.passwords.len() >= MAX_PASSWORDS {
-            return (StatusCode::BAD_REQUEST, "limit reached").into_response();
+        if request.vk_token && db.vk_access_token.is_empty() {
+            return (StatusCode::BAD_REQUEST, "configure a VK token first").into_response();
         }
-        let password = (0..64)
-            .map(|_| random_password())
-            .find(|candidate| !db.passwords.contains_key(candidate));
+        db.passwords.retain(|_, entry| !is_expired(entry));
 
-        let Some(password) = password else {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        let client_name = if request.name.trim().is_empty() {
+            model::generate_unique_client_name(model::existing_client_names_in_scope(
+                &db, &group_id, None,
+            ))
+        } else {
+            let trimmed = request.name.trim().to_string();
+            if model::is_client_name_taken(
+                model::existing_client_names_in_scope(&db, &group_id, None),
+                &trimmed,
+            ) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Участник с таким именем уже существует",
+                )
+                    .into_response();
+            }
+            trimmed
+        };
+
+        let password = if let Some(ref custom_pw) = request.password {
+            let pw = custom_pw.trim();
+            if pw.is_empty() || pw.len() > 128 {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "password must be 1..128 characters",
+                )
+                    .into_response();
+            }
+            if db.passwords.contains_key(pw) || pw == db.main_password {
+                return (StatusCode::BAD_REQUEST, "password already exists").into_response();
+            }
+            pw.to_string()
+        } else {
+            let candidate = (0..64)
+                .map(|_| random_password())
+                .find(|c| !db.passwords.contains_key(c) && c != &db.main_password);
+            let Some(p) = candidate else {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            };
+            p
         };
 
         let expires = if request.days == 0 {
@@ -1158,39 +1837,58 @@ async fn clients_create(
         } else {
             now().saturating_add(request.days.saturating_mul(86400))
         };
+        let sub_uuid = model::random_uuid_v4();
+        let ip = model::get_next_ip(&db).unwrap_or_default();
         db.passwords.insert(
             password.clone(),
             PasswordEntry {
-                device_id: String::new(),
+                ip,
                 expires_at: expires,
                 down_bytes: 0,
                 up_bytes: 0,
                 vk_hash: vk_hashes.clone(),
                 ports,
                 is_deactivated: false,
-                name: request.name.clone(),
+                name: client_name,
                 vk_hashes: vk_hashes.clone(),
-                dtls_port,
-                wg_port,
+                vk_token_enabled: request.vk_token,
+                dtls_port: peer_port,
+                wg_port: 0,
                 local_port,
+                group_id: group_id.clone(),
+                routing_rule_id: String::new(),
+                sub_uuid: sub_uuid.clone(),
+                workers: validated_workers,
             },
         );
+        let link = make_client_link(
+            &host,
+            peer_port,
+            &password,
+            &vk_hashes,
+            request.vk_token,
+            &db.vk_access_token,
+        );
         let revision = state.app.db_persistence.submit(db.clone());
-        (password, expires, revision)
+        (password, expires, revision, link, sub_uuid)
     };
-    if let Err(response) = wait_for_persistence(&state, result.2).await {
+    if let Err(response) = wait_for_persistence(&state, revision).await {
         return response;
     }
     let reload_error = refresh_credentials_report(&state).await.err();
 
     Json(serde_json::json!({
-        "password": result.0,
-        "expires": result.1,
-        "dtls_port": dtls_port,
-        "wg_port": wg_port,
+        "password": password,
+        "expires": expires,
+        "peer_port": peer_port,
         "local_port": local_port,
         "vk_hashes": vk_hashes,
+        "vk_token": request.vk_token,
+        "group_id": group_id,
+        "workers": validated_workers.unwrap_or(0),
         "reload_error": reload_error,
+        "link": link,
+        "sub_uuid": sub_uuid,
     }))
     .into_response()
 }
@@ -1210,30 +1908,76 @@ async fn client_update(
         Ok(value) => value,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
     };
+    if request.vk_token && !vk_hashes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "choose VK hashes or VK token").into_response();
+    }
+    let validated_workers = match validate_workers(request.workers) {
+        Ok(w) => w,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
 
     let revision = {
         let mut db = state.app.db.write().await;
-        let Some(entry) = db.passwords.get_mut(&password) else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-
-        let dtls_port = request.dtls_port.unwrap_or(46000);
-        let wg_port = request.wg_port.unwrap_or(46001);
-        let local_port = request.local_port.unwrap_or(0);
-
-        entry.name = request.name.clone();
-        entry.expires_at = if request.days == 0 {
-            0
+        if request.vk_token && db.vk_access_token.is_empty() {
+            return (StatusCode::BAD_REQUEST, "configure a VK token first").into_response();
+        }
+        if secret_eq(&password, &db.main_password) {
+            db.main_vk_hashes = vk_hashes;
+            db.main_vk_token_enabled = request.vk_token;
+            db.main_workers = validated_workers;
+            state.app.db_persistence.submit(db.clone())
         } else {
-            now().saturating_add(request.days.saturating_mul(86400))
-        };
-        entry.vk_hash = vk_hashes.clone();
-        entry.vk_hashes = vk_hashes;
-        entry.dtls_port = dtls_port;
-        entry.wg_port = wg_port;
-        entry.local_port = local_port;
-        entry.ports = format!("{},{},{}", dtls_port, wg_port, local_port);
-        state.app.db_persistence.submit(db.clone())
+            let current_group_id = match db.passwords.get(&password) {
+                Some(e) => e.group_id.clone(),
+                None => return StatusCode::NOT_FOUND.into_response(),
+            };
+            let target_group_id = request.group_id.as_deref().unwrap_or(&current_group_id);
+            let scope_names =
+                model::existing_client_names_in_scope(&db, target_group_id, Some(&password));
+            let client_name = if request.name.trim().is_empty() {
+                model::generate_unique_client_name(&scope_names)
+            } else {
+                let trimmed = request.name.trim().to_string();
+                if model::is_client_name_taken(&scope_names, &trimmed) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "Участник с таким именем уже существует",
+                    )
+                        .into_response();
+                }
+                trimmed
+            };
+
+            let entry = db.passwords.get_mut(&password).unwrap();
+
+            let default_peer_port = state.app.listen.port();
+            let fallback_port = if entry.dtls_port == 0 {
+                default_peer_port
+            } else {
+                entry.dtls_port
+            };
+            let peer_port = request.peer_port.unwrap_or(fallback_port);
+            let local_port = request.local_port.unwrap_or(0);
+
+            entry.name = client_name;
+            entry.expires_at = if request.days == 0 {
+                0
+            } else {
+                now().saturating_add(request.days.saturating_mul(86400))
+            };
+            entry.vk_hash = vk_hashes.clone();
+            entry.vk_hashes = vk_hashes;
+            entry.vk_token_enabled = request.vk_token;
+            entry.dtls_port = peer_port;
+            entry.wg_port = 0;
+            entry.local_port = local_port;
+            entry.ports = format!("{},0,{}", peer_port, local_port);
+            if let Some(ref g_id) = request.group_id {
+                entry.group_id = g_id.clone();
+            }
+            entry.workers = validated_workers;
+            state.app.db_persistence.submit(db.clone())
+        }
     };
     if let Err(response) = wait_for_persistence(&state, revision).await {
         return response;
@@ -1268,24 +2012,8 @@ async fn client_toggle(State(state): State<WebState>, Path(password): Path<Strin
 }
 
 async fn client_unbind(State(state): State<WebState>, Path(password): Path<String>) -> Response {
-    let revision = {
-        let mut db = state.app.db.write().await;
-        if password == db.main_password {
-            db.main_device_id.clear();
-            state.app.db_persistence.submit(db.clone())
-        } else if let Some(entry) = db.passwords.get_mut(&password) {
-            entry.device_id.clear();
-            state.app.db_persistence.submit(db.clone())
-        } else {
-            return StatusCode::NOT_FOUND.into_response();
-        }
-    };
-    if let Err(response) = wait_for_persistence(&state, revision).await {
-        return response;
-    }
-
     crate::protocol::drop_password_sessions(&state.app, &password);
-
+    crate::protocol::forget_idle_password_epoch(&state.app, &password);
     StatusCode::OK.into_response()
 }
 
@@ -1311,6 +2039,2348 @@ async fn client_delete(State(state): State<WebState>, Path(password): Path<Strin
     StatusCode::OK.into_response()
 }
 
+async fn client_get(
+    State(state): State<WebState>,
+    headers: HeaderMap,
+    Path(password): Path<String>,
+) -> Response {
+    let db = state.app.db.read().await;
+    let host = resolve_client_host(&headers, &state).await;
+
+    if secret_eq(&password, &db.main_password) {
+        let mut session_up = 0;
+        let mut session_down = 0;
+        let mut active_sessions = 0;
+        for entry in state.app.sessions.iter() {
+            let sess = entry.value();
+            if secret_eq(&sess.password, &db.main_password) {
+                active_sessions += 1;
+                session_up += sess.up_bytes.load(Ordering::Relaxed) as i64;
+                session_down += sess.down_bytes.load(Ordering::Relaxed) as i64;
+            }
+        }
+
+        let main_peer_port = state.app.listen.port();
+        let info = ClientInfo {
+            password: db.main_password.clone(),
+            down: db.main_down_bytes + session_down,
+            up: db.main_up_bytes + session_up,
+            expires: 0,
+            active: true,
+            active_sessions,
+            vk_hash: String::new(),
+            ports: String::new(),
+            ip: "10.66.67.2".to_string(),
+            name: "Главный пароль".to_string(),
+            vk_hashes: if db.main_vk_hashes.is_empty() {
+                db.vk_hashes.clone()
+            } else {
+                db.main_vk_hashes.clone()
+            },
+            vk_token: db.main_vk_token_enabled,
+            peer_port: main_peer_port,
+            local_port: 0,
+            group_id: String::new(),
+            routing_rule_id: db.main_routing_rule_id.clone(),
+            link: make_main_link(&host, main_peer_port, &db),
+            sub_uuid: db.main_sub_uuid.clone(),
+            workers: db.main_workers,
+        };
+        return Json(info).into_response();
+    }
+
+    if let Some(entry) = db.passwords.get(&password) {
+        let active_sessions = count_active_sessions(&state.app.sessions, &password);
+        let client_peer_port = if entry.dtls_port == 0 {
+            state.app.listen.port()
+        } else {
+            entry.dtls_port
+        };
+        let info = ClientInfo {
+            password: password.clone(),
+            down: entry.down_bytes,
+            up: entry.up_bytes,
+            expires: entry.expires_at,
+            active: !entry.is_deactivated && !is_expired(entry),
+            active_sessions,
+            vk_hash: entry.vk_hash.clone(),
+            ports: entry.ports.clone(),
+            ip: if entry.ip.is_empty() {
+                "10.66.67.3".to_string()
+            } else {
+                entry.ip.clone()
+            },
+            name: entry.name.clone(),
+            vk_hashes: entry.vk_hashes.clone(),
+            vk_token: entry.vk_token_enabled,
+            peer_port: client_peer_port,
+            local_port: entry.local_port,
+            group_id: entry.group_id.clone(),
+            routing_rule_id: entry.routing_rule_id.clone(),
+            link: make_entry_link(
+                &host,
+                client_peer_port,
+                &password,
+                entry,
+                &db.vk_access_token,
+            ),
+            sub_uuid: entry.sub_uuid.clone(),
+            workers: entry.workers,
+        };
+        return Json(info).into_response();
+    }
+
+    (StatusCode::NOT_FOUND, "client not found").into_response()
+}
+
+async fn client_reset_traffic(
+    State(state): State<WebState>,
+    Path(password): Path<String>,
+) -> Response {
+    let result = {
+        let mut db = state.app.db.write().await;
+        if secret_eq(&password, &db.main_password) {
+            db.main_up_bytes = 0;
+            db.main_down_bytes = 0;
+            for s in state.app.sessions.iter() {
+                if s.value().password == password {
+                    s.value().up_bytes.store(0, Ordering::Relaxed);
+                    s.value().down_bytes.store(0, Ordering::Relaxed);
+                }
+            }
+            let revision = state.app.db_persistence.submit(db.clone());
+            Some(revision)
+        } else if let Some(entry) = db.passwords.get_mut(&password) {
+            entry.up_bytes = 0;
+            entry.down_bytes = 0;
+            for s in state.app.sessions.iter() {
+                if s.value().password == password {
+                    s.value().up_bytes.store(0, Ordering::Relaxed);
+                    s.value().down_bytes.store(0, Ordering::Relaxed);
+                }
+            }
+            let revision = state.app.db_persistence.submit(db.clone());
+            Some(revision)
+        } else {
+            None
+        }
+    };
+
+    let Some(revision) = result else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+async fn client_extend(
+    State(state): State<WebState>,
+    Path(password): Path<String>,
+    Json(request): Json<ExtendClientRequest>,
+) -> Response {
+    if request.days <= 0 || request.days > 3650 {
+        return (StatusCode::BAD_REQUEST, "days must be 1..3650").into_response();
+    }
+    let current = now();
+    let result = {
+        let mut db = state.app.db.write().await;
+        if let Some(entry) = db.passwords.get_mut(&password) {
+            let base = if entry.expires_at > current {
+                entry.expires_at
+            } else {
+                current
+            };
+            let new_expires = base.saturating_add(request.days.saturating_mul(86400));
+            entry.expires_at = new_expires;
+            let revision = state.app.db_persistence.submit(db.clone());
+            Some((new_expires, revision))
+        } else {
+            None
+        }
+    };
+
+    let Some((expires, revision)) = result else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    let _ = refresh_credentials_report(&state).await;
+    Json(serde_json::json!({ "ok": true, "expires": expires })).into_response()
+}
+
+#[derive(Serialize)]
+struct ClientLinkItem {
+    name: String,
+    password: String,
+    link: String,
+    expires: i64,
+    peer_port: u16,
+    group_id: String,
+    #[serde(default)]
+    sub_uuid: String,
+}
+
+async fn api_links_get(State(state): State<WebState>, headers: HeaderMap) -> impl IntoResponse {
+    let db = state.app.db.read().await;
+    let host = resolve_client_host(&headers, &state).await;
+    let mut list: Vec<ClientLinkItem> = db
+        .passwords
+        .iter()
+        .map(|(password, entry)| {
+            let client_peer_port = if entry.dtls_port == 0 {
+                state.app.listen.port()
+            } else {
+                entry.dtls_port
+            };
+            ClientLinkItem {
+                name: entry.name.clone(),
+                password: password.clone(),
+                link: make_entry_link(
+                    &host,
+                    client_peer_port,
+                    password,
+                    entry,
+                    &db.vk_access_token,
+                ),
+                expires: entry.expires_at,
+                peer_port: client_peer_port,
+                group_id: entry.group_id.clone(),
+                sub_uuid: entry.sub_uuid.clone(),
+            }
+        })
+        .collect();
+    if !db.main_password.is_empty() {
+        let main_peer_port = state.app.listen.port();
+        list.push(ClientLinkItem {
+            name: "Владелец".to_owned(),
+            password: db.main_password.clone(),
+            link: make_main_link(&host, main_peer_port, &db),
+            expires: 0,
+            peer_port: main_peer_port,
+            group_id: String::new(),
+            sub_uuid: db.main_sub_uuid.clone(),
+        });
+    }
+    Json(list)
+}
+
+#[derive(Deserialize)]
+struct BatchVkRequest {
+    #[serde(default)]
+    vk_token: Option<String>,
+    #[serde(default)]
+    vk_hashes: Option<String>,
+    #[serde(default)]
+    apply_to_all_clients: Option<bool>,
+}
+
+async fn api_links_batch_vk(
+    State(state): State<WebState>,
+    Json(request): Json<BatchVkRequest>,
+) -> Response {
+    let token = match request.vk_token {
+        Some(t) => match normalize_vk_access_token(&t) {
+            Ok(v) => Some(v),
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        },
+        None => None,
+    };
+    let hashes = match request.vk_hashes {
+        Some(h) => match normalize_client_vk_hashes(&h) {
+            Ok(v) => Some(v),
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        },
+        None => None,
+    };
+    let apply_all = request.apply_to_all_clients.unwrap_or(true);
+    let mut updated_count = 0usize;
+    let revision = {
+        let mut db = state.app.db.write().await;
+        if let Some(ref t) = token {
+            db.vk_access_token = t.clone();
+        }
+        if let Some(ref h) = hashes {
+            db.vk_hashes = h.clone();
+        }
+        if apply_all {
+            if let Some(ref h) = hashes {
+                db.main_vk_hashes = h.clone();
+            }
+            if let Some(ref t) = token {
+                db.main_vk_token_enabled = !t.is_empty();
+            }
+            for entry in db.passwords.values_mut() {
+                if let Some(ref h) = hashes {
+                    entry.vk_hashes = h.clone();
+                }
+                if let Some(ref t) = token {
+                    entry.vk_token_enabled = !t.is_empty();
+                }
+                updated_count += 1;
+            }
+        }
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    let _ = refresh_credentials_report(&state).await;
+    Json(serde_json::json!({
+        "ok": true,
+        "updated_clients": updated_count
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct ClientVkUpdateRequest {
+    #[serde(default)]
+    vk_token: Option<bool>,
+    #[serde(default)]
+    vk_hashes: Option<String>,
+}
+
+async fn api_client_vk_update(
+    State(state): State<WebState>,
+    Path(password): Path<String>,
+    Json(request): Json<ClientVkUpdateRequest>,
+) -> Response {
+    let hashes = match request.vk_hashes {
+        Some(h) => match normalize_client_vk_hashes(&h) {
+            Ok(v) => Some(v),
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        },
+        None => None,
+    };
+    let revision = {
+        let mut db = state.app.db.write().await;
+        if secret_eq(&password, &db.main_password) {
+            if let Some(h) = hashes {
+                db.main_vk_hashes = h;
+            }
+            if let Some(token_enabled) = request.vk_token {
+                db.main_vk_token_enabled = token_enabled;
+            }
+            state.app.db_persistence.submit(db.clone())
+        } else {
+            let Some(entry) = db.passwords.get_mut(&password) else {
+                return (StatusCode::NOT_FOUND, "client not found").into_response();
+            };
+            if let Some(h) = hashes {
+                entry.vk_hashes = h;
+            }
+            if let Some(token_enabled) = request.vk_token {
+                entry.vk_token_enabled = token_enabled;
+            }
+            state.app.db_persistence.submit(db.clone())
+        }
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    let _ = refresh_credentials_report(&state).await;
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct ApiDnsRequest {
+    #[serde(default)]
+    dns_provider: Option<String>,
+    #[serde(default)]
+    dns_primary: Option<String>,
+    #[serde(default)]
+    dns_secondary: Option<String>,
+}
+
+async fn api_settings_dns(
+    State(state): State<WebState>,
+    Json(request): Json<ApiDnsRequest>,
+) -> Response {
+    let dns = match request.dns_provider.as_deref() {
+        Some("custom") | None
+            if request.dns_primary.is_some() || request.dns_secondary.is_some() =>
+        {
+            match manual_dns(
+                request.dns_primary.as_deref(),
+                request.dns_secondary.as_deref(),
+            ) {
+                Ok(dns) => (dns, "custom".to_owned()),
+                Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+            }
+        }
+        Some("custom") => {
+            return (StatusCode::BAD_REQUEST, "primary DNS is required").into_response();
+        }
+        Some(provider_id) => {
+            let Some(provider) = dns_provider_by_id(provider_id) else {
+                return (StatusCode::BAD_REQUEST, "unknown DNS provider").into_response();
+            };
+            (provider_dns(provider), provider_id.to_owned())
+        }
+        None => return (StatusCode::BAD_REQUEST, "missing DNS parameters").into_response(),
+    };
+    let (revision, applied_dns) = {
+        let mut db = state.app.db.write().await;
+        let applied_dns = (db.dns != dns.0).then(|| dns.0.clone());
+        db.dns = dns.0;
+        db.dns_provider = dns.1;
+        (state.app.db_persistence.submit(db.clone()), applied_dns)
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    if let Some(new_dns) = applied_dns {
+        *state.app.dns.write().await = new_dns;
+        let _ = crate::protocol::broadcast_tunnel_configuration(&state.app).await;
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+#[derive(Deserialize)]
+struct RestartIntervalRequest {
+    interval_hours: u8,
+}
+
+async fn api_settings_restart_interval(
+    State(state): State<WebState>,
+    Json(request): Json<RestartIntervalRequest>,
+) -> Response {
+    if !matches!(request.interval_hours, 0 | 12 | 24 | 48 | 72) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "auto restart interval must be 0, 12, 24, 48, or 72 hours",
+        )
+            .into_response();
+    }
+    let revision = {
+        let mut db = state.app.db.write().await;
+        db.set_auto_restart_interval_hours(request.interval_hours);
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    state
+        .app
+        .auto_restart_interval_tx
+        .send_replace(request.interval_hours);
+    Json(serde_json::json!({ "ok": true, "interval_hours": request.interval_hours }))
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct MasterPasswordRequest {
+    password: String,
+}
+
+async fn api_settings_master_password(
+    State(state): State<WebState>,
+    Json(request): Json<MasterPasswordRequest>,
+) -> Response {
+    if !request.password.is_empty() && request.password.len() > 128 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "password length must be 1..128 or empty",
+        )
+            .into_response();
+    }
+    let (revision, retired_password) = {
+        let mut db = state.app.db.write().await;
+        if !request.password.is_empty() && db.passwords.contains_key(&request.password) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Пароль совпадает с паролем клиента",
+            )
+                .into_response();
+        }
+        let retired = (db.main_password != request.password)
+            .then(|| std::mem::replace(&mut db.main_password, request.password));
+        (state.app.db_persistence.submit(db.clone()), retired)
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    if let Some(p) = retired_password
+        && !p.is_empty()
+    {
+        state.app.derived_keys.remove(&p);
+    }
+    let _ = refresh_credentials_report(&state).await;
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ServerExportData {
+    version: u32,
+    exported_at: i64,
+    main_password: String,
+    dns: String,
+    dns_provider: String,
+    auto_restart_interval_hours: Option<u8>,
+    vk_access_token: String,
+    vk_hashes: String,
+    groups: std::collections::BTreeMap<String, ClientGroup>,
+    routing_rules: std::collections::BTreeMap<String, RoutingRule>,
+    clients: Vec<ExportClientEntry>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ExportClientEntry {
+    password: String,
+    name: String,
+    expires_at: i64,
+    down_bytes: i64,
+    up_bytes: i64,
+    #[serde(default)]
+    vk_hash: String,
+    #[serde(default)]
+    vk_hashes: String,
+    #[serde(default)]
+    vk_token_enabled: bool,
+    #[serde(default)]
+    ports: String,
+    #[serde(default)]
+    dtls_port: u16,
+    #[serde(default)]
+    local_port: u16,
+    #[serde(default)]
+    group_id: String,
+    #[serde(default)]
+    routing_rule_id: String,
+    #[serde(default)]
+    is_deactivated: bool,
+    #[serde(default)]
+    sub_uuid: String,
+    #[serde(default)]
+    workers: Option<u32>,
+    #[serde(default)]
+    ip: String,
+}
+
+async fn api_export_get(State(state): State<WebState>) -> impl IntoResponse {
+    let db = state.app.db.read().await;
+    let clients: Vec<ExportClientEntry> = db
+        .passwords
+        .iter()
+        .map(|(pwd, entry)| ExportClientEntry {
+            password: pwd.clone(),
+            name: entry.name.clone(),
+            expires_at: entry.expires_at,
+            down_bytes: entry.down_bytes,
+            up_bytes: entry.up_bytes,
+            vk_hash: entry.vk_hash.clone(),
+            vk_hashes: entry.vk_hashes.clone(),
+            vk_token_enabled: entry.vk_token_enabled,
+            ports: entry.ports.clone(),
+            dtls_port: entry.dtls_port,
+            local_port: entry.local_port,
+            group_id: entry.group_id.clone(),
+            routing_rule_id: entry.routing_rule_id.clone(),
+            is_deactivated: entry.is_deactivated,
+            sub_uuid: entry.sub_uuid.clone(),
+            workers: entry.workers,
+            ip: entry.ip.clone(),
+        })
+        .collect();
+    let export = ServerExportData {
+        version: 1,
+        exported_at: now(),
+        main_password: db.main_password.clone(),
+        dns: db.dns.clone(),
+        dns_provider: db.dns_provider.clone(),
+        auto_restart_interval_hours: db.auto_restart_interval_hours,
+        vk_access_token: db.vk_access_token.clone(),
+        vk_hashes: db.vk_hashes.clone(),
+        groups: db.groups.clone(),
+        routing_rules: db.routing_rules.clone(),
+        clients,
+    };
+    Json(export)
+}
+
+#[derive(Deserialize)]
+struct ServerImportPayload {
+    #[serde(default)]
+    import_clients: Option<bool>,
+    #[serde(default)]
+    import_settings: Option<bool>,
+    #[serde(default)]
+    config: Option<ServerExportData>,
+    #[serde(flatten)]
+    direct_config: Option<ServerExportData>,
+}
+
+async fn api_import_post(
+    State(state): State<WebState>,
+    Json(payload): Json<ServerImportPayload>,
+) -> Response {
+    let export_opt = payload.config.or(payload.direct_config);
+    let Some(export) = export_opt else {
+        return (StatusCode::BAD_REQUEST, "invalid or empty config").into_response();
+    };
+    let do_clients = payload.import_clients.unwrap_or(true);
+    let do_settings = payload.import_settings.unwrap_or(true);
+    let mut added_clients = 0usize;
+    let mut applied_dns = None;
+    let mut applied_interval = None;
+
+    let revision = {
+        let mut db = state.app.db.write().await;
+        if do_clients {
+            for c in export.clients {
+                if !db.passwords.contains_key(&c.password) {
+                    let sub_uuid = if c.sub_uuid.trim().is_empty() {
+                        model::random_uuid_v4()
+                    } else {
+                        c.sub_uuid
+                    };
+                    let ip = if c.ip.is_empty() {
+                        model::get_next_ip(&db).unwrap_or_default()
+                    } else {
+                        c.ip
+                    };
+                    let client_name = if c.name.trim().is_empty()
+                        || model::is_client_name_taken(
+                            model::existing_client_names_in_scope(&db, &c.group_id, None),
+                            &c.name,
+                        ) {
+                        model::generate_unique_client_name(model::existing_client_names_in_scope(
+                            &db,
+                            &c.group_id,
+                            None,
+                        ))
+                    } else {
+                        c.name
+                    };
+                    db.passwords.insert(
+                        c.password.clone(),
+                        PasswordEntry {
+                            ip,
+                            expires_at: c.expires_at,
+                            down_bytes: c.down_bytes,
+                            up_bytes: c.up_bytes,
+                            vk_hash: c.vk_hash,
+                            ports: c.ports,
+                            is_deactivated: c.is_deactivated,
+                            name: client_name,
+                            vk_hashes: c.vk_hashes,
+                            vk_token_enabled: c.vk_token_enabled,
+                            dtls_port: c.dtls_port,
+                            wg_port: 0,
+                            local_port: c.local_port,
+                            group_id: c.group_id,
+                            routing_rule_id: c.routing_rule_id,
+                            sub_uuid,
+                            workers: c.workers.filter(|&w| (3..=100).contains(&w)),
+                        },
+                    );
+                    added_clients += 1;
+                }
+            }
+            for (gid, g) in export.groups {
+                db.groups.entry(gid).or_insert(g);
+            }
+            for (rid, r) in export.routing_rules {
+                db.routing_rules.entry(rid).or_insert(r);
+            }
+        }
+        if do_settings {
+            if !export.main_password.is_empty() && !db.passwords.contains_key(&export.main_password)
+            {
+                db.main_password = export.main_password;
+            }
+            if !export.dns.is_empty() {
+                applied_dns = (db.dns != export.dns).then(|| export.dns.clone());
+                db.dns = export.dns;
+                db.dns_provider = export.dns_provider;
+            }
+            if let Some(hours) = export.auto_restart_interval_hours {
+                db.set_auto_restart_interval_hours(hours);
+                applied_interval = Some(hours);
+            }
+            if !export.vk_access_token.is_empty() {
+                db.vk_access_token = export.vk_access_token;
+            }
+            if !export.vk_hashes.is_empty() {
+                db.vk_hashes = export.vk_hashes;
+            }
+        }
+        state.app.db_persistence.submit(db.clone())
+    };
+
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    if let Some(dns) = applied_dns {
+        *state.app.dns.write().await = dns;
+        let _ = crate::protocol::broadcast_tunnel_configuration(&state.app).await;
+    }
+    if let Some(hours) = applied_interval {
+        state.app.auto_restart_interval_tx.send_replace(hours);
+    }
+    let _ = refresh_credentials_report(&state).await;
+
+    Json(serde_json::json!({
+        "ok": true,
+        "added_clients": added_clients,
+        "settings_imported": do_settings
+    }))
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct GroupInfo {
+    id: String,
+    name: String,
+    routing_rule_id: String,
+    admin_uuid: String,
+    sub_uuid: String,
+    member_count: usize,
+    up: i64,
+    down: i64,
+    active_sessions: usize,
+}
+
+async fn groups_get(State(state): State<WebState>) -> Response {
+    let db = state.app.db.read().await;
+    let mut list = Vec::new();
+    for group in db.groups.values() {
+        let mut member_count = 0;
+        let mut up = 0i64;
+        let mut down = 0i64;
+        let mut active_sessions = 0;
+        for (_pass, p_entry) in &db.passwords {
+            if p_entry.group_id == group.id {
+                member_count += 1;
+                up += p_entry.up_bytes;
+                down += p_entry.down_bytes;
+                active_sessions += count_active_sessions(&state.app.sessions, _pass);
+            }
+        }
+        list.push(GroupInfo {
+            id: group.id.clone(),
+            name: group.name.clone(),
+            routing_rule_id: group.routing_rule_id.clone(),
+            admin_uuid: group.admin_uuid.clone(),
+            sub_uuid: group.sub_uuid.clone(),
+            member_count,
+            up,
+            down,
+            active_sessions,
+        });
+    }
+    Json(list).into_response()
+}
+
+#[derive(Deserialize)]
+struct CreateGroupRequest {
+    name: String,
+}
+
+async fn groups_create(
+    State(state): State<WebState>,
+    Json(request): Json<CreateGroupRequest>,
+) -> Response {
+    let name = request.name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return (StatusCode::BAD_REQUEST, "invalid group name").into_response();
+    }
+    let id = format!("grp_{}", random_token(8));
+    let group = ClientGroup {
+        id: id.clone(),
+        name: name.to_string(),
+        routing_rule_id: String::new(),
+        admin_uuid: String::new(),
+        sub_uuid: model::random_uuid_v4(),
+        workers: None,
+        vk_token: None,
+        vk_hashes: None,
+    };
+    let revision = {
+        let mut db = state.app.db.write().await;
+        db.groups.insert(id, group.clone());
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    Json(group).into_response()
+}
+
+#[derive(Deserialize)]
+struct UpdateGroupRequest {
+    name: Option<String>,
+    routing_rule_id: Option<String>,
+}
+
+async fn groups_update(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateGroupRequest>,
+) -> Response {
+    let revision = {
+        let mut db = state.app.db.write().await;
+        let Some(group) = db.groups.get_mut(&id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        if let Some(name) = request.name {
+            let n = name.trim();
+            if n.is_empty() || n.len() > 64 {
+                return (StatusCode::BAD_REQUEST, "invalid group name").into_response();
+            }
+            group.name = n.to_string();
+        }
+        if let Some(r_id) = request.routing_rule_id {
+            group.routing_rule_id = r_id;
+        }
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    let _ = crate::protocol::broadcast_tunnel_configuration(&state.app).await;
+    StatusCode::OK.into_response()
+}
+
+async fn groups_delete(State(state): State<WebState>, Path(id): Path<String>) -> Response {
+    let (revision, deleted_passwords) = {
+        let mut db = state.app.db.write().await;
+        if db.groups.remove(&id).is_none() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        let mut deleted = Vec::new();
+        db.passwords.retain(|pwd, entry| {
+            if entry.group_id == id {
+                deleted.push(pwd.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for pwd in &deleted {
+            state.app.derived_keys.remove(pwd);
+        }
+        let rev = state.app.db_persistence.submit(db.clone());
+        (rev, deleted)
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    for pwd in &deleted_passwords {
+        crate::protocol::drop_password_sessions(&state.app, pwd);
+    }
+    if let Err(message) = refresh_credentials_report(&state).await {
+        let warning = format!("saved but reload failed: {message}");
+        return (StatusCode::OK, [("x-csqtt-reload-error", warning)], "saved").into_response();
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn group_admin_link_post(State(state): State<WebState>, Path(id): Path<String>) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db.groups.get_mut(&id) else {
+        return (StatusCode::NOT_FOUND, "group not found").into_response();
+    };
+    if group.admin_uuid.is_empty() {
+        group.admin_uuid = model::random_uuid_v4();
+    }
+    let admin_uuid = group.admin_uuid.clone();
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "admin_uuid": admin_uuid
+        })),
+    )
+        .into_response()
+}
+
+async fn group_admin_link_regenerate(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db.groups.get_mut(&id) else {
+        return (StatusCode::NOT_FOUND, "group not found").into_response();
+    };
+    group.admin_uuid = model::random_uuid_v4();
+    let admin_uuid = group.admin_uuid.clone();
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "admin_uuid": admin_uuid
+        })),
+    )
+        .into_response()
+}
+
+async fn group_admin_link_delete(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db.groups.get_mut(&id) else {
+        return (StatusCode::NOT_FOUND, "group not found").into_response();
+    };
+    group.admin_uuid.clear();
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true
+        })),
+    )
+        .into_response()
+}
+
+async fn group_admin_page(
+    State(state): State<WebState>,
+    Path(admin_uuid): Path<String>,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    let db = state.app.db.read().await;
+    let exists = db
+        .groups
+        .values()
+        .any(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid);
+    if !exists {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    }
+    Html(GROUP_ADMIN_HTML).into_response()
+}
+
+fn html_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn render_client_sub_html(client_name: &str, csqtt_link: &str) -> String {
+    let name_esc = html_escape(client_name);
+    let link_esc = html_escape(csqtt_link);
+    CLIENT_SUB_HTML
+        .replace("__CLIENT_NAME__", &name_esc)
+        .replace("__CSQTT_LINK__", &link_esc)
+}
+
+fn render_group_sub_html(group_name: &str, clients_json: &str, count: usize) -> String {
+    let name_esc = html_escape(group_name);
+    let json_esc = js_json_embed(clients_json);
+    GROUP_SUB_HTML
+        .replace("__GROUP_NAME__", &name_esc)
+        .replace("__CLIENTS_COUNT__", &count.to_string())
+        .replace("__CLIENTS_JSON__", &json_esc)
+}
+
+fn js_json_embed(json: &str) -> String {
+    json.replace('<', "\\u003C")
+        .replace('>', "\\u003E")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
+async fn client_sub_page(
+    State(state): State<WebState>,
+    Path(sub_uuid): Path<String>,
+    headers: HeaderMap,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    let sub_uuid = sub_uuid.trim();
+    if sub_uuid.is_empty() {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    }
+    let db = state.app.db.read().await;
+    let host = resolve_client_host(&headers, &state).await;
+
+    if !db.main_sub_uuid.is_empty() && db.main_sub_uuid == sub_uuid && !db.main_password.is_empty()
+    {
+        let main_peer_port = state.app.listen.port();
+        let link = make_main_link(&host, main_peer_port, &db);
+        return Html(render_client_sub_html("Владелец", &link)).into_response();
+    }
+
+    let client_entry = db
+        .passwords
+        .iter()
+        .find(|(_, entry)| !entry.sub_uuid.is_empty() && entry.sub_uuid == sub_uuid);
+    let Some((password, entry)) = client_entry else {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    };
+    let client_peer_port = if entry.dtls_port == 0 {
+        state.app.listen.port()
+    } else {
+        entry.dtls_port
+    };
+    let effective_vk_token = if !entry.group_id.is_empty() {
+        db.groups
+            .get(&entry.group_id)
+            .and_then(|g| g.vk_token.as_deref())
+            .unwrap_or(&db.vk_access_token)
+    } else {
+        &db.vk_access_token
+    };
+    let link = make_entry_link(&host, client_peer_port, password, entry, effective_vk_token);
+    let client_name = if entry.name.is_empty() {
+        "Клиент".to_string()
+    } else {
+        entry.name.clone()
+    };
+    Html(render_client_sub_html(&client_name, &link)).into_response()
+}
+
+async fn client_sub_json(
+    State(state): State<WebState>,
+    Path(sub_uuid): Path<String>,
+    headers: HeaderMap,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    let sub_uuid = sub_uuid.trim();
+    if sub_uuid.is_empty() {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    }
+    let db = state.app.db.read().await;
+    let host = resolve_client_host(&headers, &state).await;
+
+    if !db.main_sub_uuid.is_empty() && db.main_sub_uuid == sub_uuid && !db.main_password.is_empty()
+    {
+        let main_peer_port = state.app.listen.port();
+        let link = make_main_link(&host, main_peer_port, &db);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "name": "Владелец",
+                "link": link,
+                "sub_uuid": db.main_sub_uuid,
+            })),
+        )
+            .into_response();
+    }
+
+    let client_entry = db
+        .passwords
+        .iter()
+        .find(|(_, entry)| !entry.sub_uuid.is_empty() && entry.sub_uuid == sub_uuid);
+    let Some((password, entry)) = client_entry else {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    };
+    let client_peer_port = if entry.dtls_port == 0 {
+        state.app.listen.port()
+    } else {
+        entry.dtls_port
+    };
+    let effective_vk_token = if !entry.group_id.is_empty() {
+        db.groups
+            .get(&entry.group_id)
+            .and_then(|g| g.vk_token.as_deref())
+            .unwrap_or(&db.vk_access_token)
+    } else {
+        &db.vk_access_token
+    };
+    let link = make_entry_link(&host, client_peer_port, password, entry, effective_vk_token);
+    let client_name = if entry.name.is_empty() {
+        "Клиент".to_string()
+    } else {
+        entry.name.clone()
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "name": client_name,
+            "link": link,
+            "sub_uuid": entry.sub_uuid,
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Serialize)]
+struct GroupSubClientItem {
+    name: String,
+    link: String,
+    sub_uuid: String,
+}
+
+async fn group_sub_page(
+    State(state): State<WebState>,
+    Path(group_sub_uuid): Path<String>,
+    headers: HeaderMap,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    let group_sub_uuid = group_sub_uuid.trim();
+    if group_sub_uuid.is_empty() {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    }
+    let db = state.app.db.read().await;
+    let group_entry = db
+        .groups
+        .values()
+        .find(|g| !g.sub_uuid.is_empty() && g.sub_uuid == group_sub_uuid);
+    let Some(group) = group_entry else {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    };
+
+    let host = resolve_client_host(&headers, &state).await;
+    let effective_vk_token = group.vk_token.as_deref().unwrap_or(&db.vk_access_token);
+    let mut items = Vec::new();
+    for (password, entry) in &db.passwords {
+        if entry.group_id == group.id {
+            let client_peer_port = if entry.dtls_port == 0 {
+                state.app.listen.port()
+            } else {
+                entry.dtls_port
+            };
+            let link =
+                make_entry_link(&host, client_peer_port, password, entry, effective_vk_token);
+            let name = if entry.name.is_empty() {
+                "Клиент".to_string()
+            } else {
+                entry.name.clone()
+            };
+            items.push(GroupSubClientItem {
+                name,
+                link,
+                sub_uuid: entry.sub_uuid.clone(),
+            });
+        }
+    }
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    let count = items.len();
+    let clients_json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string());
+    Html(render_group_sub_html(&group.name, &clients_json, count)).into_response()
+}
+
+async fn group_sub_json(
+    State(state): State<WebState>,
+    Path(group_sub_uuid): Path<String>,
+    headers: HeaderMap,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    let group_sub_uuid = group_sub_uuid.trim();
+    if group_sub_uuid.is_empty() {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    }
+    let db = state.app.db.read().await;
+    let group_entry = db
+        .groups
+        .values()
+        .find(|g| !g.sub_uuid.is_empty() && g.sub_uuid == group_sub_uuid);
+    let Some(group) = group_entry else {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    };
+
+    let host = resolve_client_host(&headers, &state).await;
+    let effective_vk_token = group.vk_token.as_deref().unwrap_or(&db.vk_access_token);
+    let mut items = Vec::new();
+    for (password, entry) in &db.passwords {
+        if entry.group_id == group.id {
+            let client_peer_port = if entry.dtls_port == 0 {
+                state.app.listen.port()
+            } else {
+                entry.dtls_port
+            };
+            let link =
+                make_entry_link(&host, client_peer_port, password, entry, effective_vk_token);
+            let name = if entry.name.is_empty() {
+                "Клиент".to_string()
+            } else {
+                entry.name.clone()
+            };
+            items.push(GroupSubClientItem {
+                name,
+                link,
+                sub_uuid: entry.sub_uuid.clone(),
+            });
+        }
+    }
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "group": {
+                "id": group.id,
+                "name": group.name,
+                "sub_uuid": group.sub_uuid,
+            },
+            "clients": items,
+        })),
+    )
+        .into_response()
+}
+
+async fn universal_sub_json(
+    State(state): State<WebState>,
+    Path(uuid): Path<String>,
+    headers: HeaderMap,
+    token: Option<Extension<Arc<StealthAbortController>>>,
+) -> Response {
+    let trimmed = uuid.trim();
+    if trimmed.is_empty() {
+        if let Some(Extension(ctrl)) = token {
+            ctrl.abort();
+        }
+        return stealth_abort_response();
+    }
+    let is_client = {
+        let db = state.app.db.read().await;
+        (!db.main_sub_uuid.is_empty() && db.main_sub_uuid == trimmed)
+            || db
+                .passwords
+                .values()
+                .any(|p| !p.sub_uuid.is_empty() && p.sub_uuid == trimmed)
+    };
+    if is_client {
+        return client_sub_json(State(state), Path(uuid), headers, token).await;
+    }
+    let is_group = {
+        let db = state.app.db.read().await;
+        db.groups
+            .values()
+            .any(|g| !g.sub_uuid.is_empty() && g.sub_uuid == trimmed)
+    };
+    if is_group {
+        return group_sub_json(State(state), Path(uuid), headers, token).await;
+    }
+    if let Some(Extension(ctrl)) = token {
+        ctrl.abort();
+    }
+    stealth_abort_response()
+}
+
+async fn client_sub_link_regenerate(
+    State(state): State<WebState>,
+    Path(password): Path<String>,
+) -> Response {
+    let (revision, new_sub) = {
+        let mut db = state.app.db.write().await;
+        if secret_eq(&password, &db.main_password) {
+            db.main_sub_uuid = model::random_uuid_v4();
+            let new_sub = db.main_sub_uuid.clone();
+            let rev = state.app.db_persistence.submit(db.clone());
+            (rev, new_sub)
+        } else if let Some(entry) = db.passwords.get_mut(&password) {
+            entry.sub_uuid = model::random_uuid_v4();
+            let new_sub = entry.sub_uuid.clone();
+            let rev = state.app.db_persistence.submit(db.clone());
+            (rev, new_sub)
+        } else {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "sub_uuid": new_sub
+        })),
+    )
+        .into_response()
+}
+
+async fn group_sub_link_regenerate(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Response {
+    let (revision, new_sub) = {
+        let mut db = state.app.db.write().await;
+        let Some(group) = db.groups.get_mut(&id) else {
+            return (StatusCode::NOT_FOUND, "group not found").into_response();
+        };
+        group.sub_uuid = model::random_uuid_v4();
+        let new_sub = group.sub_uuid.clone();
+        let rev = state.app.db_persistence.submit(db.clone());
+        (rev, new_sub)
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "sub_uuid": new_sub
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct BatchToggleRequest {
+    passwords: Vec<String>,
+    active: bool,
+}
+
+async fn api_clients_batch_toggle(
+    State(state): State<WebState>,
+    Json(req): Json<BatchToggleRequest>,
+) -> Response {
+    let mut updated = 0usize;
+    let mut passwords_to_disconnect = Vec::new();
+    let revision = {
+        let mut db = state.app.db.write().await;
+        for pwd in &req.passwords {
+            if let Some(entry) = db.passwords.get_mut(pwd) {
+                entry.is_deactivated = !req.active;
+                updated += 1;
+                if !req.active {
+                    passwords_to_disconnect.push(pwd.clone());
+                }
+            }
+        }
+        if updated > 0 {
+            Some(state.app.db_persistence.submit(db.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some(rev) = revision {
+        let _ = wait_for_persistence(&state, rev).await;
+    }
+    for pwd in &passwords_to_disconnect {
+        crate::protocol::drop_password_sessions(&state.app, pwd);
+    }
+    if updated > 0 {
+        let _ = refresh_credentials_report(&state).await;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "updated": updated })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct BatchExtendRequest {
+    passwords: Vec<String>,
+    days: i64,
+}
+
+async fn api_clients_batch_extend(
+    State(state): State<WebState>,
+    Json(req): Json<BatchExtendRequest>,
+) -> Response {
+    if req.days <= 0 || req.days > 3650 {
+        return (StatusCode::BAD_REQUEST, "days must be between 1 and 3650").into_response();
+    }
+    let add_secs = req.days.saturating_mul(86400);
+    let current_time = now();
+    let mut updated = 0usize;
+    let revision = {
+        let mut db = state.app.db.write().await;
+        for pwd in &req.passwords {
+            if let Some(entry) = db.passwords.get_mut(pwd) {
+                let base = if entry.expires_at > current_time {
+                    entry.expires_at
+                } else {
+                    current_time
+                };
+                entry.expires_at = base.saturating_add(add_secs);
+                updated += 1;
+            }
+        }
+        if updated > 0 {
+            Some(state.app.db_persistence.submit(db.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some(rev) = revision {
+        let _ = wait_for_persistence(&state, rev).await;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "updated": updated })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct BatchPasswordsRequest {
+    passwords: Vec<String>,
+}
+
+async fn api_clients_batch_reset_traffic(
+    State(state): State<WebState>,
+    Json(req): Json<BatchPasswordsRequest>,
+) -> Response {
+    let mut updated = 0usize;
+    let revision = {
+        let mut db = state.app.db.write().await;
+        for pwd in &req.passwords {
+            if pwd == &db.main_password {
+                db.main_down_bytes = 0;
+                db.main_up_bytes = 0;
+                updated += 1;
+            } else if let Some(entry) = db.passwords.get_mut(pwd) {
+                entry.down_bytes = 0;
+                entry.up_bytes = 0;
+                updated += 1;
+            }
+        }
+        if updated > 0 {
+            Some(state.app.db_persistence.submit(db.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some(rev) = revision {
+        let _ = wait_for_persistence(&state, rev).await;
+    }
+    for pwd in &req.passwords {
+        for s in state.app.sessions.iter() {
+            if &s.password == pwd {
+                s.down_bytes.store(0, Ordering::Relaxed);
+                s.up_bytes.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "updated": updated })),
+    )
+        .into_response()
+}
+
+async fn api_clients_batch_delete(
+    State(state): State<WebState>,
+    Json(req): Json<BatchPasswordsRequest>,
+) -> Response {
+    let mut deleted = 0usize;
+    let revision = {
+        let mut db = state.app.db.write().await;
+        for pwd in &req.passwords {
+            if db.passwords.remove(pwd).is_some() {
+                state.app.derived_keys.remove(pwd);
+                deleted += 1;
+            }
+        }
+        if deleted > 0 {
+            Some(state.app.db_persistence.submit(db.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some(rev) = revision {
+        let _ = wait_for_persistence(&state, rev).await;
+    }
+    for pwd in &req.passwords {
+        crate::protocol::drop_password_sessions(&state.app, pwd);
+    }
+    if deleted > 0 {
+        let _ = refresh_credentials_report(&state).await;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "deleted": deleted })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct BatchGroupAssignRequest {
+    passwords: Vec<String>,
+    group_id: String,
+}
+
+async fn api_clients_batch_group(
+    State(state): State<WebState>,
+    Json(req): Json<BatchGroupAssignRequest>,
+) -> Response {
+    let mut moved = 0usize;
+    let revision = {
+        let mut db = state.app.db.write().await;
+        let gid = req.group_id.trim();
+        if !gid.is_empty() && !db.groups.contains_key(gid) {
+            return (StatusCode::BAD_REQUEST, "target group not found").into_response();
+        }
+        for pwd in &req.passwords {
+            if let Some(entry) = db.passwords.get_mut(pwd) {
+                entry.group_id = gid.to_string();
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            Some(state.app.db_persistence.submit(db.clone()))
+        } else {
+            None
+        }
+    };
+    if let Some(rev) = revision {
+        let _ = wait_for_persistence(&state, rev).await;
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "moved": moved })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct DpiDiagnosticsQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn api_diagnostics_dpi(Query(query): Query<DpiDiagnosticsQuery>) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let frames: Vec<protocol::DpiFrame> = protocol::DPI_RING
+        .read()
+        .map(|ring| {
+            let count = limit.min(ring.len());
+            ring.iter().skip(ring.len() - count).cloned().collect()
+        })
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "ok": true,
+        "ring_len": protocol::dpi_ring_len(),
+        "frames": frames,
+    }))
+}
+
+async fn group_admin_data_get(
+    State(state): State<WebState>,
+    Path(admin_uuid): Path<String>,
+) -> Response {
+    let db = state.app.db.read().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let server_ip = state.app.public_ip.read().await.clone();
+    let host = if server_ip.is_empty() {
+        "0.0.0.0".to_string()
+    } else {
+        server_ip.clone()
+    };
+    let peer_port = state.app.listen.port();
+    let effective_vk_token = group.vk_token.as_deref().unwrap_or(&db.vk_access_token);
+    let effective_vk_hashes = group.vk_hashes.as_deref().unwrap_or(&db.vk_hashes);
+    let mut clients = Vec::new();
+    for (_pass, p_entry) in &db.passwords {
+        if p_entry.group_id == group.id {
+            let link = make_entry_link(&host, peer_port, _pass, p_entry, effective_vk_token);
+            clients.push(serde_json::json!({
+                "password": _pass,
+                "name": p_entry.name,
+                "expires": p_entry.expires_at,
+                "up": p_entry.up_bytes,
+                "down": p_entry.down_bytes,
+                "active": !p_entry.is_deactivated && !model::is_expired(p_entry),
+                "is_deactivated": p_entry.is_deactivated,
+                "active_sessions": count_active_sessions(&state.app.sessions, _pass),
+                "ip": if p_entry.ip.is_empty() { "10.66.67.3" } else { &p_entry.ip },
+                "device_ip": if p_entry.ip.is_empty() { "10.66.67.3" } else { &p_entry.ip },
+                "group_id": p_entry.group_id,
+                "peer_port": p_entry.wg_port,
+                "vk_hashes": p_entry.vk_hashes,
+                "vk_token": p_entry.vk_token_enabled,
+                "sub_uuid": p_entry.sub_uuid,
+                "workers": p_entry.workers.unwrap_or(0),
+                "link": link,
+            }));
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "group": {
+                "id": group.id,
+                "name": group.name,
+                "workers": group.workers.unwrap_or(0),
+                "vk_token": effective_vk_token,
+                "vk_hashes": effective_vk_hashes,
+            },
+            "clients": clients,
+            "server_ip": server_ip,
+            "peer_port": peer_port
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct GroupAdminSettingsRequest {
+    #[serde(default)]
+    vk_token: Option<String>,
+    #[serde(default)]
+    vk_hashes: Option<String>,
+    #[serde(default)]
+    workers: Option<u32>,
+}
+
+async fn group_admin_settings_post(
+    State(state): State<WebState>,
+    Path(admin_uuid): Path<String>,
+    Json(payload): Json<GroupAdminSettingsRequest>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db
+        .groups
+        .values_mut()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    if let Some(token) = payload.vk_token {
+        let normalized = match normalize_vk_access_token(&token) {
+            Ok(t) => t,
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        };
+        group.vk_token = Some(normalized);
+    }
+    if let Some(hashes) = payload.vk_hashes {
+        let normalized = match normalize_client_vk_hashes(&hashes) {
+            Ok(h) => h,
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        };
+        group.vk_hashes = Some(normalized);
+    }
+    if let Some(w) = payload.workers {
+        match validate_workers(Some(w)) {
+            Ok(validated) => group.workers = validated,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        }
+    }
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    let _ = refresh_credentials_report(&state).await;
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
+struct GroupAdminCreateClientRequest {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    days: i64,
+    #[serde(default)]
+    workers: Option<u32>,
+}
+
+async fn group_admin_client_create(
+    State(state): State<WebState>,
+    Path(admin_uuid): Path<String>,
+    Json(payload): Json<GroupAdminCreateClientRequest>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group_id) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+        .map(|g| g.id.clone())
+    else {
+        return stealth_abort_response();
+    };
+    let client_name = if payload.name.trim().is_empty() {
+        model::generate_unique_client_name(model::existing_client_names_in_scope(
+            &db, &group_id, None,
+        ))
+    } else {
+        let trimmed = payload.name.trim().to_string();
+        if let Err(msg) = validate_client_name(&trimmed) {
+            return (StatusCode::BAD_REQUEST, msg).into_response();
+        }
+        if model::is_client_name_taken(
+            model::existing_client_names_in_scope(&db, &group_id, None),
+            &trimmed,
+        ) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Участник с таким именем уже существует в этой группе",
+            )
+                .into_response();
+        }
+        trimmed
+    };
+    let validated_workers = match validate_workers(payload.workers) {
+        Ok(w) => w,
+        Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+    };
+    let mut pass = model::random_password();
+    while db.passwords.contains_key(&pass) {
+        pass = model::random_password();
+    }
+    let now_ts = model::now();
+    let expires_at = if payload.days > 0 {
+        now_ts.saturating_add(payload.days.saturating_mul(86400))
+    } else {
+        0
+    };
+    let sub_uuid = model::random_uuid_v4();
+    let ip = model::get_next_ip(&db).unwrap_or_default();
+    let entry = model::PasswordEntry {
+        ip,
+        expires_at,
+        down_bytes: 0,
+        up_bytes: 0,
+        vk_hash: String::new(),
+        ports: String::new(),
+        is_deactivated: false,
+        name: client_name,
+        vk_hashes: String::new(),
+        vk_token_enabled: false,
+        dtls_port: 0,
+        wg_port: 0,
+        local_port: 0,
+        group_id,
+        routing_rule_id: String::new(),
+        sub_uuid: sub_uuid.clone(),
+        workers: validated_workers,
+    };
+    db.passwords.insert(pass.clone(), entry);
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    if let Err(message) = refresh_credentials_report(&state).await {
+        let warning = format!("saved but reload failed: {message}");
+        return (
+            StatusCode::OK,
+            [("x-csqtt-reload-error", warning)],
+            Json(serde_json::json!({
+                "ok": true,
+                "password": pass,
+                "sub_uuid": sub_uuid
+            })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "password": pass,
+            "sub_uuid": sub_uuid
+        })),
+    )
+        .into_response()
+}
+
+async fn group_admin_client_toggle(
+    State(state): State<WebState>,
+    Path((admin_uuid, password)): Path<(String, String)>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let group_id = group.id.clone();
+    let Some(entry) = db.passwords.get_mut(&password) else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+    if entry.group_id != group_id {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    entry.is_deactivated = !entry.is_deactivated;
+    let is_deactivated = entry.is_deactivated;
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    if is_deactivated {
+        crate::protocol::drop_password_sessions(&state.app, &password);
+    }
+    let _ = refresh_credentials_report(&state).await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "is_deactivated": is_deactivated
+        })),
+    )
+        .into_response()
+}
+
+async fn group_admin_client_reset_traffic(
+    State(state): State<WebState>,
+    Path((admin_uuid, password)): Path<(String, String)>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let group_id = group.id.clone();
+    let Some(entry) = db.passwords.get_mut(&password) else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+    if entry.group_id != group_id {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    entry.up_bytes = 0;
+    entry.down_bytes = 0;
+    for s in state.app.sessions.iter() {
+        if s.value().password == password {
+            s.value().up_bytes.store(0, Ordering::Relaxed);
+            s.value().down_bytes.store(0, Ordering::Relaxed);
+        }
+    }
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+async fn group_admin_client_extend(
+    State(state): State<WebState>,
+    Path((admin_uuid, password)): Path<(String, String)>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let group_id = group.id.clone();
+    let Some(entry) = db.passwords.get_mut(&password) else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+    if entry.group_id != group_id {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let now_ts = model::now();
+    let base = if entry.expires_at > now_ts {
+        entry.expires_at
+    } else {
+        now_ts
+    };
+    entry.expires_at = base.saturating_add(30 * 86400);
+    let expires = entry.expires_at;
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    let _ = refresh_credentials_report(&state).await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "expires": expires })),
+    )
+        .into_response()
+}
+
+async fn group_admin_client_unbind(
+    State(state): State<WebState>,
+    Path((admin_uuid, password)): Path<(String, String)>,
+) -> Response {
+    let db = state.app.db.read().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let group_id = group.id.clone();
+    let Some(entry) = db.passwords.get(&password) else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+    if entry.group_id != group_id {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    drop(db);
+    crate::protocol::drop_password_sessions(&state.app, &password);
+    crate::protocol::forget_idle_password_epoch(&state.app, &password);
+    let _ = refresh_credentials_report(&state).await;
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
+struct GroupAdminUpdateClientRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    days: Option<i64>,
+    #[serde(default)]
+    workers: Option<u32>,
+    #[serde(default)]
+    hash: Option<String>,
+    #[serde(default)]
+    vk_token: Option<bool>,
+}
+
+async fn group_admin_client_update(
+    State(state): State<WebState>,
+    Path((admin_uuid, password)): Path<(String, String)>,
+    Json(payload): Json<GroupAdminUpdateClientRequest>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let group_id = group.id.clone();
+    let current_group_id = match db.passwords.get(&password) {
+        Some(e) => e.group_id.clone(),
+        None => return (StatusCode::NOT_FOUND, "client not found").into_response(),
+    };
+    if current_group_id != group_id {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let validated_name = if let Some(name) = payload.name {
+        let trimmed = name.trim().to_string();
+        let scope_names = model::existing_client_names_in_scope(&db, &group_id, Some(&password));
+        let client_name = if trimmed.is_empty() {
+            model::generate_unique_client_name(&scope_names)
+        } else {
+            if let Err(msg) = validate_client_name(&trimmed) {
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+            if model::is_client_name_taken(&scope_names, &trimmed) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Участник с таким именем уже существует в этой группе",
+                )
+                    .into_response();
+            }
+            trimmed
+        };
+        Some(client_name)
+    } else {
+        None
+    };
+
+    let entry = db.passwords.get_mut(&password).unwrap();
+    if let Some(name) = validated_name {
+        entry.name = name;
+    }
+    if let Some(days) = payload.days {
+        if days > 0 {
+            entry.expires_at = model::now().saturating_add(days.saturating_mul(86400));
+        } else {
+            entry.expires_at = 0;
+        }
+    }
+    if let Some(w) = payload.workers {
+        match validate_workers(Some(w)) {
+            Ok(validated) => entry.workers = validated,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        }
+    }
+    if let Some(ref h) = payload.hash {
+        let vk_hashes = match normalize_client_vk_hashes(h) {
+            Ok(v) => v,
+            Err(msg) => return (StatusCode::BAD_REQUEST, msg).into_response(),
+        };
+        entry.vk_hash = vk_hashes.clone();
+        entry.vk_hashes = vk_hashes;
+    }
+    if let Some(vt) = payload.vk_token {
+        entry.vk_token_enabled = vt;
+        if vt {
+            entry.vk_hash.clear();
+            entry.vk_hashes.clear();
+        }
+    }
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    let _ = refresh_credentials_report(&state).await;
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+async fn group_admin_client_delete(
+    State(state): State<WebState>,
+    Path((admin_uuid, password)): Path<(String, String)>,
+) -> Response {
+    let mut db = state.app.db.write().await;
+    let Some(group) = db
+        .groups
+        .values()
+        .find(|g| !g.admin_uuid.is_empty() && g.admin_uuid == admin_uuid)
+    else {
+        return stealth_abort_response();
+    };
+    let group_id = group.id.clone();
+    let Some(entry) = db.passwords.get(&password) else {
+        return (StatusCode::NOT_FOUND, "client not found").into_response();
+    };
+    if entry.group_id != group_id {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    db.passwords.remove(&password);
+    let snapshot = db.clone();
+    drop(db);
+    state.app.db_persistence.submit(snapshot);
+    crate::protocol::drop_password_sessions(&state.app, &password);
+    let _ = refresh_credentials_report(&state).await;
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+}
+
+#[derive(Serialize)]
+struct RoutingRuleInfo {
+    id: String,
+    name: String,
+    is_whitelist: bool,
+    mode: String,
+    packages: Vec<String>,
+    template_domains: bool,
+    direct_domains: Vec<String>,
+    domains: Vec<String>,
+    domains_is_whitelist: bool,
+    domains_mode: String,
+    ip_is_whitelist: bool,
+    ip_mode: String,
+    ips: Vec<String>,
+    assigned_groups: Vec<String>,
+    target_group_ids: Vec<String>,
+    assigned_clients: Vec<String>,
+    target_client_passwords: Vec<String>,
+}
+
+async fn routing_rules_get(State(state): State<WebState>) -> Response {
+    let db = state.app.db.read().await;
+    let mut list = Vec::new();
+    for rule in db.routing_rules.values() {
+        let mut assigned_groups = Vec::new();
+        for group in db.groups.values() {
+            if group.routing_rule_id == rule.id {
+                assigned_groups.push(group.id.clone());
+            }
+        }
+        let mut assigned_clients = Vec::new();
+        if !db.main_password.is_empty() && db.main_routing_rule_id == rule.id {
+            assigned_clients.push(db.main_password.clone());
+        }
+        for (pass, entry) in &db.passwords {
+            if entry.routing_rule_id == rule.id {
+                assigned_clients.push(pass.clone());
+            }
+        }
+        list.push(RoutingRuleInfo {
+            id: rule.id.clone(),
+            name: rule.name.clone(),
+            is_whitelist: rule.is_whitelist,
+            mode: if rule.is_whitelist {
+                "whitelist".to_string()
+            } else {
+                "blacklist".to_string()
+            },
+            packages: rule.packages.clone(),
+            template_domains: rule.template_domains,
+            direct_domains: rule.direct_domains.clone(),
+            domains: rule.direct_domains.clone(),
+            domains_is_whitelist: rule.domains_is_whitelist,
+            domains_mode: if rule.domains_is_whitelist {
+                "whitelist".to_string()
+            } else {
+                "blacklist".to_string()
+            },
+            ip_is_whitelist: rule.ip_is_whitelist,
+            ip_mode: if rule.ip_is_whitelist {
+                "whitelist".to_string()
+            } else {
+                "blacklist".to_string()
+            },
+            ips: rule.ips.clone(),
+            assigned_groups: assigned_groups.clone(),
+            target_group_ids: assigned_groups,
+            assigned_clients: assigned_clients.clone(),
+            target_client_passwords: assigned_clients,
+        });
+    }
+    Json(list).into_response()
+}
+
+const TEMPLATE_DOMAINS_TXT: &str = include_str!("../app/src/main/assets/domains.txt");
+
+async fn template_domains_get() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        TEMPLATE_DOMAINS_TXT,
+    )
+}
+
+#[derive(Deserialize)]
+struct CreateRoutingRuleRequest {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    is_whitelist: bool,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    packages: Vec<String>,
+    #[serde(default)]
+    template_domains: bool,
+    #[serde(default)]
+    direct_domains: Vec<String>,
+    #[serde(default)]
+    domains: Option<Vec<String>>,
+    #[serde(default)]
+    domains_mode: Option<String>,
+    #[serde(default)]
+    domains_is_whitelist: bool,
+    #[serde(default)]
+    ip_mode: Option<String>,
+    #[serde(default)]
+    ip_is_whitelist: bool,
+    #[serde(default)]
+    ips: Vec<String>,
+    #[serde(default)]
+    assigned_groups: Vec<String>,
+    #[serde(default)]
+    target_group_ids: Option<Vec<String>>,
+    #[serde(default)]
+    assigned_clients: Vec<String>,
+    #[serde(default)]
+    target_client_passwords: Option<Vec<String>>,
+}
+
+async fn routing_rules_create(
+    State(state): State<WebState>,
+    Json(request): Json<CreateRoutingRuleRequest>,
+) -> Response {
+    let name_str = request.name.trim();
+    let name = if name_str.is_empty() {
+        "Правило".to_string()
+    } else {
+        name_str.chars().take(64).collect::<String>()
+    };
+    let is_whitelist = if let Some(ref m) = request.mode {
+        m == "whitelist"
+    } else {
+        request.is_whitelist
+    };
+    let direct_domains = if !request.direct_domains.is_empty() {
+        request.direct_domains
+    } else {
+        request.domains.unwrap_or_default()
+    };
+    let domains_is_whitelist = if let Some(ref m) = request.domains_mode {
+        m == "whitelist"
+    } else {
+        request.domains_is_whitelist
+    };
+    let ip_is_whitelist = if let Some(ref m) = request.ip_mode {
+        m == "whitelist"
+    } else {
+        request.ip_is_whitelist
+    };
+    let assigned_groups = if !request.assigned_groups.is_empty() {
+        request.assigned_groups
+    } else {
+        request.target_group_ids.unwrap_or_default()
+    };
+    let assigned_clients = if !request.assigned_clients.is_empty() {
+        request.assigned_clients
+    } else {
+        request.target_client_passwords.unwrap_or_default()
+    };
+    let id = format!("rule_{}", random_token(8));
+    let rule = RoutingRule {
+        id: id.clone(),
+        name,
+        is_whitelist,
+        packages: request.packages,
+        template_domains: request.template_domains,
+        direct_domains,
+        domains_is_whitelist,
+        ip_is_whitelist,
+        ips: request.ips,
+    };
+    let revision = {
+        let mut db = state.app.db.write().await;
+        for g_id in &assigned_groups {
+            if let Some(g) = db.groups.get_mut(g_id) {
+                g.routing_rule_id = id.clone();
+            }
+        }
+        for c_pass in &assigned_clients {
+            if let Some(p) = db.passwords.get_mut(c_pass) {
+                p.routing_rule_id = id.clone();
+            }
+        }
+        if !db.main_password.is_empty() && assigned_clients.contains(&db.main_password) {
+            db.main_routing_rule_id = id.clone();
+        }
+        db.routing_rules.insert(id, rule.clone());
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    Json(rule).into_response()
+}
+
+async fn routing_rules_update(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    Json(request): Json<CreateRoutingRuleRequest>,
+) -> Response {
+    let name_str = request.name.trim();
+    let name = if name_str.is_empty() {
+        "Правило".to_string()
+    } else {
+        name_str.chars().take(64).collect::<String>()
+    };
+    let is_whitelist = if let Some(ref m) = request.mode {
+        m == "whitelist"
+    } else {
+        request.is_whitelist
+    };
+    let direct_domains = if !request.direct_domains.is_empty() {
+        request.direct_domains
+    } else {
+        request.domains.unwrap_or_default()
+    };
+    let domains_is_whitelist = if let Some(ref m) = request.domains_mode {
+        m == "whitelist"
+    } else {
+        request.domains_is_whitelist
+    };
+    let ip_is_whitelist = if let Some(ref m) = request.ip_mode {
+        m == "whitelist"
+    } else {
+        request.ip_is_whitelist
+    };
+    let assigned_groups = if !request.assigned_groups.is_empty() {
+        request.assigned_groups
+    } else {
+        request.target_group_ids.unwrap_or_default()
+    };
+    let assigned_clients = if !request.assigned_clients.is_empty() {
+        request.assigned_clients
+    } else {
+        request.target_client_passwords.unwrap_or_default()
+    };
+    let revision = {
+        let mut db = state.app.db.write().await;
+        let Some(rule) = db.routing_rules.get_mut(&id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        rule.name = name;
+        rule.is_whitelist = is_whitelist;
+        rule.packages = request.packages;
+        rule.template_domains = request.template_domains;
+        rule.direct_domains = direct_domains;
+        rule.domains_is_whitelist = domains_is_whitelist;
+        rule.ip_is_whitelist = ip_is_whitelist;
+        rule.ips = request.ips;
+
+        for group in db.groups.values_mut() {
+            if assigned_groups.contains(&group.id) {
+                group.routing_rule_id = id.clone();
+            } else if group.routing_rule_id == id {
+                group.routing_rule_id.clear();
+            }
+        }
+        for (pass, entry) in db.passwords.iter_mut() {
+            if assigned_clients.contains(pass) {
+                entry.routing_rule_id = id.clone();
+            } else if entry.routing_rule_id == id {
+                entry.routing_rule_id.clear();
+            }
+        }
+        if !db.main_password.is_empty() {
+            if assigned_clients.contains(&db.main_password) {
+                db.main_routing_rule_id = id.clone();
+            } else if db.main_routing_rule_id == id {
+                db.main_routing_rule_id.clear();
+            }
+        }
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn routing_rules_delete(State(state): State<WebState>, Path(id): Path<String>) -> Response {
+    let revision = {
+        let mut db = state.app.db.write().await;
+        if db.routing_rules.remove(&id).is_none() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        for group in db.groups.values_mut() {
+            if group.routing_rule_id == id {
+                group.routing_rule_id.clear();
+            }
+        }
+        for entry in db.passwords.values_mut() {
+            if entry.routing_rule_id == id {
+                entry.routing_rule_id.clear();
+            }
+        }
+        if db.main_routing_rule_id == id {
+            db.main_routing_rule_id.clear();
+        }
+        state.app.db_persistence.submit(db.clone())
+    };
+    if let Err(response) = wait_for_persistence(&state, revision).await {
+        return response;
+    }
+    StatusCode::OK.into_response()
+}
+
 async fn reboot(State(state): State<WebState>) -> Response {
     if state.app.restart_pending.swap(true, Ordering::AcqRel) {
         return (
@@ -1323,9 +4393,6 @@ async fn reboot(State(state): State<WebState>) -> Response {
             .into_response();
     }
 
-    // This is the same managed-restart path used by the automatic uptime
-    // interval. It runs outside csqtt.service's cgroup, so the accepted HTTP
-    // response can be written before systemd stops the current process.
     match crate::request_managed_restart(&state.app, "panel") {
         Ok(()) => (
             StatusCode::ACCEPTED,
@@ -1358,16 +4425,194 @@ async fn web_session_janitor(app: Arc<App>) {
     }
 }
 
+#[derive(Debug)]
+pub struct StealthAbortController {
+    aborted: AtomicBool,
+    last_activity_ms: AtomicU64,
+    birth_ms: AtomicU64,
+    #[cfg(unix)]
+    raw_fd: std::sync::Mutex<Option<std::os::fd::RawFd>>,
+}
+
+static WEB_CONNECTION_CONTROLLERS: Mutex<Vec<std::sync::Weak<StealthAbortController>>> =
+    Mutex::new(Vec::new());
+
+const WEB_IDLE_ABORT_MS: u64 = 120_000;
+const WEB_MAX_CONNECTION_LIFETIME_MS: u64 = 30 * 60_000;
+
+fn web_watchdog_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+async fn web_slowloris_watchdog() {
+    let mut timer = tokio::time::interval(Duration::from_millis(5_000));
+    loop {
+        timer.tick().await;
+        let now = web_watchdog_now_ms();
+        let stale = {
+            let mut registry = WEB_CONNECTION_CONTROLLERS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            registry.shrink_to_fit();
+            let mut stale = Vec::new();
+            registry.retain(|weak| match weak.upgrade() {
+                Some(controller) => {
+                    stale.push(controller);
+                    true
+                }
+                None => false,
+            });
+            stale
+        };
+        if stale.is_empty() {
+            continue;
+        }
+        for controller in stale {
+            if controller.aborted.load(Ordering::Relaxed) {
+                continue;
+            }
+            let idle_for = now.saturating_sub(controller.last_activity_ms.load(Ordering::Acquire));
+            if idle_for > WEB_IDLE_ABORT_MS {
+                controller.abort();
+                continue;
+            }
+            let registered_at = controller.birth_ms.load(Ordering::Acquire);
+            if registered_at != 0
+                && now.saturating_sub(registered_at) > WEB_MAX_CONNECTION_LIFETIME_MS
+            {
+                controller.abort();
+            }
+        }
+    }
+}
+
+fn register_web_controller(controller: &Arc<StealthAbortController>) {
+    let time = web_watchdog_now_ms();
+    controller.last_activity_ms.store(time, Ordering::Release);
+    controller.birth_ms.store(time, Ordering::Release);
+    let mut registry = WEB_CONNECTION_CONTROLLERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if registry.len() > 4 * MAX_WEB_CONNECTIONS {
+        registry.retain(|weak| weak.strong_count() > 0);
+    }
+    registry.push(Arc::downgrade(controller));
+}
+
+impl StealthAbortController {
+    pub fn new(#[allow(unused_variables)] stream: &tokio::net::TcpStream) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            Self {
+                aborted: AtomicBool::new(false),
+                last_activity_ms: AtomicU64::new(web_watchdog_now_ms()),
+                birth_ms: AtomicU64::new(0),
+                raw_fd: std::sync::Mutex::new(Some(stream.as_raw_fd())),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Self {
+                aborted: AtomicBool::new(false),
+                last_activity_ms: AtomicU64::new(web_watchdog_now_ms()),
+                birth_ms: AtomicU64::new(0),
+            }
+        }
+    }
+
+    pub fn touch(&self) {
+        self.last_activity_ms
+            .store(web_watchdog_now_ms(), Ordering::Release);
+    }
+
+    pub fn abort(&self) {
+        if self.aborted.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            let guard = self
+                .raw_fd
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(fd) = *guard {
+                let linger = libc::linger {
+                    l_onoff: 1,
+                    l_linger: 0,
+                };
+                unsafe {
+                    libc::setsockopt(
+                        fd,
+                        libc::SOL_SOCKET,
+                        libc::SO_LINGER,
+                        (&linger as *const libc::linger).cast(),
+                        std::mem::size_of::<libc::linger>() as libc::socklen_t,
+                    );
+                    libc::shutdown(fd, libc::SHUT_RDWR);
+                }
+            }
+        }
+    }
+
+    fn detach(&self) {
+        #[cfg(unix)]
+        {
+            *self
+                .raw_fd
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+
+    pub fn is_aborted(&self) -> bool {
+        self.aborted.load(Ordering::Relaxed)
+    }
+}
+
 pub enum DualProtocolStream {
     #[allow(dead_code)]
     Plain {
         stream: tokio::net::TcpStream,
+        controller: Arc<StealthAbortController>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     },
     Tls {
         stream: Box<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>,
+        controller: Arc<StealthAbortController>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     },
+}
+
+impl DualProtocolStream {
+    pub fn controller(&self) -> &Arc<StealthAbortController> {
+        match self {
+            DualProtocolStream::Plain { controller, .. } => controller,
+            DualProtocolStream::Tls { controller, .. } => controller,
+        }
+    }
+
+    #[allow(deprecated)]
+    fn abort_tcp(&self) {
+        self.controller().abort();
+        match self {
+            DualProtocolStream::Plain { stream, .. } => {
+                let _ = stream.set_linger(Some(Duration::ZERO));
+            }
+            DualProtocolStream::Tls { stream, .. } => {
+                let _ = stream.get_ref().0.set_linger(Some(Duration::ZERO));
+            }
+        }
+    }
+}
+
+impl Drop for DualProtocolStream {
+    fn drop(&mut self) {
+        self.controller().detach();
+    }
 }
 
 impl tokio::io::AsyncRead for DualProtocolStream {
@@ -1376,12 +4621,28 @@ impl tokio::io::AsyncRead for DualProtocolStream {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        if self.controller().is_aborted() {
+            self.abort_tcp();
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "stealth connection reset",
+            )));
+        }
         match &mut *self {
             DualProtocolStream::Plain { stream, .. } => {
-                std::pin::Pin::new(stream).poll_read(cx, buf)
+                let poll = std::pin::Pin::new(stream).poll_read(cx, buf);
+                if matches!(poll, std::task::Poll::Ready(Ok(())) if !buf.filled().is_empty()) {
+                    self.controller().touch();
+                }
+                poll
             }
             DualProtocolStream::Tls { stream, .. } => {
-                std::pin::Pin::new(stream.as_mut()).poll_read(cx, buf)
+                let stream = stream.as_mut();
+                let poll = std::pin::Pin::new(stream).poll_read(cx, buf);
+                if matches!(poll, std::task::Poll::Ready(Ok(())) if !buf.filled().is_empty()) {
+                    self.controller().touch();
+                }
+                poll
             }
         }
     }
@@ -1393,13 +4654,62 @@ impl tokio::io::AsyncWrite for DualProtocolStream {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.controller().is_aborted()
+            || buf
+                .windows(STEALTH_ABORT_HEADER.len())
+                .any(|w| w == STEALTH_ABORT_HEADER.as_bytes())
+        {
+            self.abort_tcp();
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "stealth connection reset",
+            )));
+        }
         match &mut *self {
             DualProtocolStream::Plain { stream, .. } => {
-                std::pin::Pin::new(stream).poll_write(cx, buf)
+                let poll = std::pin::Pin::new(stream).poll_write(cx, buf);
+                if poll.is_ready() {
+                    self.controller().touch();
+                }
+                poll
             }
             DualProtocolStream::Tls { stream, .. } => {
-                std::pin::Pin::new(stream.as_mut()).poll_write(cx, buf)
+                let stream = stream.as_mut();
+                let poll = std::pin::Pin::new(stream).poll_write(cx, buf);
+                if poll.is_ready() {
+                    self.controller().touch();
+                }
+                poll
             }
+        }
+    }
+
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.controller().is_aborted() {
+            self.abort_tcp();
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "stealth connection reset",
+            )));
+        }
+        match &mut *self {
+            DualProtocolStream::Plain { stream, .. } => {
+                std::pin::Pin::new(stream).poll_write_vectored(cx, bufs)
+            }
+            DualProtocolStream::Tls { stream, .. } => {
+                std::pin::Pin::new(stream.as_mut()).poll_write_vectored(cx, bufs)
+            }
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        match self {
+            DualProtocolStream::Plain { stream, .. } => stream.is_write_vectored(),
+            DualProtocolStream::Tls { stream, .. } => stream.is_write_vectored(),
         }
     }
 
@@ -1407,6 +4717,13 @@ impl tokio::io::AsyncWrite for DualProtocolStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        if self.controller().is_aborted() {
+            self.abort_tcp();
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "stealth connection reset",
+            )));
+        }
         match &mut *self {
             DualProtocolStream::Plain { stream, .. } => std::pin::Pin::new(stream).poll_flush(cx),
             DualProtocolStream::Tls { stream, .. } => {
@@ -1419,6 +4736,13 @@ impl tokio::io::AsyncWrite for DualProtocolStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        if self.controller().is_aborted() {
+            self.abort_tcp();
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "stealth connection reset",
+            )));
+        }
         match &mut *self {
             DualProtocolStream::Plain { stream, .. } => {
                 std::pin::Pin::new(stream).poll_shutdown(cx)
@@ -1430,19 +4754,120 @@ impl tokio::io::AsyncWrite for DualProtocolStream {
     }
 }
 
+fn collapse_consecutive_slashes(path: &str) -> String {
+    if !path.contains("//") {
+        return path.to_string();
+    }
+    let mut result = String::with_capacity(path.len());
+    let mut prev_slash = false;
+    for c in path.chars() {
+        if c == '/' {
+            if !prev_slash {
+                result.push(c);
+                prev_slash = true;
+            }
+        } else {
+            result.push(c);
+            prev_slash = false;
+        }
+    }
+    result
+}
+
+#[derive(Clone)]
+pub struct StealthConnectionService<S> {
+    inner: S,
+    controller: Arc<StealthAbortController>,
+}
+
+impl<S, ReqBody> tower_service::Service<axum::http::Request<ReqBody>>
+    for StealthConnectionService<S>
+where
+    S: tower_service::Service<axum::http::Request<ReqBody>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: axum::http::Request<ReqBody>) -> Self::Future {
+        req.extensions_mut().insert(self.controller.clone());
+        let uri = req.uri().clone();
+        let path = uri.path();
+        if path.contains("//") {
+            let new_path = collapse_consecutive_slashes(path);
+            let new_uri_str = if let Some(query) = uri.query() {
+                format!("{}?{}", new_path, query)
+            } else {
+                new_path
+            };
+            if let Ok(new_uri) = new_uri_str.parse() {
+                *req.uri_mut() = new_uri;
+            }
+        }
+        self.inner.call(req)
+    }
+}
+
 #[derive(Clone)]
 pub struct DualAcceptor {
     tls_acceptor: axum_server::tls_rustls::RustlsAcceptor,
     connections: Arc<tokio::sync::Semaphore>,
+    app: Arc<App>,
 }
 
 impl DualAcceptor {
-    pub fn new(config: axum_server::tls_rustls::RustlsConfig) -> Self {
+    pub fn new(config: axum_server::tls_rustls::RustlsConfig, app: Arc<App>) -> Self {
         Self {
             tls_acceptor: axum_server::tls_rustls::RustlsAcceptor::new(config),
             connections: Arc::new(tokio::sync::Semaphore::new(MAX_WEB_CONNECTIONS)),
+            app,
         }
     }
+}
+
+async fn is_valid_secret_path(raw_path: &str, app: &Arc<App>) -> bool {
+    let path_no_query = raw_path.split('?').next().unwrap_or("").trim();
+    let normalized = collapse_consecutive_slashes(path_no_query);
+    let secret = app.web_secret_path.trim().trim_matches('/');
+    if !secret.is_empty() {
+        let prefix = format!("/{}", secret);
+        if normalized == prefix || normalized.starts_with(&format!("{}/", prefix)) {
+            return true;
+        }
+    } else {
+        return true;
+    }
+
+    let trimmed = normalized.trim_matches('/');
+    let first_segment = trimmed.split('/').next().unwrap_or("");
+    if !first_segment.is_empty() {
+        let db = app.db.read().await;
+        if !db.main_sub_uuid.is_empty() && db.main_sub_uuid == first_segment {
+            return true;
+        }
+        if db
+            .passwords
+            .values()
+            .any(|p| !p.sub_uuid.is_empty() && p.sub_uuid == first_segment)
+        {
+            return true;
+        }
+        if db.groups.values().any(|g| {
+            (!g.sub_uuid.is_empty() && g.sub_uuid == first_segment)
+                || (!g.admin_uuid.is_empty() && g.admin_uuid == first_segment)
+        }) {
+            return true;
+        }
+    }
+
+    false
 }
 
 impl<S> axum_server::accept::Accept<tokio::net::TcpStream, S> for DualAcceptor
@@ -1450,16 +4875,18 @@ where
     S: Send + Clone + 'static,
 {
     type Stream = DualProtocolStream;
-    type Service = S;
+    type Service = StealthConnectionService<S>;
     type Future = std::pin::Pin<
         Box<
             dyn std::future::Future<Output = std::io::Result<(Self::Stream, Self::Service)>> + Send,
         >,
     >;
 
-    fn accept(&self, stream: tokio::net::TcpStream, service: S) -> Self::Future {
+    #[allow(deprecated)]
+    fn accept(&self, mut stream: tokio::net::TcpStream, service: S) -> Self::Future {
         let tls_acceptor = self.tls_acceptor.clone();
         let connections = self.connections.clone();
+        let app = self.app.clone();
         Box::pin(async move {
             let permit = connections.try_acquire_owned().map_err(|_| {
                 std::io::Error::new(
@@ -1468,14 +4895,17 @@ where
                 )
             })?;
             let mut buf = [0u8; 1];
-            let _ = tokio::time::timeout(Duration::from_secs(3), stream.peek(&mut buf))
+            let _ = tokio::time::timeout(Duration::from_secs(10), stream.peek(&mut buf))
                 .await
                 .map_err(|_| {
+                    let _ = stream.set_linger(Some(Duration::ZERO));
                     std::io::Error::new(std::io::ErrorKind::TimedOut, "web connection timed out")
                 })??;
             if buf[0] == 0x16 {
+                let controller = Arc::new(StealthAbortController::new(&stream));
+                register_web_controller(&controller);
                 let (tls_stream, service) = tokio::time::timeout(
-                    Duration::from_secs(3),
+                    Duration::from_secs(10),
                     tls_acceptor.accept(stream, service),
                 )
                 .await
@@ -1485,89 +4915,93 @@ where
                 Ok((
                     DualProtocolStream::Tls {
                         stream: Box::new(tls_stream),
+                        controller: controller.clone(),
                         _permit: permit,
                     },
-                    service,
+                    StealthConnectionService {
+                        inner: service,
+                        controller,
+                    },
                 ))
             } else {
-                let mut stream = stream;
-                use tokio::io::AsyncReadExt;
-                // Bound the whole header read, not each recv: a dribbling
-                // client must not pin an accept task for seconds.
-                let read_deadline = std::time::Instant::now() + Duration::from_millis(1200);
-                let mut read_buf = vec![0u8; 4096];
-                let mut total_read = 0;
-                while total_read < read_buf.len() - 1 && std::time::Instant::now() < read_deadline {
-                    let max_to_read = std::cmp::min(1024, read_buf.len() - 1 - total_read);
-                    let remaining =
-                        read_deadline.saturating_duration_since(std::time::Instant::now());
-                    match tokio::time::timeout(
-                        remaining.max(Duration::from_millis(1)),
-                        stream.read(&mut read_buf[total_read..total_read + max_to_read]),
-                    )
-                    .await
+                let mut http_buf = [0u8; 2048];
+                let n =
+                    match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut http_buf))
+                        .await
                     {
-                        Ok(Ok(0)) => break,
-                        Ok(Ok(n)) => {
-                            total_read += n;
-                            if read_buf[..total_read].windows(4).any(|w| w == b"\r\n\r\n") {
-                                break;
+                        Ok(Ok(n)) if n > 0 => n,
+                        _ => {
+                            let _ = stream.set_linger(Some(Duration::ZERO));
+                            drop(stream);
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionReset,
+                                "plain HTTP rejected",
+                            ));
+                        }
+                    };
+                let req_str = String::from_utf8_lossy(&http_buf[..n]);
+                let first_line = req_str.lines().next().unwrap_or("");
+                let mut parts = first_line.split_whitespace();
+                let _method = parts.next().unwrap_or("");
+                let raw_path = parts.next().unwrap_or("");
+
+                let host_header = req_str
+                    .lines()
+                    .find(|l| l.to_ascii_lowercase().starts_with("host:"))
+                    .and_then(|l| l.split_once(':'))
+                    .map(|(_, h)| h.trim())
+                    .unwrap_or("");
+
+                if is_valid_secret_path(raw_path, &app).await {
+                    let public_ip = app.public_ip.read().await.clone();
+                    let target_host = match parse_host_header(host_header) {
+                        Some((name, _))
+                            if name.parse::<std::net::IpAddr>().is_ok() || name == public_ip =>
+                        {
+                            if host_header.contains(':')
+                                || app.web_port == 443
+                                || app.web_port == 80
+                            {
+                                host_header.to_string()
+                            } else {
+                                format!("{}:{}", host_header, app.web_port)
                             }
                         }
-                        Ok(Err(_)) => break,
-                        Err(_) => break,
-                    }
+                        _ => {
+                            let ip_str = if !public_ip.is_empty() && public_ip != "0.0.0.0" {
+                                public_ip
+                            } else {
+                                "127.0.0.1".to_string()
+                            };
+                            if app.web_port == 443 {
+                                ip_str
+                            } else {
+                                format!("{}:{}", ip_str, app.web_port)
+                            }
+                        }
+                    };
+
+                    let redirect_url = format!("https://{}{}", target_host, raw_path);
+                    let resp = format!(
+                        "HTTP/1.1 301 Moved Permanently\r\nLocation: {redirect_url}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                    );
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        stream.write_all(resp.as_bytes()),
+                    )
+                    .await;
+                    let _ = stream.flush().await;
+                    let _ = stream.shutdown().await;
+                    drop(stream);
+                    Err(std::io::Error::other("redirected HTTP to HTTPS"))
+                } else {
+                    let _ = stream.set_linger(Some(Duration::ZERO));
+                    drop(stream);
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        "plain HTTP rejected (dead RST)",
+                    ))
                 }
-
-                let req_str = String::from_utf8_lossy(&read_buf[..total_read]);
-                let mut host = String::new();
-                let mut path = "/".to_string();
-
-                let mut lines = req_str.lines();
-                if let Some(first_line) = lines.next() {
-                    let parts: Vec<&str> = first_line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        path = parts[1].to_string();
-                    }
-                }
-
-                for line in lines {
-                    if line.to_lowercase().starts_with("host:")
-                        && let Some(h) = line.split_once(':').map(|x| x.1)
-                    {
-                        host = h.trim().to_string();
-                    }
-                }
-
-                if !is_safe_redirect_host(&host) {
-                    host.clear();
-                }
-                if host.is_empty()
-                    && let Ok(local) = stream.local_addr()
-                {
-                    host = local.to_string();
-                }
-                if host.is_empty() {
-                    host = "127.0.0.1:46002".to_string();
-                }
-
-                let redirect_response = format!(
-                    "HTTP/1.1 301 Moved Permanently\r\n\
-                     Location: https://{}{}\r\n\
-                     Connection: close\r\n\
-                     Content-Length: 0\r\n\r\n",
-                    host, path
-                );
-
-                use tokio::io::AsyncWriteExt;
-                let _ = stream.write_all(redirect_response.as_bytes()).await;
-                let _ = stream.flush().await;
-                let _ = stream.shutdown().await;
-
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionAborted,
-                    "HTTP redirected to HTTPS",
-                ))
             }
         })
     }
@@ -1790,8 +5224,6 @@ async fn local_proxy_delete(State(state): State<WebState>, Path(id): Path<String
     Json(serde_json::json!({ "deleted": true })).into_response()
 }
 
-// The monitor loop applies the TPROXY route asynchronously after the trigger;
-// wait briefly so the response reflects reality instead of pre-declaring success.
 async fn wait_proxy_route_applied(state: &WebState, want_active: bool) -> Result<(), String> {
     tokio::time::sleep(Duration::from_millis(250)).await;
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
@@ -1882,8 +5314,31 @@ async fn logs_download(State(state): State<WebState>) -> impl IntoResponse {
     }
 }
 
-async fn security_headers(request: Request<Body>, next: Next) -> Response {
+async fn security_headers(mut request: Request<Body>, next: Next) -> Response {
+    let controller = request
+        .extensions()
+        .get::<Arc<StealthAbortController>>()
+        .cloned();
+    let uri = request.uri().clone();
+    let path = uri.path();
+    if path.contains("//") {
+        let new_path = collapse_consecutive_slashes(path);
+        let new_uri_str = if let Some(query) = uri.query() {
+            format!("{}?{}", new_path, query)
+        } else {
+            new_path
+        };
+        if let Ok(new_uri) = new_uri_str.parse() {
+            *request.uri_mut() = new_uri;
+        }
+    }
     let mut response = next.run(request).await;
+    if response.headers().contains_key(STEALTH_ABORT_HEADER) {
+        if let Some(controller) = controller {
+            controller.abort();
+        }
+        return response;
+    }
     let h = response.headers_mut();
     if !h.contains_key(header::CACHE_CONTROL) {
         h.insert(
@@ -1928,10 +5383,42 @@ pub async fn run(
         .route("/api/clients", get(clients_get).post(clients_create))
         .route(
             "/api/clients/{password}",
-            post(client_update).delete(client_delete),
+            get(client_get).post(client_update).delete(client_delete),
         )
         .route("/api/clients/{password}/toggle", post(client_toggle))
         .route("/api/clients/{password}/unbind", post(client_unbind))
+        .route(
+            "/api/clients/{password}/reset-traffic",
+            post(client_reset_traffic),
+        )
+        .route("/api/clients/{password}/extend", post(client_extend))
+        .route(
+            "/api/clients/{password}/sub-link/regenerate",
+            post(client_sub_link_regenerate),
+        )
+        .route("/api/groups", get(groups_get).post(groups_create))
+        .route("/api/groups/{id}", put(groups_update).delete(groups_delete))
+        .route(
+            "/api/groups/{id}/admin-link",
+            post(group_admin_link_post).delete(group_admin_link_delete),
+        )
+        .route(
+            "/api/groups/{id}/admin-link/regenerate",
+            post(group_admin_link_regenerate),
+        )
+        .route(
+            "/api/groups/{id}/sub-link/regenerate",
+            post(group_sub_link_regenerate),
+        )
+        .route(
+            "/api/routing-rules",
+            get(routing_rules_get).post(routing_rules_create),
+        )
+        .route(
+            "/api/routing-rules/{id}",
+            put(routing_rules_update).delete(routing_rules_delete),
+        )
+        .route("/api/template-domains", get(template_domains_get))
         .route("/api/logs", get(logs_get))
         .route("/api/logs/toggle", post(logs_toggle))
         .route("/api/logs/clear", post(logs_clear))
@@ -1948,28 +5435,145 @@ pub async fn run(
         .route("/api/local-proxy/deactivate", post(local_proxy_deactivate))
         .route("/api/logout", post(logout))
         .route("/api/logout_all", post(logout_all))
+        .route("/api/links", get(api_links_get))
+        .route("/api/links/batch-vk", post(api_links_batch_vk))
+        .route("/api/clients/{password}/vk", put(api_client_vk_update))
+        .route("/api/settings/dns", post(api_settings_dns))
+        .route(
+            "/api/settings/restart-interval",
+            post(api_settings_restart_interval),
+        )
+        .route(
+            "/api/settings/master-password",
+            post(api_settings_master_password),
+        )
+        .route("/api/clients/batch-toggle", post(api_clients_batch_toggle))
+        .route("/api/clients/batch-extend", post(api_clients_batch_extend))
+        .route(
+            "/api/clients/batch-reset-traffic",
+            post(api_clients_batch_reset_traffic),
+        )
+        .route("/api/clients/batch-delete", post(api_clients_batch_delete))
+        .route("/api/clients/batch-group", post(api_clients_batch_group))
+        .route("/api/groups/{id}/clients", get(group_clients_get))
+        .route("/api/diagnostics/dpi", get(api_diagnostics_dpi))
+        .route("/api/export", get(api_export_get))
+        .route("/api/import", post(api_import_post))
         .route("/api/reboot", post(reboot))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ));
 
-    let router = Router::new()
-        .route("/", get(root))
+    let panel_routes = Router::new()
+        .route("/", get(panel_root))
         .route("/manifest.webmanifest", get(pwa_manifest))
         .route("/sw.js", get(pwa_service_worker))
         .route("/pwa-icon.svg", get(pwa_icon))
         .route("/pwa-icon-192.png", get(pwa_icon_192))
         .route("/pwa-icon-512.png", get(pwa_icon_512))
+        .route("/qrcode.min.js", get(qrcode_js))
+        .route("/favicon.ico", get(favicon))
         .route("/api/login", post(login))
-        .merge(protected)
+        .merge(protected);
+
+    let mut router = Router::new();
+    let secret = app.web_secret_path.trim().trim_matches('/');
+    if secret.is_empty() {
+        router = router.merge(panel_routes);
+    } else {
+        let prefix = format!("/{}", secret);
+        let trailing_prefix = format!("{}/", prefix);
+        router = router
+            .route("/", get(root_with_secret))
+            .route(&trailing_prefix, get(panel_root))
+            .nest(&prefix, panel_routes);
+        router = router
+            .route("/manifest.webmanifest", get(pwa_manifest))
+            .route("/sw.js", get(pwa_service_worker))
+            .route("/pwa-icon.svg", get(pwa_icon))
+            .route("/pwa-icon-192.png", get(pwa_icon_192))
+            .route("/pwa-icon-512.png", get(pwa_icon_512))
+            .route("/qrcode.min.js", get(qrcode_js))
+            .route("/favicon.ico", get(favicon));
+    }
+
+    let router = router
+        .route("/{uuid}/admin", get(group_admin_page))
+        .route("/{uuid}/admin/", get(group_admin_page))
+        .route("/{uuid}/api/data", get(group_admin_data_get))
+        .route("/api/group-admin/{uuid}/data", get(group_admin_data_get))
+        .route("/{uuid}/api/settings", post(group_admin_settings_post))
+        .route(
+            "/api/group-admin/{uuid}/settings",
+            post(group_admin_settings_post),
+        )
+        .route("/{uuid}/api/clients", post(group_admin_client_create))
+        .route(
+            "/api/group-admin/{uuid}/clients",
+            post(group_admin_client_create),
+        )
+        .route(
+            "/{uuid}/api/clients/{password}",
+            put(group_admin_client_update).delete(group_admin_client_delete),
+        )
+        .route(
+            "/api/group-admin/{uuid}/clients/{password}",
+            put(group_admin_client_update).delete(group_admin_client_delete),
+        )
+        .route(
+            "/{uuid}/api/clients/{password}/toggle",
+            post(group_admin_client_toggle),
+        )
+        .route(
+            "/api/group-admin/{uuid}/clients/{password}/toggle",
+            post(group_admin_client_toggle),
+        )
+        .route(
+            "/{uuid}/api/clients/{password}/reset-traffic",
+            post(group_admin_client_reset_traffic),
+        )
+        .route(
+            "/api/group-admin/{uuid}/clients/{password}/reset-traffic",
+            post(group_admin_client_reset_traffic),
+        )
+        .route(
+            "/{uuid}/api/clients/{password}/extend",
+            post(group_admin_client_extend),
+        )
+        .route(
+            "/api/group-admin/{uuid}/clients/{password}/extend",
+            post(group_admin_client_extend),
+        )
+        .route(
+            "/{uuid}/api/clients/{password}/unbind",
+            post(group_admin_client_unbind),
+        )
+        .route(
+            "/api/group-admin/{uuid}/clients/{password}/unbind",
+            post(group_admin_client_unbind),
+        )
+        .route("/{uuid}/sub", get(client_sub_page))
+        .route("/{uuid}/sub/", get(client_sub_page))
+        .route("/{uuid}/json", get(universal_sub_json))
+        .route("/{uuid}/json/", get(universal_sub_json))
+        .route("/{uuid}/sub.json", get(client_sub_json))
+        .route("/api/sub/{uuid}", get(client_sub_json))
+        .route("/api/sub/{uuid}/", get(client_sub_json))
+        .route("/{uuid}/sub-group", get(group_sub_page))
+        .route("/{uuid}/sub-group/", get(group_sub_page))
+        .route("/{uuid}/sub-group.json", get(group_sub_json))
+        .route("/api/sub-group/{uuid}", get(group_sub_json))
+        .route("/api/sub-group/{uuid}/", get(group_sub_json))
+        .fallback(fallback_reject)
         .layer(DefaultBodyLimit::max(WEB_BODY_LIMIT_BYTES))
         .layer(middleware::from_fn(security_headers))
         .with_state(state);
 
     tokio::spawn(web_session_janitor(app.clone()));
+    tokio::spawn(web_slowloris_watchdog());
     println!("[WEB] HTTP/HTTPS listening on 0.0.0.0:{}", app.web_port);
-    let acceptor = DualAcceptor::new(tls_config);
+    let acceptor = DualAcceptor::new(tls_config, app.clone());
     axum_server::Server::bind(SocketAddr::from(([0, 0, 0, 0], app.web_port)))
         .acceptor(acceptor)
         .serve(router.into_make_service_with_connect_info::<SocketAddr>())
@@ -2026,14 +5630,16 @@ static PWA_ICON_512_PNG: LazyLock<Vec<u8>> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
-const PWA_SERVICE_WORKER: &str = r##"const CACHE_NAME = 'csqtt-panel-shell-2.1.9-pwa2';
-const SHELL_ASSETS = ['/manifest.webmanifest', '/pwa-icon.svg', '/pwa-icon-192.png', '/pwa-icon-512.png'];
-const OFFLINE_PAGE = '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CSQTT</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0a0c;color:#f4f4f5;font:16px system-ui,-apple-system,Segoe UI,Roboto,sans-serif}main{max-width:320px;padding:28px;text-align:center}h1{margin:0 0 12px;color:#55adff;font-size:28px}p{margin:0;color:#a1a1aa;line-height:1.5}</style><main><h1>CSQTT</h1><p>Нет соединения с сервером. Проверьте сеть и откройте панель снова.</p></main></html>';
+const PWA_SERVICE_WORKER: &str = r##"const CACHE_NAME = 'csqtt-panel-shell-2.5.0-pwa4';
+const base = self.location.pathname.replace(/\/sw\.js$/, '');
+const SHELL_ASSETS = ['/manifest.webmanifest', '/pwa-icon.svg', '/pwa-icon-192.png', '/pwa-icon-512.png', '/qrcode.min.js'].map(p => (base ? base : '') + p);
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(SHELL_ASSETS);
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.addAll(SHELL_ASSETS);
+    } catch (_) {}
     await self.skipWaiting();
   })());
 });
@@ -2050,20 +5656,15 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
-
-  if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(() => new Response(OFFLINE_PAGE, {
-      headers: { 'content-type': 'text/html; charset=utf-8' }
-    })));
-    return;
-  }
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.includes('/api/')) return;
 
   if (SHELL_ASSETS.includes(url.pathname)) {
     event.respondWith(caches.match(request).then(cached => cached || fetch(request)));
   }
 });
 "##;
+
+const QRCODE_JS: &str = r##"var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=new Array(t),e=0;e<t;e+=1){r[e]=new Array(t);for(var n=0;n<t;n+=1)r[e][n]=null}return r}(l=4*u+17),e(0,0),e(l-7,0),e(0,l-7),i(),o(),v(t,r),7<=u&&h(t),null==n&&(n=w(u,f,c)),d(n,r)}var u=t,f=y[r],g=null,l=0,n=null,c=[],s={},e=function(t,r){for(var e=-1;e<=7;e+=1)if(!(t+e<=-1||l<=t+e))for(var n=-1;n<=7;n+=1)r+n<=-1||l<=r+n||(g[t+e][r+n]=0<=e&&e<=6&&(0==n||6==n)||0<=n&&n<=6&&(0==e||6==e)||2<=e&&e<=4&&2<=n&&n<=4)},o=function(){for(var t=8;t<l-8;t+=1)null==g[t][6]&&(g[t][6]=t%2==0);for(var r=8;r<l-8;r+=1)null==g[6][r]&&(g[6][r]=r%2==0)},i=function(){for(var t=B.getPatternPosition(u),r=0;r<t.length;r+=1)for(var e=0;e<t.length;e+=1){var n=t[r],o=t[e];if(null==g[n][o])for(var i=-2;i<=2;i+=1)for(var a=-2;a<=2;a+=1)g[n+i][o+a]=-2==i||2==i||-2==a||2==a||0==i&&0==a}},h=function(t){for(var r=B.getBCHTypeNumber(u),e=0;e<18;e+=1){var n=!t&&1==(r>>e&1);g[Math.floor(e/3)][e%3+l-8-3]=n}for(e=0;e<18;e+=1){n=!t&&1==(r>>e&1);g[e%3+l-8-3][Math.floor(e/3)]=n}},v=function(t,r){for(var e=f<<3|r,n=B.getBCHTypeInfo(e),o=0;o<15;o+=1){var i=!t&&1==(n>>o&1);o<6?g[o][8]=i:o<8?g[o+1][8]=i:g[l-15+o][8]=i}for(o=0;o<15;o+=1){i=!t&&1==(n>>o&1);o<8?g[8][l-o-1]=i:o<9?g[8][15-o-1+1]=i:g[8][15-o-1]=i}g[l-8][8]=!t},d=function(t,r){for(var e=-1,n=l-1,o=7,i=0,a=B.getMaskFunction(r),u=l-1;0<u;u-=2)for(6==u&&(u-=1);;){for(var f=0;f<2;f+=1)if(null==g[n][u-f]){var c=!1;i<t.length&&(c=1==(t[i]>>>o&1)),a(n,u-f)&&(c=!c),g[n][u-f]=c,-1==(o-=1)&&(i+=1,o=7)}if((n+=e)<0||l<=n){n-=e,e=-e;break}}},w=function(t,r,e){for(var n=b.getRSBlocks(t,r),o=M(),i=0;i<e.length;i+=1){var a=e[i];o.put(a.getMode(),4),o.put(a.getLength(),B.getLengthInBits(a.getMode(),t)),a.write(o)}var u=0;for(i=0;i<n.length;i+=1)u+=n[i].dataCount;if(o.getLengthInBits()>8*u)throw"code length overflow. ("+o.getLengthInBits()+">"+8*u+")";for(o.getLengthInBits()+4<=8*u&&o.put(0,4);o.getLengthInBits()%8!=0;)o.putBit(!1);for(;!(o.getLengthInBits()>=8*u||(o.put(236,8),o.getLengthInBits()>=8*u));)o.put(17,8);return function(t,r){for(var e=0,n=0,o=0,i=new Array(r.length),a=new Array(r.length),u=0;u<r.length;u+=1){var f=r[u].dataCount,c=r[u].totalCount-f;n=Math.max(n,f),o=Math.max(o,c),i[u]=new Array(f);for(var g=0;g<i[u].length;g+=1)i[u][g]=255&t.getBuffer()[g+e];e+=f;var l=B.getErrorCorrectPolynomial(c),h=C(i[u],l.getLength()-1).mod(l);a[u]=new Array(l.getLength()-1);for(g=0;g<a[u].length;g+=1){var s=g+h.getLength()-a[u].length;a[u][g]=0<=s?h.getAt(s):0}}var v=0;for(g=0;g<r.length;g+=1)v+=r[g].totalCount;var d=new Array(v),w=0;for(g=0;g<n;g+=1)for(u=0;u<r.length;u+=1)g<i[u].length&&(d[w]=i[u][g],w+=1);for(g=0;g<o;g+=1)for(u=0;u<r.length;u+=1)g<a[u].length&&(d[w]=a[u][g],w+=1);return d}(o,n)};s.addData=function(t,r){var e=null;switch(r=r||"Byte"){case"Numeric":e=x(t);break;case"Alphanumeric":e=m(t);break;case"Byte":e=L(t);break;case"Kanji":e=D(t);break;default:throw"mode:"+r}c.push(e),n=null},s.isDark=function(t,r){if(t<0||l<=t||r<0||l<=r)throw t+","+r;return g[t][r]},s.getModuleCount=function(){return l},s.make=function(){if(u<1){for(var t=1;t<40;t++){for(var r=b.getRSBlocks(t,f),e=M(),n=0;n<c.length;n++){var o=c[n];e.put(o.getMode(),4),e.put(o.getLength(),B.getLengthInBits(o.getMode(),t)),o.write(e)}var i=0;for(n=0;n<r.length;n++)i+=r[n].dataCount;if(e.getLengthInBits()<=8*i)break}u=t}a(!1,function(){for(var t=0,r=0,e=0;e<8;e+=1){a(!0,e);var n=B.getLostPoint(s);(0==e||n<t)&&(t=n,r=e)}return r}())},s.createTableTag=function(t,r){t=t||2;var e="";e+='<table style="',e+=" border-width: 0px; border-style: none;",e+=" border-collapse: collapse;",e+=" padding: 0px; margin: "+(r=void 0===r?4*t:r)+"px;",e+='">',e+="<tbody>";for(var n=0;n<s.getModuleCount();n+=1){e+="<tr>";for(var o=0;o<s.getModuleCount();o+=1)e+='<td style="',e+=" border-width: 0px; border-style: none;",e+=" border-collapse: collapse;",e+=" padding: 0px; margin: 0px;",e+=" width: "+t+"px;",e+=" height: "+t+"px;",e+=" background-color: ",e+=s.isDark(n,o)?"#000000":"#ffffff",e+=";",e+='"/>';e+="</tr>"}return e+="</tbody>",e+="</table>"},s.createSvgTag=function(t,r,e,n){var o={};"object"==typeof t&&(t=(o=t).cellSize,r=o.margin,e=o.alt,n=o.title),t=t||2,r=void 0===r?4*t:r,(e="string"==typeof e?{text:e}:e||{}).text=e.text||null,e.id=e.text?e.id||"qrcode-description":null,(n="string"==typeof n?{text:n}:n||{}).text=n.text||null,n.id=n.text?n.id||"qrcode-title":null;var i,a,u,f,c=s.getModuleCount()*t+2*r,g="";for(f="l"+t+",0 0,"+t+" -"+t+",0 0,-"+t+"z ",g+='<svg version="1.1" xmlns="http://www.w3.org/2000/svg"',g+=o.scalable?"":' width="'+c+'px" height="'+c+'px"',g+=' viewBox="0 0 '+c+" "+c+'" ',g+=' preserveAspectRatio="xMinYMin meet"',g+=n.text||e.text?' role="img" aria-labelledby="'+p([n.id,e.id].join(" ").trim())+'"':"",g+=">",g+=n.text?'<title id="'+p(n.id)+'">'+p(n.text)+"</title>":"",g+=e.text?'<description id="'+p(e.id)+'">'+p(e.text)+"</description>":"",g+='<rect width="100%" height="100%" fill="white" cx="0" cy="0"/>',g+='<path d="',a=0;a<s.getModuleCount();a+=1)for(u=a*t+r,i=0;i<s.getModuleCount();i+=1)s.isDark(a,i)&&(g+="M"+(i*t+r)+","+u+f);return g+='" stroke="transparent" fill="black"/>',g+="</svg>"},s.createDataURL=function(o,t){o=o||2,t=void 0===t?4*o:t;var r=s.getModuleCount()*o+2*t,i=t,a=r-t;return I(r,r,function(t,r){if(i<=t&&t<a&&i<=r&&r<a){var e=Math.floor((t-i)/o),n=Math.floor((r-i)/o);return s.isDark(n,e)?0:1}return 1})},s.createImgTag=function(t,r,e){t=t||2,r=void 0===r?4*t:r;var n=s.getModuleCount()*t+2*r,o="";return o+="<img",o+=' src="',o+=s.createDataURL(t,r),o+='"',o+=' width="',o+=n,o+='"',o+=' height="',o+=n,o+='"',e&&(o+=' alt="',o+=p(e),o+='"'),o+="/>"};var p=function(t){for(var r="",e=0;e<t.length;e+=1){var n=t.charAt(e);switch(n){case"<":r+="&lt;";break;case">":r+="&gt;";break;case"&":r+="&amp;";break;case'"':r+="&quot;";break;default:r+=n}}return r};return s.createASCII=function(t,r){if((t=t||1)<2)return function(t){t=void 0===t?2:t;var r,e,n,o,i,a=1*s.getModuleCount()+2*t,u=t,f=a-t,c={"██":"█","█ ":"▀"," █":"▄","  ":" "},g={"██":"▀","█ ":"▀"," █":" ","  ":" "},l="";for(r=0;r<a;r+=2){for(n=Math.floor((r-u)/1),o=Math.floor((r+1-u)/1),e=0;e<a;e+=1)i="█",u<=e&&e<f&&u<=r&&r<f&&s.isDark(n,Math.floor((e-u)/1))&&(i=" "),u<=e&&e<f&&u<=r+1&&r+1<f&&s.isDark(o,Math.floor((e-u)/1))?i+=" ":i+="█",l+=t<1&&f<=r+1?g[i]:c[i];l+="\n"}return a%2&&0<t?l.substring(0,l.length-a-1)+Array(1+a).join("▀"):l.substring(0,l.length-1)}(r);t-=1,r=void 0===r?2*t:r;var e,n,o,i,a=s.getModuleCount()*t+2*r,u=r,f=a-r,c=Array(t+1).join("██"),g=Array(t+1).join("  "),l="",h="";for(e=0;e<a;e+=1){for(o=Math.floor((e-u)/t),h="",n=0;n<a;n+=1)i=1,u<=n&&n<f&&u<=e&&e<f&&s.isDark(o,Math.floor((n-u)/t))&&(i=0),h+=i?c:g;for(o=0;o<t;o+=1)l+=h+"\n"}return l.substring(0,l.length-1)},s.renderTo2dContext=function(t,r){r=r||2;for(var e=s.getModuleCount(),n=0;n<e;n++)for(var o=0;o<e;o++)t.fillStyle=s.isDark(n,o)?"black":"white",t.fillRect(n*r,o*r,r,r)},s}i.stringToBytes=(i.stringToBytesFuncs={default:function(t){for(var r=[],e=0;e<t.length;e+=1){var n=t.charCodeAt(e);r.push(255&n)}return r}}).default,i.createStringToBytes=function(u,f){var i=function(){function t(){var t=r.read();if(-1==t)throw"eof";return t}for(var r=S(u),e=0,n={};;){var o=r.read();if(-1==o)break;var i=t(),a=t()<<8|t();n[String.fromCharCode(o<<8|i)]=a,e+=1}if(e!=f)throw e+" != "+f;return n}(),a="?".charCodeAt(0);return function(t){for(var r=[],e=0;e<t.length;e+=1){var n=t.charCodeAt(e);if(n<128)r.push(n);else{var o=i[t.charAt(e)];"number"==typeof o?(255&o)==o?r.push(o):(r.push(o>>>8),r.push(255&o)):r.push(a)}}return r}};var r,t,a=1,u=2,o=4,f=8,y={L:1,M:0,Q:3,H:2},e=0,n=1,c=2,g=3,l=4,h=5,s=6,v=7,B=(r=[[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50],[6,30,54],[6,32,58],[6,34,62],[6,26,46,66],[6,26,48,70],[6,26,50,74],[6,30,54,78],[6,30,56,82],[6,30,58,86],[6,34,62,90],[6,28,50,72,94],[6,26,50,74,98],[6,30,54,78,102],[6,28,54,80,106],[6,32,58,84,110],[6,30,58,86,114],[6,34,62,90,118],[6,26,50,74,98,122],[6,30,54,78,102,126],[6,26,52,78,104,130],[6,30,56,82,108,134],[6,34,60,86,112,138],[6,30,58,86,114,142],[6,34,62,90,118,146],[6,30,54,78,102,126,150],[6,24,50,76,102,128,154],[6,28,54,80,106,132,158],[6,32,58,84,110,136,162],[6,26,54,82,110,138,166],[6,30,58,86,114,142,170]],(t={}).getBCHTypeInfo=function(t){for(var r=t<<10;0<=d(r)-d(1335);)r^=1335<<d(r)-d(1335);return 21522^(t<<10|r)},t.getBCHTypeNumber=function(t){for(var r=t<<12;0<=d(r)-d(7973);)r^=7973<<d(r)-d(7973);return t<<12|r},t.getPatternPosition=function(t){return r[t-1]},t.getMaskFunction=function(t){switch(t){case e:return function(t,r){return(t+r)%2==0};case n:return function(t,r){return t%2==0};case c:return function(t,r){return r%3==0};case g:return function(t,r){return(t+r)%3==0};case l:return function(t,r){return(Math.floor(t/2)+Math.floor(r/3))%2==0};case h:return function(t,r){return t*r%2+t*r%3==0};case s:return function(t,r){return(t*r%2+t*r%3)%2==0};case v:return function(t,r){return(t*r%3+(t+r)%2)%2==0};default:throw"bad maskPattern:"+t}},t.getErrorCorrectPolynomial=function(t){for(var r=C([1],0),e=0;e<t;e+=1)r=r.multiply(C([1,w.gexp(e)],0));return r},t.getLengthInBits=function(t,r){if(1<=r&&r<10)switch(t){case a:return 10;case u:return 9;case o:case f:return 8;default:throw"mode:"+t}else if(r<27)switch(t){case a:return 12;case u:return 11;case o:return 16;case f:return 10;default:throw"mode:"+t}else{if(!(r<41))throw"type:"+r;switch(t){case a:return 14;case u:return 13;case o:return 16;case f:return 12;default:throw"mode:"+t}}},t.getLostPoint=function(t){for(var r=t.getModuleCount(),e=0,n=0;n<r;n+=1)for(var o=0;o<r;o+=1){for(var i=0,a=t.isDark(n,o),u=-1;u<=1;u+=1)if(!(n+u<0||r<=n+u))for(var f=-1;f<=1;f+=1)o+f<0||r<=o+f||0==u&&0==f||a==t.isDark(n+u,o+f)&&(i+=1);5<i&&(e+=3+i-5)}for(n=0;n<r-1;n+=1)for(o=0;o<r-1;o+=1){var c=0;t.isDark(n,o)&&(c+=1),t.isDark(n+1,o)&&(c+=1),t.isDark(n,o+1)&&(c+=1),t.isDark(n+1,o+1)&&(c+=1),0!=c&&4!=c||(e+=3)}for(n=0;n<r;n+=1)for(o=0;o<r-6;o+=1)t.isDark(n,o)&&!t.isDark(n,o+1)&&t.isDark(n,o+2)&&t.isDark(n,o+3)&&t.isDark(n,o+4)&&!t.isDark(n,o+5)&&t.isDark(n,o+6)&&(e+=40);for(o=0;o<r;o+=1)for(n=0;n<r-6;n+=1)t.isDark(n,o)&&!t.isDark(n+1,o)&&t.isDark(n+2,o)&&t.isDark(n+3,o)&&t.isDark(n+4,o)&&!t.isDark(n+5,o)&&t.isDark(n+6,o)&&(e+=40);var g=0;for(o=0;o<r;o+=1)for(n=0;n<r;n+=1)t.isDark(n,o)&&(g+=1);return e+=Math.abs(100*g/r/r-50)/5*10},t);function d(t){for(var r=0;0!=t;)r+=1,t>>>=1;return r}var w=function(){for(var r=new Array(256),e=new Array(256),t=0;t<8;t+=1)r[t]=1<<t;for(t=8;t<256;t+=1)r[t]=r[t-4]^r[t-5]^r[t-6]^r[t-8];for(t=0;t<255;t+=1)e[r[t]]=t;var n={glog:function(t){if(t<1)throw"glog("+t+")";return e[t]},gexp:function(t){for(;t<0;)t+=255;for(;256<=t;)t-=255;return r[t]}};return n}();function C(n,o){if(void 0===n.length)throw n.length+"/"+o;var r=function(){for(var t=0;t<n.length&&0==n[t];)t+=1;for(var r=new Array(n.length-t+o),e=0;e<n.length-t;e+=1)r[e]=n[e+t];return r}(),i={getAt:function(t){return r[t]},getLength:function(){return r.length},multiply:function(t){for(var r=new Array(i.getLength()+t.getLength()-1),e=0;e<i.getLength();e+=1)for(var n=0;n<t.getLength();n+=1)r[e+n]^=w.gexp(w.glog(i.getAt(e))+w.glog(t.getAt(n)));return C(r,0)},mod:function(t){if(i.getLength()-t.getLength()<0)return i;for(var r=w.glog(i.getAt(0))-w.glog(t.getAt(0)),e=new Array(i.getLength()),n=0;n<i.getLength();n+=1)e[n]=i.getAt(n);for(n=0;n<t.getLength();n+=1)e[n]^=w.gexp(w.glog(t.getAt(n))+r);return C(e,0).mod(t)}};return i}function p(){var e=[],o={writeByte:function(t){e.push(255&t)},writeShort:function(t){o.writeByte(t),o.writeByte(t>>>8)},writeBytes:function(t,r,e){r=r||0,e=e||t.length;for(var n=0;n<e;n+=1)o.writeByte(t[n+r])},writeString:function(t){for(var r=0;r<t.length;r+=1)o.writeByte(t.charCodeAt(r))},toByteArray:function(){return e},toString:function(){var t="";t+="[";for(var r=0;r<e.length;r+=1)0<r&&(t+=","),t+=e[r];return t+="]"}};return o}var k,A,b=(k=[[1,26,19],[1,26,16],[1,26,13],[1,26,9],[1,44,34],[1,44,28],[1,44,22],[1,44,16],[1,70,55],[1,70,44],[2,35,17],[2,35,13],[1,100,80],[2,50,32],[2,50,24],[4,25,9],[1,134,108],[2,67,43],[2,33,15,2,34,16],[2,33,11,2,34,12],[2,86,68],[4,43,27],[4,43,19],[4,43,15],[2,98,78],[4,49,31],[2,32,14,4,33,15],[4,39,13,1,40,14],[2,121,97],[2,60,38,2,61,39],[4,40,18,2,41,19],[4,40,14,2,41,15],[2,146,116],[3,58,36,2,59,37],[4,36,16,4,37,17],[4,36,12,4,37,13],[2,86,68,2,87,69],[4,69,43,1,70,44],[6,43,19,2,44,20],[6,43,15,2,44,16],[4,101,81],[1,80,50,4,81,51],[4,50,22,4,51,23],[3,36,12,8,37,13],[2,116,92,2,117,93],[6,58,36,2,59,37],[4,46,20,6,47,21],[7,42,14,4,43,15],[4,133,107],[8,59,37,1,60,38],[8,44,20,4,45,21],[12,33,11,4,34,12],[3,145,115,1,146,116],[4,64,40,5,65,41],[11,36,16,5,37,17],[11,36,12,5,37,13],[5,109,87,1,110,88],[5,65,41,5,66,42],[5,54,24,7,55,25],[11,36,12,7,37,13],[5,122,98,1,123,99],[7,73,45,3,74,46],[15,43,19,2,44,20],[3,45,15,13,46,16],[1,135,107,5,136,108],[10,74,46,1,75,47],[1,50,22,15,51,23],[2,42,14,17,43,15],[5,150,120,1,151,121],[9,69,43,4,70,44],[17,50,22,1,51,23],[2,42,14,19,43,15],[3,141,113,4,142,114],[3,70,44,11,71,45],[17,47,21,4,48,22],[9,39,13,16,40,14],[3,135,107,5,136,108],[3,67,41,13,68,42],[15,54,24,5,55,25],[15,43,15,10,44,16],[4,144,116,4,145,117],[17,68,42],[17,50,22,6,51,23],[19,46,16,6,47,17],[2,139,111,7,140,112],[17,74,46],[7,54,24,16,55,25],[34,37,13],[4,151,121,5,152,122],[4,75,47,14,76,48],[11,54,24,14,55,25],[16,45,15,14,46,16],[6,147,117,4,148,118],[6,73,45,14,74,46],[11,54,24,16,55,25],[30,46,16,2,47,17],[8,132,106,4,133,107],[8,75,47,13,76,48],[7,54,24,22,55,25],[22,45,15,13,46,16],[10,142,114,2,143,115],[19,74,46,4,75,47],[28,50,22,6,51,23],[33,46,16,4,47,17],[8,152,122,4,153,123],[22,73,45,3,74,46],[8,53,23,26,54,24],[12,45,15,28,46,16],[3,147,117,10,148,118],[3,73,45,23,74,46],[4,54,24,31,55,25],[11,45,15,31,46,16],[7,146,116,7,147,117],[21,73,45,7,74,46],[1,53,23,37,54,24],[19,45,15,26,46,16],[5,145,115,10,146,116],[19,75,47,10,76,48],[15,54,24,25,55,25],[23,45,15,25,46,16],[13,145,115,3,146,116],[2,74,46,29,75,47],[42,54,24,1,55,25],[23,45,15,28,46,16],[17,145,115],[10,74,46,23,75,47],[10,54,24,35,55,25],[19,45,15,35,46,16],[17,145,115,1,146,116],[14,74,46,21,75,47],[29,54,24,19,55,25],[11,45,15,46,46,16],[13,145,115,6,146,116],[14,74,46,23,75,47],[44,54,24,7,55,25],[59,46,16,1,47,17],[12,151,121,7,152,122],[12,75,47,26,76,48],[39,54,24,14,55,25],[22,45,15,41,46,16],[6,151,121,14,152,122],[6,75,47,34,76,48],[46,54,24,10,55,25],[2,45,15,64,46,16],[17,152,122,4,153,123],[29,74,46,14,75,47],[49,54,24,10,55,25],[24,45,15,46,46,16],[4,152,122,18,153,123],[13,74,46,32,75,47],[48,54,24,14,55,25],[42,45,15,32,46,16],[20,147,117,4,148,118],[40,75,47,7,76,48],[43,54,24,22,55,25],[10,45,15,67,46,16],[19,148,118,6,149,119],[18,75,47,31,76,48],[34,54,24,34,55,25],[20,45,15,61,46,16]],(A={}).getRSBlocks=function(t,r){var e=function(t,r){switch(r){case y.L:return k[4*(t-1)+0];case y.M:return k[4*(t-1)+1];case y.Q:return k[4*(t-1)+2];case y.H:return k[4*(t-1)+3];default:return}}(t,r);if(void 0===e)throw"bad rs block @ typeNumber:"+t+"/errorCorrectionLevel:"+r;for(var n,o,i=e.length/3,a=[],u=0;u<i;u+=1)for(var f=e[3*u+0],c=e[3*u+1],g=e[3*u+2],l=0;l<f;l+=1)a.push((n=g,o=void 0,(o={}).totalCount=c,o.dataCount=n,o));return a},A),M=function(){var e=[],n=0,o={getBuffer:function(){return e},getAt:function(t){var r=Math.floor(t/8);return 1==(e[r]>>>7-t%8&1)},put:function(t,r){for(var e=0;e<r;e+=1)o.putBit(1==(t>>>r-e-1&1))},getLengthInBits:function(){return n},putBit:function(t){var r=Math.floor(n/8);e.length<=r&&e.push(0),t&&(e[r]|=128>>>n%8),n+=1}};return o},x=function(t){var r=a,n=t,e={getMode:function(){return r},getLength:function(t){return n.length},write:function(t){for(var r=n,e=0;e+2<r.length;)t.put(o(r.substring(e,e+3)),10),e+=3;e<r.length&&(r.length-e==1?t.put(o(r.substring(e,e+1)),4):r.length-e==2&&t.put(o(r.substring(e,e+2)),7))}},o=function(t){for(var r=0,e=0;e<t.length;e+=1)r=10*r+i(t.charAt(e));return r},i=function(t){if("0"<=t&&t<="9")return t.charCodeAt(0)-"0".charCodeAt(0);throw"illegal char :"+t};return e},m=function(t){var r=u,n=t,e={getMode:function(){return r},getLength:function(t){return n.length},write:function(t){for(var r=n,e=0;e+1<r.length;)t.put(45*o(r.charAt(e))+o(r.charAt(e+1)),11),e+=2;e<r.length&&t.put(o(r.charAt(e)),6)}},o=function(t){if("0"<=t&&t<="9")return t.charCodeAt(0)-"0".charCodeAt(0);if("A"<=t&&t<="Z")return t.charCodeAt(0)-"A".charCodeAt(0)+10;switch(t){case" ":return 36;case"$":return 37;case"%":return 38;case"*":return 39;case"+":return 40;case"-":return 41;case".":return 42;case"/":return 43;case":":return 44;default:throw"illegal char :"+t}};return e},L=function(t){var r=o,e=i.stringToBytes(t),n={getMode:function(){return r},getLength:function(t){return e.length},write:function(t){for(var r=0;r<e.length;r+=1)t.put(e[r],8)}};return n},D=function(t){var r=f,e=i.stringToBytesFuncs.SJIS;if(!e)throw"sjis not supported.";!function(){var t=e("友");if(2!=t.length||38726!=(t[0]<<8|t[1]))throw"sjis not supported."}();var o=e(t),n={getMode:function(){return r},getLength:function(t){return~~(o.length/2)},write:function(t){for(var r=o,e=0;e+1<r.length;){var n=(255&r[e])<<8|255&r[e+1];if(33088<=n&&n<=40956)n-=33088;else{if(!(57408<=n&&n<=60351))throw"illegal char at "+(e+1)+"/"+n;n-=49472}n=192*(n>>>8&255)+(255&n),t.put(n,13),e+=2}if(e<r.length)throw"illegal char at "+(e+1)}};return n},S=function(t){var e=t,n=0,o=0,i=0,r={read:function(){for(;i<8;){if(n>=e.length){if(0==i)return-1;throw"unexpected end of file./"+i}var t=e.charAt(n);if(n+=1,"="==t)return i=0,-1;t.match(/^\s$/)||(o=o<<6|a(t.charCodeAt(0)),i+=6)}var r=o>>>i-8&255;return i-=8,r}},a=function(t){if(65<=t&&t<=90)return t-65;if(97<=t&&t<=122)return t-97+26;if(48<=t&&t<=57)return t-48+52;if(43==t)return 62;if(47==t)return 63;throw"c:"+t};return r},I=function(t,r,e){for(var n=function(t,r){var n=t,o=r,l=new Array(t*r),e={setPixel:function(t,r,e){l[r*n+t]=e},write:function(t){t.writeString("GIF87a"),t.writeShort(n),t.writeShort(o),t.writeByte(128),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(0),t.writeByte(255),t.writeByte(255),t.writeByte(255),t.writeString(","),t.writeShort(0),t.writeShort(0),t.writeShort(n),t.writeShort(o),t.writeByte(0);var r=i(2);t.writeByte(2);for(var e=0;255<r.length-e;)t.writeByte(255),t.writeBytes(r,e,255),e+=255;t.writeByte(r.length-e),t.writeBytes(r,e,r.length-e),t.writeByte(0),t.writeString(";")}},i=function(t){for(var r=1<<t,e=1+(1<<t),n=t+1,o=h(),i=0;i<r;i+=1)o.add(String.fromCharCode(i));o.add(String.fromCharCode(r)),o.add(String.fromCharCode(e));var a=p(),u=function(t){var e=t,n=0,o=0,r={write:function(t,r){if(t>>>r!=0)throw"length over";for(;8<=n+r;)e.writeByte(255&(t<<n|o)),r-=8-n,t>>>=8-n,n=o=0;o|=t<<n,n+=r},flush:function(){0<n&&e.writeByte(o)}};return r}(a);u.write(r,n);var f=0,c=String.fromCharCode(l[f]);for(f+=1;f<l.length;){var g=String.fromCharCode(l[f]);f+=1,o.contains(c+g)?c+=g:(u.write(o.indexOf(c),n),o.size()<4095&&(o.size()==1<<n&&(n+=1),o.add(c+g)),c=g)}return u.write(o.indexOf(c),n),u.write(e,n),u.flush(),a.toByteArray()},h=function(){var r={},e=0,n={add:function(t){if(n.contains(t))throw"dup key:"+t;r[t]=e,e+=1},size:function(){return e},indexOf:function(t){return r[t]},contains:function(t){return void 0!==r[t]}};return n};return e}(t,r),o=0;o<r;o+=1)for(var i=0;i<t;i+=1)n.setPixel(i,o,e(i,o));var a=p();n.write(a);for(var u=function(){function e(t){a+=String.fromCharCode(r(63&t))}var n=0,o=0,i=0,a="",t={},r=function(t){if(t<0);else{if(t<26)return 65+t;if(t<52)return t-26+97;if(t<62)return t-52+48;if(62==t)return 43;if(63==t)return 47}throw"n:"+t};return t.writeByte=function(t){for(n=n<<8|255&t,o+=8,i+=1;6<=o;)e(n>>>o-6),o-=6},t.flush=function(){if(0<o&&(e(n<<6-o),o=n=0),i%3!=0)for(var t=3-i%3,r=0;r<t;r+=1)a+="="},t.toString=function(){return a},t}(),f=a.toByteArray(),c=0;c<f.length;c+=1)u.writeByte(f[c]);return u.flush(),"data:image/gif;base64,"+u};return i}();qrcode.stringToBytesFuncs["UTF-8"]=function(t){return function(t){for(var r=[],e=0;e<t.length;e++){var n=t.charCodeAt(e);n<128?r.push(n):n<2048?r.push(192|n>>6,128|63&n):n<55296||57344<=n?r.push(224|n>>12,128|n>>6&63,128|63&n):(e++,n=65536+((1023&n)<<10|1023&t.charCodeAt(e)),r.push(240|n>>18,128|n>>12&63,128|n>>6&63,128|63&n))}return r}(t)},function(t){"function"==typeof define&&define.amd?define([],t):"object"==typeof exports&&(module.exports=t())}(function(){return qrcode});"##;
 
 const LOGIN_HTML: &str = r##"
 <!DOCTYPE html>
@@ -2076,10 +5677,13 @@ const LOGIN_HTML: &str = r##"
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png">
-    <link rel="apple-touch-icon" sizes="192x192" href="/pwa-icon-192.png">
     <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg">
-    <title>Вход</title>
+    <link rel="apple-touch-icon" href="/pwa-icon.svg">
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png">
+    <meta property="og:title" content="CSQTT">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="/pwa-icon.svg">
+    <title>CSQTT — Вход</title>
     <style>
         :root {
             --bg-color: #f8fafc;
@@ -2135,9 +5739,13 @@ const LOGIN_HTML: &str = r##"
         </form>
     </main>
     <script>
-        if ('serviceWorker' in navigator && window.isSecureContext) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+        const basePath = window.location.pathname.replace(/\/$/, '');
+        if (basePath) {
+            document.querySelectorAll('link[rel="manifest"], link[rel="icon"], link[rel="apple-touch-icon"]').forEach(el => {
+                const href = el.getAttribute('href');
+                if (href && href.startsWith('/')) {
+                    el.setAttribute('href', basePath + href);
+                }
             });
         }
         function caesarEncode(s) {
@@ -2152,10 +5760,17 @@ const LOGIN_HTML: &str = r##"
             const err = document.getElementById('e');
             err.style.opacity = '0';
             try {
-                let r = await fetch("/api/login", { method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({user: caesarEncode(u.value), pass: caesarEncode(p.value)}) });
+                let r = await fetch((basePath || '') + "/api/login", {
+                    method: "POST",
+                    headers: {"content-type": "application/json"},
+                    credentials: "include",
+                    body: JSON.stringify({user: caesarEncode(u.value), pass: caesarEncode(p.value)})
+                });
                 if (r.ok) {
                     btn.innerHTML = 'Успешно!'; btn.style.background = '#0077ff';
-                    setTimeout(() => location.reload(), 500);
+                    setTimeout(() => {
+                        window.location.href = (basePath || '') + '/';
+                    }, 150);
                 } else {
                     err.textContent = r.status === 429 ? "Подождите 3 минуты." : "Неверный логин или пароль"; err.style.opacity = '1';
                 }
@@ -2165,6 +5780,2127 @@ const LOGIN_HTML: &str = r##"
 </body>
 </html>
 
+"##;
+
+const CLIENT_SUB_HTML: &str = r##"<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0a0a0c">
+    <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg">
+    <link rel="apple-touch-icon" href="/pwa-icon.svg">
+    <meta property="og:title" content="CSQTT">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="/pwa-icon.svg">
+    <title>Подписка: __CLIENT_NAME__</title>
+    <script src="/qrcode.min.js"></script>
+    <style>
+        :root {
+            --bg: #0a0a0c;
+            --surface: #141418;
+            --surface-hover: #1c1c22;
+            --border: #27272a;
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        dialog#qrDlg {
+            display: block;
+            position: static;
+            background: var(--surface);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 16px 32px rgba(0, 0, 0, 0.4);
+            box-sizing: border-box;
+            max-width: 440px;
+            width: min(440px, calc(100% - 24px));
+            text-align: center;
+        }
+        .dlg-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .close-btn:hover {
+            color: var(--text-main);
+            background: var(--surface-hover);
+        }
+        .qr-box {
+            background: #ffffff;
+            padding: 12px;
+            border-radius: 12px;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            width: 260px;
+            height: 260px;
+            margin: 0 auto;
+        }
+        .qr-box svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .btn {
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            outline: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .btn-ghost:hover {
+            background: var(--surface-hover);
+        }
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--surface);
+            color: var(--text-main);
+            padding: 10px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            opacity: 0;
+            transition: transform 0.25s ease, opacity 0.25s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <dialog id="qrDlg" style="max-width: 440px; width: min(440px, calc(100% - 24px)); text-align: center;" open="">
+        <div class="dlg-header" style="justify-content: center;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                    <path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path>
+                </svg>
+                <h2 id="qrDlgTitle" style="font-size: 18px; margin: 0;">Подписка: __CLIENT_NAME__</h2>
+            </div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 16px; margin: 16px 0;">
+            <div id="qrCodeContainer" class="qr-box"></div>
+            <div style="width: 100%; display: flex; gap: 8px; align-items: center;">
+                <input id="qrDlgLink" readonly="" value="__CSQTT_LINK__" style="flex: 1; height: 42px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; padding: 0 10px; background: var(--surface-hover); color: var(--text-muted); border-radius: 8px; border: 1px solid var(--border);" onclick="this.select()">
+                <button class="btn btn-ghost" id="qrDlgCopyBtn" onclick="copyQrDlgLink(this)" style="height: 42px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: #27272a; border: 1px solid #3f3f46; color: #ffffff; border-radius: 8px;" title="Копировать ссылку">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                </button>
+            </div>
+        </div>
+        <div class="dlg-actions" style="justify-content: center; display: flex; margin-top: 16px;">
+            <a id="qrDlgConnectBtn" href="__CSQTT_LINK__" class="btn btn-primary" style="width: 100%; height: 42px; text-decoration: none; display: flex; align-items: center; justify-content: center; font-weight: 500; font-size: 14px; border-radius: 8px;">Подключить в приложении CSQTT</a>
+        </div>
+    </dialog>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+                function showToast(msg) {
+            const t = document.getElementById('toast');
+            if (!t) return;
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => { t.classList.remove('show'); }, 2000);
+        }
+        async function copyToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (e) {}
+            }
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'absolute';
+                ta.style.left = '-9999px';
+                ta.style.top = '0';
+                ta.setAttribute('readonly', '');
+                document.body.appendChild(ta);
+                ta.select();
+                ta.setSelectionRange(0, 99999);
+                const success = document.execCommand('copy');
+                document.body.removeChild(ta);
+                return success;
+            } catch (e) {
+                return false;
+            }
+        }
+        async function copyQrDlgLink(btn) {
+            const link = document.getElementById('qrDlgLink')?.value || '';
+            if (!link) return;
+            if (await copyToClipboard(link)) {
+                if (btn) {
+                    btn.style.color = '#3b82f6';
+                    btn.style.borderColor = '#3b82f6';
+                    setTimeout(() => { btn.style.color = ''; btn.style.borderColor = ''; }, 1500);
+                }
+                showToast("Ссылка скопирована");
+            } else {
+                showToast("Не удалось скопировать");
+            }
+        }
+        (function initQr() {
+            const link = document.getElementById('qrDlgLink')?.value || '';
+            if (!link) return;
+            try {
+                const qr = qrcode(0, 'L');
+                qr.addData(link);
+                qr.make();
+                const svg = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+                document.getElementById('qrCodeContainer').innerHTML = svg;
+            } catch (e) {
+                document.getElementById('qrCodeContainer').innerHTML = '<div style="color:#ef4444;padding:16px;">Ошибка генерации QR</div>';
+            }
+        })();
+    </script>
+</body>
+</html>
+"##;
+
+const GROUP_SUB_HTML: &str = r##"<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0a0a0c">
+    <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg">
+    <link rel="apple-touch-icon" href="/pwa-icon.svg">
+    <meta property="og:title" content="CSQTT">
+    <meta property="og:type" content="website">
+    <title>Подписка группы: __GROUP_NAME__</title>
+    <script src="/qrcode.min.js"></script>
+    <style>
+        :root {
+            --bg: #0a0a0c;
+            --surface: #141418;
+            --surface-hover: #1c1c22;
+            --border: #27272a;
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px 48px;
+        }
+        .header-bar {
+            width: 100%;
+            max-width: 1360px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 24px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 16px 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header-title {
+            font-size: 19px;
+            font-weight: 700;
+            margin: 0;
+            color: var(--text-main);
+        }
+        .badge {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--primary);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 9999px;
+            padding: 4px 12px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .group-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 20px;
+            width: 100%;
+            max-width: 1360px;
+        }
+        @media (min-width: 1024px) {
+            .group-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        @media (min-width: 1360px) {
+            .group-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+        @media (max-width: 640px) {
+            .group-grid {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+            body { padding: 16px 12px 32px; }
+            .header-bar { padding: 14px 16px; margin-bottom: 16px; }
+        }
+        .client-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+        .client-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.4);
+        }
+        .client-card-header {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .client-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-main);
+            word-break: break-word;
+        }
+        .divider {
+            width: 100%;
+            border: 0;
+            border-top: 1px solid var(--border);
+            margin: 0 0 16px;
+        }
+        .qr-box {
+            background: #ffffff;
+            padding: 10px;
+            border-radius: 12px;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            width: 220px;
+            height: 220px;
+            margin: 0 auto 16px;
+        }
+        .qr-box svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .input-row {
+            width: 100%;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .link-input {
+            flex: 1;
+            height: 40px;
+            font-size: 12px;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            padding: 0 10px;
+            background: var(--surface-hover);
+            color: var(--text-muted);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            outline: none;
+        }
+        .btn {
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            outline: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+        }
+        .btn-copy {
+            height: 40px;
+            width: 44px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            background: #27272a;
+            border: 1px solid #3f3f46;
+            color: #ffffff;
+            border-radius: 8px;
+        }
+        .btn-copy:hover {
+            background: #3f3f46;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            width: 100%;
+            height: 42px;
+        }
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+            font-size: 15px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+        }
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--surface);
+            color: var(--text-main);
+            padding: 10px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+            opacity: 0;
+            transition: transform 0.25s ease, opacity 0.25s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <header class="header-bar">
+        <div class="header-left">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="7" r="3.5"></circle>
+                <path d="M6 21v-2a4 4 0 0 1 8 0v2"></path>
+                <path d="M5.5 10a3 3 0 0 1 0-6"></path>
+                <path d="M2 21v-1.5a3.5 3.5 0 0 1 3-3.4"></path>
+                <path d="M18.5 4a3 3 0 0 1 0 6"></path>
+                <path d="M19 16.1a3.5 3.5 0 0 1 3 3.4V21"></path>
+            </svg>
+            <h1 class="header-title">Группа: __GROUP_NAME__</h1>
+        </div>
+        <div class="badge">__CLIENTS_COUNT__ клиентов</div>
+    </header>
+
+    <main class="group-grid" id="gridContainer"></main>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+
+        const clients = __CLIENTS_JSON__;
+        function esc(s) {
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            if (!t) return;
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => { t.classList.remove('show'); }, 2000);
+        }
+        async function copyToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (e) {}
+            }
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'absolute';
+                ta.style.left = '-9999px';
+                ta.style.top = '0';
+                ta.setAttribute('readonly', '');
+                document.body.appendChild(ta);
+                ta.select();
+                ta.setSelectionRange(0, 99999);
+                const success = document.execCommand('copy');
+                document.body.removeChild(ta);
+                return success;
+            } catch (e) {
+                return false;
+            }
+        }
+        async function copyCardLink(btn, link) {
+            if (!link) return;
+            if (await copyToClipboard(link)) {
+                if (btn) {
+                    btn.style.color = '#3b82f6';
+                    btn.style.borderColor = '#3b82f6';
+                    setTimeout(() => { btn.style.color = ''; btn.style.borderColor = ''; }, 1500);
+                }
+                showToast("Ссылка скопирована");
+            } else {
+                showToast("Не удалось скопировать");
+            }
+        }
+
+        const grid = document.getElementById('gridContainer');
+        if (!clients.length) {
+            grid.innerHTML = '<div class="empty-state">В этой группе пока нет клиентов.</div>';
+        } else {
+            let html = '';
+            clients.forEach((c, idx) => {
+                html += `
+                <div class="client-card">
+                    <div class="client-card-header">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        <h2 class="client-name">${esc(c.name || 'Клиент')}</h2>
+                    </div>
+                    <hr class="divider">
+                    <div class="qr-box" id="qr-box-${idx}"></div>
+                    <div class="input-row">
+                        <input class="link-input" readonly value="${esc(c.link)}" onclick="this.select()">
+                        <button class="btn btn-copy" onclick="copyCardLink(this, '${esc(c.link)}')" title="Копировать ссылку">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
+                    </div>
+                    <a href="${esc(c.link)}" class="btn btn-primary">Подключить в приложении CSQTT</a>
+                </div>
+                `;
+            });
+            grid.innerHTML = html;
+
+            clients.forEach((c, idx) => {
+                const el = document.getElementById('qr-box-' + idx);
+                if (!el || !c.link) return;
+                try {
+                    const qr = qrcode(0, 'L');
+                    qr.addData(c.link);
+                    qr.make();
+                    el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+                } catch (e) {
+                    el.innerHTML = '<div style="color:#ef4444;font-size:12px;">Ошибка QR</div>';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
+"##;
+
+const GROUP_ADMIN_HTML: &str = r##"<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0a0a0c">
+    <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg">
+    <link rel="apple-touch-icon" href="/pwa-icon.svg">
+    <meta property="og:title" content="CSQTT">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="/pwa-icon.svg">
+    <title>CSQTT — Панель группы</title>
+    <script src="/qrcode.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --surface: #ffffff;
+            --surface-hover: #f1f5f9;
+            --primary: #0077ff;
+            --primary-hover: #0060cc;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --danger: #ef4444;
+            --success: #10b981;
+            --icon-bg: rgba(0, 119, 255, 0.1);
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #000000;
+            --surface: #0a0a0c;
+            --surface-hover: #161619;
+            --text-main: #f4f4f5;
+            --text-muted: #9ca3af;
+            --border: #1f1f23;
+            --danger: #ef4444;
+            --success: #10b981;
+            --icon-bg: rgba(0, 119, 255, 0.15);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 24px 16px;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .main-card {
+            max-width: 760px;
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+            align-self: flex-start;
+        }
+        .dlg-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .btn {
+            font-size: 13px;
+            padding: 0 16px;
+            height: 38px;
+            white-space: nowrap;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+        .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+        .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+        .btn-ghost { background: var(--surface); color: var(--text-main); }
+        .btn-ghost:hover { background: var(--surface-hover); }
+        .btn-danger { color: #ef4444; border-color: rgba(239, 68, 68, 0.35); background: transparent; }
+        .btn-danger:hover { background: rgba(239, 68, 68, 0.1); }
+        .badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .badge.active { background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.25); }
+        .badge.inactive { background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.25); }
+        .badge.admin { background: var(--icon-bg); color: var(--primary); border: 1px solid rgba(0, 119, 255, 0.25); }
+        .group-dlg-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+        .group-act-btn {
+            height: 38px;
+            font-size: 13px;
+            border-radius: 10px;
+            padding: 0 16px;
+            box-sizing: border-box;
+            border: 1px solid var(--border);
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+        .group-search-wrapper {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            flex: 1;
+            min-width: 170px;
+        }
+        input[type="text"].group-search-input, .group-search-input {
+            width: 100%;
+            height: 38px;
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 0 32px 0 46px !important;
+            font-size: 13px;
+            color: var(--text-main);
+            outline: none;
+            box-sizing: border-box;
+            transition: all 0.2s;
+        }
+        .group-search-input:focus { border-color: var(--primary); }
+        .group-search-icon {
+            position: absolute;
+            left: 13px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            pointer-events: none;
+        }
+        .stats-summary {
+            font-size: 13px;
+            color: var(--text-muted);
+            padding: 10px 14px;
+            background: var(--surface-hover);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            font-weight: 500;
+        }
+        .client-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 14px;
+            margin-top: 4px;
+        }
+        .client-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 16px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            transition: all 0.2s ease;
+        }
+        .client-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
+        }
+        .client-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+            min-height: 32px;
+        }
+        .client-card-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text-main);
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .client-card-body {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .client-card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .client-card-label { color: var(--text-muted); }
+        .client-card-value { color: var(--text-main); font-weight: 500; }
+        .client-pw {
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            color: var(--primary);
+            font-weight: 600;
+            background: var(--icon-bg);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+        .client-sub-btn {
+            width: 100%;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-size: 12px;
+            padding: 7px 10px;
+            border: 1px solid var(--border) !important;
+            color: var(--text-main) !important;
+            background: transparent !important;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        .client-sub-btn:hover {
+            background: var(--surface-hover) !important;
+            border-color: var(--primary) !important;
+            color: var(--primary) !important;
+        }
+        [data-theme="dark"] .client-sub-btn {
+            border-color: rgba(255, 255, 255, 0.25) !important;
+            color: #ffffff !important;
+        }
+        [data-theme="dark"] .client-sub-btn:hover {
+            border-color: var(--primary) !important;
+            color: var(--primary) !important;
+            background: rgba(255, 255, 255, 0.05) !important;
+        }
+        .hub-bulk-panel {
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .hub-field-block {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 12px;
+        }
+        .hub-field-block:last-child {
+            margin-bottom: 0;
+        }
+        .hub-field-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .hub-field-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .hub-field-input {
+            flex: 1;
+            min-width: 0;
+            min-height: 38px;
+            height: 38px;
+            font-size: 13px;
+            padding: 0 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-main);
+            box-sizing: border-box;
+        }
+        .hub-field-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .hub-btn-apply {
+            height: 38px;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 175px;
+            padding: 0 14px;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+        }
+        .hub-btn-clear {
+            height: 38px;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 135px;
+            padding: 0 12px;
+            white-space: nowrap;
+            color: #ef4444 !important;
+            border: 1px solid rgba(239, 68, 68, 0.35) !important;
+            background: transparent;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            transition: all 0.15s ease;
+        }
+        .hub-btn-clear:hover {
+            background: rgba(239, 68, 68, 0.1) !important;
+            border-color: #ef4444 !important;
+            color: #dc2626 !important;
+        }
+        .hub-bulk-footer {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+            margin-top: 14px;
+        }
+        input.hub-search-input, .hub-search-input {
+            width: 100%;
+            height: 36px;
+            padding: 0 32px 0 44px !important;
+            border-radius: 8px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            font-size: 13px;
+            outline: none;
+            box-sizing: border-box;
+            transition: all 0.2s;
+        }
+        .hub-search-input::placeholder {
+            color: var(--text-muted);
+            opacity: 0.8;
+        }
+        .hub-search-input:focus {
+            border-color: var(--primary);
+            background: var(--surface-hover);
+            box-shadow: 0 0 0 2px rgba(0, 119, 255, 0.15);
+        }
+        dialog {
+            background: var(--surface);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 20px;
+            margin: auto;
+            max-width: 500px;
+            width: min(500px, calc(100% - 24px));
+            outline: none;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.25);
+        }
+        dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+        input[type="text"], input[type="number"], input:not([type]), input {
+            background: var(--surface-hover);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            height: 40px;
+            padding: 0 12px;
+            color: var(--text-main);
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+        input:focus { border-color: var(--primary); }
+        .dlg-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 16px;
+        }
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--surface);
+            color: var(--text-main);
+            padding: 10px 18px;
+            border-radius: 10px;
+            font-size: 13px;
+            border: 1px solid var(--border);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            z-index: 10000;
+            display: none;
+            font-weight: 500;
+        }
+        #qrCodeContainer {
+            background: #ffffff;
+            padding: 14px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            border: 1px solid var(--border);
+            width: 240px;
+            height: 240px;
+            max-width: 100%;
+            aspect-ratio: 1;
+            box-sizing: border-box;
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        #qrCodeContainer svg {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100% !important;
+            max-height: 100% !important;
+            display: block !important;
+        }
+        .show-mobile { display: none; }
+        .hide-mobile { display: inline-block; }
+        @media (max-width: 600px) {
+            body { padding: 12px 8px; }
+            .main-card { padding: 16px; border-radius: 16px; gap: 12px; }
+            .group-dlg-actions { flex-direction: column; align-items: stretch; gap: 8px; }
+            .group-act-btn { width: 100%; justify-content: center; }
+            .group-search-wrapper { width: 100%; min-width: 0; }
+            .client-cards-grid { grid-template-columns: 1fr; }
+            .show-mobile { display: inline-block !important; }
+            .hide-mobile { display: none !important; }
+            .hub-field-row {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+            .hub-field-row .hub-field-input {
+                width: 100% !important;
+                height: 38px !important;
+                min-height: 38px !important;
+                flex: none !important;
+                box-sizing: border-box !important;
+            }
+            .hub-field-actions {
+                width: 100%;
+                display: flex;
+                gap: 8px;
+            }
+            .hub-btn-apply,
+            .hub-btn-clear {
+                flex: 1;
+                width: auto;
+                min-width: 0;
+                font-size: 12px;
+                padding: 0 8px;
+                height: 38px;
+                box-sizing: border-box;
+            }
+            .hub-field-row.hub-workers-row {
+                flex-direction: row;
+                align-items: center;
+                gap: 8px;
+            }
+            .hub-field-row.hub-workers-row .hub-workers-input {
+                width: 75px !important;
+                flex: 0 0 75px !important;
+                height: 38px !important;
+                min-height: 38px !important;
+                text-align: center;
+                box-sizing: border-box !important;
+            }
+            .hub-field-row.hub-workers-row .hub-field-actions {
+                flex: 1;
+                min-width: 0;
+            }
+            .hub-bulk-footer {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+            }
+            .hub-search-container {
+                width: 100% !important;
+            }
+            .hub-search-input {
+                height: 38px;
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="main-card">
+        <div class="dlg-header">
+            <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+                <h2 id="groupDlgTitle" style="font-size: 22px; font-weight: 700; margin: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Группа</h2>
+                <span class="badge admin">Админ</span>
+            </div>
+            <button class="btn btn-ghost" onclick="toggleTheme()" title="Сменить тему" style="width: 36px; height: 36px; padding: 0; border: 1px solid var(--border); border-radius: 10px;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+            </button>
+        </div>
+        <div id="statsSummary" class="stats-summary">Загрузка данных...</div>
+        <div class="group-dlg-actions">
+            <button class="btn btn-primary group-act-btn" onclick="openNewClientModal()">Создать пароль</button>
+            <button class="btn btn-ghost group-act-btn" onclick="openLinksAndTokensDlg()">Настройка ссылок</button>
+            <div class="group-search-wrapper">
+                <input type="text" id="groupSearchInput" class="group-search-input" placeholder="Поиск в группе..." oninput="handleSearch(this.value)" style="padding-left: 46px !important;">
+                <svg class="group-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </div>
+        </div>
+        <div id="groupClientsCards" class="client-cards-grid"></div>
+    </div>
+
+    <dialog id="newClientModal">
+        <div class="dlg-header" style="margin-bottom: 14px;">
+            <h3 style="font-size: 18px; margin: 0; font-weight: 700;">Создать пароль</h3>
+            <button class="btn btn-ghost" style="width: 32px; height: 32px; padding: 0; border: none; font-size: 16px;" onclick="document.getElementById('newClientModal').close()">✕</button>
+        </div>
+        <div class="input-group">
+            <label>Имя клиента</label>
+            <input type="text" id="newClientName" placeholder="Например: Клиент123">
+        </div>
+        <div class="input-group">
+            <label>Срок действия (0 = Бессрочно, 1-365 Ручной лимит)</label>
+            <input type="number" id="newClientDays" value="30" min="0" max="365">
+        </div>
+        <div class="dlg-actions">
+            <button class="btn btn-ghost" onclick="document.getElementById('newClientModal').close()">Отмена</button>
+            <button class="btn btn-primary" onclick="submitNewClient()">Создать</button>
+        </div>
+    </dialog>
+
+    <dialog id="editClientModal">
+        <div class="dlg-header" style="margin-bottom: 14px;">
+            <h3 style="font-size: 18px; margin: 0; font-weight: 700;">Управление клиентом</h3>
+            <button class="btn btn-ghost" style="width: 32px; height: 32px; padding: 0; border: none; font-size: 16px;" onclick="document.getElementById('editClientModal').close()">✕</button>
+        </div>
+        <div class="input-group">
+            <label>Имя клиента</label>
+            <input type="text" id="editName">
+        </div>
+        <div class="input-group">
+            <label>Пароль (ключ)</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="editPass" readonly style="flex: 1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text-muted);">
+                <button class="btn btn-ghost" onclick="copyPasswordText()" style="width: 40px; height: 40px; padding: 0;" title="Копировать"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                <button class="btn btn-ghost" onclick="openQrModalForActiveClient()" style="width: 40px; height: 40px; padding: 0;" title="QR-код"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path></svg></button>
+            </div>
+        </div>
+        <div class="input-group">
+            <label>Срок действия (0 = Бессрочно, 1-365 Ручной лимит)</label>
+            <input type="number" id="editDays" min="0" max="365">
+        </div>
+        <div style="border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 12px 0; font-size: 13px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-hover);">
+            <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted);">IP-адрес:</span><span id="editIp">—</span></div>
+            <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted);">Трафик:</span><span id="editTraffic" style="font-family: ui-monospace, SFMono-Regular, Consolas, monospace;">↑ 0 B / ↓ 0 B</span></div>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+            <button class="btn btn-ghost" onclick="executeResetTraffic()" style="flex: 1; height: 38px;">Сбросить трафик</button>
+            <button class="btn btn-ghost" onclick="executeExtend30()" style="flex: 1; height: 38px;">Продлить +30 дн.</button>
+            <button class="btn btn-ghost" id="editToggleBtn" onclick="executeToggleClient()" style="flex: 1; height: 38px;">Отключить</button>
+        </div>
+        <div class="dlg-actions" style="justify-content: space-between;">
+            <button class="btn btn-danger" onclick="executeDeleteClient()" style="height: 38px;">Удалить</button>
+            <button class="btn btn-primary" onclick="saveClientChanges()" style="height: 38px;">Сохранить</button>
+        </div>
+    </dialog>
+
+    <dialog id="qrDlg" style="max-width: 440px; width: min(440px, calc(100% - 24px)); text-align: center;">
+        <div class="dlg-header" style="justify-content: space-between;">
+            <h3 id="qrDlgTitle" style="font-size: 18px; margin: 0; font-weight: 700;">QR-код клиента</h3>
+            <button class="btn btn-ghost" style="width: 32px; height: 32px; padding: 0; border: none; font-size: 16px;" onclick="document.getElementById('qrDlg').close()">✕</button>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 16px; margin: 16px 0;">
+            <div id="qrCodeContainer"></div>
+            <div style="width: 100%; display: flex; gap: 8px; align-items: center;">
+                <input type="text" id="qrDlgLink" readonly style="flex: 1; height: 40px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text-muted);" onclick="this.select()">
+                <button class="btn btn-ghost" onclick="copyQrLink()" style="height: 40px; width: 44px; padding: 0;" title="Копировать"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+            </div>
+        </div>
+        <button class="btn btn-primary" style="width: 100%; height: 40px;" onclick="document.getElementById('qrDlg').close()">Закрыть</button>
+    </dialog>
+
+    <dialog id="linksAndTokensDlg" style="max-width: 820px; width: min(820px, calc(100% - 24px)); max-height: 88vh; overflow-y: auto;">
+        <div class="dlg-header">
+            <h2 style="font-size: 20px; font-weight: 700; margin: 0;">Настройка ссылок</h2>
+            <button class="btn btn-ghost" style="width: 32px; height: 32px; padding: 0; border: none; font-size: 16px;" onclick="document.getElementById('linksAndTokensDlg').close()">✕</button>
+        </div>
+
+        <!-- Top bulk settings panel -->
+        <div class="hub-bulk-panel">
+            <div class="hub-field-block">
+                <label class="hub-field-label">VK токен группы</label>
+                <div class="hub-field-row">
+                    <input id="hubVkTokenInput" class="hub-field-input" placeholder="Введите VK токен..." onchange="autoSaveHubVkToken()" onblur="autoSaveHubVkToken()">
+                    <div class="hub-field-actions">
+                        <button class="btn btn-primary hub-btn-apply" onclick="applyHubVkTokenDirect()"><span class="hide-mobile">Применить VK токен</span><span class="show-mobile">Применить токен</span></button>
+                        <button class="btn btn-ghost hub-btn-clear" onclick="promptBatchAction('clear-token')"><span class="hide-mobile">Очистить токен</span><span class="show-mobile">Очистить</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hub-field-block">
+                <label class="hub-field-label">VK хеши группы (через запятую)</label>
+                <div class="hub-field-row">
+                    <input id="hubVkHashesInput" class="hub-field-input" placeholder="hash1,hash2,...,hash6" onchange="autoSaveHubVkHashes()" onblur="autoSaveHubVkHashes()">
+                    <div class="hub-field-actions">
+                        <button class="btn btn-primary hub-btn-apply" onclick="applyHubVkHashesDirect()"><span class="hide-mobile">Применить VK хеши</span><span class="show-mobile">Применить хеши</span></button>
+                        <button class="btn btn-ghost hub-btn-clear" onclick="promptBatchAction('clear-hashes')"><span class="hide-mobile">Очистить хеши</span><span class="show-mobile">Очистить</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hub-field-block">
+                <label class="hub-field-label">Установить число потоков (0 = Клиентские настройки, 3-99 Ручной лимит)</label>
+                <div class="hub-field-row hub-workers-row">
+                    <input type="number" id="hubWorkersInput" class="hub-field-input hub-workers-input" min="0" max="99" value="0" placeholder="0 (Клиентские)">
+                    <div class="hub-field-actions">
+                        <button class="btn btn-primary hub-btn-apply" onclick="applyHubWorkersDirect()"><span class="hide-mobile">Установить число потоков</span><span class="show-mobile">Установить</span></button>
+                        <button class="btn btn-ghost hub-btn-clear" onclick="promptBatchAction('clear-workers')"><span class="hide-mobile">Сбросить число потоков</span><span class="show-mobile">Сбросить</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hub-bulk-footer">
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
+                    <input type="checkbox" id="hubSelectAll" onchange="toggleSelectAllHubClients(this.checked)" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary);">
+                    <label for="hubSelectAll" style="cursor: pointer; font-weight: 600;">Выбрать всех</label>
+                    <span id="hubSelectedCount" style="color: var(--text-muted); font-size: 12px;">(0 выбрано)</span>
+                </div>
+                <div class="hub-search-container" style="position: relative; width: 280px; max-width: 100%;">
+                    <input type="text" id="hubSearchInput" class="hub-search-input" placeholder="Клиент (группа)..." oninput="handleHubSearch(this.value)" style="padding-left: 44px !important; padding-right: 32px !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <button id="hubSearchClearBtn" onclick="clearHubSearch()" style="display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; align-items: center; justify-content: center;" title="Очистить">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Clients links list -->
+        <div id="hubClientsList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+    </dialog>
+
+    <dialog id="batchConfirmDlg" style="max-width: 440px; width: min(440px, calc(100% - 24px));">
+        <h3 id="batchConfirmTitle" style="font-size: 18px; margin: 0 0 12px 0; font-weight: 700;">Подтверждение</h3>
+        <p id="batchConfirmMessage" style="font-size: 14px; color: var(--text-muted); line-height: 1.5; margin-bottom: 24px;"></p>
+        <div class="dlg-actions">
+            <button class="btn btn-ghost" onclick="document.getElementById('batchConfirmDlg').close()">Отмена</button>
+            <button class="btn btn-primary" id="batchConfirmSubmitBtn">Применить</button>
+        </div>
+    </dialog>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        function toggleTheme() {
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+            localStorage.setItem('csqtt-theme', isDark ? 'light' : 'dark');
+        }
+        if (localStorage.getItem('csqtt-theme') === 'dark') {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+
+        const adminUuid = window.location.pathname.split('/').filter(Boolean)[0];
+        let currentData = null;
+        let activeClient = null;
+
+        function esc(s) {
+            return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+        }
+
+        function size(b) {
+            if (!b || b <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(b) / Math.log(1024));
+            return (b / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+        }
+
+        function calcMatchScore(text, query) {
+            if (!text || !query) return 0;
+            const t = String(text).trim().toLowerCase();
+            const q = String(query).trim().toLowerCase();
+            if (!t || !q) return 0;
+            if (t === q) return 1000;
+            if (t.startsWith(q)) return 500 + Math.max(0, 100 - t.length);
+            const words = t.split(/[\s,._\-#№]+|(?<=[^\d\s])(?=\d)|(?<=\d)(?=[^\d\s])/);
+            for (const w of words) {
+                if (w === q) return 450 + Math.max(0, 100 - w.length);
+                if (w.startsWith(q)) return 400 + Math.max(0, 100 - w.length);
+            }
+            const idx = t.indexOf(q);
+            if (idx !== -1) return 200 + Math.max(0, 100 - idx);
+            return 0;
+        }
+
+        function generateUniqueClientName(existingNames) {
+            const set = new Set((existingNames || []).map(n => String(n || '').trim().toLowerCase()));
+            for (let i = 0; i < 1000; i++) {
+                const candidate = 'Клиент' + Math.floor(100 + Math.random() * 900);
+                if (!set.has(candidate.toLowerCase())) {
+                    return candidate;
+                }
+            }
+            return 'Клиент' + Math.floor(100 + Math.random() * 900);
+        }
+
+        function showToast(msg, isError) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.borderColor = isError ? 'var(--danger)' : 'var(--border)';
+            t.style.display = 'block';
+            setTimeout(() => { t.style.display = 'none'; }, 2500);
+        }
+
+        async function copyToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (e) {}
+            }
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'absolute';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        async function loadData() {
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/data');
+                if (!r.ok) {
+                    document.getElementById('statsSummary').textContent = 'Ошибка загрузки данных группы';
+                    return;
+                }
+                currentData = await r.json();
+                renderView();
+            } catch (e) {
+                document.getElementById('statsSummary').textContent = 'Ошибка сети';
+            }
+        }
+
+        function renderView() {
+            if (!currentData) return;
+            document.getElementById('groupDlgTitle').textContent = currentData.group.name || 'Группа';
+            const clients = currentData.clients || [];
+            let sumUp = 0, sumDown = 0, sumSessions = 0;
+            for (const c of clients) {
+                sumUp += (c.up || 0);
+                sumDown += (c.down || 0);
+                sumSessions += (c.active_sessions || 0);
+            }
+            document.getElementById('statsSummary').textContent = `Участники: ${clients.length} · Трафик: ↑ ${size(sumUp)} / ↓ ${size(sumDown)} · Потоки: ${sumSessions}`;
+            renderCards(clients);
+        }
+
+        function renderCards(clients) {
+            const query = (document.getElementById('groupSearchInput')?.value || '').trim().toLowerCase();
+            const filtered = query ? clients.filter(c => (c.name || '').toLowerCase().includes(query) || c.password.toLowerCase().includes(query)) : clients;
+            const container = document.getElementById('groupClientsCards');
+            if (filtered.length === 0) {
+                container.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 32px; color: var(--text-muted); font-size: 14px;">' + (query ? 'Ничего не найдено' : 'В группе пока нет клиентов. Нажмите «Создать пароль».') + '</div>';
+                return;
+            }
+            container.innerHTML = filtered.map(c => {
+                const expiryStr = c.expires ? new Date(c.expires * 1000).toLocaleDateString() : '∞ Бессрочно';
+                return `
+                <div class="client-card" onclick="openEditModal('${esc(c.password)}')">
+                    <div class="client-card-header">
+                        <div class="client-card-title">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary); flex-shrink: 0;"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                            <span>${esc(c.name || 'Клиент')}</span>
+                        </div>
+                        <span class="badge ${c.active ? 'active' : 'inactive'}">${c.active ? 'Участник' : 'Неактивно'}</span>
+                    </div>
+                    <div class="client-card-body">
+                        <div class="client-card-row">
+                            <span class="client-card-label">IP:</span>
+                            <span class="client-card-value">${esc(c.ip || '—')}</span>
+                        </div>
+                        <div class="client-card-row">
+                            <span class="client-card-label">Срок действия:</span>
+                            <span class="client-card-value">${expiryStr}</span>
+                        </div>
+                        <div class="client-card-row">
+                            <span class="client-card-label">Трафик:</span>
+                            <span class="client-card-value" style="font-family: ui-monospace, SFMono-Regular, Consolas, monospace;">↑ ${size(c.up)} / ↓ ${size(c.down)}</span>
+                        </div>
+                        <div class="client-card-row">
+                            <span class="client-card-label">Потоки:</span>
+                            <span class="client-card-value">${c.active_sessions || 0}</span>
+                        </div>
+                        ${c.sub_uuid ? `
+                        <button class="btn btn-ghost client-sub-btn" onclick="event.stopPropagation(); copyClientSubLink('${c.sub_uuid}', this)" title="Скопировать ссылку подписки">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            <span>Скопировать ссылку подписки</span>
+                        </button>
+                        ` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function handleSearch(val) {
+            if (currentData) renderCards(currentData.clients || []);
+        }
+
+        function openNewClientModal() {
+            const existing = (currentData?.clients || []).map(c => c.name);
+            document.getElementById('newClientName').value = generateUniqueClientName(existing);
+            document.getElementById('newClientDays').value = '30';
+            document.getElementById('newClientModal').showModal();
+        }
+
+        async function submitNewClient() {
+            let name = document.getElementById('newClientName').value.trim();
+            if (!name) {
+                const existing = (currentData?.clients || []).map(c => c.name);
+                name = generateUniqueClientName(existing);
+            }
+            const days = parseInt(document.getElementById('newClientDays').value, 10) || 0;
+            const workers = 0;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ name, days, workers })
+                });
+                if (r.ok) {
+                    showToast('Пароль создан');
+                    document.getElementById('newClientModal').close();
+                    await loadData();
+                } else {
+                    const msg = await r.text().catch(() => '');
+                    showToast(msg || 'Ошибка создания пароля', true);
+                }
+            } catch (e) {
+                showToast('Ошибка сети', true);
+            }
+        }
+
+        function openEditModal(password) {
+            const c = (currentData?.clients || []).find(x => x.password === password);
+            if (!c) return;
+            activeClient = c;
+            document.getElementById('editName').value = c.name || '';
+            document.getElementById('editPass').value = c.password;
+            let remainingDays = 0;
+            if (c.expires) {
+                remainingDays = Math.max(0, Math.ceil((c.expires * 1000 - Date.now()) / 86400000));
+            }
+            document.getElementById('editDays').value = c.expires ? remainingDays : 0;
+            document.getElementById('editIp').textContent = c.ip || '—';
+            document.getElementById('editTraffic').textContent = `↑ ${size(c.up)} / ↓ ${size(c.down)}`;
+            const toggleBtn = document.getElementById('editToggleBtn');
+            toggleBtn.textContent = c.is_deactivated ? 'Включить' : 'Отключить';
+            toggleBtn.style.color = c.is_deactivated ? '#10b981' : '#ef4444';
+            document.getElementById('editClientModal').showModal();
+        }
+
+        async function copyPasswordText() {
+            if (activeClient && await copyToClipboard(activeClient.password)) {
+                showToast('Пароль скопирован');
+            }
+        }
+
+        async function executeResetTraffic() {
+            if (!activeClient) return;
+            if (!confirm('Сбросить трафик для этого клиента?')) return;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(activeClient.password) + '/reset-traffic', { method: 'POST' });
+                if (r.ok) {
+                    showToast('Трафик сброшен');
+                    document.getElementById('editClientModal').close();
+                    await loadData();
+                }
+            } catch (e) { showToast('Ошибка сети', true); }
+        }
+
+        async function executeExtend30() {
+            if (!activeClient) return;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(activeClient.password) + '/extend', { method: 'POST' });
+                if (r.ok) {
+                    showToast('Срок продлён на 30 дней');
+                    document.getElementById('editClientModal').close();
+                    await loadData();
+                }
+            } catch (e) { showToast('Ошибка сети', true); }
+        }
+
+        async function executeToggleClient() {
+            if (!activeClient) return;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(activeClient.password) + '/toggle', { method: 'POST' });
+                if (r.ok) {
+                    showToast('Статус клиента изменён');
+                    document.getElementById('editClientModal').close();
+                    await loadData();
+                }
+            } catch (e) { showToast('Ошибка сети', true); }
+        }
+
+        async function executeUnbind() {
+            if (!activeClient) return;
+            if (!confirm('Отвязать устройство?')) return;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(activeClient.password) + '/unbind', { method: 'POST' });
+                if (r.ok) {
+                    showToast('Устройство отвязано');
+                    document.getElementById('editClientModal').close();
+                    await loadData();
+                }
+            } catch (e) { showToast('Ошибка сети', true); }
+        }
+
+        async function executeDeleteClient() {
+            if (!activeClient) return;
+            if (!confirm('Удалить клиента? Это действие необратимо.')) return;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(activeClient.password), { method: 'DELETE' });
+                if (r.ok) {
+                    showToast('Клиент удалён');
+                    document.getElementById('editClientModal').close();
+                    await loadData();
+                }
+            } catch (e) { showToast('Ошибка сети', true); }
+        }
+
+        async function saveClientChanges() {
+            if (!activeClient) return;
+            let name = document.getElementById('editName').value.trim();
+            if (!name) {
+                const existing = (currentData?.clients || []).filter(c => c.password !== activeClient.password).map(c => c.name);
+                name = generateUniqueClientName(existing);
+            }
+            const days = parseInt(document.getElementById('editDays').value, 10);
+            const workers = activeClient.workers || 0;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(activeClient.password), {
+                    method: 'PUT',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ name, days, workers })
+                });
+                if (r.ok) {
+                    showToast('Изменения сохранены');
+                    document.getElementById('editClientModal').close();
+                    await loadData();
+                } else {
+                    const msg = await r.text().catch(() => '');
+                    showToast(msg || 'Ошибка сохранения', true);
+                }
+            } catch (e) { showToast('Ошибка сети', true); }
+        }
+
+        function generateQrSvg(text) {
+            try {
+                const qr = qrcode(0, 'L');
+                qr.addData(text);
+                qr.make();
+                return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+            } catch (e) {
+                return '<div style="color: #ef4444; padding: 16px;">Ошибка генерации QR</div>';
+            }
+        }
+
+        function openQrModalForActiveClient() {
+            if (!activeClient) return;
+            const link = activeClient.link || '';
+            if (!link) { showToast('Ссылка клиента недоступна', true); return; }
+            document.getElementById('qrDlgTitle').textContent = 'QR-код: ' + (activeClient.name || 'Клиент');
+            document.getElementById('qrDlgLink').value = link;
+            const container = document.getElementById('qrCodeContainer');
+            container.innerHTML = generateQrSvg(link);
+            document.getElementById('qrDlg').showModal();
+        }
+
+        async function copyClientSubLink(subUuid, btn) {
+            if (!subUuid) {
+                showToast("У клиента нет ссылки подписки", true);
+                return;
+            }
+            const url = window.location.origin + '/' + subUuid + '/sub';
+            if (await copyToClipboard(url)) {
+                if (btn) {
+                    btn.style.color = '#10b981';
+                    setTimeout(() => { btn.style.color = ''; }, 1500);
+                }
+                showToast("Ссылка подписки скопирована");
+            } else {
+                showToast("Не удалось скопировать", true);
+            }
+        }
+
+        async function copyQrLink() {
+            const link = document.getElementById('qrDlgLink')?.value || '';
+            if (await copyToClipboard(link)) {
+                showToast('Ссылка скопирована');
+            }
+        }
+
+        let hubSelectedPasswords = new Set();
+        let currentHubFilterQuery = '';
+        let groupVkToken = '';
+        let groupVkHashes = '';
+
+        function openLinksAndTokensDlg() {
+            hubSelectedPasswords.clear();
+            currentHubFilterQuery = '';
+            const searchInput = document.getElementById('hubSearchInput');
+            if (searchInput) searchInput.value = '';
+            const clearBtn = document.getElementById('hubSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+
+            groupVkToken = currentData?.group?.vk_token || '';
+            groupVkHashes = currentData?.group?.vk_hashes || '';
+
+            const tokenInput = document.getElementById('hubVkTokenInput');
+            if (tokenInput) tokenInput.value = groupVkToken;
+            const hashesInput = document.getElementById('hubVkHashesInput');
+            if (hashesInput) hashesInput.value = groupVkHashes;
+            const workersInput = document.getElementById('hubWorkersInput');
+            if (workersInput) workersInput.value = currentData?.group?.workers || '0';
+            const selectAll = document.getElementById('hubSelectAll');
+            if (selectAll) selectAll.checked = false;
+
+            renderHubClientsList();
+            updateHubSelectedCount();
+            document.getElementById('linksAndTokensDlg').showModal();
+        }
+
+        async function autoSaveHubVkToken() {
+            const input = document.getElementById('hubVkTokenInput');
+            const token = input ? input.value.trim() : '';
+            if (token && (/\s/.test(token) || token.length > 4096)) return false;
+            if (token === groupVkToken) return true;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/settings', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ vk_token: token })
+                });
+                if (r.ok) {
+                    groupVkToken = token;
+                    if (currentData && currentData.group) {
+                        currentData.group.vk_token = token;
+                    }
+                    await loadData();
+                    renderHubClientsList();
+                    return true;
+                }
+            } catch (e) {}
+            return false;
+        }
+
+        async function autoSaveHubVkHashes() {
+            const input = document.getElementById('hubVkHashesInput');
+            const raw = input ? input.value.trim() : '';
+            if (raw === groupVkHashes) return true;
+            try {
+                const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/settings', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ vk_hashes: raw })
+                });
+                if (r.ok) {
+                    groupVkHashes = raw;
+                    if (currentData && currentData.group) {
+                        currentData.group.vk_hashes = raw;
+                    }
+                    await loadData();
+                    renderHubClientsList();
+                    return true;
+                }
+            } catch (e) {}
+            return false;
+        }
+
+        async function applyHubVkTokenDirect() {
+            const input = document.getElementById('hubVkTokenInput');
+            const token = input ? input.value.trim() : '';
+            if (!token) {
+                showToast("Введите VK токен", true);
+                return;
+            }
+            if (/\s/.test(token) || token.length > 4096) {
+                showToast("VK токен не должен содержать пробелы и должен быть короче 4097 символов", true);
+                return;
+            }
+            await autoSaveHubVkToken();
+            promptBatchAction('token');
+        }
+
+        async function applyHubVkHashesDirect() {
+            const input = document.getElementById('hubVkHashesInput');
+            const raw = input ? input.value.trim() : '';
+            const hashes = raw.split(',').map(s => s.trim()).filter(Boolean);
+            if (!hashes.length || hashes.length > 6 || hashes.some(h => h.length < 16 || /\s/.test(h))) {
+                showToast("Укажите от 1 до 6 корректных VK-хешей через запятую (каждый от 16 символов без пробелов)", true);
+                return;
+            }
+            await autoSaveHubVkHashes();
+            promptBatchAction('hashes');
+        }
+
+        async function applyHubWorkersDirect() {
+            const input = document.getElementById('hubWorkersInput');
+            const w = parseInt(input ? input.value : '0', 10);
+            if (isNaN(w) || w < 0 || (w > 0 && w < 3) || w > 99) {
+                showToast("Число потоков должно быть 0 (клиентские) или от 3 до 99", true);
+                return;
+            }
+            promptBatchAction('workers');
+        }
+
+        function handleHubSearch(val) {
+            currentHubFilterQuery = val.trim();
+            const clearBtn = document.getElementById('hubSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = currentHubFilterQuery ? 'flex' : 'none';
+            renderHubClientsList();
+        }
+
+        function clearHubSearch() {
+            const searchInput = document.getElementById('hubSearchInput');
+            if (searchInput) searchInput.value = '';
+            const clearBtn = document.getElementById('hubSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+            currentHubFilterQuery = '';
+            renderHubClientsList();
+        }
+
+        function renderHubClientsList(preservedChecked = null) {
+            const container = document.getElementById('hubClientsList');
+            if (!container) return;
+            if (preservedChecked !== null) {
+                hubSelectedPasswords.clear();
+                preservedChecked.forEach(p => hubSelectedPasswords.add(p));
+            }
+            const allClients = currentData?.clients || [];
+            if (!allClients.length) {
+                container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 24px;">Нет созданных клиентов</div>';
+                updateHubSelectedCount();
+                return;
+            }
+
+            const groupName = currentData?.group?.name || 'Группа';
+            let displayClients = [];
+            const q = currentHubFilterQuery;
+
+            if (!q) {
+                displayClients = allClients.map(c => ({
+                    client: c,
+                    groupName: groupName,
+                    score: 0
+                }));
+            } else {
+                const bracketMatch = q.match(/^(.*?)\((.*?)\)(.*)$/);
+                let mode = 'name_only';
+                let namePart = '';
+                let groupPart = '';
+
+                if (bracketMatch) {
+                    const outside = (bracketMatch[1] + ' ' + bracketMatch[3]).trim();
+                    const inside = bracketMatch[2].trim();
+                    if (!outside) {
+                        mode = 'group_only';
+                        groupPart = inside;
+                    } else {
+                        mode = 'name_and_group';
+                        namePart = outside;
+                        groupPart = inside;
+                    }
+                } else {
+                    const openIdx = q.lastIndexOf('(');
+                    if (openIdx !== -1) {
+                        const outside = q.slice(0, openIdx).trim();
+                        const inside = q.slice(openIdx + 1).trim();
+                        if (!outside) {
+                            mode = 'group_only';
+                            groupPart = inside;
+                        } else {
+                            mode = 'name_and_group';
+                            namePart = outside;
+                            groupPart = inside;
+                        }
+                    } else {
+                        mode = 'name_only';
+                        namePart = q;
+                    }
+                }
+
+                const scored = [];
+                for (const c of allClients) {
+                    const cName = c.name || 'Клиент';
+                    let score = 0;
+
+                    if (mode === 'name_only') {
+                        score = calcMatchScore(cName, namePart);
+                    } else if (mode === 'group_only') {
+                        if (groupName) {
+                            if (!groupPart) {
+                                score = 100;
+                            } else {
+                                score = calcMatchScore(groupName, groupPart);
+                            }
+                        }
+                    } else if (mode === 'name_and_group') {
+                        const nScore = namePart ? calcMatchScore(cName, namePart) : 0;
+                        const gScore = (groupPart && groupName) ? calcMatchScore(groupName, groupPart) : 0;
+                        if (nScore > 0 && gScore > 0) {
+                            score = 2000 + nScore + gScore;
+                        } else if (nScore > 0) {
+                            score = nScore;
+                        } else if (gScore > 0) {
+                            score = gScore;
+                        }
+                    }
+
+                    if (score > 0) {
+                        scored.push({ client: c, groupName: groupName, score });
+                    }
+                }
+
+                scored.sort((a, b) => b.score - a.score);
+                displayClients = scored;
+            }
+
+            if (!displayClients.length) {
+                container.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 24px;">По запросу «<b>${esc(q)}</b>» ничего не найдено</div>`;
+                updateHubSelectedCount();
+                return;
+            }
+
+            container.innerHTML = displayClients.map(item => {
+                const c = item.client;
+                const link = c.link || '';
+                let badge = '';
+                const hashes = String(c.vk_hashes || '').trim();
+                if (c.vk_token) {
+                    badge = '<span class="badge active" style="font-size: 11px;">VK Токен</span>';
+                } else if (hashes) {
+                    badge = '<span class="badge active" style="font-size: 11px;">VK Хеши</span>';
+                } else {
+                    badge = '<span class="badge inactive" style="font-size: 11px;">Прямой</span>';
+                }
+                if (c.workers && c.workers >= 3) {
+                    badge += ` <span class="badge active" style="font-size: 11px;">Потоки: ${c.workers}</span>`;
+                }
+                const isChecked = hubSelectedPasswords.has(c.password);
+                const displayName = `${c.name || 'Клиент'} (${groupName})`;
+
+                return `
+                <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="checkbox" class="hub-client-cb" value="${esc(c.password)}" ${isChecked ? 'checked' : ''} onchange="handleHubClientCbChange(this)" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary);">
+                            <span style="font-weight: 600; font-size: 14px; color: var(--text-main);">${esc(displayName)}</span>
+                            ${badge}
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input readonly value="${esc(link)}" style="flex: 1; height: 40px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; padding: 0 10px; background: var(--surface-hover); color: var(--text-muted); border-radius: 8px;" onclick="this.select()">
+                        <button class="btn btn-ghost" style="height: 40px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px;" onclick="copyHubClientLink('${esc(c.password)}', this)" title="Копировать ссылку">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary);"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
+                        <button class="btn btn-ghost" style="height: 40px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px;" onclick="openQrModalForClient('${esc(c.password)}')" title="QR-код">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary);"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path></svg>
+                        </button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+
+            updateHubSelectedCount();
+        }
+
+        function handleHubClientCbChange(cb) {
+            if (cb.checked) {
+                hubSelectedPasswords.add(cb.value);
+            } else {
+                hubSelectedPasswords.delete(cb.value);
+            }
+            updateHubSelectedCount();
+        }
+
+        function toggleSelectAllHubClients(checked) {
+            const cbs = document.querySelectorAll('.hub-client-cb');
+            cbs.forEach(cb => {
+                cb.checked = checked;
+                if (checked) {
+                    hubSelectedPasswords.add(cb.value);
+                } else {
+                    hubSelectedPasswords.delete(cb.value);
+                }
+            });
+            updateHubSelectedCount();
+        }
+
+        function updateHubSelectedCount() {
+            const visibleCbs = document.querySelectorAll('.hub-client-cb');
+            const checkedCount = hubSelectedPasswords.size;
+            const countEl = document.getElementById('hubSelectedCount');
+            if (countEl) countEl.textContent = `(${checkedCount} выбрано)`;
+            const selectAll = document.getElementById('hubSelectAll');
+            if (selectAll) {
+                selectAll.checked = (visibleCbs.length > 0 && Array.from(visibleCbs).every(cb => cb.checked));
+            }
+        }
+
+        async function copyHubClientLink(password, btn = null) {
+            const client = (currentData?.clients || []).find(c => c.password === password);
+            if (!client) return;
+            const link = client.link || '';
+            if (!link) { showToast('Ссылка клиента недоступна', true); return; }
+            if (await copyToClipboard(link)) {
+                showToast("Ссылка скопирована");
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+                }
+            } else {
+                showToast("Не удалось скопировать", true);
+            }
+        }
+
+        function openQrModalForClient(password) {
+            const client = (currentData?.clients || []).find(c => c.password === password);
+            if (!client) return;
+            const link = client.link || '';
+            if (!link) { showToast('Ссылка клиента недоступна', true); return; }
+            document.getElementById('qrDlgTitle').textContent = 'QR-код: ' + (client.name || 'Клиент');
+            document.getElementById('qrDlgLink').value = link;
+            const container = document.getElementById('qrCodeContainer');
+            container.innerHTML = generateQrSvg(link);
+            document.getElementById('qrDlg').showModal();
+        }
+
+        let currentBatchAction = null;
+
+        function promptBatchAction(action) {
+            if (!hubSelectedPasswords.size) {
+                const checkedCbs = Array.from(document.querySelectorAll('.hub-client-cb:checked'));
+                checkedCbs.forEach(cb => hubSelectedPasswords.add(cb.value));
+            }
+            if (!hubSelectedPasswords.size) {
+                showToast("Выберите хотя бы одного клиента", true);
+                return;
+            }
+            const count = hubSelectedPasswords.size;
+            const titleEl = document.getElementById('batchConfirmTitle');
+            const msgEl = document.getElementById('batchConfirmMessage');
+            const submitBtn = document.getElementById('batchConfirmSubmitBtn');
+
+            if (action === 'token') {
+                const tokenVal = (document.getElementById('hubVkTokenInput')?.value || groupVkToken || '').trim();
+                if (!tokenVal) {
+                    showToast("Укажите VK токен", true);
+                    return;
+                }
+                titleEl.textContent = "Применить VK токен";
+                msgEl.textContent = `Включить общий VK токен для выбранных клиентов (${count} шт.)? Индивидуальные VK хеши будут очищены.`;
+                submitBtn.textContent = "Применить токен";
+                submitBtn.className = "btn btn-primary";
+            } else if (action === 'clear-token') {
+                titleEl.textContent = "Отключить VK токен";
+                msgEl.textContent = `Отключить VK токен для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Отключить токен";
+                submitBtn.className = "btn btn-danger";
+            } else if (action === 'hashes') {
+                const raw = (document.getElementById('hubVkHashesInput')?.value || groupVkHashes || '').trim();
+                const hashes = raw.split(',').map(s => s.trim()).filter(Boolean);
+                if (!hashes.length || hashes.length > 6 || hashes.some(h => h.length < 16 || /\s/.test(h))) {
+                    showToast("Укажите от 1 до 6 корректных VK-хешей через запятую (каждый от 16 символов без пробелов)", true);
+                    return;
+                }
+                titleEl.textContent = "Применить VK хеши";
+                msgEl.textContent = `Установить указанные VK хеши для выбранных клиентов (${count} шт.)? Флаг VK токена будет отключен.`;
+                submitBtn.textContent = "Применить хеши";
+                submitBtn.className = "btn btn-primary";
+            } else if (action === 'clear-hashes') {
+                titleEl.textContent = "Очистить VK хеши";
+                msgEl.textContent = `Очистить VK хеши для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Очистить хеши";
+                submitBtn.className = "btn btn-danger";
+            } else if (action === 'workers') {
+                const w = parseInt(document.getElementById('hubWorkersInput')?.value || '0', 10);
+                if (isNaN(w) || w < 0 || (w > 0 && w < 3) || w > 100) {
+                    showToast("Число потоков должно быть 0 или от 3 до 100", true);
+                    return;
+                }
+                titleEl.textContent = "Установить число потоков";
+                msgEl.textContent = `Установить число потоков (${w === 0 ? 'Клиентские настройки (0)' : w}) для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Установить число потоков";
+                submitBtn.className = "btn btn-primary";
+            } else if (action === 'clear-workers') {
+                titleEl.textContent = "Сбросить число потоков";
+                msgEl.textContent = `Сбросить число потоков до клиентских настроек (0) для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Сбросить число потоков";
+                submitBtn.className = "btn btn-danger";
+            } else if (action === 'clear') {
+                titleEl.textContent = "Очистить параметры VK";
+                msgEl.textContent = `Очистить VK токен и VK хеши у выбранных клиентов (${count} шт.)? Они перейдут в обычный режим прямого подключения.`;
+                submitBtn.textContent = "Очистить";
+                submitBtn.className = "btn btn-danger";
+            }
+            currentBatchAction = action;
+            submitBtn.onclick = executeBatchAction;
+            document.getElementById('batchConfirmDlg').showModal();
+        }
+
+        async function executeBatchAction() {
+            const action = currentBatchAction;
+            if (!action) return;
+            const checkedPasses = Array.from(hubSelectedPasswords);
+            const clients = (currentData?.clients || []).filter(c => checkedPasses.includes(c.password));
+
+            const submitBtn = document.getElementById('batchConfirmSubmitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Применение...";
+
+            let hashesVal = null;
+            let tokenVal = null;
+            let workersVal = null;
+
+            if (action === 'token') {
+                tokenVal = true;
+                hashesVal = '';
+            } else if (action === 'clear-token') {
+                tokenVal = false;
+            } else if (action === 'hashes') {
+                const raw = (document.getElementById('hubVkHashesInput')?.value || groupVkHashes || '').trim();
+                hashesVal = raw.split(',').map(s => s.trim()).filter(Boolean).join(',');
+                tokenVal = false;
+            } else if (action === 'clear-hashes') {
+                hashesVal = '';
+            } else if (action === 'workers') {
+                workersVal = parseInt(document.getElementById('hubWorkersInput')?.value || '0', 10) || 0;
+            } else if (action === 'clear-workers') {
+                workersVal = 0;
+                const winp = document.getElementById('hubWorkersInput');
+                if (winp) winp.value = '0';
+            } else if (action === 'clear') {
+                tokenVal = false;
+                hashesVal = '';
+            }
+
+            try {
+                let successCount = 0;
+                for (const c of clients) {
+                    const payload = {};
+                    if (hashesVal !== null) payload.hash = hashesVal;
+                    if (tokenVal !== null) payload.vk_token = tokenVal;
+                    if (workersVal !== null) payload.workers = workersVal;
+
+                    const r = await fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/clients/' + encodeURIComponent(c.password), {
+                        method: 'PUT',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (r.ok) {
+                        successCount++;
+                    }
+                }
+                if (workersVal !== null) {
+                    fetch('/' + encodeURIComponent(adminUuid) + '/api' + '/settings', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ workers: workersVal })
+                    }).catch(() => {});
+                }
+                document.getElementById('batchConfirmDlg').close();
+                showToast(`Обновлено клиентов: ${successCount} из ${clients.length}`);
+                await loadData();
+                renderHubClientsList();
+                updateHubSelectedCount();
+            } finally {
+                submitBtn.disabled = false;
+            }
+        }
+
+        document.getElementById('linksAndTokensDlg')?.addEventListener('close', () => {
+            hubSelectedPasswords.clear();
+            const selectAll = document.getElementById('hubSelectAll');
+            if (selectAll) selectAll.checked = false;
+        });
+
+        loadData();
+    </script>
+</body>
+</html>
 "##;
 
 const PANEL_HTML: &str = r##"
@@ -2178,10 +7914,14 @@ const PANEL_HTML: &str = r##"
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png">
-    <link rel="apple-touch-icon" sizes="192x192" href="/pwa-icon-192.png">
     <link rel="icon" type="image/svg+xml" href="/pwa-icon.svg">
+    <link rel="apple-touch-icon" href="/pwa-icon.svg">
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-icon-192.png">
+    <meta property="og:title" content="CSQTT">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="/pwa-icon.svg">
     <title>CSQTT</title>
+    <script src="/qrcode.min.js"></script>
     <style>
         :root {
             --bg-color: #f8fafc;
@@ -2213,7 +7953,7 @@ const PANEL_HTML: &str = r##"
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
         body { background-color: var(--bg-color); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; width: 100%; }
 
-        body, header, .header-container, .brand, .brand-logo, .version-logo, .yoomoney-button, .support-card, .header-actions, .btn, main, .glass-panel,
+        body, header, .header-container, .brand, .brand-logo, .version-logo, .support-card, .header-actions, .btn, main, .glass-panel,
         .stat-card, .stat-icon, .stat-value, .stat-sub, .progress-bar, .progress-fill,
         .section-header, .section-title, .table-wrapper, table, th, td, tr,
         .client-name, .client-pw, .client-hash, .traffic-flex, .badge, .actions,
@@ -2230,15 +7970,6 @@ const PANEL_HTML: &str = r##"
         .brand { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; }
         .brand-logo { display: block; width: 165px; height: auto; }
         .version-logo { display: block; width: 180px; height: auto; flex: 0 1 auto; }
-        .yoomoney-button {
-            display: inline-flex; align-items: center; justify-content: center; width: 100%;
-            height: 48px; min-height: 48px; padding: 0 16px; border: 0; border-radius: 12px;
-            background: #8b3ffd; box-shadow: 0 4px 12px rgba(139, 63, 253, 0.28); text-decoration: none;
-        }
-        .yoomoney-button:hover { background: #7c2ee8; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(139, 63, 253, 0.38); }
-        .yoomoney-button:active { transform: scale(0.96); }
-        .yoomoney-button:focus-visible { outline: 2px solid #8b3ffd; outline-offset: 3px; }
-        .yoomoney-logo { display: block; width: 120px; height: 26px; }
         .crypto-button {
             display: inline-flex; align-items: center; justify-content: center; width: 100%;
             height: 48px; min-height: 48px; padding: 0 16px; border: 0; border-radius: 12px;
@@ -2248,6 +7979,16 @@ const PANEL_HTML: &str = r##"
         .crypto-button:active { transform: scale(0.96); }
         .crypto-button:focus-visible { outline: 2px solid #38bdf8; outline-offset: 3px; }
         .crypto-logo { display: block; width: 120px; height: auto; }
+        .telegram-button {
+            display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: 100%;
+            height: 48px; min-height: 48px; padding: 0 16px; border: 0; border-radius: 12px;
+            background: #24a1de; box-shadow: 0 4px 12px rgba(36, 161, 222, 0.32); text-decoration: none;
+            color: #ffffff; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .telegram-button:hover { background: #1f94cd; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(36, 161, 222, 0.44); color: #ffffff; }
+        .telegram-button:active { transform: scale(0.96); }
+        .telegram-button:focus-visible { outline: 2px solid #24a1de; outline-offset: 3px; }
+        .tg-plane-icon { display: block; width: 22px; height: 22px; flex-shrink: 0; }
 
         .header-actions { display: flex; gap: 16px; align-items: center; }
 
@@ -2264,6 +8005,129 @@ const PANEL_HTML: &str = r##"
         .btn-ghost { background: transparent; color: var(--text-muted); }
         .btn-ghost:hover { background: var(--surface-hover); color: var(--text-main); }
         .btn-icon { padding: 8px; border-radius: 10px; }
+        .btn-api {
+            background: transparent;
+            color: var(--text-muted);
+            border: none;
+            border-radius: 8px;
+            padding: 6px 10px;
+            height: 36px;
+            font-size: 14px;
+            font-weight: 500;
+            gap: 6px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            transition: all 0.2s ease;
+        }
+        .btn-api:hover {
+            background: var(--surface-hover);
+            color: var(--text-main);
+            transform: translateY(-1px);
+        }
+        .btn-api:active {
+            transform: scale(0.96);
+        }
+        .btn-api svg {
+            color: var(--primary);
+        }
+
+        .api-card {
+            background: var(--bg-color);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+        .api-card:hover { border-color: var(--primary); }
+        .api-card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: var(--surface-hover);
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            flex-wrap: wrap;
+        }
+        .api-method {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 7px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .api-method.get { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .api-method.post { background: rgba(0, 119, 255, 0.15); color: var(--primary); border: 1px solid rgba(0, 119, 255, 0.3); }
+        .api-method.put { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .api-method.delete { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .api-path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 600; color: var(--text-main); }
+        .api-desc { color: var(--text-muted); font-size: 12px; margin-left: auto; }
+        .api-card-body { padding: 12px 14px; }
+        .api-code-label { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+        .api-code-block {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-main);
+            overflow-x: auto;
+            margin: 0;
+        }
+
+        .api-tabs-nav {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 20px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--border);
+            scrollbar-width: none;
+        }
+        .api-tabs-nav::-webkit-scrollbar { display: none; }
+        .api-tab-btn {
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            background: transparent;
+            color: var(--text-muted);
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .api-tab-btn:hover {
+            color: var(--text-main);
+            background: var(--surface-hover);
+        }
+        .api-tab-btn.active {
+            background: var(--primary);
+            color: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 119, 255, 0.25);
+        }
+        .api-curl-copy-btn {
+            padding: 3px 8px;
+            font-size: 11px;
+            height: 24px;
+            border-radius: 6px;
+            background: var(--surface-hover);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .api-curl-copy-btn:hover {
+            color: var(--text-main);
+            border-color: var(--primary);
+        }
 
         main { max-width: 1300px; width: 100%; margin: 0 auto; padding: 32px 24px 80px; display: flex; flex-direction: column; gap: 32px; }
 
@@ -2289,6 +8153,40 @@ const PANEL_HTML: &str = r##"
         .tab-btn.active { background: var(--primary); color: #ffffff; box-shadow: 0 4px 12px rgba(0, 119, 255, 0.2); }
 
         .section-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; }
+        .clients-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+        .clients-tb-links-btn { color: var(--primary); border: 1px solid rgba(0, 119, 255, 0.4); white-space: nowrap; flex-shrink: 0; order: 1; }
+        .panel-search-wrapper { flex: 1 1 240px; max-width: 440px; min-width: 180px; position: relative; order: 2; }
+        .panel-search-input { width: 100%; height: 38px; padding: 0 32px 0 34px; border-radius: 9px; background: var(--surface); border: 1px solid var(--border); color: var(--text-main); font-size: 13px; outline: none; transition: border-color 0.2s, background 0.2s, box-shadow 0.2s; }
+        .panel-search-input::placeholder { color: var(--text-muted); opacity: 0.8; }
+        .panel-search-input:focus { border-color: var(--primary); background: var(--surface-hover); box-shadow: 0 0 0 2px rgba(0, 119, 255, 0.15); }
+        .clients-tb-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; order: 3; }
+        .group-dlg-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: nowrap; margin-bottom: 12px; }
+        .group-act-btn { height: 36px; font-size: 13px; border-radius: 8px; padding: 0 14px; box-sizing: border-box; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; flex-shrink: 0; }
+        .group-admin-row { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        #groupAdminLinkBtn {
+            background: transparent !important;
+            color: var(--primary) !important;
+            border: 1.5px solid var(--primary) !important;
+            box-shadow: none !important;
+        }
+        #groupAdminLinkBtn:hover {
+            background: var(--icon-bg) !important;
+        }
+        .group-delete-btn {
+            background: transparent !important;
+            color: #ef4444 !important;
+            border: 1.5px solid #ef4444 !important;
+            box-shadow: none !important;
+        }
+        .group-delete-btn:hover {
+            background: rgba(239, 68, 68, 0.1) !important;
+        }
+        .group-regen-btn { width: 36px; min-width: 36px; height: 36px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; box-sizing: border-box; }
+        .group-search-wrapper { position: relative; display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 140px; }
+        .group-search-input { width: 100%; height: 36px; padding: 0 28px 0 38px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-main); font-size: 13px; outline: none; box-sizing: border-box; transition: all 0.2s; }
+        .group-search-input::placeholder { color: var(--text-muted); opacity: 0.8; }
+        .group-search-input:focus { border-color: var(--primary); background: var(--surface-hover); box-shadow: 0 0 0 2px rgba(0, 119, 255, 0.15); }
+        .group-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
         .section-title { font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 10px; color: var(--text-main); }
         .section-title svg { stroke: var(--primary); }
 
@@ -2302,7 +8200,7 @@ const PANEL_HTML: &str = r##"
         .client-name { font-weight: 600; font-size: 15px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;}
         .client-pw { font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace; font-size: 12px; color: var(--primary); background: var(--icon-bg); padding: 2px 6px; border-radius: 4px; }
         .client-hash { font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace; font-size: 12px; color: var(--text-muted); max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
-        
+
         .traffic-flex { display: flex; flex-direction: column; gap: 4px; font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace; font-size: 13px; }
         .t-up { color: var(--primary); } .t-down { color: var(--primary); }
 
@@ -2315,8 +8213,14 @@ const PANEL_HTML: &str = r##"
         .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
         .empty-state { text-align: center; padding: 64px 20px; color: var(--text-muted); }
 
-        .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+        @media (max-width: 1024px) { .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 600px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } }
         .setting-card { padding: 24px; }
+        .dns-selection { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+        .dns-selection.is-custom { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+        .dns-selection .dns-manual-input { display: none; }
+        .dns-selection.is-custom .dns-manual-input { display: block; }
         .settings-actions-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
         .settings-action-btn {
             width: 100%; min-width: 0; padding: 10px 8px; border: 0; background: transparent;
@@ -2378,10 +8282,30 @@ const PANEL_HTML: &str = r##"
         input { background: var(--bg-color); color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; outline: none; }
         .input-group { margin-bottom: 16px; }
         .input-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; }
-        .input-group input, .input-group select { width: 100%; height: 48px; background: var(--bg-color); color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; padding: 0 16px; font-size: 14px; outline: none; transition: background 0.3s, border-color 0.3s, color 0.3s; }
-        .input-group input:focus, .input-group select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 119, 255, 0.15); }
+        /* Custom Modern Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.3);
+            border-radius: 999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 116, 139, 0.55);
+        }
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(100, 116, 139, 0.3) transparent;
+        }
+
+        .input-group input:not([type="checkbox"]), .input-group select { width: 100%; height: 48px; background: var(--bg-color); color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; padding: 0 16px; font-size: 14px; outline: none; transition: background 0.3s, border-color 0.3s, color 0.3s; }
+        .input-group input:not([type="checkbox"]):focus, .input-group select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0, 119, 255, 0.15); }
         .input-group input.is-invalid { border-color: #ef4444 !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15) !important; }
-        
+
         .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; padding: 12px; background: var(--bg-color); border-radius: 12px; border: 1px solid var(--border); transition: background 0.3s, border-color 0.3s; }
         .toggle-row label { font-size: 14px; font-weight: 600; color: var(--text-main); margin: 0; text-transform: none; white-space: nowrap; }
         .vk-hashes-toggle { margin-top: 10px; }
@@ -2392,7 +8316,7 @@ const PANEL_HTML: &str = r##"
         input:checked + .slider { background-color: var(--primary); }
         input:checked + .slider:before { transform: translateX(20px); }
 
-        dialog { margin: auto; width: min(500px, calc(100% - 32px)); background: var(--surface); color: var(--text-main); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); }
+        dialog { margin: auto; width: min(500px, calc(100% - 32px)); max-height: min(90vh, 760px); overflow-y: auto; background: var(--surface); color: var(--text-main); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); }
         dialog::backdrop { background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); }
         dialog h2 { margin-bottom: 24px; font-size: 24px; }
         .dlg-row { display: flex; gap: 16px; }
@@ -2422,13 +8346,259 @@ const PANEL_HTML: &str = r##"
             transform: translateY(-2px);
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
         }
+        .client-card.group-card {
+            border: 1.5px solid var(--primary, #0077ff);
+        }
+        .client-card.group-card:hover {
+            border-color: var(--primary-hover, #0060cc);
+            box-shadow: 0 10px 20px -3px rgba(0, 119, 255, 0.2);
+        }
+        .group-card-tag {
+            display: inline-flex;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 6px;
+            background: var(--icon-bg);
+            color: var(--primary);
+        }
+        .rule-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .rule-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .rule-card-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+        .rule-chip {
+            display: inline-flex;
+            align-items: center;
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            background: var(--surface-hover);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        #qrCodeContainer {
+            background: #ffffff;
+            padding: 16px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            border: 1px solid var(--border);
+            width: 260px;
+            height: 260px;
+            max-width: 100%;
+            aspect-ratio: 1;
+            box-sizing: border-box;
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        #qrCodeContainer svg {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100% !important;
+            max-height: 100% !important;
+            display: block !important;
+        }
+
+        /* Hub Links & Bulk Settings Panel */
+        .hub-bulk-panel {
+            background: var(--bg-color);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .hub-field-block {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 12px;
+        }
+        .hub-field-block:last-child {
+            margin-bottom: 0;
+        }
+        .hub-field-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .hub-field-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .hub-field-input {
+            flex: 1;
+            min-width: 0;
+            min-height: 38px;
+            height: 38px;
+            font-size: 13px;
+            padding: 0 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-main);
+            box-sizing: border-box;
+        }
+        .hub-field-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .hub-btn-apply {
+            height: 38px;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 175px;
+            padding: 0 14px;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+        }
+        .hub-btn-clear {
+            height: 38px;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 135px;
+            padding: 0 12px;
+            white-space: nowrap;
+            color: #ef4444 !important;
+            border: 1px solid rgba(239, 68, 68, 0.35) !important;
+            background: transparent;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            transition: all 0.15s ease;
+        }
+        .hub-btn-clear:hover {
+            background: rgba(239, 68, 68, 0.1) !important;
+            border-color: #ef4444 !important;
+            color: #dc2626 !important;
+        }
+        .hub-bulk-footer {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+            margin-top: 14px;
+        }
+        input.hub-search-input, .hub-search-input {
+            width: 100%;
+            height: 36px;
+            padding: 0 32px 0 44px !important;
+            border-radius: 8px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            font-size: 13px;
+            outline: none;
+            box-sizing: border-box;
+            transition: all 0.2s;
+        }
+        .hub-search-input::placeholder {
+            color: var(--text-muted);
+            opacity: 0.8;
+        }
+        .hub-search-input:focus {
+            border-color: var(--primary);
+            background: var(--surface-hover);
+            box-shadow: 0 0 0 2px rgba(0, 119, 255, 0.15);
+        }
+
+        @media (max-width: 640px) {
+            .hub-field-row {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+            .hub-field-row .hub-field-input {
+                width: 100% !important;
+                height: 38px !important;
+                min-height: 38px !important;
+                flex: none !important;
+                box-sizing: border-box !important;
+            }
+            .hub-field-actions {
+                width: 100%;
+                display: flex;
+                gap: 8px;
+            }
+            .hub-btn-apply,
+            .hub-btn-clear {
+                flex: 1;
+                width: auto;
+                min-width: 0;
+                font-size: 12px;
+                padding: 0 8px;
+                height: 38px;
+                box-sizing: border-box;
+            }
+            .hub-field-row.hub-workers-row {
+                flex-direction: row;
+                align-items: center;
+                gap: 8px;
+            }
+            .hub-field-row.hub-workers-row .hub-workers-input {
+                width: 75px !important;
+                flex: 0 0 75px !important;
+                height: 38px !important;
+                min-height: 38px !important;
+                text-align: center;
+                box-sizing: border-box !important;
+            }
+            .hub-field-row.hub-workers-row .hub-field-actions {
+                flex: 1;
+                min-width: 0;
+            }
+            .hub-bulk-footer {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+            }
+            .hub-search-container {
+                width: 100% !important;
+            }
+            .hub-search-input {
+                height: 38px;
+                font-size: 13px;
+            }
+        }
+
         .client-card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--border);
-            padding-bottom: 8px;
+            padding-bottom: 10px;
             margin-bottom: 2px;
+            min-height: 40px;
         }
         .client-card-title {
             font-size: 15px;
@@ -2437,6 +8607,95 @@ const PANEL_HTML: &str = r##"
             display: flex;
             align-items: center;
             gap: 8px;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .rule-targets-container {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--bg-color);
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .rule-target-section-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 4px 6px 2px;
+        }
+        .rule-target-item {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            padding: 8px 12px !important;
+            border-radius: 10px !important;
+            background: var(--surface) !important;
+            border: 1px solid var(--border) !important;
+            cursor: pointer !important;
+            transition: background 0.15s, border-color 0.15s !important;
+            user-select: none;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .rule-target-item:hover {
+            background: var(--surface-hover) !important;
+            border-color: rgba(0, 119, 255, 0.4) !important;
+        }
+        .rule-target-item input[type="checkbox"] {
+            width: 18px !important;
+            min-width: 18px !important;
+            max-width: 18px !important;
+            height: 18px !important;
+            min-height: 18px !important;
+            max-height: 18px !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            accent-color: var(--primary);
+            cursor: pointer;
+            flex-shrink: 0;
+            border-radius: 4px;
+        }
+        .rule-target-info {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+        }
+        .rule-target-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .rule-target-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .rule-target-badge {
+            display: inline-flex;
+            align-items: center;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--icon-bg);
+            color: var(--primary);
+            flex-shrink: 0;
         }
         .client-card-body {
             display: flex;
@@ -2457,7 +8716,39 @@ const PANEL_HTML: &str = r##"
             color: var(--text-main);
             font-weight: 500;
         }
-        
+        .client-sub-btn {
+            width: 100%;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-size: 12px;
+            padding: 7px 10px;
+            border: 1px solid var(--border) !important;
+            color: var(--text-main) !important;
+            background: transparent !important;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        .client-sub-btn:hover {
+            background: var(--surface-hover) !important;
+            border-color: var(--primary) !important;
+            color: var(--primary) !important;
+        }
+        [data-theme="dark"] .client-sub-btn {
+            border-color: rgba(255, 255, 255, 0.25) !important;
+            color: #ffffff !important;
+        }
+        [data-theme="dark"] .client-sub-btn:hover {
+            border-color: var(--primary) !important;
+            color: var(--primary) !important;
+            background: rgba(255, 255, 255, 0.05) !important;
+        }
+
         .dlg-header {
             display: flex;
             justify-content: space-between;
@@ -2486,24 +8777,25 @@ const PANEL_HTML: &str = r##"
 
         @keyframes spin { 100% { transform: rotate(360deg); } }
         @keyframes shrink { from { width: 100%; } to { width: 0%; } }
-        
-        .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 10px; }
-        .toast { 
+
+        .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 100000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+        .toast {
             position: relative;
-            background: var(--surface); 
-            border: 1px solid var(--border); 
-            color: var(--text-main); 
-            padding: 14px 20px; 
-            border-radius: 12px; 
-            font-size: 14px; 
-            font-weight: 500; 
-            display: flex; 
-            align-items: center; 
-            gap: 10px; 
-            box-shadow: 0 10px 25px rgba(0,0,0,0.1); 
-            animation: toastIn 0.3s forwards; 
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 14px 20px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            animation: toastIn 0.3s forwards;
             overflow: hidden;
             transition: all 0.3s;
+            pointer-events: auto;
         }
         .toast.hide { animation: toastOut 0.3s forwards; }
         @keyframes toastIn { from { opacity: 0; transform: translateX(50px); } to { opacity: 1; transform: translateX(0); } }
@@ -2512,7 +8804,7 @@ const PANEL_HTML: &str = r##"
 
         .toast-success { border-left: 3px solid #10b981; }
         .toast-error { border-left: 3px solid #ef4444; }
-        
+
         .toast-progress {
             position: absolute; bottom: 0; left: 0; height: 3px; width: 100%;
             background: rgba(0,0,0,0.3);
@@ -2523,32 +8815,30 @@ const PANEL_HTML: &str = r##"
         @media(max-width: 480px) {
             .hide-mobile { display: none !important; }
             .show-mobile { display: inline-block !important; }
-            
+
             .header-container { padding: 0 10px !important; }
             .brand-logo { width: 92px !important; }
             .header-actions { gap: 6px !important; }
             .version-logo { width: 82px !important; }
             .header-actions .btn:not(.btn-icon) { padding: 6px 8px !important; font-size: 12px !important; white-space: nowrap !important; }
             .header-actions .btn-icon { padding: 6px !important; }
-            
+
             .routing-panel { padding: 16px !important; }
             .routing-header { gap: 8px !important; margin-bottom: 16px !important; }
         }
 
-        .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 10px; }
-
-        @media(max-width: 768px) { 
-            header { height: 64px; } 
+        @media(max-width: 768px) {
+            header { height: 64px; }
             .header-container { padding: 0 16px; }
             .brand-logo { width: 128px; }
             .version-logo { width: 132px; }
-            main { padding: 20px 12px 80px; gap: 20px; } 
-            
+            main { padding: 20px 12px 80px; gap: 20px; }
+
             .tabs-container { width: 100%; margin-bottom: 4px; }
             .tabs { display: flex; width: 100%; }
             .tab-btn { flex: 1; justify-content: center; padding: 10px 0; font-size: 13px; }
 
-            .dashboard { grid-template-columns: repeat(2, 1fr); gap: 12px; } 
+            .dashboard { grid-template-columns: repeat(2, 1fr); gap: 12px; }
             .dashboard .stat-card {
                 padding: 12px 14px;
                 min-height: 106px;
@@ -2598,23 +8888,37 @@ const PANEL_HTML: &str = r##"
 
             .section-header { flex-direction: column; align-items: flex-start; gap: 12px; }
             .section-header .btn { width: 100%; }
-            .dlg-row { flex-direction: column; gap: 0; } 
+            .clients-toolbar { display: flex !important; flex-direction: column !important; align-items: stretch !important; gap: 8px !important; margin-bottom: 16px !important; justify-content: flex-start !important; }
+            .clients-tb-links-btn { order: 1 !important; width: 100% !important; }
+            .clients-tb-actions { order: 2 !important; width: 100% !important; display: flex !important; flex-direction: column !important; gap: 8px !important; }
+            .clients-tb-actions .btn { width: 100% !important; }
+            .panel-search-wrapper { order: 3 !important; width: 100% !important; max-width: 100% !important; margin-top: 4px !important; flex: none !important; }
+            .group-dlg-actions { display: flex !important; flex-direction: column !important; align-items: stretch !important; gap: 8px !important; margin-bottom: 12px !important; }
+            .group-dlg-actions .group-act-btn, .group-dlg-actions .btn { width: 100% !important; height: 38px !important; justify-content: center !important; }
+            .group-admin-row { width: 100% !important; display: flex !important; gap: 6px !important; align-items: center !important; }
+            .group-admin-row #groupAdminLinkBtn { flex: 1 1 0 !important; width: auto !important; height: 38px !important; }
+            .group-admin-row .group-regen-btn { width: 38px !important; min-width: 38px !important; height: 38px !important; flex-shrink: 0 !important; }
+            .group-search-wrapper { width: 100% !important; min-width: 0 !important; margin-top: 4px !important; flex: none !important; }
+            .group-search-input { width: 100% !important; height: 38px !important; padding: 0 28px 0 38px !important; }
+            .group-search-input:focus { width: 100% !important; }
+            .dlg-row { flex-direction: column; gap: 0; }
             dialog { padding: 20px 16px; width: calc(100% - 24px); }
             .dlg-actions { flex-direction: row; flex-wrap: wrap; gap: 8px !important; }
             .dlg-actions .btn { flex: 1 1 0; width: auto; font-size: 13px !important; padding: 12px 4px !important; font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .toggle-row { gap: 8px; padding: 10px; }
             .toggle-row > label:first-child { font-size: 12px; flex-shrink: 0; }
             #edit_copyLinkBtn { width: 34px; min-width: 34px; height: 34px; padding: 0 !important; gap: 0 !important; font-size: 0 !important; }
+            .vk-hashes-toggle > div > label:first-child { font-size: 12px; flex-shrink: 0; }
             .switch { width: 56px; height: 32px; }
             .slider:before { height: 26px; width: 26px; left: 3px; bottom: 3px; }
             input:checked + .slider:before { transform: translateX(24px); }
             .setting-card { padding: 16px; }
-            
+
             .table-wrapper { background: transparent; border: none; }
             table, thead, tbody, th, td, tr { display: block; width: 100%; }
             thead { display: none; }
             tbody { display: flex; flex-direction: column; gap: 12px; }
-            
+
             tr {
                 background: var(--surface);
                 border: 1px solid var(--border);
@@ -2627,7 +8931,7 @@ const PANEL_HTML: &str = r##"
                 gap: 10px;
             }
             tr:hover td { background: transparent; }
-            
+
             td {
                 border: none;
                 padding: 0;
@@ -2638,7 +8942,7 @@ const PANEL_HTML: &str = r##"
                 text-align: left;
                 width: 100%;
             }
-            
+
             td::before {
                 content: attr(data-label) ":";
                 font-size: 11px;
@@ -2648,7 +8952,7 @@ const PANEL_HTML: &str = r##"
                 letter-spacing: 0.05em;
                 display: inline-block;
             }
-            
+
             td[data-label="Пользователь"] {
                 flex-direction: column;
                 align-items: flex-start;
@@ -2671,7 +8975,7 @@ const PANEL_HTML: &str = r##"
                 width: 100%;
                 margin-top: 2px;
             }
-            
+
             td[data-label="Действия"] {
                 border-top: 1px solid var(--border);
                 padding-top: 8px;
@@ -2821,12 +9125,24 @@ const PANEL_HTML: &str = r##"
                 </svg>
             </div>
             <div class="header-actions">
+                <button class="btn btn-api" onclick="openApiDocsDlg()" title="API Документация">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                    <span>API</span>
+                </button>
+                <button class="btn btn-ghost btn-icon" onclick="openImportExportDlg()" title="Импорт / Экспорт конфигурации">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
+                    </svg>
+                </button>
                 <button class="btn btn-ghost btn-icon" onclick="toggleTheme()" title="Сменить тему">
                     <svg id="themeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
                 </button>
-                <svg class="version-logo" viewBox="0 0 516 64" role="img" aria-label="v2.1.9 by amurcanov" fill="none" stroke="url(#versionLogoGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="version-logo" viewBox="0 0 516 64" role="img" aria-label="v2.5.0 by amurcanov" fill="none" stroke="url(#versionLogoGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
                     <defs><linearGradient id="versionLogoGradient" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="516" y2="64"><stop offset="0" stop-color="#45B7FF"></stop><stop offset="0.45" stop-color="#2087FF"></stop><stop offset="1" stop-color="#075BFF"></stop></linearGradient></defs>
-                    <path d="M8,24 L18,48 L28,24 M34,20 Q38,14 46,14 H50 Q58,14 58,22 Q58,28 52,33 L36,48 H58 M67,47 L67.8,47 M86,14 V48 M107,47 L107.8,47 M142,26 Q142,14 132,14 Q121,14 121,26 Q121,36 132,36 Q142,36 142,26 V38 Q142,48 132,48 Q126,48 121,44 M158,12 V48 M158,31 Q163,24 170,24 Q180,24 180,36 Q180,48 170,48 Q163,48 158,41 M190,24 L200,47 M210,24 L200,47 L196,57 Q194,60 189,58 M250,30 Q246,24 239,24 Q228,24 228,36 Q228,48 239,48 Q246,48 250,42 M250,24 V48 M260,48 V24 M260,31 Q264,24 270,24 Q277,24 277,32 V48 M277,31 Q281,24 287,24 Q294,24 294,32 V48 M304,24 V39 Q304,48 314,48 Q324,48 324,39 V24 M334,48 V24 M334,32 Q338,24 348,24 M382,29 Q378,24 370,24 Q360,24 360,36 Q360,48 370,48 Q378,48 382,43 M414,30 Q410,24 403,24 Q392,24 392,36 Q392,48 403,48 Q410,48 414,42 M414,24 V48 M424,48 V24 M424,32 Q429,24 436,24 Q446,24 446,35 V48 M467,24 Q456,24 456,36 Q456,48 467,48 Q478,48 478,36 Q478,24 467,24 Z M488,24 L498,48 L508,24"></path>
+                    <path d="M8,24 L18,48 L28,24 M34,20 Q38,14 46,14 H50 Q58,14 58,22 Q58,28 52,33 L36,48 H58 M67,47 L67.8,47 M102,14 H80 V28 H92 Q102,28 102,38 Q102,48 90,48 Q80,48 78,42 M110,47 L110.8,47 M122,22 Q122,14 134,14 Q146,14 146,22 V40 Q146,48 134,48 Q122,48 122,40 Z M158,12 V48 M158,31 Q163,24 170,24 Q180,24 180,36 Q180,48 170,48 Q163,48 158,41 M190,24 L200,47 M210,24 L200,47 L196,57 Q194,60 189,58 M250,30 Q246,24 239,24 Q228,24 228,36 Q228,48 239,48 Q246,48 250,42 M250,24 V48 M260,48 V24 M260,31 Q264,24 270,24 Q277,24 277,32 V48 M277,31 Q281,24 287,24 Q294,24 294,32 V48 M304,24 V39 Q304,48 314,48 Q324,48 324,39 V24 M334,48 V24 M334,32 Q338,24 348,24 M382,29 Q378,24 370,24 Q360,24 360,36 Q360,48 370,48 Q378,48 382,43 M414,30 Q410,24 403,24 Q392,24 392,36 Q392,48 403,48 Q410,48 414,42 M414,24 V48 M424,48 V24 M424,32 Q429,24 436,24 Q446,24 446,35 V48 M467,24 Q456,24 456,36 Q456,48 467,48 Q478,48 478,36 Q478,24 467,24 Z M488,24 L498,48 L508,24"></path>
                 </svg>
             </div>
         </div>
@@ -2919,8 +9235,20 @@ const PANEL_HTML: &str = r##"
 
         <div id="clients-section" style="display: none;">
             <section>
-                <div class="section-header" style="justify-content: flex-end;">
-                    <button class="btn btn-primary" onclick="openNewClientDlg()">Создать доступ</button>
+                <div class="clients-toolbar">
+                    <button class="btn btn-ghost clients-tb-links-btn" onclick="openLinksAndTokensDlg()">Настройка ссылок</button>
+                    <div class="panel-search-wrapper">
+                        <input type="text" id="mainSearchInput" class="panel-search-input" placeholder="Поиск групп и пользователей..." oninput="handleMainSearch(this.value)">
+                        <svg style="position: absolute; left: 10px; top: 11px; color: var(--text-muted); pointer-events: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <button id="mainSearchClearBtn" onclick="clearMainSearch()" style="display: none; position: absolute; right: 8px; top: 10px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0;" title="Очистить">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                    </div>
+                    <div class="clients-tb-actions">
+                        <button class="btn btn-ghost" style="color: var(--primary); border: 1px solid rgba(0, 119, 255, 0.4); white-space: nowrap;" onclick="openRoutingRulesDlg()">Управление маршрутизацией</button>
+                        <button class="btn btn-primary" onclick="openNewGroupDlg()">Создать группу</button>
+                        <button class="btn btn-primary" onclick="openNewClientDlg()">Создать доступ</button>
+                    </div>
                 </div>
                 <div id="clientsCards" class="client-cards-grid"></div>
             </section>
@@ -2957,14 +9285,16 @@ const PANEL_HTML: &str = r##"
                     <button class="settings-action-btn danger" onclick="logout()">Выйти</button>
                 </div>
                 <div class="settings-grid">
-                    <div class="glass-panel setting-card">
-                        <div class="input-group"><label for="mainpass">Главный пароль</label><input id="mainpass"></div>
-                        <button id="saveMainPasswordBtn" class="btn btn-primary" style="width: 100%; margin-top: 8px;" onclick="saveMainPassword()" disabled>Сохранить главный пароль</button>
+                    <div class="glass-panel setting-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+                        <div class="input-group" style="margin-bottom: 0;"><label for="mainpass">Главный пароль</label><input id="mainpass"></div>
+                        <button id="saveMainPasswordBtn" class="btn btn-primary" style="width: 100%; margin-top: 22px;" onclick="saveMainPassword()" disabled>Сохранить главный пароль</button>
                     </div>
                     <div class="glass-panel setting-card" style="display: flex; flex-direction: column; justify-content: space-between;">
                         <div class="input-group" style="margin-bottom: 0;">
                             <label for="dns_provider">DNS Адреса</label>
+                            <div id="dns_selection" class="dns-selection">
                             <select id="dns_provider">
+                                <option value="custom">Ручной DNS</option>
                                 <option value="yandex" selected>Yandex DNS</option>
                                 <option value="cloudflare">Cloudflare DNS</option>
                                 <option value="google">Google DNS</option>
@@ -2978,8 +9308,9 @@ const PANEL_HTML: &str = r##"
                                 <option value="nextdns">NextDNS</option>
                                 <option value="bizone">BI.ZONE DNS</option>
                                 <option value="nsdi">НСДИ DNS</option>
-                                <option value="custom" hidden>Пользовательские DNS</option>
                             </select>
+                            <input id="dns_manual" class="dns-manual-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="ipv4,ipv4" aria-label="Ручной DNS">
+                            </div>
                         </div>
                         <button id="saveDnsBtn" class="btn btn-primary" style="width: 100%; margin-top: 22px;" onclick="saveDnsSettings()" disabled>Применить DNS</button>
                     </div>
@@ -3008,7 +9339,9 @@ const PANEL_HTML: &str = r##"
                             </h3>
                             <button class="proxy-info-btn" type="button" aria-label="Что такое локальный SOCKS5 UDP" title="Что такое локальный SOCKS5 UDP" onclick="document.getElementById('localProxyInfoDlg').showModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button>
                         </div>
-                        <button class="proxy-add-btn" type="button" aria-label="Добавить профиль" title="Добавить профиль" onclick="openProfileDlg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <button class="proxy-add-btn" type="button" aria-label="Добавить профиль" title="Добавить профиль" onclick="openProfileDlg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+                        </div>
                     </div>
                     <div id="proxyProfilesList" class="proxy-profiles"></div>
                 </div>
@@ -3017,15 +9350,11 @@ const PANEL_HTML: &str = r##"
             <section style="margin-top: 20px;">
                 <div class="glass-panel support-card">
                     <h3 class="support-card-title">Поддержать разработчика Amurcanov</h3>
-                    <a class="yoomoney-button" href="https://yoomoney.ru/to/4100119505530465/100" target="_blank" rel="noopener noreferrer" aria-label="Перейти в ЮMoney" title="ЮMoney">
-                        <svg class="yoomoney-logo" viewBox="0 0 92 20" aria-hidden="true" fill="#ffffff">
-                            <path d="M33.9287 15.222H36.2782V9.5425C36.2782 8.34 37.1107 7.9145 37.9247 7.9145C38.8127 7.9145 39.4047 8.4695 39.4047 9.5425V15.222H41.7542V9.5425C41.7542 8.3215 42.5867 7.9145 43.4007 7.9145C44.2887 7.9145 44.8807 8.4695 44.8807 9.5425V15.222H47.2302V9.3575C47.2302 6.9895 45.7502 5.75 43.9187 5.75C42.6977 5.75 41.8282 6.305 41.1622 7.119C40.5702 6.2125 39.6082 5.75 38.5167 5.75C37.5177 5.75 36.7592 6.194 36.1672 6.86L36.0377 5.9535H33.9287V15.222Z"></path>
-                            <path d="M53.9553 5.75C51.1063 5.75 49.0157 7.8035 49.0157 10.5785C49.0157 13.372 51.1063 15.407 53.9553 15.407C56.8043 15.407 58.8948 13.372 58.8948 10.5785C58.8948 7.8035 56.8043 5.75 53.9553 5.75ZM53.9553 7.9145C55.4538 7.9145 56.4342 8.9875 56.4342 10.5785C56.4342 12.188 55.4538 13.261 53.9553 13.261C52.4568 13.261 51.4577 12.188 51.4577 10.5785C51.4577 8.9875 52.4568 7.9145 53.9553 7.9145Z"></path>
-                            <path d="M60.8838 15.222H63.2333V10.005C63.2333 8.451 64.3063 7.933 65.2868 7.933C66.3783 7.933 67.1553 8.636 67.1553 10.005V15.222H69.5048V9.635C69.5048 7.082 67.8398 5.75 65.8603 5.75C64.8243 5.75 63.8808 6.1385 63.1408 6.8785L63.0113 5.9535H60.8838V15.222Z"></path>
-                            <path d="M76.1941 15.407C78.4326 15.407 80.0421 14.3525 80.5971 12.5025L78.4141 12.0585C78.1181 12.8355 77.4151 13.372 76.1941 13.372C74.8621 13.372 73.9186 12.743 73.6966 11.3H80.5786C80.6526 10.9485 80.6896 10.5785 80.6896 10.2455C80.6896 7.563 78.8026 5.75 76.0831 5.75C73.2711 5.75 71.2916 7.822 71.2916 10.634C71.2916 13.3905 73.1231 15.407 76.1941 15.407ZM76.0831 7.6925C77.2671 7.6925 78.0256 8.34 78.2291 9.5055H73.7706C74.1036 8.2845 75.0101 7.6925 76.0831 7.6925Z"></path>
-                            <path d="M81.2328 5.9535L85.2103 15.1665L83.6193 19.292H86.0428L91.1673 5.9535H88.6698L86.4313 12.2065L83.8413 5.9535H81.2328Z"></path>
-                            <path d="M8.23663 9.97273C8.25147 4.47884 12.7503 0 18.4037 0C24.002 0 28.6351 4.49367 28.5708 10C28.5708 15.5063 24.002 20 18.4037 20C12.8145 20 8.25158 15.5841 8.23663 10.0274V17.4683H4.6331L0 2.91138H8.23663V9.97273ZM14.6071 10C14.6071 12.0253 16.3445 13.7342 18.4037 13.7342C20.5272 13.7342 22.2002 12.0253 22.2002 10C22.2002 7.97469 20.4628 6.26582 18.4037 6.26582C16.3445 6.26582 14.6071 7.97469 14.6071 10Z"></path>
+                    <a class="telegram-button" href="https://t.me/amurcanov_telegram" target="_blank" rel="noopener noreferrer" aria-label="Telegram: amurcanov_telegram" title="Telegram: amurcanov_telegram">
+                        <svg class="tg-plane-icon" viewBox="0 0 24 24" width="22" height="22" fill="#ffffff" aria-hidden="true">
+                            <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/>
                         </svg>
+                        <span>t.me/amurcanov_telegram</span>
                     </a>
                     <button class="crypto-button" type="button" onclick="openCryptoDonateDlg()" aria-label="Поддержать криптовалютой" title="CRYPTO">
                         <svg class="crypto-logo" viewBox="0 0 320 60" aria-hidden="true">
@@ -3051,7 +9380,7 @@ const PANEL_HTML: &str = r##"
     <dialog id="cryptoDonateDlg">
         <h2 style="font-size: 20px; margin-bottom: 8px;">Поддержать криптовалютой</h2>
         <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5;">Переведите криптовалюту на один из указанных адресов кошельков.</p>
-        
+
         <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <span style="font-size: 13px; font-weight: 700; color: #31A1F5;">GRAM (Сеть TON)</span>
@@ -3107,6 +9436,19 @@ const PANEL_HTML: &str = r##"
         </div>
     </dialog>
 
+    <dialog id="vkTokenSettingsDlg">
+        <h2 style="font-size: 20px; margin-bottom: 16px;">Настройка VK токенов</h2>
+        <p style="color: var(--text-muted); font-size: 14px; line-height: 1.6; margin: 0 0 18px;">Если сохранить VK токен здесь, все CSQTT-ссылки с включённой функцией VK токена будут автоматически использовать этот общий токен.</p>
+        <div class="input-group" style="margin-bottom: 0;">
+            <label for="vkTokenSettingsInput">Бессрочный VK токен</label>
+            <input id="vkTokenSettingsInput" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="dlg-actions" style="margin-top: 20px;">
+            <button class="btn btn-ghost" style="color: #ef4444;" onclick="clearVkTokenSettings()">Очистить</button>
+            <button class="btn btn-primary" onclick="saveVkTokenSettings()">Сохранить</button>
+        </div>
+    </dialog>
+
     <dialog id="profileDlg">
         <h2 id="profileDlgTitle" style="font-size: 18px; margin-bottom: 18px;">Новый профиль</h2>
         <div class="input-group"><label for="profileDlgName">Имя</label><input id="profileDlgName" maxlength="64" placeholder="3x-ui VLESS"></div>
@@ -3121,45 +9463,21 @@ const PANEL_HTML: &str = r##"
 
     <dialog id="newDlg">
         <h2>Создание доступа</h2>
+        <div id="newDlgGroupNotice" style="display: none; font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+            Группа: <span id="newDlgGroupName" style="font-weight: 600; color: var(--text-muted);"></span>
+        </div>
+        <input type="hidden" id="newDlgGroupId" value="">
         <div class="input-group">
             <label for="cname">Имя клиента</label>
             <input id="cname" maxlength="128">
         </div>
         <div class="input-group">
-            <label for="days">Срок действия (дней)</label>
-            <input type="number" id="days" value="30" min="0" max="3650">
+            <label for="days">Срок действия (0 = Бессрочно, 1-365 Ручной лимит)</label>
+            <input type="number" id="days" value="30" min="0" max="365">
         </div>
-        
-        <div class="toggle-row">
-            <label for="csqttToggle">Создать ссылку csqtt://</label>
-            <label class="switch">
-                <input type="checkbox" id="csqttToggle" onchange="toggleWdttFields()">
-                <span class="slider"></span>
-            </label>
-        </div>
-
-        <div id="csqttFields" style="display: none; margin-top: 16px;">
-            <div class="dlg-row">
-                <div class="input-group" style="flex: 1;"><label for="peer_port">PEER Port</label><input type="number" id="peer_port" value="46000"></div>
-                <input type="hidden" id="wg_port" value="46001">
-                <input type="hidden" id="local_port" value="0">
-            </div>
-            <div class="toggle-row vk-hashes-toggle">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <label for="vkHashesToggle">Добавить VK хеши</label>
-                    <button class="proxy-info-btn" type="button" aria-label="Как добавить VK хеши" title="Как добавить VK хеши" onclick="document.getElementById('vkHashesInfoDlg').showModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button>
-                </div>
-                <label class="switch">
-                    <input type="checkbox" id="vkHashesToggle" onchange="toggleVkHashFields()">
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div id="vkHashesFields" style="display: none;">
-                <div class="input-group" style="margin-bottom: 0;">
-                    <label for="vk_hashes">VK Хеши</label>
-                    <input id="vk_hashes" maxlength="1024" autocomplete="off" placeholder="hash1,hash2,...,hash6" oninput="this.classList.remove('is-invalid')">
-                </div>
-            </div>
+        <div class="input-group">
+            <label for="new_workers">Число потоков (0 = Клиентские настройки, 3-100 Ручной лимит)</label>
+            <input type="number" id="new_workers" min="0" max="100" value="0" placeholder="0 (Клиентские)">
         </div>
 
         <div class="dlg-actions">
@@ -3175,72 +9493,1101 @@ const PANEL_HTML: &str = r##"
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
         </div>
-        
+
         <div class="input-group">
             <label for="edit_name">Имя клиента</label>
             <input id="edit_name" maxlength="128">
         </div>
-        
+
+        <div class="input-group">
+            <label for="edit_group">Группа</label>
+            <select id="edit_group">
+                <option value="">Без группы</option>
+            </select>
+        </div>
+
         <div class="input-group">
             <label for="edit_pass">Пароль (ключ)</label>
-            <div style="display: flex; gap: 8px;">
-                <input id="edit_pass" readonly style="background: var(--surface-hover); color: var(--text-muted); cursor: not-allowed; flex: 1; font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace;">
-                <button class="btn btn-ghost" onclick="copyPasswordText()" style="padding: 0 16px; display: flex; align-items: center; gap: 6px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Копировать</button>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <input id="edit_pass" readonly style="background: var(--surface-hover); color: var(--text-muted); cursor: not-allowed; flex: 1; font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace; height: 48px;">
+                <button class="btn btn-ghost" onclick="copyPasswordText()" style="width: 48px; height: 48px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0;" title="Копировать"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                <button class="btn btn-ghost" onclick="openQrModalForActiveClient()" style="width: 48px; height: 48px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0;" title="QR-код"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path></svg></button>
             </div>
         </div>
 
         <div class="input-group">
-            <label for="edit_days">Срок действия (дней оставшихся)</label>
-            <input type="number" id="edit_days" min="0" max="3650">
-        </div>
-        
-        <div class="toggle-row">
-            <label for="edit_csqttToggle">Использовать csqtt://</label>
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="btn btn-ghost" id="edit_copyLinkBtn" onclick="executeCopyLink()" style="padding: 0 16px; display: flex; align-items: center; gap: 6px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Ссылка</button>
-                <label class="switch">
-                    <input type="checkbox" id="edit_csqttToggle" onchange="toggleEditWdttFields()">
-                    <span class="slider"></span>
-                </label>
-            </div>
+            <label for="edit_days">Срок действия (0 = Бессрочно, 1-365 Ручной лимит)</label>
+            <input type="number" id="edit_days" min="0" max="365">
         </div>
 
-        <div id="edit_csqttFields" style="display: none; margin-top: 16px;">
-            <div class="dlg-row">
-                <div class="input-group" style="flex: 1;"><label for="edit_peer_port">PEER Port</label><input type="number" id="edit_peer_port"></div>
-                <input type="hidden" id="edit_wg_port" value="46001">
-                <input type="hidden" id="edit_local_port" value="0">
-            </div>
-            <div class="toggle-row vk-hashes-toggle">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <label for="edit_vkHashesToggle">Добавить VK хеши</label>
-                    <button class="proxy-info-btn" type="button" aria-label="Как добавить VK хеши" title="Как добавить VK хеши" onclick="document.getElementById('vkHashesInfoDlg').showModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button>
-                </div>
-                <label class="switch">
-                    <input type="checkbox" id="edit_vkHashesToggle" onchange="toggleEditVkHashFields()">
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div id="edit_vkHashesFields" style="display: none;">
-                <div class="input-group" style="margin-bottom: 0;">
-                    <label for="edit_vk_hashes">VK Хеши</label>
-                    <input id="edit_vk_hashes" maxlength="1024" autocomplete="off" placeholder="hash1,hash2,...,hash6" oninput="this.classList.remove('is-invalid')">
-                </div>
-            </div>
+        <div class="input-group">
+            <label for="edit_workers">Число потоков (0 = Клиентские настройки, 3-100 Ручной лимит)</label>
+            <input type="number" id="edit_workers" min="0" max="100" value="0" placeholder="0 (Клиентские)">
         </div>
 
         <!-- Info Section -->
         <div style="border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-top: 16px; font-size: 13px; display: flex; flex-direction: column; gap: 8px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;"><span style="color: var(--text-muted);">Устройство:</span><span style="display: flex; gap: 8px; align-items: center;"><span id="edit_device_info" style="font-weight: 500;">—</span><button class="btn btn-ghost" id="edit_unbindBtn" onclick="executeUnbind()" style="font-size: 11px; padding: 2px 8px; height: auto; min-height: auto; display: none;">Отвязать</button></span></div>
             <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted);">IP-адрес:</span><span id="edit_ip_info" style="font-weight: 500;">—</span></div>
             <div style="display: flex; justify-content: space-between;"><span style="color: var(--text-muted);">Трафик:</span><span id="edit_traffic_info" style="font-weight: 500; font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace;">↑ 0 B / ↓ 0 B</span></div>
         </div>
 
         <div class="dlg-actions" style="margin-top: 16px;">
-            <button class="btn btn-ghost" onclick="document.getElementById('editDlg').close()"><span class="hide-mobile">Отмена</span><span class="show-mobile">Отм.</span></button>
             <button class="btn btn-ghost" id="edit_deleteBtn" style="color: #ef4444;" onclick="executeDelete()"><span class="hide-mobile">Удалить</span><span class="show-mobile">Удал.</span></button>
             <button class="btn btn-ghost" id="edit_statusBtn" style="color: var(--primary);" onclick="executeToggle()">Выкл</button>
             <button class="btn btn-primary" onclick="saveClientChanges()" id="edit_saveBtn"><span class="hide-mobile">Сохранить</span><span class="show-mobile">Сохр.</span></button>
+        </div>
+    </dialog>
+
+    <dialog id="newGroupDlg">
+        <div class="dlg-header">
+            <h2>Создание группы</h2>
+            <button class="close-btn" onclick="document.getElementById('newGroupDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <div class="input-group">
+            <label for="groupNameInput">Имя группы</label>
+            <input id="groupNameInput" maxlength="128" placeholder="Введите название группы">
+        </div>
+        <div class="dlg-actions">
+            <button class="btn btn-ghost" onclick="document.getElementById('newGroupDlg').close()">Отмена</button>
+            <button class="btn btn-primary" onclick="createGroup()" id="createGroupBtn">Создать</button>
+        </div>
+    </dialog>
+
+    <dialog id="groupDlg" style="max-width: 720px; width: min(720px, calc(100% - 24px)); max-height: 88vh; overflow-y: auto;">
+        <div class="dlg-header" style="align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+                <h2 id="groupDlgTitle" style="font-size: 22px; margin: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Группа</h2>
+                <input id="groupDlgTitleInput" style="display: none; font-size: 18px; font-weight: 700; height: 32px; padding: 0 8px; border-radius: 8px; width: 200px; max-width: 100%;" maxlength="128">
+                <button id="groupDlgEditBtn" onclick="toggleGroupInlineEdit()" style="background: none; border: 1px solid var(--border); cursor: pointer; color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; transition: all 0.2s;" title="Переименовать">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                </button>
+            </div>
+            <button class="close-btn" onclick="document.getElementById('groupDlg').close()" style="margin: 0; flex-shrink: 0;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+
+        <div class="group-dlg-actions">
+            <button class="btn btn-primary group-act-btn" onclick="createClientInCurrentGroup()">Создать пароль</button>
+            <div class="group-admin-row">
+                <button id="groupAdminLinkBtn" class="btn group-act-btn" onclick="createOrCopyGroupAdminLink()">Создать админа</button>
+                <button id="groupAdminDeleteBtn" class="btn btn-ghost group-regen-btn" style="display: none; color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4);" onclick="deleteGroupAdminLink()" title="Удалить ссылку админа"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg></button>
+            </div>
+            <button id="groupDeleteBtn" class="btn group-act-btn group-delete-btn" onclick="deleteCurrentGroup()" title="Удалить группу">Удалить группу</button>
+            <div class="group-search-wrapper">
+                <input type="text" id="groupSearchInput" class="group-search-input" placeholder="Поиск в группе..." oninput="handleGroupSearch(this.value)">
+                <svg class="group-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <button id="groupSearchClearBtn" onclick="clearGroupSearch()" style="display: none; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;" title="Очистить">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+        </div>
+
+        <div id="groupClientsCards" class="client-cards-grid" style="margin-top: 12px;"></div>
+    </dialog>
+
+    <dialog id="routingRulesDlg" style="max-width: 680px; width: min(680px, calc(100% - 24px)); max-height: 85vh; overflow-y: auto;">
+        <div class="dlg-header" style="align-items: center; justify-content: space-between; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <h2 style="margin: 0;">Управление маршрутизацией</h2>
+                <button class="btn btn-primary" style="font-size: 13px; padding: 4px 12px; height: 32px; white-space: nowrap;" onclick="openEditRoutingRuleDlg(null)">+ Создать правило</button>
+            </div>
+            <button class="close-btn" onclick="document.getElementById('routingRulesDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); margin: 8px 0 16px; line-height: 1.5;">
+            Правила маршрутизации автоматически передаются клиенту Android при подключении (через TUNCONF). При назначении правила клиенту вкладка «Исключения» в приложении скрывается, а правила применяются сервером.
+        </p>
+        <div id="routingRulesList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+    </dialog>
+
+    <dialog id="editRoutingRuleDlg" style="max-width: 620px; width: min(620px, calc(100% - 24px)); max-height: 85vh; overflow-y: auto;">
+        <div class="dlg-header">
+            <h2 id="editRoutingRuleTitle">Правило маршрутизации</h2>
+            <button class="close-btn" onclick="document.getElementById('editRoutingRuleDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <input type="hidden" id="ruleId">
+        <div class="input-group">
+            <label for="ruleName">Имя правила</label>
+            <input id="ruleName" maxlength="128" placeholder="Например: Обход блокировок">
+        </div>
+        <div class="input-group">
+            <label for="ruleMode">Режим исключения приложений</label>
+            <select id="ruleMode">
+                <option value="blacklist">Чёрный список</option>
+                <option value="whitelist">Белый список</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="rulePackages">Список пакетов приложений</label>
+            <textarea id="rulePackages" rows="3" style="width: 100%; background: var(--surface); color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; padding: 10px; font-family: monospace; font-size: 12px;" placeholder="com.instagram.android&#10;org.telegram.messenger"></textarea>
+        </div>
+        <div class="input-group">
+            <label for="ruleDomainsMode">Режим исключения доменов</label>
+            <select id="ruleDomainsMode" onchange="onRuleDomainsModeChange()">
+                <option value="blacklist">Чёрный список</option>
+                <option value="whitelist">Белый список</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="ruleDomains">Список доменов</label>
+            <textarea id="ruleDomains" rows="3" style="width: 100%; background: var(--surface); color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; padding: 10px; font-family: monospace; font-size: 12px;" placeholder="gosuslugi.ru&#10;*.ru&#10;vk.com"></textarea>
+        </div>
+        <div class="toggle-row" id="ruleTemplateDomainsRow" style="margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <label for="ruleTemplateDomains" style="cursor: pointer;">Готовый список RU доменов</label>
+                <button type="button" class="btn-icon" style="padding: 2px; border: none; background: transparent; cursor: pointer; color: var(--primary); display: flex; align-items: center;" onclick="openTemplateDomainsDlg()" title="Посмотреть список RU доменов">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </button>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="ruleTemplateDomains">
+                <span class="slider"></span>
+            </label>
+        </div>
+        <div class="input-group">
+            <label for="ruleIpMode">Режим исключения адресов</label>
+            <select id="ruleIpMode">
+                <option value="blacklist">Чёрный список</option>
+                <option value="whitelist">Белый список</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="ruleIps">Список адресов</label>
+            <textarea id="ruleIps" rows="3" style="width: 100%; background: var(--surface); color: var(--text-main); border: 1px solid var(--border); border-radius: 12px; padding: 10px; font-family: monospace; font-size: 12px;" placeholder="1.2.3.4/32&#10;1.2.3.4&#10;1.2.3.4-1.2.3.255"></textarea>
+        </div>
+        <div class="input-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
+                <label style="margin: 0;">Применить правило к:</label>
+                <div style="display: flex; gap: 6px;">
+                    <button type="button" class="btn btn-ghost" style="font-size: 11px; height: 26px; padding: 0 8px; border: 1px solid var(--border);" onclick="selectAllRuleTargets(true)">Выбрать все</button>
+                    <button type="button" class="btn btn-ghost" style="font-size: 11px; height: 26px; padding: 0 8px; border: 1px solid var(--border);" onclick="selectAllRuleTargets(false)">Снять все</button>
+                </div>
+            </div>
+            <div id="ruleTargetsContainer" class="rule-targets-container" style="user-select: none; -webkit-user-select: none; touch-action: pan-y;"></div>
+        </div>
+        <div class="dlg-actions">
+            <button class="btn btn-ghost" onclick="document.getElementById('editRoutingRuleDlg').close()">Отмена</button>
+            <button class="btn btn-ghost" id="ruleDeleteBtn" style="color: #ef4444; display: none;" onclick="deleteCurrentRoutingRule()">Удалить</button>
+            <button class="btn btn-primary" onclick="saveRoutingRule()" id="ruleSaveBtn">Сохранить</button>
+        </div>
+    </dialog>
+
+    <dialog id="templateDomainsDlg" style="max-width: 540px; width: min(540px, calc(100% - 24px)); max-height: 80vh; overflow-y: auto;">
+        <div class="dlg-header">
+            <h2>Список RU доменов</h2>
+            <button class="close-btn" onclick="document.getElementById('templateDomainsDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5;">
+            Эти <span id="templateDomainsCount">503</span> домена направляются напрямую без VPN при включении функции:
+        </p>
+        <div style="margin-bottom: 10px;">
+            <input id="templateDomainsFilter" placeholder="Быстрый поиск по доменам..." style="width: 100%; height: 38px; font-size: 13px; padding: 0 12px;" oninput="filterTemplateDomains(this.value)">
+        </div>
+        <div id="templateDomainsList" style="max-height: 320px; overflow-y: auto; background: var(--bg-color); border: 1px solid var(--border); border-radius: 12px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text-main);"></div>
+        <div class="dlg-actions" style="margin-top: 16px;">
+            <button class="btn btn-primary" onclick="document.getElementById('templateDomainsDlg').close()">Понятно</button>
+        </div>
+    </dialog>
+
+    <dialog id="linksAndTokensDlg" style="max-width: 820px; width: min(820px, calc(100% - 24px)); max-height: 88vh; overflow-y: auto;">
+        <div class="dlg-header">
+            <h2>Настройка ссылок</h2>
+            <button class="close-btn" onclick="document.getElementById('linksAndTokensDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+
+        <!-- Top bulk settings panel -->
+        <div class="hub-bulk-panel">
+            <div class="hub-field-block">
+                <label class="hub-field-label">Общий VK токен</label>
+                <div class="hub-field-row">
+                    <input id="hubVkTokenInput" class="hub-field-input" placeholder="Введите VK токен..." onchange="autoSaveHubVkToken()" onblur="autoSaveHubVkToken()">
+                    <div class="hub-field-actions">
+                        <button class="btn btn-primary hub-btn-apply" onclick="applyHubVkTokenDirect()"><span class="hide-mobile">Применить VK токен</span><span class="show-mobile">Применить токен</span></button>
+                        <button class="btn btn-ghost hub-btn-clear" onclick="promptBatchAction('clear-token')"><span class="hide-mobile">Очистить токен</span><span class="show-mobile">Очистить</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hub-field-block">
+                <label class="hub-field-label">VK хеши (через запятую)</label>
+                <div class="hub-field-row">
+                    <input id="hubVkHashesInput" class="hub-field-input" placeholder="hash1,hash2,...,hash6" onchange="autoSaveHubVkHashes()" onblur="autoSaveHubVkHashes()">
+                    <div class="hub-field-actions">
+                        <button class="btn btn-primary hub-btn-apply" onclick="applyHubVkHashesDirect()"><span class="hide-mobile">Применить VK хеши</span><span class="show-mobile">Применить хеши</span></button>
+                        <button class="btn btn-ghost hub-btn-clear" onclick="promptBatchAction('clear-hashes')"><span class="hide-mobile">Очистить хеши</span><span class="show-mobile">Очистить</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hub-field-block">
+                <label class="hub-field-label">Установить число потоков (0 = Клиентские настройки, 3-100 Ручной лимит)</label>
+                <div class="hub-field-row hub-workers-row">
+                    <input type="number" id="hubWorkersInput" class="hub-field-input hub-workers-input" min="0" max="100" value="0" placeholder="0 (Клиентские)">
+                    <div class="hub-field-actions">
+                        <button class="btn btn-primary hub-btn-apply" onclick="applyHubWorkersDirect()"><span class="hide-mobile">Установить число потоков</span><span class="show-mobile">Установить</span></button>
+                        <button class="btn btn-ghost hub-btn-clear" onclick="promptBatchAction('clear-workers')"><span class="hide-mobile">Сбросить число потоков</span><span class="show-mobile">Сбросить</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hub-bulk-footer">
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
+                    <input type="checkbox" id="hubSelectAll" onchange="toggleSelectAllHubClients(this.checked)" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary);">
+                    <label for="hubSelectAll" style="cursor: pointer; font-weight: 600;">Выбрать всех</label>
+                    <span id="hubSelectedCount" style="color: var(--text-muted); font-size: 12px;">(0 выбрано)</span>
+                </div>
+                <div class="hub-search-container" style="position: relative; width: 280px; max-width: 100%;">
+                    <input type="text" id="hubSearchInput" class="hub-search-input" placeholder="Клиент (группа)..." oninput="handleHubSearch(this.value)" style="padding-left: 44px !important; padding-right: 32px !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <button id="hubSearchClearBtn" onclick="clearHubSearch()" style="display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; align-items: center; justify-content: center;" title="Очистить">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Clients links list -->
+        <div id="hubClientsList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+    </dialog>
+
+    <dialog id="qrDlg" style="max-width: 440px; width: min(440px, calc(100% - 24px)); text-align: center;">
+        <div class="dlg-header" style="justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path></svg>
+                <h2 id="qrDlgTitle" style="font-size: 18px; margin: 0;">QR-код клиента</h2>
+            </div>
+            <button class="close-btn" onclick="document.getElementById('qrDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 16px; margin: 16px 0;">
+            <div id="qrCodeContainer"></div>
+            <div style="width: 100%; display: flex; gap: 8px; align-items: center;">
+                <input id="qrDlgLink" readonly style="flex: 1; height: 42px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; padding: 0 10px; background: var(--surface-hover); color: var(--text-muted); border-radius: 8px;" onclick="this.select()">
+                <button class="btn btn-ghost" id="qrDlgCopyBtn" onclick="copyQrDlgLink(this)" style="height: 42px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px;" title="Копировать ссылку">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                </button>
+            </div>
+        </div>
+        <div class="dlg-actions" style="justify-content: center;">
+            <button class="btn btn-primary" style="width: 100%;" onclick="document.getElementById('qrDlg').close()">Закрыть</button>
+        </div>
+    </dialog>
+
+    <!-- Confirmation Dialog for Batch Operations -->
+    <dialog id="batchConfirmDlg" style="max-width: 440px; width: min(440px, calc(100% - 24px));">
+        <h2 id="batchConfirmTitle" style="font-size: 20px; margin-bottom: 12px;">Подтверждение</h2>
+        <p id="batchConfirmMessage" style="font-size: 14px; color: var(--text-muted); line-height: 1.5; margin-bottom: 24px;"></p>
+        <div class="dlg-actions">
+            <button class="btn btn-ghost" onclick="document.getElementById('batchConfirmDlg').close()">Отмена</button>
+            <button class="btn btn-primary" id="batchConfirmSubmitBtn">Применить</button>
+        </div>
+    </dialog>
+
+    <dialog id="importExportDlg" style="max-width: 640px; width: min(640px, calc(100% - 24px)); max-height: 88vh; overflow-y: auto;">
+        <div class="dlg-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--icon-bg); color: var(--primary); display: grid; place-items: center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
+                    </svg>
+                </div>
+                <div>
+                    <h2 style="font-size: 20px; font-weight: 700; margin: 0;">Импорт и Экспорт</h2>
+                    <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Резервная копия, перенос клиентов и настроек</p>
+                </div>
+            </div>
+            <button class="close-btn" onclick="document.getElementById('importExportDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+            <button id="btnTabExport" class="btn btn-primary" style="flex: 1;" onclick="switchImportExportTab('export')">Экспорт</button>
+            <button id="btnTabImport" class="btn btn-ghost" style="flex: 1; border: 1px solid var(--border);" onclick="switchImportExportTab('import')">Импорт</button>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 16px; align-items: center;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; font-weight: 500;">
+                <input type="checkbox" id="ieOptClients" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary);">
+                <span>Клиенты</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; font-weight: 500;">
+                <input type="checkbox" id="ieOptSettings" checked style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary);">
+                <span>Настройки</span>
+            </label>
+        </div>
+
+        <div id="iePaneExport" style="display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-ghost" style="flex: 1; border: 1px solid var(--border); gap: 8px; justify-content: center;" onclick="executeExportDownload()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    <span>Скачать</span>
+                </button>
+                <button class="btn btn-ghost" style="flex: 1; border: 1px solid var(--border); gap: 8px; justify-content: center;" onclick="executeExportCopy()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <span>Копировать</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="iePaneImport" style="display: none; flex-direction: column; gap: 12px;">
+            <div style="display: flex; gap: 10px;">
+                <label class="btn btn-ghost" style="flex: 1; border: 1px solid var(--border); cursor: pointer; gap: 8px; justify-content: center; display: inline-flex; align-items: center;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                    <span>Загрузить файл</span>
+                    <input type="file" id="ieFileInput" accept=".json" style="display: none;" onchange="handleImportFile(event)">
+                </label>
+                <button class="btn btn-ghost" style="flex: 1; border: 1px solid var(--border); gap: 8px; justify-content: center;" onclick="executeImportFromClipboard()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+                    <span>Вставить из буфера</span>
+                </button>
+            </div>
+            <div id="ieImportStatus" style="font-size: 13px; font-weight: 600; display: none; text-align: center;"></div>
+        </div>
+    </dialog>
+
+    <!-- API Documentation Modal -->
+    <dialog id="apiDocsDlg" style="max-width: 940px; width: min(940px, calc(100% - 24px)); max-height: 88vh; overflow-y: auto;">
+        <div class="dlg-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--icon-bg); color: var(--primary); display: grid; place-items: center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                </div>
+                <div>
+                    <h2 style="font-size: 20px; font-weight: 700; margin: 0;">Документация REST API</h2>
+                    <p style="font-size: 12px; color: var(--text-muted); margin: 0;">Интеграция с Telegram-ботами, панелями управления и биллингом</p>
+                </div>
+            </div>
+            <button class="close-btn" onclick="document.getElementById('apiDocsDlg').close()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 16px;">
+            <div style="background: var(--surface-hover); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
+                    <div style="display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; color: var(--text-main);">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        Базовый адрес API (Base URL)
+                    </div>
+                    <button class="btn btn-ghost" onclick="copyText(document.getElementById('apiBaseUrlDisplay').textContent, this)" style="padding: 2px 8px; font-size: 11px; height: 22px; min-height: auto;">Копировать</button>
+                </div>
+                <div style="font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--primary); background: var(--bg-color); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); word-break: break-all;" id="apiBaseUrlDisplay"></div>
+            </div>
+            <div style="background: var(--surface-hover); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;">
+                <div style="display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; margin-bottom: 6px; color: var(--text-main);">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                    Авторизация запросов (Headers)
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px;">
+                    <div style="background: var(--bg-color); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                        <code>X-API-Key: &lt;пароль_панели&gt;</code>
+                        <span style="color: var(--text-muted); font-size: 10px;">Рекомендуемый</span>
+                    </div>
+                    <div style="background: var(--bg-color); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                        <code>Authorization: Bearer &lt;пароль&gt;</code>
+                        <span style="color: var(--text-muted); font-size: 10px;">Стандарт Bearer</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="api-tabs-nav">
+            <button id="btnApiTabClients" class="api-tab-btn active" onclick="switchApiDocsTab('clients')">
+                👥 Клиенты
+            </button>
+            <button id="btnApiTabGroups" class="api-tab-btn" onclick="switchApiDocsTab('groups')">
+                📁 Группы
+            </button>
+            <button id="btnApiTabSubs" class="api-tab-btn" onclick="switchApiDocsTab('subs')">
+                🔗 Подписки
+            </button>
+            <button id="btnApiTabRouting" class="api-tab-btn" onclick="switchApiDocsTab('routing')">
+                🔀 Маршрутизация & Прокси
+            </button>
+            <button id="btnApiTabSystem" class="api-tab-btn" onclick="switchApiDocsTab('system')">
+                ⚙️ Система & Бэкап
+            </button>
+        </div>
+
+        <!-- TAB 1: Clients -->
+        <div id="apiPaneClients" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients</span>
+                    <span class="api-desc">Создание нового клиента (ключа)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        Создает ключ доступа. Если <code>password</code> не указан, сервер сгенерирует надежный криптостойкий пароль. В ответе возвращаются готовая ссылка <code>link</code> (<code>csqtt://...</code>) и срок <code>expires</code>.
+                    </p>
+                    <div class="api-code-label">Тело запроса (JSON):</div>
+                    <pre class="api-code-block"><code>{
+  "name": "Пользователь @username",
+  "days": 30,                     // 0 = бессрочно, 1..3650 = дней
+  "password": "custom_pass",       // опционально (мин. 4 символа)
+  "peer_port": 46000,             // опционально (UDP порт)
+  "group_id": "group_id_here",     // опционально (привязка к группе)
+  "vk_token": false,               // опционально (общий VK токен)
+  "hash": "hash1,hash2"            // опционально (VK хеши)
+}</code></pre>
+                    <div class="api-code-label" style="margin-top: 8px;">Пример curl:</div>
+                    <pre class="api-code-block"><code>curl -X POST https://example.com/api/clients \
+  -H "X-API-Key: YOUR_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"TelegramUser","days":30}'</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/clients</span>
+                    <span class="api-desc">Список всех клиентов (с фильтрацией)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">
+                        Возвращает массив клиентов: расход трафика, статус активности, срок, <code>ip</code>, <code>sub_uuid</code> и <code>link</code>.
+                    </p>
+                    <p style="font-size: 11px; color: var(--primary);">
+                        Фильтры (Query): <code>?group_id={id|root}</code>, <code>?active=true|false</code>, <code>?search=текст</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/clients/{password}</span>
+                    <span class="api-desc">Информация по одному клиенту</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает объект клиента по его паролю (трафик, активные сессии, IP-адреса, скорость, срок, ссылка подписки и <code>link</code>).
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/{password}</span>
+                    <span class="api-desc">Обновление параметров клиента</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        Изменение имени, срока, пароля, UDP-порта, группы или VK параметров:
+                    </p>
+                    <pre class="api-code-block"><code>{ "name": "Новое Имя", "days": 60, "peer_port": 46000, "group_id": "" }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/{password}/extend</span>
+                    <span class="api-desc">Продление срока действия ключа</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        Продлевает ключ на указанное число дней. Если ключ истёк — отсчет от текущего момента; если активен — дни прибавляются к дате окончания:
+                    </p>
+                    <pre class="api-code-block"><code>{ "days": 30 }</code></pre>
+                    <div class="api-code-label" style="margin-top: 8px;">Ответ: <code>{ "ok": true, "expires": 1791600000 }</code></div>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/{password}/toggle</span>
+                    <span class="api-desc">Блокировка / разблокировка</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Переключает статус клиента. При деактивации активные туннели ключа мгновенно сбрасываются. Ответ: <code>{ "ok": true, "active": false }</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/{password}/unbind</span>
+                    <span class="api-desc">Сброс привязки клиента</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Сбрасывает эпоху пароля и активные сессии клиента, позволяя подключиться заново.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/{password}/reset-traffic</span>
+                    <span class="api-desc">Сброс расхода трафика в 0</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Сбрасывает счетчики отправленного и принятого трафика в базе данных и у активных сессий в ноль.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/{password}/sub-link/regenerate</span>
+                    <span class="api-desc">Перегенерация ссылки подписки</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        Генерирует новый постоянный <code>sub_uuid</code> для клиента или Главного пароля, мгновенно аннулируя старый адрес подписки.
+                    </p>
+                    <pre class="api-code-block"><code>Ответ: { "ok": true, "sub_uuid": "e2a3b4c5-..." }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method put">PUT</span>
+                    <span class="api-path">/api/clients/{password}/vk</span>
+                    <span class="api-desc">Персональная настройка VK токена и хешей</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "vk_token": true, "vk_hashes": "hash1,hash2" }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method delete">DELETE</span>
+                    <span class="api-path">/api/clients/{password}</span>
+                    <span class="api-desc">Удаление клиента</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Полностью удаляет ключ с сервера и немедленно разрывает активные соединения.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/links</span>
+                    <span class="api-desc">Массив всех готовых ссылок csqtt://</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает компактный массив объектов всех клиентов и мастер-пароля с готовыми ссылками <code>csqtt://...</code> и <code>sub_link</code> для ботов.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/links/batch-vk</span>
+                    <span class="api-desc">Пакетная настройка VK токенов и хешей</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "vk_token": "vk1.a...", "vk_hashes": "hash1,hash2", "apply_to_all_clients": true }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/batch-toggle</span>
+                    <span class="api-desc">Массовое переключение активности</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "passwords": ["p1", "p2"], "active": true }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/batch-extend</span>
+                    <span class="api-desc">Массовое продление срока ключей</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "passwords": ["p1", "p2"], "days": 30 }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/batch-reset-traffic</span>
+                    <span class="api-desc">Массовый сброс расхода трафика</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "passwords": ["p1", "p2"] }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/batch-delete</span>
+                    <span class="api-desc">Массовое удаление клиентов</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "passwords": ["p1", "p2"] }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/clients/batch-group</span>
+                    <span class="api-desc">Массовое перемещение между группами</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "passwords": ["p1", "p2"], "group_id": "target_group_id_or_empty" }</code></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: Groups -->
+        <div id="apiPaneGroups" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/groups</span>
+                    <span class="api-desc">Список групп и лимитов скорости</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает все группы: <code>id</code>, <code>name</code>, ограничение скорости <code>rate_limit_mbps</code>, привязанное правило <code>routing_rule_id</code>, постоянный <code>sub_uuid</code> групповой подписки, статус админ-панели и <code>admin_uuid</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/groups</span>
+                    <span class="api-desc">Создание группы</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "name": "VIP Клиенты", "rate_limit_mbps": 100, "routing_rule_id": "" }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method put">PUT</span>
+                    <span class="api-path">/api/groups/{id}</span>
+                    <span class="api-desc">Редактирование группы</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "name": "Новое Имя Группы", "routing_rule_id": "rule_id_here" }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method delete">DELETE</span>
+                    <span class="api-path">/api/groups/{id}</span>
+                    <span class="api-desc">Каскадное удаление группы</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: #ef4444; font-weight: 500;">
+                        Внимание: удаляет группу и безвозвратно удаляет всех входящих в неё клиентов.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-method delete" style="margin-left: -4px;">DELETE</span>
+                    <span class="api-path">/api/groups/{id}/admin-link</span>
+                    <span class="api-desc">Управление админ-панелью группы</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        <code>POST</code> генерирует секретную ссылку <code>/{admin_uuid}/admin</code> для делегированного управления клиентами группы без доступа к настройкам сервера. <code>DELETE</code> отключает ссылку.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/groups/{id}/admin-link/regenerate</span>
+                    <span class="api-desc">Перегенерация секрета админ-панели</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Выпускает новый <code>admin_uuid</code> группы. Предыдущая ссылка мгновенно аннулируется.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/groups/{id}/sub-link/regenerate</span>
+                    <span class="api-desc">Перегенерация ссылки групповой подписки</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Выпускает новый уникальный <code>sub_uuid</code> для групповой подписки <code>/{group_sub_uuid}/sub-group</code>. Ответ: <code>{ "ok": true, "sub_uuid": "..." }</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/groups/{id}/clients</span>
+                    <span class="api-desc">Список клиентов выбранной группы</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает JSON-массив всех клиентов, входящих в группу с указанным <code>id</code>.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: Subscriptions -->
+        <div id="apiPaneSubs" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+                <strong style="color: #60a5fa;">Изоляция доступа:</strong> эндпоинты подписок и управления группами открываются напрямую от корня со своим персональным секретным UUID (без префикса главной админки). Это предотвращает утечку пути главной панели администратора.
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/{sub_uuid}/sub</span>
+                    <span class="api-desc">Веб-страница персональной подписки (HTML)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Публичная веб-страница подписки клиента или Главного пароля (без необходимости авторизации). Содержит живой векторный QR-код, прямую ссылку <code>csqtt://connect?...</code>, кнопку «Подключить в приложении CSQTT» (с нативным уведомлением в приложении), контрастную кнопку копирования и инструкции.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/{sub_uuid}/json</span>
+                    <span class="api-desc">Конфигурация подписки клиента (JSON)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        Чистый эндпоинт для автоматического обновления конфигурации клиентом или ботом (также доступны алиасы <code>/{sub_uuid}/sub.json</code> и <code>/api/sub/{sub_uuid}</code>):
+                    </p>
+                    <pre class="api-code-block"><code>{
+  "v": 2,
+  "name": "Пользователь",
+  "host": "vpn.example.com",
+  "peer": 46000,
+  "password": "p_abc123...",
+  "vk_token": "...",
+  "hash": "...",
+  "link": "csqtt://connect?v=2&host=vpn.example.com&peer=46000&password=..."
+}</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/{group_sub_uuid}/sub-group</span>
+                    <span class="api-desc">Групповая страница подписок (HTML)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Публичная адаптивная страница для группы. Выводит всех активных клиентов группы в виде аккуратной сетки с QR-кодами, ссылками, кнопками копирования и быстрого подключения в CSQTT.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/{group_sub_uuid}/json</span>
+                    <span class="api-desc">Конфигурации клиентов группы (JSON)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает JSON-массив с параметрами подключения всех активных клиентов группы (также доступны алиасы <code>/{group_sub_uuid}/sub-group.json</code> и <code>/api/sub-group/{group_sub_uuid}</code>): <code>[{ "name": "...", "link": "csqtt://...", ... }]</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/{admin_uuid}/admin</span>
+                    <span class="api-desc">Панель управления группы (HTML & API)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Автономная панель для модератора группы. Управление клиентами и настройками группы изолировано под префиксом <code>/{admin_uuid}/api/...</code> (получение данных группы: <code>GET /{admin_uuid}/api/data</code>, создание клиента: <code>POST /{admin_uuid}/api/clients</code>).
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: Routing & Proxy -->
+        <div id="apiPaneRouting" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-method post" style="margin-left: -4px;">POST</span>
+                    <span class="api-path">/api/routing-rules</span>
+                    <span class="api-desc">Правила выборочной маршрутизации</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        <code>GET</code> возвращает список настроенных правил обхода. <code>POST</code> создает новое правило с доменами, IP-диапазонами и outbound-действием (прямой выход или прокси):
+                    </p>
+                    <pre class="api-code-block"><code>{
+  "name": "YouTube & Discord",
+  "domains": ["youtube.com", "googlevideo.com", "discord.com"],
+  "ip_ranges": ["162.158.0.0/15"],
+  "action": "proxy", // "direct" или "proxy"
+  "proxy_id": "proxy_uuid_here"
+}</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method put">PUT</span>
+                    <span class="api-method delete" style="margin-left: -4px;">DELETE</span>
+                    <span class="api-path">/api/routing-rules/{id}</span>
+                    <span class="api-desc">Редактирование и удаление правила</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        <code>PUT</code> обновляет список доменов и IP правила, <code>DELETE</code> удаляет правило.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/template-domains</span>
+                    <span class="api-desc">Шаблоны доменов популярных сервисов</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает готовые списки доменов для YouTube, Discord, Instagram, Twitter/X, ChatGPT, Spotify и др.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-method post" style="margin-left: -4px;">POST</span>
+                    <span class="api-path">/api/local-proxy</span>
+                    <span class="api-desc">Outbound прокси (SOCKS5 / HTTP)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                        Добавление внешних upstream прокси-серверов для маршрутизации трафика:
+                    </p>
+                    <pre class="api-code-block"><code>{
+  "name": "Германия SOCKS5",
+  "protocol": "socks5", // "socks5" или "http"
+  "host": "198.51.100.1",
+  "port": 1080,
+  "username": "user",
+  "password": "pass"
+}</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method put">PUT</span>
+                    <span class="api-method delete" style="margin-left: -4px;">DELETE</span>
+                    <span class="api-path">/api/local-proxy/profiles/{id}</span>
+                    <span class="api-desc">Управление профилем прокси</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Редактирование хоста/порта/пароля или удаление профиля прокси.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/local-proxy/activate/{id}</span>
+                    <span class="api-desc">Активация системного прокси</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Назначает выбранный прокси глобальным шлюзом по умолчанию (или <code>POST /api/local-proxy/deactivate</code> для отключения).
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 5: System & Settings -->
+        <div id="apiPaneSystem" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/stats</span>
+                    <span class="api-desc">Мониторинг нагрузки и ресурсов</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает нагрузку CPU (%), использование RAM (байт), число активных туннелей и скорость сети.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-path">/api/diagnostics/dpi</span>
+                    <span class="api-desc">DPI диагностика и телеметрия пакетов</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Возвращает статус кольцевого буфера DPI, количество зафиксированных аномальных пакетов и последние семплы фреймов для отладки цензуры.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/memory/trim</span>
+                    <span class="api-desc">Принудительное освобождение RAM (Trim)</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Вызывает сброс неиспользуемой памяти в ядро операционной системы для минимизации RSS.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-method post" style="margin-left: -4px;">POST</span>
+                    <span class="api-path">/api/settings</span>
+                    <span class="api-desc">Глобальные настройки сервера</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Получение и сохранение настроек: DNS, MTU, stealth-домены маскировки, интервал автоперезапуска, лимиты.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/settings/dns</span>
+                    <span class="api-desc">Быстрая смена DNS</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "dns_provider": "cloudflare", "dns_primary": "1.1.1.1", "dns_secondary": "1.0.0.1" }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/settings/restart-interval</span>
+                    <span class="api-desc">Интервал автоперезапуска (в часах)</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "interval_hours": 12 }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/settings/master-password</span>
+                    <span class="api-desc">Смена главного пароля сервера</span>
+                </div>
+                <div class="api-card-body">
+                    <pre class="api-code-block"><code>{ "password": "новый_пароль" }</code></pre>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-method post" style="margin-left: -4px;">POST</span>
+                    <span class="api-path">/api/export и /api/import</span>
+                    <span class="api-desc">Резервная копия и неразрушающее слияние</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        <code>GET /api/export</code> выгружает полный JSON базы. <code>POST /api/import</code> производит умное слияние: клиенты и настройки добавляются к существующим без перезаписи и потери трафика.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method get">GET</span>
+                    <span class="api-method post" style="margin-left: -4px;">POST</span>
+                    <span class="api-path">/api/logs</span>
+                    <span class="api-desc">Журнал логов сервера</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        <code>GET /api/logs</code> возвращает строки логов. <code>POST /api/logs/toggle</code> включает/выключает запись, <code>POST /api/logs/clear</code> очищает буфер, а <code>GET /api/logs/download</code> отдает текстовый файл.
+                    </p>
+                </div>
+            </div>
+
+            <div class="api-card">
+                <div class="api-card-header">
+                    <span class="api-method post">POST</span>
+                    <span class="api-path">/api/reboot</span>
+                    <span class="api-desc">Перезапуск сервера CSQTT</span>
+                </div>
+                <div class="api-card-body">
+                    <p style="font-size: 12px; color: var(--text-muted);">
+                        Инициирует контролируемый мягкий перезапуск процесса CSQTT на сервере.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div class="dlg-actions">
+            <button class="btn btn-primary" onclick="document.getElementById('apiDocsDlg').close()">Закрыть</button>
         </div>
     </dialog>
 
@@ -3253,13 +10600,21 @@ const PANEL_HTML: &str = r##"
         </div>
     </dialog>
 
-
     <div class="toast-container" id="toastContainer"></div>
 
     <script>
+        const basePath = window.location.pathname.replace(/\/$/, '');
+        if (basePath) {
+            document.querySelectorAll('link[rel="manifest"], link[rel="icon"], link[rel="apple-touch-icon"]').forEach(el => {
+                const href = el.getAttribute('href');
+                if (href && href.startsWith('/')) {
+                    el.setAttribute('href', basePath + href);
+                }
+            });
+        }
         if ('serviceWorker' in navigator && window.isSecureContext) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+                navigator.serviceWorker.register((basePath || '') + '/sw.js', { scope: (basePath || '') + '/' }).catch(() => {});
             });
         }
         function openCryptoDonateDlg() {
@@ -3281,14 +10636,14 @@ const PANEL_HTML: &str = r##"
             const isDark = document.body.parentElement.getAttribute('data-theme') === 'dark';
             document.body.parentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
             localStorage.setItem('csqtt-theme', isDark ? 'light' : 'dark');
-            document.getElementById('themeIcon').innerHTML = isDark 
-                ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>' 
+            document.getElementById('themeIcon').innerHTML = isDark
+                ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>'
                 : '<circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>';
         }
         if (localStorage.getItem('csqtt-theme') === 'dark') { toggleTheme(); }
 
         const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-        
+
         async function copyToClipboard(text) {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 try {
@@ -3317,11 +10672,19 @@ const PANEL_HTML: &str = r##"
         let apiNetworkToastShown = false;
         async function api(u, o = {}) {
             try {
-                let res = await fetch(u, { ...o, headers: { "content-type": "application/json", ...o.headers } });
+                let url = (basePath || '') + u;
+                const opts = { credentials: "include", ...o, headers: { "content-type": "application/json", ...(o.headers || {}) } };
+                if (!opts.signal && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+                    opts.signal = AbortSignal.timeout(8000);
+                }
+                let res = await fetch(url, opts);
                 if (res.status === 401) { location.reload(); }
                 apiNetworkToastShown = false;
                 return res;
             } catch (e) {
+                if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+                    throw e;
+                }
                 if (!apiNetworkToastShown) {
                     apiNetworkToastShown = true;
                     showToast("Ошибка сети", "error");
@@ -3362,15 +10725,31 @@ const PANEL_HTML: &str = r##"
 
         function showToast(text, type = 'success') {
             const container = document.getElementById('toastContainer');
+            if (container) {
+                const openDialog = Array.from(document.querySelectorAll('dialog[open]')).pop();
+                if (openDialog) {
+                    openDialog.appendChild(container);
+                } else if (container.parentElement !== document.body) {
+                    document.body.appendChild(container);
+                }
+            }
             const toast = document.createElement('div');
-            toast.className = 'toast';
+            toast.className = 'toast ' + (type === 'error' ? 'toast-error' : 'toast-success');
             const icon = document.createElement('div');
             icon.className = 'toast-icon';
-            icon.textContent = type === 'error' ? '✗' : '✓';
+            if (type === 'error') {
+                icon.style.color = '#ef4444';
+                icon.style.background = 'rgba(239, 68, 68, 0.15)';
+                icon.textContent = '✗';
+            } else {
+                icon.style.color = 'var(--primary)';
+                icon.style.background = 'var(--icon-bg)';
+                icon.textContent = '✓';
+            }
             const message = document.createElement('span');
             message.textContent = String(text);
             toast.append(icon, message);
-            container.appendChild(toast);
+            if (container) container.appendChild(toast);
             setTimeout(() => { toast.classList.add('hide'); setTimeout(() => toast.remove(), 300); }, 3000);
         }
 
@@ -3408,62 +10787,81 @@ const PANEL_HTML: &str = r##"
             }
         }
 
+        let statsInFlight = false;
         async function loadStats() {
-            let r = await api("/api/stats"); if(!r.ok) return; let x = await r.json();
-            document.getElementById('status_val').textContent = x.status === "Active" ? "Активно" : x.status;
-            document.getElementById('status_uptime').textContent = "Аптайм: " + uptime(x.uptime);
-            document.getElementById('active_val').textContent = x.active;
-            const cpuTotal = Number(x.cpu_total) || 0;
-            const cpuCapacity = Math.max(100, Number(x.cpu_capacity) || 100);
-            const cpuNormalized = Math.min(100, Math.max(0, Number(x.cpu_normalized) || 0));
-            document.getElementById('cpu_val').textContent = cpuTotal + '% / ' + cpuCapacity + '%';
-            document.getElementById('cpu_bar').style.width = cpuNormalized + '%';
-            const ramValue = document.getElementById('ram_val');
-            const ramDetail = document.getElementById('ram_detail');
-            ramValue.textContent = x.ram_used || String(x.ram || '').split(' / ')[0] || '0 MB';
-            ramDetail.textContent = `из ${x.ram_total || '0 MB'} · пик ${x.ram_peak || ramValue.textContent}`;
-            ramValue.title = [
-                `RSS: ${x.ram_used || '0 MB'}`,
-                `Анонимная: ${x.ram_anonymous || '0 MB'}`,
-                `Файлы: ${x.ram_file || '0 MB'}`,
-                `Shared: ${x.ram_shared || '0 MB'}`,
-                `Swap: ${x.ram_swap || '0 MB'}`,
-                `Пик: ${x.ram_peak || '0 MB'}`,
-                `PSS: ${x.ram_pss || 'н/д'} · private: ${x.ram_private || 'н/д'} · shared: ${x.ram_shared_rollup || 'н/д'}`,
-                `smaps PSS anon/file/shmem: ${x.ram_anon_rollup || 'н/д'} / ${x.ram_file_rollup || 'н/д'} / ${x.ram_shmem_rollup || 'н/д'} · Anonymous RSS-like: ${x.ram_anonymous_rollup || 'н/д'}`,
-                `Аллокатор: ${x.allocator || 'system'}`,
-                `Сессии: ${Number(x.hot_sessions) || 0}/${Number(x.hot_session_capacity) || 0}`,
-                `TPROXY TCP/UDP: ${Number(x.local_proxy_tcp_sessions) || 0}/${Number(x.local_proxy_udp_flows) || 0}`,
-                `Эпохи движка: ${Number(x.mem_engine_epochs) || 0} · device-эпохи: ${Number(x.mem_device_epochs) || 0}`,
-                `Ключи: ${Number(x.mem_derived_keys) || 0} · web-сессии: ${Number(x.mem_web_sessions) || 0}/${Number(x.mem_web_session_capacity) || 0} · login-limit: ${Number(x.mem_login_limits) || 0}`,
-                `stream repair/inventory: ${Number(x.mem_stream_repairs) || 0}/${Number(x.mem_stream_inventory) || 0} · DPI: ${Number(x.mem_dpi_ring) || 0} · логи: ${Number(x.mem_log_ring) || 0} (${Number(x.mem_log_bytes) || 0} B)`,
-                `Циклов memory trim: ${Number(x.memory_trim_count) || 0}${Number(x.memory_trim_last_unix) ? ` · последнее: ${new Date(Number(x.memory_trim_last_unix) * 1000).toLocaleTimeString()}` : ''}`
-            ].join('\n');
-            document.getElementById('traffic_up').textContent = "↑ " + size(x.up);
-            document.getElementById('traffic_down').textContent = "↓ " + size(x.down);
-            document.getElementById('traffic_ingress').textContent = `RX ${compactCounter(x.udp_rx_packets)} · TX ${compactCounter(x.udp_tx_packets)}`;
+            if (statsInFlight) return;
+            statsInFlight = true;
+            try {
+                let r = await api("/api/stats"); if(!r.ok) return; let x = await r.json();
+                if (x.peer_port) window.serverDefaultPeerPort = Number(x.peer_port);
+                if (x.public_ip) window.serverPublicIp = x.public_ip;
+                document.getElementById('status_val').textContent = x.status === "Active" ? "Активно" : x.status;
+                document.getElementById('status_uptime').textContent = "Аптайм: " + uptime(x.uptime);
+                document.getElementById('active_val').textContent = x.active;
+                const cpuTotal = Number(x.cpu_total) || 0;
+                const cpuCapacity = Math.max(100, Number(x.cpu_capacity) || 100);
+                const cpuNormalized = Math.min(100, Math.max(0, Number(x.cpu_normalized) || 0));
+                document.getElementById('cpu_val').textContent = cpuTotal + '% / ' + cpuCapacity + '%';
+                document.getElementById('cpu_bar').style.width = cpuNormalized + '%';
+                const ramValue = document.getElementById('ram_val');
+                const ramDetail = document.getElementById('ram_detail');
+                ramValue.textContent = x.ram_used || String(x.ram || '').split(' / ')[0] || '0 MB';
+                ramDetail.textContent = `из ${x.ram_total || '0 MB'} · пик ${x.ram_peak || ramValue.textContent}`;
+                ramValue.title = [
+                    `RSS: ${x.ram_used || '0 MB'}`,
+                    `Анонимная: ${x.ram_anonymous || '0 MB'}`,
+                    `Файлы: ${x.ram_file || '0 MB'}`,
+                    `Shared: ${x.ram_shared || '0 MB'}`,
+                    `Swap: ${x.ram_swap || '0 MB'}`,
+                    `Пик: ${x.ram_peak || '0 MB'}`,
+                    `PSS: ${x.ram_pss || 'н/д'} · private: ${x.ram_private || 'н/д'} · shared: ${x.ram_shared_rollup || 'н/д'}`,
+                    `smaps PSS anon/file/shmem: ${x.ram_anon_rollup || 'н/д'} / ${x.ram_file_rollup || 'н/д'} / ${x.ram_shmem_rollup || 'н/д'} · Anonymous RSS-like: ${x.ram_anonymous_rollup || 'н/д'}`,
+                    `Аллокатор: ${x.allocator || 'system'}`,
+                    `Сессии: ${Number(x.hot_sessions) || 0}/${Number(x.hot_session_capacity) || 0}`,
+                    `TPROXY TCP/UDP: ${Number(x.local_proxy_tcp_sessions) || 0}/${Number(x.local_proxy_udp_flows) || 0}`,
+                    `Эпохи движка: ${Number(x.mem_engine_epochs) || 0}`,
+                    `Ключи: ${Number(x.mem_derived_keys) || 0} · web-сессии: ${Number(x.mem_web_sessions) || 0}/${Number(x.mem_web_session_capacity) || 0} · login-limit: ${Number(x.mem_login_limits) || 0}`,
+                    `stream repair/inventory: ${Number(x.mem_stream_repairs) || 0}/${Number(x.mem_stream_inventory) || 0} · DPI: ${Number(x.mem_dpi_ring) || 0} · логи: ${Number(x.mem_log_ring) || 0} (${Number(x.mem_log_bytes) || 0} B)`,
+                    `Циклов memory trim: ${Number(x.memory_trim_count) || 0}${Number(x.memory_trim_last_unix) ? ` · последнее: ${new Date(Number(x.memory_trim_last_unix) * 1000).toLocaleTimeString()}` : ''}`
+                ].join('\n');
+                document.getElementById('traffic_up').textContent = "↑ " + size(x.up);
+                document.getElementById('traffic_down').textContent = "↓ " + size(x.down);
+                document.getElementById('traffic_ingress').textContent = `RX ${compactCounter(x.udp_rx_packets)} · TX ${compactCounter(x.udp_tx_packets)}`;
 
-            updateLocalProxyRuntime(
-                Boolean(x.local_proxy_enabled),
-                Boolean(x.local_proxy_active),
-                x.local_proxy_port_listening,
-                Number(x.local_proxy_tcp_sessions) || 0,
-                Number(x.local_proxy_udp_flows) || 0,
-                x.local_proxy_health_error || null
-            );
+                updateLocalProxyRuntime(
+                    Boolean(x.local_proxy_enabled),
+                    Boolean(x.local_proxy_active),
+                    x.local_proxy_port_listening,
+                    Number(x.local_proxy_tcp_sessions) || 0,
+                    Number(x.local_proxy_udp_flows) || 0,
+                    x.local_proxy_health_error || null
+                );
+            } catch (e) {
+            } finally {
+                statsInFlight = false;
+            }
         }
 
         let savedMainPassword = '';
         let savedDnsProvider = 'yandex';
+        let savedManualDns = '';
         let savedAutoRestartInterval = 0;
+        let sharedVkToken = '';
+        let sharedVkHashes = '';
 
         function setRestartRequired(required) {
             document.getElementById('restartRequiredBanner')?.classList.toggle('visible', Boolean(required));
         }
 
+        function syncDnsControls() {
+            const provider = document.getElementById('dns_provider')?.value;
+            document.getElementById('dns_selection')?.classList.toggle('is-custom', provider === 'custom');
+        }
+
         function updateSettingsDirtyState() {
             const mainPassword = document.getElementById('mainpass')?.value ?? '';
             const dnsProvider = document.getElementById('dns_provider')?.value ?? '';
+            const manualDns = document.getElementById('dns_manual')?.value ?? '';
             const autoRestartInterval = Number(document.getElementById('auto_restart_interval')?.value ?? 0);
             const mainButton = document.getElementById('saveMainPasswordBtn');
             const dnsButton = document.getElementById('saveDnsBtn');
@@ -3472,7 +10870,8 @@ const PANEL_HTML: &str = r##"
                 mainButton.disabled = mainPassword === savedMainPassword;
             }
             if (dnsButton && !dnsButton.classList.contains('saving')) {
-                dnsButton.disabled = dnsProvider === savedDnsProvider || dnsProvider === 'custom';
+                dnsButton.disabled = dnsProvider === savedDnsProvider
+                    && (dnsProvider !== 'custom' || manualDns === savedManualDns);
             }
             if (autoRestartButton && !autoRestartButton.classList.contains('saving')) {
                 autoRestartButton.disabled = autoRestartInterval === savedAutoRestartInterval;
@@ -3483,15 +10882,49 @@ const PANEL_HTML: &str = r##"
             let r = await api("/api/settings"); if(!r.ok) return; let x = await r.json();
             savedMainPassword = x.main_password || '';
             savedDnsProvider = x.dns_provider || 'custom';
+            savedManualDns = [x.dns_primary, x.dns_secondary].filter(Boolean).join(',');
             savedAutoRestartInterval = [0, 12, 24, 48, 72].includes(Number(x.auto_restart_interval_hours))
                 ? Number(x.auto_restart_interval_hours)
                 : 0;
+            sharedVkToken = x.vk_token || '';
+            sharedVkHashes = x.vk_hashes || '';
             document.getElementById('mainpass').value = savedMainPassword;
             document.getElementById('dns_provider').value = savedDnsProvider;
+            document.getElementById('dns_manual').value = savedManualDns;
             document.getElementById('auto_restart_interval').value = String(savedAutoRestartInterval);
+            syncDnsControls();
             setRestartRequired(x.restart_required);
             updateSettingsDirtyState();
             loadLocalProxy();
+        }
+
+        function openVkTokenSettingsDlg() {
+            document.getElementById('vkTokenSettingsInput').value = sharedVkToken;
+            document.getElementById('vkTokenSettingsDlg').showModal();
+        }
+
+        async function saveVkTokenSettings(clear = false) {
+            const input = document.getElementById('vkTokenSettingsInput');
+            const token = clear ? '' : input.value.trim();
+            if (token && (/\s/.test(token) || token.length > 4096)) {
+                showToast('VK токен не должен содержать пробелы и должен быть короче 4097 символов', 'error');
+                return;
+            }
+            const response = await api('/api/settings', {
+                method: 'POST', body: JSON.stringify({ vk_token: token })
+            });
+            if (!response.ok) {
+                showToast(await response.text(), 'error');
+                return;
+            }
+            sharedVkToken = token;
+            input.value = token;
+            document.getElementById('vkTokenSettingsDlg').close();
+            showToast(token ? 'Общий VK токен сохранён' : 'Общий VK токен очищен');
+        }
+
+        function clearVkTokenSettings() {
+            saveVkTokenSettings(true);
         }
 
         let localProxyData = { active_profile_id: '', profiles: [], route_active: false, port_listening: true, health_error: null, tcp_sessions: 0, udp_flows: 0 };
@@ -3572,7 +11005,6 @@ const PANEL_HTML: &str = r##"
                 renderProxyProfiles();
             }
         }
-
 
         async function loadLocalProxy() {
             const r = await api('/api/local-proxy');
@@ -3671,43 +11103,230 @@ const PANEL_HTML: &str = r##"
         }
 
         window.clientsData = [];
-        async function loadClients() {
-            let r = await api("/api/clients"); if(!r.ok) return; let a = await r.json();
-            window.clientsData = a || [];
-            const container = document.getElementById('clientsCards');
-            if(!a.length) { container.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;">Нет созданных доступов.</div>`; return; }
-            
-            container.innerHTML = a.map((x, idx) => {
-                const isMain = x.name === "Главный пароль";
-                const expiryStr = isMain ? "—" : (x.expires ? new Date(x.expires * 1000).toLocaleDateString() : "∞ Бессрочно");
-                
-                return `
-                <div class="client-card" onclick="openEditClientDlgByIndex(${idx})">
-                    <div class="client-card-header">
-                        <div class="client-card-title">${esc(x.name || 'Без имени')}</div>
-                        <span class="badge ${x.active ? "active" : "inactive"}">${x.active ? "Активно" : "Неактивно"}</span>
+        window.groupsData = [];
+        window.routingRulesData = [];
+        window.currentViewingGroupId = null;
+
+        function generateUniqueClientName(existingNames) {
+            const set = new Set((existingNames || []).map(n => String(n || '').trim().toLowerCase()));
+            for (let i = 0; i < 1000; i++) {
+                const candidate = 'Клиент' + Math.floor(100 + Math.random() * 900);
+                if (!set.has(candidate.toLowerCase())) {
+                    return candidate;
+                }
+            }
+            return 'Клиент' + Math.floor(100 + Math.random() * 900);
+        }
+
+        function renderClientCard(x) {
+            const isMain = x.name === "Главный пароль";
+            const expiryStr = isMain ? "—" : (x.expires ? new Date(x.expires * 1000).toLocaleDateString() : "∞ Бессрочно");
+            return `
+            <div class="client-card" onclick="openEditClientDlgByPassword('${esc(x.password)}')">
+                <div class="client-card-header">
+                    <div class="client-card-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary); flex-shrink: 0;"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                        <span>${esc(x.name || 'Клиент')}</span>
                     </div>
-                    <div class="client-card-body">
-                        <div class="client-card-row">
-                            <span class="client-card-label">Ключ (пароль):</span>
-                            <span class="client-pw">${esc(x.password)}</span>
-                        </div>
-                        <div class="client-card-row">
-                            <span class="client-card-label">Срок действия:</span>
-                            <span class="client-card-value">${expiryStr}</span>
-                        </div>
-                        <div class="client-card-row">
-                            <span class="client-card-label">Трафик:</span>
-                            <span class="client-card-value" style="font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace;">↑ ${size(x.up)} / ↓ ${size(x.down)}</span>
-                        </div>
-                        <div class="client-card-row">
-                            <span class="client-card-label">Потоки:</span>
-                            <span class="client-card-value">${x.active_sessions}</span>
-                        </div>
-                    </div>
+                    <span class="badge ${x.active ? "active" : "inactive"}">${x.active ? "Участник" : "Неактивно"}</span>
                 </div>
-                `;
-            }).join("");
+                <div class="client-card-body">
+                    <div class="client-card-row">
+                        <span class="client-card-label">IP:</span>
+                        <span class="client-card-value">${esc(x.ip || '—')}</span>
+                    </div>
+                    <div class="client-card-row">
+                        <span class="client-card-label">Срок действия:</span>
+                        <span class="client-card-value">${expiryStr}</span>
+                    </div>
+                    <div class="client-card-row">
+                        <span class="client-card-label">Трафик:</span>
+                        <span class="client-card-value" style="font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace;">↑ ${size(x.up)} / ↓ ${size(x.down)}</span>
+                    </div>
+                    <div class="client-card-row">
+                        <span class="client-card-label">Потоки:</span>
+                        <span class="client-card-value">${x.active_sessions}</span>
+                    </div>
+                    ${x.sub_uuid ? `
+                    <button class="btn btn-ghost client-sub-btn" onclick="event.stopPropagation(); copyClientSubLink('${x.sub_uuid}', this)" title="Скопировать ссылку подписки">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <span>Скопировать ссылку подписки</span>
+                    </button>
+                    ` : ''}
+                </div>
+            </div>
+            `;
+        }
+
+        function renderGroupCard(g, st) {
+            const stats = st || { count: 0, up: 0, down: 0, active_sessions: 0 };
+            return `
+            <div class="client-card group-card" onclick="openGroupDlg('${esc(g.id)}')">
+                <div class="client-card-header">
+                    <div class="client-card-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary); flex-shrink: 0;"><circle cx="12" cy="7" r="3.5"></circle><path d="M6 21v-2a4 4 0 0 1 8 0v2"></path><path d="M5.5 10a3 3 0 0 1 0-6"></path><path d="M2 21v-1.5a3.5 3.5 0 0 1 3-3.4"></path><path d="M18.5 4a3 3 0 0 1 0 6"></path><path d="M19 16.1a3.5 3.5 0 0 1 3 3.4V21"></path></svg>
+                        <span>${esc(g.name || 'Без названия')}</span>
+                    </div>
+                    <span class="badge active">Группа</span>
+                </div>
+                <div class="client-card-body">
+                    <div class="client-card-row">
+                        <span class="client-card-label">Участники:</span>
+                        <span class="client-card-value">${stats.count}</span>
+                    </div>
+                    <div class="client-card-row">
+                        <span class="client-card-label">Срок действия:</span>
+                        <span class="client-card-value">—</span>
+                    </div>
+                    <div class="client-card-row">
+                        <span class="client-card-label">Трафик:</span>
+                        <span class="client-card-value" style="font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', Consolas, monospace;">↑ ${size(stats.up)} / ↓ ${size(stats.down)}</span>
+                    </div>
+                    <div class="client-card-row">
+                        <span class="client-card-label">Потоки:</span>
+                        <span class="client-card-value">${stats.active_sessions}</span>
+                    </div>
+                    ${g.sub_uuid ? `
+                    <button class="btn btn-ghost" style="width: 100%; margin-top: 8px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; padding: 7px 10px; border: 1px solid var(--primary); color: var(--primary); border-radius: 8px; font-weight: 500;" onclick="event.stopPropagation(); copyGroupSubLink('${g.sub_uuid}', this)" title="Скопировать ссылку подписки">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <span>Скопировать ссылку подписки</span>
+                    </button>
+                    ` : ''}
+                </div>
+            </div>
+            `;
+        }
+
+        function calcMatchScore(text, query) {
+            if (!text || !query) return 0;
+            const t = String(text).trim().toLowerCase();
+            const q = String(query).trim().toLowerCase();
+            if (!t || !q) return 0;
+            if (t === q) return 1000;
+            if (t.startsWith(q)) return 500 + Math.max(0, 100 - t.length);
+            const words = t.split(/[\s,._\-#№]+|(?<=[^\d\s])(?=\d)|(?<=\d)(?=[^\d\s])/);
+            for (const w of words) {
+                if (w === q) return 450 + Math.max(0, 100 - w.length);
+                if (w.startsWith(q)) return 400 + Math.max(0, 100 - w.length);
+            }
+            const idx = t.indexOf(q);
+            if (idx !== -1) return 200 + Math.max(0, 100 - idx);
+            return 0;
+        }
+
+        function handleMainSearch(val) {
+            const clearBtn = document.getElementById('mainSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = val.trim() ? 'block' : 'none';
+            renderMainClientsCards();
+        }
+
+        function clearMainSearch() {
+            const input = document.getElementById('mainSearchInput');
+            if (input) {
+                input.value = '';
+                const clearBtn = document.getElementById('mainSearchClearBtn');
+                if (clearBtn) clearBtn.style.display = 'none';
+                renderMainClientsCards();
+                input.focus();
+            }
+        }
+
+        function renderMainClientsCards() {
+            const container = document.getElementById('clientsCards');
+            if (!container) return;
+
+            const groupStats = {};
+            for (const g of (window.groupsData || [])) {
+                groupStats[g.id] = { count: 0, up: 0, down: 0, active_sessions: 0, clients: [] };
+            }
+            const standaloneClients = [];
+            for (const c of (window.clientsData || [])) {
+                if (c.group_id && groupStats[c.group_id]) {
+                    groupStats[c.group_id].count++;
+                    groupStats[c.group_id].up += (c.up || 0);
+                    groupStats[c.group_id].down += (c.down || 0);
+                    groupStats[c.group_id].active_sessions += (c.active_sessions || 0);
+                    groupStats[c.group_id].clients.push(c);
+                } else {
+                    standaloneClients.push(c);
+                }
+            }
+
+            const query = (document.getElementById('mainSearchInput')?.value || '').trim();
+
+            if (!query) {
+                const groupsHtml = (window.groupsData || []).map(g => renderGroupCard(g, groupStats[g.id])).join('');
+                const standaloneHtml = standaloneClients.map(x => renderClientCard(x)).join('');
+                container.innerHTML = groupsHtml + standaloneHtml;
+                if (!groupsHtml && !standaloneHtml) {
+                    container.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;">Нет созданных доступов.</div>`;
+                }
+                return;
+            }
+
+            const results = [];
+
+            for (const g of (window.groupsData || [])) {
+                let bestScore = calcMatchScore(g.name, query);
+                const st = groupStats[g.id] || { count: 0, clients: [] };
+                for (const c of st.clients) {
+                    const sc = calcMatchScore(c.name, query);
+                    if (sc > bestScore) bestScore = sc;
+                }
+                if (bestScore > 0) {
+                    results.push({
+                        type: 'group',
+                        score: bestScore,
+                        html: renderGroupCard(g, st)
+                    });
+                }
+            }
+
+            for (const c of standaloneClients) {
+                const sc = calcMatchScore(c.name, query);
+                if (sc > 0) {
+                    results.push({
+                        type: 'client',
+                        score: sc,
+                        html: renderClientCard(c)
+                    });
+                }
+            }
+
+            if (results.length === 0) {
+                container.innerHTML = `<div class="empty-state" style="grid-column: 1/-1; padding: 32px 16px;">По запросу «<b>${esc(query)}</b>» ничего не найдено.</div>`;
+                return;
+            }
+
+            results.sort((a, b) => b.score - a.score);
+            container.innerHTML = results.map(r => r.html).join('');
+        }
+
+        let clientsInFlight = false;
+        async function loadClients() {
+            if (clientsInFlight) return;
+            clientsInFlight = true;
+            try {
+                const [rC, rG] = await Promise.all([api("/api/clients"), api("/api/groups")]);
+                if (!rC.ok) return;
+                const a = await rC.json() || [];
+                window.clientsData = a;
+                if (a.length > 0 && a[0].peer_port) {
+                    window.serverDefaultPeerPort = a[0].peer_port;
+                }
+                if (rG && rG.ok) {
+                    window.groupsData = await rG.json() || [];
+                }
+
+                renderMainClientsCards();
+
+                if (window.currentViewingGroupId) {
+                    refreshCurrentGroupDlgView();
+                }
+            } catch (e) {
+            } finally {
+                clientsInFlight = false;
+            }
         }
 
         function openEditClientDlgByIndex(idx) {
@@ -3716,108 +11335,954 @@ const PANEL_HTML: &str = r##"
             }
         }
 
-        function openNewClientDlg() {
-            document.getElementById('cname').value = '';
-            document.getElementById('csqttToggle').checked = false;
-            document.getElementById('vkHashesToggle').checked = false;
-            document.getElementById('vk_hashes').value = '';
-            document.getElementById('vk_hashes').classList.remove('is-invalid');
-            toggleWdttFields();
-            document.getElementById('newDlg').showModal();
+        function openEditClientDlgByPassword(password) {
+            const c = (window.clientsData || []).find(x => x.password === password);
+            if (c) openEditClientDlg(c);
         }
 
-        function toggleWdttFields() {
-            const toggle = document.getElementById('csqttToggle').checked;
-            document.getElementById('csqttFields').style.display = toggle ? 'block' : 'none';
-            if (!toggle) document.getElementById('vkHashesToggle').checked = false;
-            toggleVkHashFields();
+        function openNewGroupDlg() {
+            document.getElementById('groupNameInput').value = 'Группа' + Math.floor(100 + Math.random() * 900);
+            document.getElementById('newGroupDlg').showModal();
         }
 
-        function toggleVkHashFields() {
-            const enabled = document.getElementById('csqttToggle').checked && document.getElementById('vkHashesToggle').checked;
-            document.getElementById('vkHashesFields').style.display = enabled ? 'block' : 'none';
-        }
-
-        function readNewClientVkHashes() {
-            return readVkHashes('vkHashesToggle', 'vk_hashes');
-        }
-
-        function readEditClientVkHashes() {
-            return readVkHashes('edit_vkHashesToggle', 'edit_vk_hashes');
-        }
-
-        function readVkHashes(toggleId, inputId) {
-            if (!document.getElementById(toggleId).checked) return [];
-            const input = document.getElementById(inputId);
-            const value = input.value.trim();
-            const hashes = value.split(',');
-            const valid = value.length > 0 && !/\s/.test(value) && hashes.length <= 6 && hashes.every(hash => hash.length >= 16);
-            input.classList.toggle('is-invalid', !valid);
-            if (!valid) throw new Error('Укажите от 1 до 6 VK-хешей через запятую без пробелов');
-            return hashes;
-        }
-
-        async function createClient() {
-            const toggle = document.getElementById('csqttToggle').checked;
-            let vkHashes = [];
+        async function createGroup() {
+            const name = document.getElementById('groupNameInput').value.trim();
+            if (!name) { showToast("Укажите имя группы", "error"); return; }
+            const btn = document.getElementById('createGroupBtn');
+            btn.disabled = true;
             try {
-                vkHashes = readNewClientVkHashes();
-            } catch (error) {
-                showToast(error.message, "error");
+                let r = await api("/api/groups", {
+                    method: "POST",
+                    body: JSON.stringify({ name: name })
+                });
+                if (r.ok) {
+                    showToast("Группа создана");
+                    document.getElementById('newGroupDlg').close();
+                    loadClients();
+                } else {
+                    showToast(await r.text(), "error");
+                }
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        let isGroupInlineEditing = false;
+        function exitGroupInlineEdit() {
+            isGroupInlineEditing = false;
+            const titleEl = document.getElementById('groupDlgTitle');
+            const inputEl = document.getElementById('groupDlgTitleInput');
+            const btnEl = document.getElementById('groupDlgEditBtn');
+            if (titleEl) titleEl.style.display = '';
+            if (inputEl) inputEl.style.display = 'none';
+            if (btnEl) {
+                btnEl.title = "Переименовать";
+                btnEl.style.color = "var(--text-muted)";
+                btnEl.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`;
+            }
+        }
+
+        async function toggleGroupInlineEdit() {
+            const titleEl = document.getElementById('groupDlgTitle');
+            const inputEl = document.getElementById('groupDlgTitleInput');
+            const btnEl = document.getElementById('groupDlgEditBtn');
+            if (!titleEl || !inputEl || !btnEl) return;
+
+            if (!isGroupInlineEditing) {
+                isGroupInlineEditing = true;
+                inputEl.value = titleEl.textContent.trim();
+                titleEl.style.display = 'none';
+                inputEl.style.display = 'inline-block';
+                inputEl.focus();
+                inputEl.select();
+                btnEl.title = "Сохранить";
+                btnEl.style.color = "var(--primary)";
+                btnEl.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+            } else {
+                const newName = inputEl.value.trim();
+                if (!newName) {
+                    showToast("Имя группы не может быть пустым", "error");
+                    return;
+                }
+                const groupId = window.currentViewingGroupId;
+                if (!groupId) return;
+                btnEl.disabled = true;
+                try {
+                    let r = await api("/api/groups/" + encodeURIComponent(groupId), {
+                        method: "PUT",
+                        body: JSON.stringify({ name: newName })
+                    });
+                    if (r.ok) {
+                        showToast("Группа переименована");
+                        titleEl.textContent = newName;
+                        exitGroupInlineEdit();
+                        await loadClients();
+                        if (window.currentViewingGroupId) refreshCurrentGroupDlgView();
+                    } else {
+                        showToast(await r.text(), "error");
+                    }
+                } finally {
+                    btnEl.disabled = false;
+                }
+            }
+        }
+
+        function handleGroupSearch(val) {
+            const clearBtn = document.getElementById('groupSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = val.trim() ? 'block' : 'none';
+            refreshCurrentGroupDlgView();
+        }
+
+        function clearGroupSearch() {
+            const input = document.getElementById('groupSearchInput');
+            if (input) {
+                input.value = '';
+                const clearBtn = document.getElementById('groupSearchClearBtn');
+                if (clearBtn) clearBtn.style.display = 'none';
+                refreshCurrentGroupDlgView();
+                input.focus();
+            }
+        }
+
+        function refreshCurrentGroupDlgView() {
+            if (!window.currentViewingGroupId) return;
+            const group = (window.groupsData || []).find(g => g.id === window.currentViewingGroupId);
+            if (!group) return;
+            if (!isGroupInlineEditing) {
+                document.getElementById('groupDlgTitle').textContent = group.name || 'Группа';
+            }
+            const adminBtn = document.getElementById('groupAdminLinkBtn');
+            const deleteAdminBtn = document.getElementById('groupAdminDeleteBtn');
+            if (adminBtn) {
+                if (group.admin_uuid) {
+                    adminBtn.textContent = 'Скопировать ссылку админа';
+                    if (deleteAdminBtn) deleteAdminBtn.style.display = 'inline-flex';
+                } else {
+                    adminBtn.textContent = 'Создать админа';
+                    if (deleteAdminBtn) deleteAdminBtn.style.display = 'none';
+                }
+            }
+
+            const groupClients = (window.clientsData || []).filter(c => c.group_id === window.currentViewingGroupId);
+            let sumUp = 0, sumDown = 0, sumSessions = 0;
+            for (const c of groupClients) {
+                sumUp += (c.up || 0);
+                sumDown += (c.down || 0);
+                sumSessions += (c.active_sessions || 0);
+            }
+            const statsEl = document.getElementById('groupDlgStatsSummary');
+            if (statsEl) {
+                statsEl.textContent = `Участники: ${groupClients.length} · Трафик: ↑ ${size(sumUp)} / ↓ ${size(sumDown)} · Потоки: ${sumSessions}`;
+            }
+
+            const container = document.getElementById('groupClientsCards');
+            if (!container) return;
+
+            if (groupClients.length === 0) {
+                container.innerHTML = `<div class="empty-state" style="grid-column: 1/-1; padding: 24px;">В группе пока нет клиентов. Нажмите «Создать пароль», чтобы добавить.</div>`;
                 return;
             }
 
-            const btn = document.getElementById('createBtn');
-            btn.textContent = 'Создание...'; btn.disabled = true;
-            
-            try {
-                let r = await api("/api/clients", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        name: document.getElementById('cname').value.trim(),
-                        days: +document.getElementById('days').value,
-                        hash: vkHashes.join(','),
-                        dtls_port: toggle ? +document.getElementById('peer_port').value : 0,
-                        wg_port: toggle ? +document.getElementById('wg_port').value : 0,
-                        local_port: toggle ? +document.getElementById('local_port').value : 0
-                    })
-                });
-                
-                if(!r.ok) { showToast(await r.text(), "error"); } else {
-                    let x = await r.json();
-                    document.getElementById('newDlg').close();
-                    if (toggle) {
-                        const fullClient = {
-                            ...x,
-                            dtls_port: x.dtls_port || (toggle ? +document.getElementById('peer_port').value : 46000),
-                            wg_port: x.wg_port || (toggle ? +document.getElementById('wg_port').value : 46001),
-                            local_port: x.local_port || (toggle ? +document.getElementById('local_port').value : 0)
-                        };
-                        await copycsqtt(fullClient);
-                    } else {
-                        showToast("Ключ успешно создан");
-                    }
-                    loadClients();
+            const query = (document.getElementById('groupSearchInput')?.value || '').trim();
+            if (!query) {
+                container.innerHTML = groupClients.map(c => renderClientCard(c)).join('');
+                return;
+            }
+
+            const matched = [];
+            for (const c of groupClients) {
+                const sc = calcMatchScore(c.name, query);
+                if (sc > 0) {
+                    matched.push({ score: sc, html: renderClientCard(c) });
                 }
-            } finally { btn.textContent = 'Создать'; btn.disabled = false; }
+            }
+
+            if (matched.length === 0) {
+                container.innerHTML = `<div class="empty-state" style="grid-column: 1/-1; padding: 24px;">По запросу «<b>${esc(query)}</b>» в группе ничего не найдено.</div>`;
+                return;
+            }
+
+            matched.sort((a, b) => b.score - a.score);
+            container.innerHTML = matched.map(m => m.html).join('');
         }
 
-        function buildCsqttLink(password, peerPort, rawHashes) {
-            let url = "csqtt://connect?v=2&host=" + encodeURIComponent(location.hostname) +
-                "&peer=" + encodeURIComponent(peerPort) +
-                "&password=" + encodeURIComponent(password);
-            const hashes = String(rawHashes || '').split(',').map(hash => hash.trim()).filter(Boolean);
-            if (hashes.length) url += "&hashes=" + hashes.map(encodeURIComponent).join('+');
-            return url;
+        function openGroupDlg(groupId) {
+            window.currentViewingGroupId = groupId;
+            exitGroupInlineEdit();
+            const gSearch = document.getElementById('groupSearchInput');
+            if (gSearch) gSearch.value = '';
+            const gClear = document.getElementById('groupSearchClearBtn');
+            if (gClear) gClear.style.display = 'none';
+            refreshCurrentGroupDlgView();
+            const inputEl = document.getElementById('groupDlgTitleInput');
+            if (inputEl) {
+                inputEl.onkeydown = (e) => {
+                    if (e.key === 'Enter') toggleGroupInlineEdit();
+                    else if (e.key === 'Escape') exitGroupInlineEdit();
+                };
+            }
+            document.getElementById('groupDlg').showModal();
         }
 
-        async function copycsqtt(c) {
-            const url = buildCsqttLink(c.password, c.dtls_port || 46000, c.vk_hashes);
+        function createClientInCurrentGroup() {
+            const group = (window.groupsData || []).find(g => g.id === window.currentViewingGroupId);
+            openNewClientDlg(window.currentViewingGroupId, group ? group.name : '');
+        }
+
+        async function copyClientSubLink(subUuid, btn) {
+            if (!subUuid) {
+                showToast("У клиента нет ссылки подписки", "error");
+                return;
+            }
+            const url = window.location.origin + '/' + subUuid + '/sub';
             if (await copyToClipboard(url)) {
-                showToast("Ссылка csqtt:// скопирована");
+                if (btn) {
+                    btn.style.color = '#3b82f6';
+                    btn.style.borderColor = '#3b82f6';
+                    setTimeout(() => { btn.style.color = ''; btn.style.borderColor = ''; }, 1500);
+                }
+                showToast("Ссылка подписки скопирована");
             } else {
                 showToast("Не удалось скопировать", "error");
             }
+        }
+
+        async function copyGroupSubLink(subUuid, btn) {
+            if (!subUuid) {
+                showToast("У группы нет ссылки подписки", "error");
+                return;
+            }
+            const url = window.location.origin + '/' + subUuid + '/sub-group';
+            if (await copyToClipboard(url)) {
+                if (btn) {
+                    btn.style.color = '#3b82f6';
+                    btn.style.borderColor = '#3b82f6';
+                    setTimeout(() => { btn.style.color = ''; btn.style.borderColor = ''; }, 1500);
+                }
+                showToast("Ссылка подписки группы скопирована");
+            } else {
+                showToast("Не удалось скопировать", "error");
+            }
+        }
+
+        async function createOrCopyGroupAdminLink() {
+            if (!window.currentViewingGroupId) return;
+            const group = (window.groupsData || []).find(g => g.id === window.currentViewingGroupId);
+            if (!group) return;
+            if (group.admin_uuid) {
+                const url = window.location.origin + '/' + group.admin_uuid + '/admin';
+                await copyToClipboard(url);
+                showToast("Ссылка админа скопирована");
+                return;
+            }
+            try {
+                let r = await api("/api/groups/" + encodeURIComponent(window.currentViewingGroupId) + "/admin-link", {
+                    method: "POST"
+                });
+                if (r.ok) {
+                    let res = await r.json();
+                    group.admin_uuid = res.admin_uuid;
+                    refreshCurrentGroupDlgView();
+                    const url = window.location.origin + '/' + res.admin_uuid + '/admin';
+                    await copyToClipboard(url);
+                    showToast("Админ создан! Ссылка скопирована");
+                } else {
+                    showToast("Ошибка создания ссылки админа", "error");
+                }
+            } catch (e) {
+                showToast("Ошибка сети", "error");
+            }
+        }
+
+        async function regenerateGroupAdminLink() {
+            if (!window.currentViewingGroupId) return;
+            const group = (window.groupsData || []).find(g => g.id === window.currentViewingGroupId);
+            if (!group) return;
+            if (!confirm("Пересоздать ссылку админа группы? Старая ссылка перестанет работать.")) return;
+            try {
+                let r = await api("/api/groups/" + encodeURIComponent(window.currentViewingGroupId) + "/admin-link/regenerate", {
+                    method: "POST"
+                });
+                if (r.ok) {
+                    let res = await r.json();
+                    group.admin_uuid = res.admin_uuid;
+                    refreshCurrentGroupDlgView();
+                    const url = window.location.origin + '/' + res.admin_uuid + '/admin';
+                    await copyToClipboard(url);
+                    showToast("Новая ссылка админа создана и скопирована");
+                } else {
+                    showToast("Ошибка пересоздания ссылки", "error");
+                }
+            } catch (e) {
+                showToast("Ошибка сети", "error");
+            }
+        }
+
+        async function deleteGroupAdminLink() {
+            if (!window.currentViewingGroupId) return;
+            const group = (window.groupsData || []).find(g => g.id === window.currentViewingGroupId);
+            if (!group) return;
+            if (!confirm("Удалить ссылку админа группы? Ссылка перестанет работать.")) return;
+            try {
+                let r = await api("/api/groups/" + encodeURIComponent(window.currentViewingGroupId) + "/admin-link", {
+                    method: "DELETE"
+                });
+                if (r.ok) {
+                    group.admin_uuid = "";
+                    refreshCurrentGroupDlgView();
+                    showToast("Ссылка админа группы удалена");
+                } else {
+                    showToast("Ошибка удаления ссылки", "error");
+                }
+            } catch (e) {
+                showToast("Ошибка сети", "error");
+            }
+        }
+
+        async function deleteCurrentGroup() {
+            if (!window.currentViewingGroupId) return;
+            if (!confirm("Удалить группу? Все ключи внутри этой группы также будут безвозвратно удалены.")) return;
+            let r = await api("/api/groups/" + encodeURIComponent(window.currentViewingGroupId), {
+                method: "DELETE"
+            });
+            if (r.ok) {
+                showToast("Группа и все её ключи удалены");
+                document.getElementById('groupDlg').close();
+                window.currentViewingGroupId = null;
+                loadClients();
+            } else {
+                showToast(await r.text(), "error");
+            }
+        }
+
+        async function openRoutingRulesDlg() {
+            await loadRoutingRules();
+            document.getElementById('routingRulesDlg').showModal();
+        }
+
+        async function loadRoutingRules() {
+            let r = await api("/api/routing-rules");
+            if (!r.ok) { showToast("Не удалось загрузить правила", "error"); return; }
+            window.routingRulesData = await r.json() || [];
+            renderRoutingRulesList();
+        }
+
+        function renderRoutingRulesList() {
+            const container = document.getElementById('routingRulesList');
+            if (!window.routingRulesData || window.routingRulesData.length === 0) {
+                container.innerHTML = `<div class="empty-state" style="padding: 24px;">Нет созданных правил маршрутизации.</div>`;
+                return;
+            }
+            container.innerHTML = window.routingRulesData.map(rule => {
+                const isWhite = rule.mode === 'whitelist';
+                const modeText = isWhite ? 'Белый список' : 'Чёрный список';
+                const modeBadge = `<span class="badge ${isWhite ? 'active' : 'inactive'}" style="font-size: 11px;">${modeText}</span>`;
+                const appsCount = (rule.packages || []).length;
+                const domainsCount = (rule.domains || []).length;
+                const targetGroups = (rule.target_group_ids || []).length;
+                const targetClients = (rule.target_client_passwords || []).length;
+                return `
+                <div class="rule-card">
+                    <div class="rule-card-header">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <div class="rule-card-title">${esc(rule.name || 'Без имени')}</div>
+                            ${modeBadge}
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 12px; height: 30px;" onclick="openEditRoutingRuleDlg('${esc(rule.id)}')">Изменить</button>
+                            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 12px; height: 30px; color: #ef4444;" onclick="deleteRoutingRule('${esc(rule.id)}')">Удалить</button>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px;">
+                        <span class="rule-chip">Приложений: ${appsCount}</span>
+                        <span class="rule-chip">Доменов: ${domainsCount}</span>
+                        <span class="rule-chip">Адресов: ${(rule.ips || []).length}</span>
+                        <span class="rule-chip">Шаблоны: ${rule.template_domains ? 'Вкл' : 'Выкл'}</span>
+                        <span class="rule-chip">Целей: ${targetGroups} групп, ${targetClients} клиентов</span>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function onRuleDomainsModeChange() {
+            const mode = document.getElementById('ruleDomainsMode').value;
+            const row = document.getElementById('ruleTemplateDomainsRow');
+            if (row) {
+                row.style.display = (mode === 'whitelist') ? 'none' : 'flex';
+            }
+        }
+
+        function selectAllRuleTargets(selectAll) {
+            const cbs = document.querySelectorAll('#ruleTargetsContainer input[type="checkbox"]');
+            cbs.forEach(cb => cb.checked = selectAll);
+        }
+
+        function toggleRuleTargetItem(e, item) {
+            if (e.target.tagName === 'INPUT') return;
+            const cb = item.querySelector('input[type="checkbox"]');
+            if (cb) {
+                cb.checked = !cb.checked;
+            }
+        }
+
+        let isDragSelecting = false;
+        let dragSelectState = false;
+        let dragStartItem = null;
+
+        function bindTargetDragSelection(container) {
+            if (container._dragBound) return;
+            container._dragBound = true;
+
+            container.addEventListener('mousedown', (e) => {
+                const item = e.target.closest('.rule-target-item');
+                if (!item) return;
+                const cb = item.querySelector('input[type="checkbox"]');
+                if (!cb) return;
+                isDragSelecting = true;
+                dragStartItem = item;
+                dragSelectState = !cb.checked;
+            });
+
+            container.addEventListener('mouseover', (e) => {
+                if (!isDragSelecting) return;
+                const item = e.target.closest('.rule-target-item');
+                if (!item || item === dragStartItem) return;
+                const cb = item.querySelector('input[type="checkbox"]');
+                if (cb && cb.checked !== dragSelectState) {
+                    cb.checked = dragSelectState;
+                }
+            });
+
+            container.addEventListener('touchstart', (e) => {
+                const item = e.target.closest('.rule-target-item');
+                if (!item) return;
+                const cb = item.querySelector('input[type="checkbox"]');
+                if (!cb) return;
+                isDragSelecting = true;
+                dragStartItem = item;
+                dragSelectState = !cb.checked;
+            }, { passive: true });
+
+            container.addEventListener('touchmove', (e) => {
+                if (!isDragSelecting) return;
+                const touch = e.touches[0];
+                if (!touch) return;
+                const targetEl = document.elementFromPoint(touch.clientX, touch.clientY);
+                const item = targetEl ? targetEl.closest('.rule-target-item') : null;
+                if (!item || item === dragStartItem) return;
+                const cb = item.querySelector('input[type="checkbox"]');
+                if (cb && cb.checked !== dragSelectState) {
+                    cb.checked = dragSelectState;
+                }
+            }, { passive: true });
+        }
+
+        window.addEventListener('mouseup', () => { isDragSelecting = false; dragStartItem = null; });
+        window.addEventListener('touchend', () => { isDragSelecting = false; dragStartItem = null; });
+
+        function openEditRoutingRuleDlg(ruleId) {
+            const rule = ruleId ? (window.routingRulesData || []).find(r => r.id === ruleId) : null;
+            document.getElementById('ruleId').value = rule ? rule.id : '';
+            document.getElementById('editRoutingRuleTitle').textContent = rule ? 'Редактирование правила' : 'Создание правила';
+
+            const randomNum = Math.floor(100 + Math.random() * 900);
+            const defaultName = rule ? (rule.name || '') : `Правило${randomNum}`;
+            document.getElementById('ruleName').value = defaultName;
+            document.getElementById('ruleMode').value = rule ? (rule.mode || 'blacklist') : 'blacklist';
+            document.getElementById('rulePackages').value = rule && rule.packages ? rule.packages.join('\n') : '';
+            document.getElementById('ruleDomainsMode').value = rule ? (rule.domains_mode || (rule.domains_is_whitelist ? 'whitelist' : 'blacklist')) : 'blacklist';
+            onRuleDomainsModeChange();
+            document.getElementById('ruleDomains').value = rule && (rule.domains || rule.direct_domains) ? (rule.domains || rule.direct_domains).join('\n') : '';
+            document.getElementById('ruleTemplateDomains').checked = rule ? Boolean(rule.template_domains) : false;
+            document.getElementById('ruleIpMode').value = rule ? (rule.ip_mode || (rule.ip_is_whitelist ? 'whitelist' : 'blacklist')) : 'blacklist';
+            document.getElementById('ruleIps').value = rule && rule.ips ? rule.ips.join('\n') : '';
+            document.getElementById('ruleDeleteBtn').style.display = rule ? 'inline-block' : 'none';
+
+            const targetsCont = document.getElementById('ruleTargetsContainer');
+            let targetsHtml = '';
+
+            const groups = window.groupsData || [];
+            if (groups.length > 0) {
+                targetsHtml += '<div class="rule-target-section-title">Группы:</div>';
+                targetsHtml += groups.map(g => {
+                    const checked = rule && rule.target_group_ids && rule.target_group_ids.includes(g.id);
+                    return `
+                    <div class="rule-target-item" onclick="toggleRuleTargetItem(event, this)">
+                        <input type="checkbox" class="rule-target-group-cb" value="${esc(g.id)}" ${checked ? 'checked' : ''}>
+                        <div class="rule-target-info">
+                            <span class="rule-target-name">${esc(g.name || 'Без названия')}</span>
+                            <span class="rule-target-badge">Группа</span>
+                        </div>
+                    </div>
+                    `;
+                }).join('');
+            }
+
+            const clients = (window.clientsData || []).filter(c => !c.group_id);
+            if (clients.length > 0) {
+                targetsHtml += '<div class="rule-target-section-title" style="margin-top: 8px;">Отдельные клиенты:</div>';
+                targetsHtml += clients.map(c => {
+                    const checked = rule && rule.target_client_passwords && rule.target_client_passwords.includes(c.password);
+                    return `
+                    <div class="rule-target-item" onclick="toggleRuleTargetItem(event, this)">
+                        <input type="checkbox" class="rule-target-client-cb" value="${esc(c.password)}" ${checked ? 'checked' : ''}>
+                        <div class="rule-target-info">
+                            <span class="rule-target-name">${esc(c.name || 'Клиент')}</span>
+                            <span class="rule-target-meta">${esc(c.password)}</span>
+                        </div>
+                    </div>
+                    `;
+                }).join('');
+            }
+
+            targetsCont.innerHTML = targetsHtml || '<div style="color: var(--text-muted); font-size: 12px; padding: 12px; text-align: center;">Нет доступных групп или клиентов</div>';
+            bindTargetDragSelection(targetsCont);
+            document.getElementById('editRoutingRuleDlg').showModal();
+        }
+
+        async function saveRoutingRule() {
+            const id = document.getElementById('ruleId').value;
+            let name = document.getElementById('ruleName').value.trim();
+            if (!name) name = "Правило";
+            const mode = document.getElementById('ruleMode').value;
+
+            const packages = document.getElementById('rulePackages').value
+                .split(/[\n,]/)
+                .map(s => s.trim())
+                .filter(Boolean);
+
+            const rawDomains = document.getElementById('ruleDomains').value
+                .split(/[\n,]/);
+            const domains = [];
+            const seen = new Set();
+            let hadGarbage = false;
+            for (let raw of rawDomains) {
+                let s = raw.trim();
+                if (!s) continue;
+                s = s.replace(/^[a-zA-Z]+:\/\//, '');
+                s = s.split(/[/?#]/)[0];
+                s = s.replace(/:\d+$/, '');
+                s = s.replace(/^["'\[\(]+|["'\]\)]+$/g, '');
+                s = s.replace(/\.+$/, '').trim();
+                if (!s) { hadGarbage = true; continue; }
+                const isWildcardDomain = /^(\*\.)?([a-zA-Z0-9\u0400-\u04FF]([a-zA-Z0-9\u0400-\u04FF\-]{0,61}[a-zA-Z0-9\u0400-\u04FF])?\.)+[a-zA-Z\u0400-\u04FF]{2,}$/i.test(s);
+                const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(s);
+                const isIpv6 = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/.test(s);
+                const isSimple = /^[a-zA-Z0-9\u0400-\u04FF\-_\.]+$/.test(s) && (s.includes('.') || s === 'localhost');
+                if (isWildcardDomain || isIpv4 || isIpv6 || isSimple) {
+                    const norm = s.toLowerCase();
+                    if (!seen.has(norm)) {
+                        seen.add(norm);
+                        domains.push(norm);
+                    }
+                } else {
+                    hadGarbage = true;
+                }
+            }
+            document.getElementById('ruleDomains').value = domains.join('\n');
+            if (hadGarbage) {
+                const domainsEl = document.getElementById('ruleDomains');
+                if (domainsEl) {
+                    domainsEl.style.borderColor = '#ef4444';
+                    setTimeout(() => { if (domainsEl) domainsEl.style.borderColor = ''; }, 2000);
+                }
+            }
+
+            const domains_mode = document.getElementById('ruleDomainsMode').value;
+            const template_domains = (domains_mode === 'whitelist') ? false : document.getElementById('ruleTemplateDomains').checked;
+            const ip_mode = document.getElementById('ruleIpMode').value;
+            const rawIps = document.getElementById('ruleIps').value.split(/[\n,]/);
+            const ips = [];
+            const seenIps = new Set();
+            for (let raw of rawIps) {
+                let s = raw.trim();
+                if (!s) continue;
+                const isCidr = /^(\d{1,3}\.){3}\d{1,3}\/(3[0-2]|[12]?\d)$/.test(s);
+                const isSingle = /^(\d{1,3}\.){3}\d{1,3}$/.test(s);
+                const isRange = /^(\d{1,3}\.){3}\d{1,3}\s*-\s*(\d{1,3}\.){3}\d{1,3}$/.test(s);
+                if (isCidr || isSingle || isRange) {
+                    const norm = s.replace(/\s+/g, '');
+                    if (!seenIps.has(norm)) {
+                        seenIps.add(norm);
+                        ips.push(norm);
+                    }
+                }
+            }
+            document.getElementById('ruleIps').value = ips.join('\n');
+
+            const target_group_ids = Array.from(document.querySelectorAll('.rule-target-group-cb:checked')).map(cb => cb.value);
+            const target_client_passwords = Array.from(document.querySelectorAll('.rule-target-client-cb:checked')).map(cb => cb.value);
+
+            const btn = document.getElementById('ruleSaveBtn');
+            btn.disabled = true;
+            try {
+                const payload = {
+                    name,
+                    mode,
+                    is_whitelist: mode === 'whitelist',
+                    packages,
+                    domains_mode,
+                    domains_is_whitelist: domains_mode === 'whitelist',
+                    direct_domains: domains,
+                    template_domains,
+                    ip_mode,
+                    ip_is_whitelist: ip_mode === 'whitelist',
+                    ips,
+                    assigned_groups: target_group_ids,
+                    assigned_clients: target_client_passwords
+                };
+                let r;
+                if (id) {
+                    r = await api("/api/routing-rules/" + encodeURIComponent(id), {
+                        method: "PUT",
+                        body: JSON.stringify(payload)
+                    });
+                } else {
+                    r = await api("/api/routing-rules", {
+                        method: "POST",
+                        body: JSON.stringify(payload)
+                    });
+                }
+                if (r.ok) {
+                    showToast("Правило сохранено");
+                    document.getElementById('editRoutingRuleDlg').close();
+                    await loadRoutingRules();
+                    loadClients();
+                } else {
+                    showToast(await r.text(), "error");
+                }
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function updateApiDocsPaths() {
+            const basePath = window.location.pathname.replace(/\/$/, '');
+            const baseUrl = window.location.origin + (basePath || '');
+            const baseEl = document.getElementById('apiBaseUrlDisplay');
+            if (baseEl) baseEl.textContent = baseUrl;
+            document.querySelectorAll('#apiDocsDlg .api-path').forEach(el => {
+                if (!el.dataset.orig) el.dataset.orig = el.textContent.trim();
+                const orig = el.dataset.orig;
+                el.textContent = orig.split(' и ').map(p => {
+                    const cleanP = p.trim();
+                    if (cleanP.startsWith('/{') || cleanP.startsWith('/api/sub') || cleanP.startsWith('/api/group-admin')) {
+                        return cleanP;
+                    }
+                    return (basePath || '') + cleanP;
+                }).join(' и ');
+            });
+            document.querySelectorAll('#apiDocsDlg code').forEach(el => {
+                if (!el.dataset.orig) el.dataset.orig = el.textContent;
+                let text = el.dataset.orig;
+                if (text.includes('/api/') && !text.includes('/api/sub') && !text.includes('/api/group-admin')) {
+                    text = text.replaceAll('/api/', (basePath || '') + '/api/');
+                }
+                el.textContent = text;
+            });
+        }
+
+        function openApiDocsDlg() {
+            switchApiDocsTab('clients');
+            updateApiDocsPaths();
+            document.getElementById('apiDocsDlg').showModal();
+        }
+
+        function switchApiDocsTab(tab) {
+            const tabs = ['clients', 'groups', 'subs', 'routing', 'system'];
+            tabs.forEach(t => {
+                const btn = document.getElementById('btnApiTab' + t.charAt(0).toUpperCase() + t.slice(1));
+                const pane = document.getElementById('apiPane' + t.charAt(0).toUpperCase() + t.slice(1));
+                if (btn) {
+                    if (t === tab) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+                if (pane) {
+                    pane.style.display = (t === tab) ? 'flex' : 'none';
+                }
+            });
+        }
+
+        function openImportExportDlg() {
+            switchImportExportTab('export');
+            const st = document.getElementById('ieImportStatus');
+            if (st) { st.style.display = 'none'; st.textContent = ''; }
+            document.getElementById('importExportDlg').showModal();
+        }
+
+        function switchImportExportTab(tab) {
+            const btnExp = document.getElementById('btnTabExport');
+            const btnImp = document.getElementById('btnTabImport');
+            const paneExp = document.getElementById('iePaneExport');
+            const paneImp = document.getElementById('iePaneImport');
+            if (tab === 'export') {
+                btnExp.className = 'btn btn-primary';
+                btnImp.className = 'btn btn-ghost';
+                btnImp.style.border = '1px solid var(--border)';
+                paneExp.style.display = 'flex';
+                paneImp.style.display = 'none';
+            } else {
+                btnImp.className = 'btn btn-primary';
+                btnExp.className = 'btn btn-ghost';
+                btnExp.style.border = '1px solid var(--border)';
+                paneExp.style.display = 'none';
+                paneImp.style.display = 'flex';
+            }
+        }
+
+        async function fetchExportData() {
+            const r = await api('/api/export');
+            if (!r.ok) throw new Error('Ошибка экспорта: ' + r.statusText);
+            const data = await r.json();
+            const incClients = document.getElementById('ieOptClients').checked;
+            const incSettings = document.getElementById('ieOptSettings').checked;
+            const filtered = {
+                version: data.version,
+                exported_at: data.exported_at
+            };
+            if (incClients) {
+                filtered.clients = data.clients;
+                filtered.groups = data.groups;
+                filtered.routing_rules = data.routing_rules;
+            }
+            if (incSettings) {
+                filtered.main_password = data.main_password;
+                filtered.dns = data.dns;
+                filtered.dns_provider = data.dns_provider;
+                filtered.auto_restart_interval_hours = data.auto_restart_interval_hours;
+                filtered.vk_access_token = data.vk_access_token;
+                filtered.vk_hashes = data.vk_hashes;
+            }
+            return filtered;
+        }
+
+        async function executeExportDownload() {
+            try {
+                const data = await fetchExportData();
+                const jsonStr = JSON.stringify(data, null, 2);
+                const hostIp = window.location.hostname || 'server';
+                const safeIp = hostIp.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+                const filename = (safeIp || 'server') + '-config.json';
+                const blob = new Blob([jsonStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert(e.message || 'Ошибка скачивания конфигурации');
+            }
+        }
+
+        async function executeExportCopy() {
+            try {
+                const data = await fetchExportData();
+                const jsonStr = JSON.stringify(data, null, 2);
+                await navigator.clipboard.writeText(jsonStr);
+                alert('Конфигурация скопирована в буфер обмена ✓');
+            } catch (e) {
+                alert(e.message || 'Ошибка копирования');
+            }
+        }
+
+        function handleImportFile(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                await processImportJson(e.target.result);
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
+        async function executeImportFromClipboard() {
+            const statusEl = document.getElementById('ieImportStatus');
+            statusEl.style.display = 'block';
+            statusEl.style.color = 'var(--text-muted)';
+            statusEl.textContent = 'Чтение буфера...';
+            try {
+                const text = await navigator.clipboard.readText();
+                if (!text || !text.trim()) {
+                    statusEl.style.color = '#ef4444';
+                    statusEl.textContent = 'Буфер обмена пуст';
+                    return;
+                }
+                await processImportJson(text.trim());
+            } catch (e) {
+                statusEl.style.color = '#ef4444';
+                statusEl.textContent = 'Ошибка чтения буфера: ' + (e.message || e);
+            }
+        }
+
+        async function processImportJson(text) {
+            const statusEl = document.getElementById('ieImportStatus');
+            statusEl.style.display = 'block';
+            let parsed;
+            try {
+                parsed = JSON.parse(text);
+            } catch (e) {
+                statusEl.style.color = '#ef4444';
+                statusEl.textContent = 'Ошибка: невалидный JSON';
+                return;
+            }
+            const incClients = document.getElementById('ieOptClients').checked;
+            const incSettings = document.getElementById('ieOptSettings').checked;
+            statusEl.style.color = 'var(--text-muted)';
+            statusEl.textContent = 'Импортирование...';
+            try {
+                const r = await api('/api/import', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        import_clients: incClients,
+                        import_settings: incSettings,
+                        config: parsed
+                    })
+                });
+                if (!r.ok) {
+                    const err = await r.text();
+                    throw new Error(err || r.statusText);
+                }
+                const res = await r.json();
+                statusEl.style.color = '#10b981';
+                statusEl.textContent = 'Успешно! Добавлено новых клиентов: ' + (res.added_clients || 0) + ' ✓';
+                if (typeof loadClients === 'function') loadClients();
+                if (typeof loadSettings === 'function') loadSettings();
+                setTimeout(() => {
+                    document.getElementById('importExportDlg').close();
+                }, 1500);
+            } catch (e) {
+                statusEl.style.color = '#ef4444';
+                statusEl.textContent = 'Ошибка: ' + (e.message || 'Не удалось импортировать');
+            }
+        }
+
+        let templateDomainsCache = null;
+        async function openTemplateDomainsDlg() {
+            const listEl = document.getElementById('templateDomainsList');
+            const countEl = document.getElementById('templateDomainsCount');
+            const filterEl = document.getElementById('templateDomainsFilter');
+            if (filterEl) filterEl.value = '';
+            document.getElementById('templateDomainsDlg').showModal();
+            if (!templateDomainsCache) {
+                listEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px;">Загрузка...</div>';
+                try {
+                    const r = await api('/api/template-domains');
+                    if (r.ok) {
+                        const txt = await r.text();
+                        templateDomainsCache = txt.split('\n')
+                            .map(s => s.trim())
+                            .filter(s => s && !s.startsWith('#'));
+                    } else {
+                        templateDomainsCache = [];
+                    }
+                } catch(e) {
+                    templateDomainsCache = [];
+                }
+            }
+            if (countEl) countEl.textContent = templateDomainsCache.length;
+            renderTemplateDomainsList(templateDomainsCache);
+        }
+
+        function renderTemplateDomainsList(list) {
+            const listEl = document.getElementById('templateDomainsList');
+            if (!listEl) return;
+            if (!list || list.length === 0) {
+                listEl.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 10px;">Ничего не найдено</div>';
+                return;
+            }
+            listEl.innerHTML = list.map(d => `<div style="padding: 2px 0;">${esc(d)}</div>`).join('');
+        }
+
+        function filterTemplateDomains(query) {
+            if (!templateDomainsCache) return;
+            const q = query.trim().toLowerCase();
+            if (!q) {
+                renderTemplateDomainsList(templateDomainsCache);
+                return;
+            }
+            const filtered = templateDomainsCache.filter(d => d.toLowerCase().includes(q));
+            renderTemplateDomainsList(filtered);
+        }
+
+        async function deleteRoutingRule(ruleId) {
+            if (!confirm("Удалить правило маршрутизации?")) return;
+            let r = await api("/api/routing-rules/" + encodeURIComponent(ruleId), { method: "DELETE" });
+            if (r.ok) {
+                showToast("Правило удалено");
+                await loadRoutingRules();
+                loadClients();
+            } else {
+                showToast(await r.text(), "error");
+            }
+        }
+
+        async function deleteCurrentRoutingRule() {
+            const id = document.getElementById('ruleId').value;
+            if (id) {
+                document.getElementById('editRoutingRuleDlg').close();
+                await deleteRoutingRule(id);
+            }
+        }
+
+        function openNewClientDlg(groupId = null, groupName = null) {
+            const targetGid = groupId || '';
+            const scopeClients = (window.clientsData || []).filter(c => (c.group_id || '') === targetGid);
+            document.getElementById('cname').value = generateUniqueClientName(scopeClients.map(c => c.name));
+            document.getElementById('days').value = '30';
+            const workersInput = document.getElementById('new_workers');
+            if (workersInput) workersInput.value = '0';
+            const groupNotice = document.getElementById('newDlgGroupNotice');
+            const groupNameSpan = document.getElementById('newDlgGroupName');
+            const groupIdInput = document.getElementById('newDlgGroupId');
+            if (groupId) {
+                groupNotice.style.display = 'block';
+                groupNameSpan.textContent = groupName || groupId;
+                groupIdInput.value = groupId;
+            } else {
+                groupNotice.style.display = 'none';
+                groupNameSpan.textContent = '';
+                groupIdInput.value = '';
+            }
+            document.getElementById('newDlg').showModal();
+        }
+
+        async function createClient() {
+            const btn = document.getElementById('createBtn');
+            btn.textContent = 'Создание...'; btn.disabled = true;
+
+            try {
+                const targetGid = document.getElementById('newDlgGroupId').value || "";
+                let name = document.getElementById('cname').value.trim();
+                if (!name) {
+                    const scopeClients = (window.clientsData || []).filter(c => (c.group_id || '') === targetGid);
+                    name = generateUniqueClientName(scopeClients.map(c => c.name));
+                }
+                const workersVal = parseInt(document.getElementById('new_workers')?.value || '0', 10) || 0;
+                let r = await api("/api/clients", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        name: name,
+                        group_id: targetGid,
+                        days: +document.getElementById('days').value,
+                        hash: "",
+                        workers: workersVal
+                    })
+                });
+
+                if(!r.ok) { showToast(await r.text(), "error"); } else {
+                    document.getElementById('newDlg').close();
+                    showToast("Ключ успешно создан");
+                    loadClients();
+                }
+            } finally { btn.textContent = 'Создать'; btn.disabled = false; }
         }
 
         let activeClient = null;
@@ -3825,61 +12290,42 @@ const PANEL_HTML: &str = r##"
         function openEditClientDlg(c) {
             activeClient = c;
             const isMain = c.name === "Главный пароль";
-            
+
             document.getElementById('edit_name').value = c.name || '';
             document.getElementById('edit_name').disabled = isMain;
+            const groupSelect = document.getElementById('edit_group');
+            if (groupSelect) {
+                groupSelect.innerHTML = '<option value="">Без группы</option>' + (window.groupsData || []).map(g =>
+                    `<option value="${esc(g.id)}">${esc(g.name || 'Без названия')}</option>`
+                ).join('');
+                groupSelect.value = c.group_id || "";
+                groupSelect.disabled = isMain;
+            }
             document.getElementById('edit_pass').value = c.password || '';
-            
+
             let remainingDays = 0;
             if (c.expires) {
                 remainingDays = Math.max(0, Math.ceil((c.expires * 1000 - Date.now()) / 86400000));
             }
             document.getElementById('edit_days').value = c.expires ? remainingDays : 0;
             document.getElementById('edit_days').disabled = isMain;
-            
-            const storedVkHashes = String(c.vk_hashes || c.vk_hash || '');
-            const hasWdtt = Boolean(c.dtls_port || c.wg_port || c.local_port || storedVkHashes);
-            document.getElementById('edit_csqttToggle').checked = hasWdtt;
-            document.getElementById('edit_csqttToggle').disabled = isMain;
-            
-            document.getElementById('edit_peer_port').value = c.dtls_port || 46000;
-            document.getElementById('edit_wg_port').value = c.wg_port || 46001;
-            document.getElementById('edit_local_port').value = c.local_port || 0;
-            document.getElementById('edit_vkHashesToggle').checked = storedVkHashes.length > 0;
-            document.getElementById('edit_vkHashesToggle').disabled = isMain;
-            document.getElementById('edit_vk_hashes').value = storedVkHashes;
-            document.getElementById('edit_vk_hashes').disabled = isMain;
-            document.getElementById('edit_vk_hashes').classList.remove('is-invalid');
-            toggleEditWdttFields();
 
-            document.getElementById('edit_device_info').textContent = c.device_id || '—';
+            const editWorkers = document.getElementById('edit_workers');
+            if (editWorkers) {
+                editWorkers.value = c.workers || 0;
+                editWorkers.disabled = isMain;
+            }
+
             document.getElementById('edit_ip_info').textContent = c.ip || '—';
             document.getElementById('edit_traffic_info').textContent = `↑ ${size(c.up)} / ↓ ${size(c.down)}`;
-            
+
             document.getElementById('edit_statusBtn').innerHTML = c.active ? 'Выкл' : 'Вкл';
             document.getElementById('edit_statusBtn').style.display = isMain ? 'none' : 'inline-block';
-            
-            document.getElementById('edit_unbindBtn').style.display = (!c.device_id) ? 'none' : 'inline-block';
-            document.getElementById('edit_copyLinkBtn').style.display = hasWdtt ? 'inline-block' : 'none';
+
             document.getElementById('edit_deleteBtn').style.display = isMain ? 'none' : 'inline-block';
             document.getElementById('edit_saveBtn').style.display = isMain ? 'none' : 'inline-block';
-            
+
             document.getElementById('editDlg').showModal();
-        }
-
-        function toggleEditWdttFields() {
-            const toggle = document.getElementById('edit_csqttToggle').checked;
-            document.getElementById('edit_csqttFields').style.display = toggle ? 'block' : 'none';
-            if (!toggle) document.getElementById('edit_vkHashesToggle').checked = false;
-            toggleEditVkHashFields();
-            if (activeClient) {
-                document.getElementById('edit_copyLinkBtn').style.display = toggle ? 'inline-block' : 'none';
-            }
-        }
-
-        function toggleEditVkHashFields() {
-            const enabled = document.getElementById('edit_csqttToggle').checked && document.getElementById('edit_vkHashesToggle').checked;
-            document.getElementById('edit_vkHashesFields').style.display = enabled ? 'block' : 'none';
         }
 
         async function copyPasswordText() {
@@ -3911,26 +12357,6 @@ const PANEL_HTML: &str = r##"
             }
         }
 
-        async function executeCopyLink() {
-            if (!activeClient) return;
-            const dtls = +document.getElementById('edit_peer_port').value || 46000;
-            const password = activeClient.password;
-            let vkHashes = [];
-            try {
-                vkHashes = readEditClientVkHashes();
-            } catch (error) {
-                showToast(error.message, "error");
-                return;
-            }
-
-            const url = buildCsqttLink(password, dtls, vkHashes.join(','));
-            if (await copyToClipboard(url)) {
-                showToast("Ссылка csqtt:// скопирована");
-            } else {
-                showToast("Не удалось скопировать", "error");
-            }
-        }
-
         async function executeDelete() {
             if (!activeClient) return;
             let r = await api("/api/clients/" + encodeURIComponent(activeClient.password), {method: "DELETE"});
@@ -3943,31 +12369,30 @@ const PANEL_HTML: &str = r##"
 
         async function saveClientChanges() {
             if (!activeClient) return;
-            const toggle = document.getElementById('edit_csqttToggle').checked;
-            let vkHashes = [];
-            try {
-                vkHashes = readEditClientVkHashes();
-            } catch (error) {
-                showToast(error.message, "error");
-                return;
-            }
-
             const btn = document.getElementById('edit_saveBtn');
             btn.textContent = 'Сохранение...'; btn.disabled = true;
-            
+
             try {
+                const targetGid = document.getElementById('edit_group') ? document.getElementById('edit_group').value : "";
+                let name = document.getElementById('edit_name').value.trim();
+                if (!name) {
+                    const scopeClients = (window.clientsData || []).filter(c => (c.group_id || '') === targetGid && c.password !== activeClient.password);
+                    name = generateUniqueClientName(scopeClients.map(c => c.name));
+                }
                 let r = await api("/api/clients/" + encodeURIComponent(activeClient.password), {
                     method: "POST",
                     body: JSON.stringify({
-                        name: document.getElementById('edit_name').value.trim(),
+                        name: name,
+                        group_id: targetGid,
                         days: +document.getElementById('edit_days').value,
-                        hash: vkHashes.join(','),
-                        dtls_port: toggle ? +document.getElementById('edit_peer_port').value : 0,
-                        wg_port: toggle ? +document.getElementById('edit_wg_port').value : 0,
-                        local_port: toggle ? +document.getElementById('edit_local_port').value : 0
+                        hash: activeClient.vk_hashes || activeClient.vk_hash || "",
+                        vk_token: Boolean(activeClient.vk_token),
+                        peer_port: activeClient.peer_port || window.serverDefaultPeerPort || 46000,
+                        local_port: activeClient.local_port || 0,
+                        workers: parseInt(document.getElementById('edit_workers')?.value || '0', 10) || 0
                     })
                 });
-                
+
                 if(!r.ok) { showToast(await r.text(), "error"); } else {
                     showToast("Изменения сохранены");
                     document.getElementById('editDlg').close();
@@ -3975,41 +12400,507 @@ const PANEL_HTML: &str = r##"
                 }
             } finally { btn.textContent = 'Сохранить'; btn.disabled = false; }
         }
+
+        let currentHubFilterQuery = '';
+        const hubSelectedPasswords = new Set();
+
+        function handleHubSearch(val) {
+            currentHubFilterQuery = (val || '').trim();
+            const clearBtn = document.getElementById('hubSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = currentHubFilterQuery ? 'inline-flex' : 'none';
+            renderHubClientsList();
+        }
+
+        function clearHubSearch() {
+            const input = document.getElementById('hubSearchInput');
+            if (input) input.value = '';
+            const clearBtn = document.getElementById('hubSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+            currentHubFilterQuery = '';
+            renderHubClientsList();
+        }
+
+        function openLinksAndTokensDlg() {
+            hubSelectedPasswords.clear();
+            currentHubFilterQuery = '';
+            const searchInput = document.getElementById('hubSearchInput');
+            if (searchInput) searchInput.value = '';
+            const clearBtn = document.getElementById('hubSearchClearBtn');
+            if (clearBtn) clearBtn.style.display = 'none';
+
+            const tokenInput = document.getElementById('hubVkTokenInput');
+            if (tokenInput) tokenInput.value = sharedVkToken || '';
+            const hashesInput = document.getElementById('hubVkHashesInput');
+            if (hashesInput) hashesInput.value = sharedVkHashes || '';
+            const workersInput = document.getElementById('hubWorkersInput');
+            if (workersInput) workersInput.value = '0';
+            const selectAll = document.getElementById('hubSelectAll');
+            if (selectAll) selectAll.checked = false;
+            renderHubClientsList();
+            updateHubSelectedCount();
+            document.getElementById('linksAndTokensDlg').showModal();
+        }
+
+        async function autoSaveHubVkToken() {
+            const input = document.getElementById('hubVkTokenInput');
+            const token = input ? input.value.trim() : '';
+            if (token && (/\s/.test(token) || token.length > 4096)) return false;
+            if (token === sharedVkToken) return true;
+            const r = await api('/api/settings', {
+                method: 'POST',
+                body: JSON.stringify({ vk_token: token })
+            });
+            if (r.ok) {
+                sharedVkToken = token;
+                renderHubClientsList();
+                return true;
+            }
+            return false;
+        }
+
+        async function autoSaveHubVkHashes() {
+            const input = document.getElementById('hubVkHashesInput');
+            const raw = input ? input.value.trim() : '';
+            if (raw === sharedVkHashes) return true;
+            const r = await api('/api/settings', {
+                method: 'POST',
+                body: JSON.stringify({ vk_hashes: raw })
+            });
+            if (r.ok) {
+                sharedVkHashes = raw;
+                renderHubClientsList();
+                return true;
+            }
+            return false;
+        }
+
+        async function applyHubVkTokenDirect() {
+            const input = document.getElementById('hubVkTokenInput');
+            const token = input ? input.value.trim() : '';
+            if (!token) {
+                showToast("Введите VK токен", "error");
+                return;
+            }
+            if (/\s/.test(token) || token.length > 4096) {
+                showToast("VK токен не должен содержать пробелы и должен быть короче 4097 символов", "error");
+                return;
+            }
+            await autoSaveHubVkToken();
+            promptBatchAction('token');
+        }
+
+        async function applyHubVkHashesDirect() {
+            const input = document.getElementById('hubVkHashesInput');
+            const raw = input ? input.value.trim() : '';
+            const hashes = raw.split(',').map(s => s.trim()).filter(Boolean);
+            if (!hashes.length || hashes.length > 6 || hashes.some(h => h.length < 16 || /\s/.test(h))) {
+                showToast("Укажите от 1 до 6 корректных VK-хешей через запятую (каждый от 16 символов без пробелов)", "error");
+                return;
+            }
+            await autoSaveHubVkHashes();
+            promptBatchAction('hashes');
+        }
+
+        async function applyHubWorkersDirect() {
+            const input = document.getElementById('hubWorkersInput');
+            const w = parseInt(input ? input.value : '0', 10);
+            if (isNaN(w) || w < 0 || (w > 0 && w < 3) || w > 100) {
+                showToast("Число потоков должно быть 0 (клиентские) или от 3 до 100", "error");
+                return;
+            }
+            promptBatchAction('workers');
+        }
+
+        function renderHubClientsList(preservedChecked = null) {
+            const container = document.getElementById('hubClientsList');
+            if (!container) return;
+            if (preservedChecked !== null) {
+                hubSelectedPasswords.clear();
+                preservedChecked.forEach(p => hubSelectedPasswords.add(p));
+            }
+            const allClients = window.clientsData || [];
+            if (!allClients.length) {
+                container.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 24px;">Нет созданных клиентов</div>';
+                updateHubSelectedCount();
+                return;
+            }
+
+            const groupMap = new Map();
+            (window.groupsData || []).forEach(g => {
+                if (g && g.id) groupMap.set(g.id, g.name || '');
+            });
+
+            let displayClients = [];
+            const q = currentHubFilterQuery;
+
+            if (!q) {
+                displayClients = allClients.map(c => ({
+                    client: c,
+                    groupName: c.group_id ? (groupMap.get(c.group_id) || '') : '',
+                    score: 0
+                }));
+            } else {
+                const bracketMatch = q.match(/^(.*?)\((.*?)\)(.*)$/);
+                let mode = 'name_only';
+                let namePart = '';
+                let groupPart = '';
+
+                if (bracketMatch) {
+                    const outside = (bracketMatch[1] + ' ' + bracketMatch[3]).trim();
+                    const inside = bracketMatch[2].trim();
+                    if (!outside) {
+                        mode = 'group_only';
+                        groupPart = inside;
+                    } else {
+                        mode = 'name_and_group';
+                        namePart = outside;
+                        groupPart = inside;
+                    }
+                } else {
+                    const openIdx = q.lastIndexOf('(');
+                    if (openIdx !== -1) {
+                        const outside = q.slice(0, openIdx).trim();
+                        const inside = q.slice(openIdx + 1).trim();
+                        if (!outside) {
+                            mode = 'group_only';
+                            groupPart = inside;
+                        } else {
+                            mode = 'name_and_group';
+                            namePart = outside;
+                            groupPart = inside;
+                        }
+                    } else {
+                        mode = 'name_only';
+                        namePart = q;
+                    }
+                }
+
+                const scored = [];
+                for (const c of allClients) {
+                    const gName = c.group_id ? (groupMap.get(c.group_id) || '') : '';
+                    const cName = c.name || 'Клиент';
+                    let score = 0;
+
+                    if (mode === 'name_only') {
+                        score = calcMatchScore(cName, namePart);
+                    } else if (mode === 'group_only') {
+                        if (c.group_id && gName) {
+                            if (!groupPart) {
+                                score = 100;
+                            } else {
+                                score = calcMatchScore(gName, groupPart);
+                            }
+                        }
+                    } else if (mode === 'name_and_group') {
+                        const nScore = namePart ? calcMatchScore(cName, namePart) : 0;
+                        const gScore = (groupPart && gName) ? calcMatchScore(gName, groupPart) : 0;
+                        if (nScore > 0 && gScore > 0) {
+                            score = 2000 + nScore + gScore;
+                        } else if (nScore > 0) {
+                            score = nScore;
+                        } else if (gScore > 0) {
+                            score = gScore;
+                        }
+                    }
+
+                    if (score > 0) {
+                        scored.push({ client: c, groupName: gName, score });
+                    }
+                }
+
+                scored.sort((a, b) => b.score - a.score);
+                displayClients = scored;
+            }
+
+            if (!displayClients.length) {
+                container.innerHTML = `<div style="color: var(--text-muted); text-align: center; padding: 24px;">По запросу «<b>${esc(q)}</b>» ничего не найдено</div>`;
+                updateHubSelectedCount();
+                return;
+            }
+
+            container.innerHTML = displayClients.map(item => {
+                const c = item.client;
+                const groupName = item.groupName;
+                const link = c.link || '';
+                let badge = '';
+                const hashes = String(c.vk_hashes || c.vk_hash || '').trim();
+                if (c.vk_token) {
+                    badge = '<span class="badge active" style="font-size: 11px;">VK Токен</span>';
+                } else if (hashes) {
+                    badge = '<span class="badge active" style="font-size: 11px;">VK Хеши</span>';
+                } else {
+                    badge = '<span class="badge inactive" style="font-size: 11px;">Прямой</span>';
+                }
+                if (c.workers && c.workers >= 3) {
+                    badge += ` <span class="badge active" style="font-size: 11px;">Потоки: ${c.workers}</span>`;
+                }
+                const isChecked = hubSelectedPasswords.has(c.password);
+                const displayName = groupName ? `${c.name || 'Клиент'} (${groupName})` : (c.name || 'Клиент');
+
+                return `
+                <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="checkbox" class="hub-client-cb" value="${esc(c.password)}" ${isChecked ? 'checked' : ''} onchange="handleHubClientCbChange(this)" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary);">
+                            <span style="font-weight: 600; font-size: 14px; color: var(--text-main);">${esc(displayName)}</span>
+                            ${badge}
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input readonly value="${esc(link)}" style="flex: 1; height: 40px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; padding: 0 10px; background: var(--surface-hover); color: var(--text-muted); border-radius: 8px;" onclick="this.select()">
+                        <button class="btn btn-ghost" style="height: 40px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px;" onclick="copyHubClientLink('${esc(c.password)}', this)" title="Копировать ссылку">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary);"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
+                        <button class="btn btn-ghost" style="height: 40px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px;" onclick="openQrModalForClient('${esc(c.password)}')" title="QR-код">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary);"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path></svg>
+                        </button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+
+            updateHubSelectedCount();
+        }
+
+        function handleHubClientCbChange(cb) {
+            if (cb.checked) {
+                hubSelectedPasswords.add(cb.value);
+            } else {
+                hubSelectedPasswords.delete(cb.value);
+            }
+            updateHubSelectedCount();
+        }
+
+        function toggleSelectAllHubClients(checked) {
+            const cbs = document.querySelectorAll('.hub-client-cb');
+            cbs.forEach(cb => {
+                cb.checked = checked;
+                if (checked) {
+                    hubSelectedPasswords.add(cb.value);
+                } else {
+                    hubSelectedPasswords.delete(cb.value);
+                }
+            });
+            updateHubSelectedCount();
+        }
+
+        function updateHubSelectedCount() {
+            const visibleCbs = document.querySelectorAll('.hub-client-cb');
+            const checkedCount = hubSelectedPasswords.size;
+            const countEl = document.getElementById('hubSelectedCount');
+            if (countEl) countEl.textContent = `(${checkedCount} выбрано)`;
+            const selectAll = document.getElementById('hubSelectAll');
+            if (selectAll) {
+                selectAll.checked = (visibleCbs.length > 0 && Array.from(visibleCbs).every(cb => cb.checked));
+            }
+        }
+
+        async function copyHubClientLink(password, btn = null) {
+            const client = (window.clientsData || []).find(c => c.password === password);
+            if (!client) return;
+            const link = client.link || '';
+            if (!link) { showToast('Ссылка клиента недоступна', true); return; }
+            if (await copyToClipboard(link)) {
+                showToast("Ссылка скопирована");
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+                    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+                }
+            } else {
+                showToast("Не удалось скопировать", "error");
+            }
+        }
+
+        let currentBatchAction = null;
+
+        function promptBatchAction(action) {
+            if (!hubSelectedPasswords.size) {
+                const checkedCbs = Array.from(document.querySelectorAll('.hub-client-cb:checked'));
+                checkedCbs.forEach(cb => hubSelectedPasswords.add(cb.value));
+            }
+            if (!hubSelectedPasswords.size) {
+                showToast("Выберите хотя бы одного клиента", "error");
+                return;
+            }
+            const count = hubSelectedPasswords.size;
+            const titleEl = document.getElementById('batchConfirmTitle');
+            const msgEl = document.getElementById('batchConfirmMessage');
+            const submitBtn = document.getElementById('batchConfirmSubmitBtn');
+
+            if (action === 'token') {
+                const tokenVal = (document.getElementById('hubVkTokenInput')?.value || sharedVkToken || '').trim();
+                if (!tokenVal) {
+                    showToast("Укажите VK токен", "error");
+                    return;
+                }
+                titleEl.textContent = "Применить VK токен";
+                msgEl.textContent = `Включить общий VK токен для выбранных клиентов (${count} шт.)? Индивидуальные VK хеши будут очищены.`;
+                submitBtn.textContent = "Применить токен";
+                submitBtn.className = "btn btn-primary";
+            } else if (action === 'clear-token') {
+                titleEl.textContent = "Отключить VK токен";
+                msgEl.textContent = `Отключить VK токен для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Отключить токен";
+                submitBtn.className = "btn btn-danger";
+            } else if (action === 'hashes') {
+                const raw = (document.getElementById('hubVkHashesInput')?.value || sharedVkHashes || '').trim();
+                const hashes = raw.split(',').map(s => s.trim()).filter(Boolean);
+                if (!hashes.length || hashes.length > 6 || hashes.some(h => h.length < 16 || /\s/.test(h))) {
+                    showToast("Укажите от 1 до 6 корректных VK-хешей через запятую (каждый от 16 символов без пробелов)", "error");
+                    return;
+                }
+                titleEl.textContent = "Применить VK хеши";
+                msgEl.textContent = `Установить указанные VK хеши для выбранных клиентов (${count} шт.)? Флаг VK токена будет отключен.`;
+                submitBtn.textContent = "Применить хеши";
+                submitBtn.className = "btn btn-primary";
+            } else if (action === 'clear-hashes') {
+                titleEl.textContent = "Очистить VK хеши";
+                msgEl.textContent = `Очистить VK хеши для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Очистить хеши";
+                submitBtn.className = "btn btn-danger";
+            } else if (action === 'workers') {
+                const w = parseInt(document.getElementById('hubWorkersInput')?.value || '0', 10);
+                if (isNaN(w) || w < 0 || (w > 0 && w < 3) || w > 100) {
+                    showToast("Число потоков должно быть 0 или от 3 до 100", "error");
+                    return;
+                }
+                titleEl.textContent = "Установить число потоков";
+                msgEl.textContent = `Установить число потоков (${w === 0 ? 'Клиентские настройки (0)' : w}) для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Установить число потоков";
+                submitBtn.className = "btn btn-primary";
+            } else if (action === 'clear-workers') {
+                titleEl.textContent = "Сбросить число потоков";
+                msgEl.textContent = `Сбросить число потоков до клиентских настроек (0) для выбранных клиентов (${count} шт.)?`;
+                submitBtn.textContent = "Сбросить число потоков";
+                submitBtn.className = "btn btn-danger";
+            } else if (action === 'clear') {
+                titleEl.textContent = "Очистить параметры VK";
+                msgEl.textContent = `Очистить VK токен и VK хеши у выбранных клиентов (${count} шт.)? Они перейдут в обычный режим прямого подключения.`;
+                submitBtn.textContent = "Очистить";
+                submitBtn.className = "btn btn-danger";
+            }
+            currentBatchAction = action;
+            submitBtn.onclick = executeBatchAction;
+            document.getElementById('batchConfirmDlg').showModal();
+        }
+
+        async function executeBatchAction() {
+            const action = currentBatchAction;
+            if (!action) return;
+            const checkedPasses = Array.from(hubSelectedPasswords);
+            const clients = (window.clientsData || []).filter(c => checkedPasses.includes(c.password));
+
+            const submitBtn = document.getElementById('batchConfirmSubmitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Применение...";
+
+            let hashesVal = null;
+            let tokenVal = null;
+            let workersVal = null;
+
+            if (action === 'token') {
+                tokenVal = true;
+                hashesVal = '';
+            } else if (action === 'clear-token') {
+                tokenVal = false;
+            } else if (action === 'hashes') {
+                const raw = (document.getElementById('hubVkHashesInput')?.value || sharedVkHashes || '').trim();
+                hashesVal = raw.split(',').map(s => s.trim()).filter(Boolean).join(',');
+                tokenVal = false;
+            } else if (action === 'clear-hashes') {
+                hashesVal = '';
+            } else if (action === 'workers') {
+                workersVal = parseInt(document.getElementById('hubWorkersInput')?.value || '0', 10) || 0;
+            } else if (action === 'clear-workers') {
+                workersVal = 0;
+                const winp = document.getElementById('hubWorkersInput');
+                if (winp) winp.value = '0';
+            } else if (action === 'clear') {
+                tokenVal = false;
+                hashesVal = '';
+            }
+
+            try {
+                let successCount = 0;
+                for (const c of clients) {
+                    let remainingDays = 0;
+                    if (c.expires) {
+                        remainingDays = Math.max(1, Math.ceil((c.expires * 1000 - Date.now()) / 86400000));
+                    }
+                    const payload = {
+                        name: c.name || '',
+                        group_id: c.group_id || '',
+                        days: c.expires ? remainingDays : 0,
+                        hash: (hashesVal !== null) ? hashesVal : (c.vk_hashes || c.vk_hash || ''),
+                        vk_token: (tokenVal !== null) ? tokenVal : Boolean(c.vk_token),
+                        peer_port: c.peer_port || window.serverDefaultPeerPort || 46000,
+                        local_port: c.local_port || 0,
+                        workers: (workersVal !== null) ? workersVal : (c.workers || 0)
+                    };
+                    const r = await api("/api/clients/" + encodeURIComponent(c.password), {
+                        method: "POST",
+                        body: JSON.stringify(payload)
+                    });
+                    if (r.ok) {
+                        successCount++;
+                    }
+                }
+                document.getElementById('batchConfirmDlg').close();
+                showToast(`Обновлено клиентов: ${successCount} из ${clients.length}`);
+                await loadClients();
+                renderHubClientsList();
+                updateHubSelectedCount();
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.className = "btn btn-primary";
+                submitBtn.textContent = "Подтвердить";
+                currentBatchAction = null;
+            }
+        }
         let logsLoadedOnce = false;
+        let logsInFlight = false;
         async function loadLogs() {
+            if (logsInFlight) return;
             const consoleElem = document.getElementById('logConsole');
-            
+
             const selection = window.getSelection();
             const isSelecting = selection && selection.toString().length > 0 && consoleElem.contains(selection.anchorNode);
-            
+
             if (isSelecting) {
                 return;
             }
 
-            let r = await api("/api/logs"); if(!r.ok) return; let x = await r.json();
-            document.getElementById('logFilePath').textContent = "Путь: " + x.path;
-            document.getElementById('loggingActiveToggle').checked = x.active;
-            
-            const threshold = 30;
-            const scrollBottom = consoleElem.scrollHeight - consoleElem.clientHeight;
-            const isScrolledToBottom = (scrollBottom - consoleElem.scrollTop) <= threshold;
+            logsInFlight = true;
+            try {
+                let r = await api("/api/logs"); if(!r.ok) return; let x = await r.json();
+                document.getElementById('logFilePath').textContent = "Путь: " + x.path;
+                document.getElementById('loggingActiveToggle').checked = x.active;
 
-            const linesHtml = x.lines.map(line => {
-                let escLine = esc(line);
-                const match = escLine.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.*)$/);
-                if (match) {
-                    const [, timestamp, level, message] = match;
-                    const lvlClass = level.trim() === 'ERROR' ? 'log-err' : 'log-info';
-                    return `<div class="log-line"><span class="log-time">[${timestamp}]</span><span class="log-lvl ${lvlClass}">${level}</span><span>${message}</span></div>`;
+                const threshold = 30;
+                const scrollBottom = consoleElem.scrollHeight - consoleElem.clientHeight;
+                const isScrolledToBottom = (scrollBottom - consoleElem.scrollTop) <= threshold;
+
+                const linesHtml = x.lines.map(line => {
+                    let escLine = esc(line);
+                    const match = escLine.match(/^\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.*)$/);
+                    if (match) {
+                        const [, timestamp, level, message] = match;
+                        const lvlClass = level.trim() === 'ERROR' ? 'log-err' : 'log-info';
+                        return `<div class="log-line"><span class="log-time">[${timestamp}]</span><span class="log-lvl ${lvlClass}">${level}</span><span>${message}</span></div>`;
+                    }
+                    return `<div class="log-line"><span>${escLine}</span></div>`;
+                }).join('');
+
+                consoleElem.innerHTML = linesHtml;
+
+                if (isScrolledToBottom || !logsLoadedOnce) {
+                    consoleElem.scrollTop = consoleElem.scrollHeight;
+                    logsLoadedOnce = true;
                 }
-                return `<div class="log-line"><span>${escLine}</span></div>`;
-            }).join('');
-
-            consoleElem.innerHTML = linesHtml;
-
-            if (isScrolledToBottom || !logsLoadedOnce) {
-                consoleElem.scrollTop = consoleElem.scrollHeight;
-                logsLoadedOnce = true;
+            } catch (e) {
+            } finally {
+                logsInFlight = false;
             }
         }
 
@@ -4065,10 +12956,34 @@ const PANEL_HTML: &str = r##"
         async function saveDnsSettings() {
             const button = document.getElementById('saveDnsBtn');
             const provider = document.getElementById('dns_provider')?.value || '';
-            if (!button || button.disabled || provider === 'custom') return;
+            if (!button || button.disabled) return;
+            let payload;
+            if (provider === 'custom') {
+                const value = document.getElementById('dns_manual')?.value || '';
+                const addresses = value.split(',');
+                const valid = value === value.trim()
+                    && !value.includes(' ')
+                    && (addresses.length === 1 || addresses.length === 2)
+                    && addresses.every(address => {
+                        const octets = address.split('.');
+                        return octets.length === 4
+                            && octets.every(octet => /^[0-9]{1,3}$/.test(octet) && Number(octet) <= 255);
+                    });
+                if (!valid) {
+                    showToast('Введите один или два IPv4-адреса через запятую без пробелов', 'error');
+                    return;
+                }
+                payload = {
+                    dns_provider: 'custom',
+                    dns_primary: addresses[0],
+                    dns_secondary: addresses[1] || ''
+                };
+            } else {
+                payload = { dns_provider: provider };
+            }
             button.classList.add('saving'); button.disabled = true;
             const response = await api('/api/settings', {
-                method: 'POST', body: JSON.stringify({ dns_provider: provider })
+                method: 'POST', body: JSON.stringify(payload)
             });
             if (!response.ok) {
                 button.classList.remove('saving');
@@ -4078,6 +12993,9 @@ const PANEL_HTML: &str = r##"
             }
             const result = await response.json();
             savedDnsProvider = provider;
+            savedManualDns = provider === 'custom'
+                ? [payload.dns_primary, payload.dns_secondary].filter(Boolean).join(',')
+                : savedManualDns;
             setRestartRequired(result.restart_required);
             await animateSavedButton(button, 'Применить DNS');
         }
@@ -4164,17 +13082,109 @@ const PANEL_HTML: &str = r##"
         document.getElementById('mainpass')?.addEventListener('input', updateSettingsDirtyState);
         const dnsProviderSelect = document.getElementById('dns_provider');
         dnsProviderSelect?.addEventListener('change', () => {
+            syncDnsControls();
             updateSettingsDirtyState();
         });
+        document.getElementById('dns_manual')?.addEventListener('input', updateSettingsDirtyState);
         document.getElementById('auto_restart_interval')?.addEventListener('change', updateSettingsDirtyState);
+        const dlBtn = document.getElementById('downloadLogBtn');
+        if (dlBtn) dlBtn.href = (basePath || '') + '/api/logs/download';
+        updateApiDocsPaths();
         loadStats(); loadSettings(); if (savedTab === 'clients') { loadClients(); } if (savedTab === 'logs') { loadLogs(); }
-        
+
         const savedInterval = parseInt(localStorage.getItem('csqtt-update-interval'), 10) || 3000;
         const selectElem = document.getElementById('updateIntervalSelect');
         if (selectElem) {
             selectElem.value = savedInterval;
         }
         startUpdateInterval(savedInterval);
+
+        document.querySelectorAll('dialog').forEach(dlg => {
+            dlg.addEventListener('mousedown', (e) => {
+                dlg._mouseDownOnBackdrop = (e.target === dlg);
+            });
+            dlg.addEventListener('click', (e) => {
+                if (e.target === dlg && dlg._mouseDownOnBackdrop) {
+                    const rect = dlg.getBoundingClientRect();
+                    const isInDialog = (
+                        rect.top <= e.clientY && e.clientY <= rect.top + rect.height &&
+                        rect.left <= e.clientX && e.clientX <= rect.left + rect.width
+                    );
+                    if (!isInDialog) {
+                        dlg.close();
+                    }
+                }
+                dlg._mouseDownOnBackdrop = false;
+            });
+            dlg.addEventListener('close', () => {
+                const toastBox = document.getElementById('toastContainer');
+                if (toastBox && !document.querySelector('dialog[open]')) {
+                    document.body.appendChild(toastBox);
+                }
+            });
+        });
+
+        document.getElementById('linksAndTokensDlg')?.addEventListener('close', () => {
+            const cbs = document.querySelectorAll('.hub-client-cb');
+            cbs.forEach(cb => cb.checked = false);
+            const selectAll = document.getElementById('hubSelectAll');
+            if (selectAll) selectAll.checked = false;
+            updateHubSelectedCount();
+        });
+
+        document.getElementById('groupDlg')?.addEventListener('close', () => {
+            if (typeof exitGroupInlineEdit === 'function') exitGroupInlineEdit();
+        });
+
+        window.qrSvgCache = {};
+        function generateQrSvg(text) {
+            if (window.qrSvgCache[text]) {
+                return window.qrSvgCache[text];
+            }
+            try {
+                const qr = qrcode(0, 'L');
+                qr.addData(text);
+                qr.make();
+                const svg = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+                window.qrSvgCache[text] = svg;
+                return svg;
+            } catch (e) {
+                return '<div style="color: #ef4444; padding: 16px;">Ошибка генерации QR</div>';
+            }
+        }
+
+        function openQrModalForClient(password) {
+            const client = (window.clientsData || []).find(c => c.password === password) || (typeof activeClient !== 'undefined' && activeClient && activeClient.password === password ? activeClient : null);
+            if (!client) return;
+            const link = client.link || '';
+            if (!link) { showToast('Ссылка клиента недоступна', true); return; }
+            const titleEl = document.getElementById('qrDlgTitle');
+            if (titleEl) titleEl.textContent = 'QR-код: ' + (client.name || 'Клиент');
+            const linkInput = document.getElementById('qrDlgLink');
+            if (linkInput) linkInput.value = link;
+            const container = document.getElementById('qrCodeContainer');
+            if (container) container.innerHTML = generateQrSvg(link);
+            document.getElementById('qrDlg').showModal();
+        }
+
+        function openQrModalForActiveClient() {
+            if (typeof activeClient !== 'undefined' && activeClient) {
+                openQrModalForClient(activeClient.password);
+            }
+        }
+
+        async function copyQrDlgLink(btn) {
+            const link = document.getElementById('qrDlgLink')?.value || '';
+            if (await copyToClipboard(link)) {
+                if (btn) {
+                    btn.style.color = '#10b981';
+                    setTimeout(() => { btn.style.color = ''; }, 1500);
+                }
+                showToast("Ссылка скопирована");
+            } else {
+                showToast("Не удалось скопировать", "error");
+            }
+        }
     </script>
 </body>
 </html>
@@ -4185,9 +13195,11 @@ const PANEL_HTML: &str = r##"
 mod tests {
     use super::{
         DNS_PROVIDERS, LOGIN_HTML, MAX_CLIENT_NAME_BYTES, PANEL_HTML, PWA_ICON_192_PNG,
-        PWA_ICON_512_PNG, PWA_MANIFEST, PWA_SERVICE_WORKER, deploy_dns_profile_or_yandex,
-        dns_provider_by_id, dns_provider_id, normalize_client_vk_hashes, process_memory,
-        process_memory_rollup, provider_dns, validate_client_name, validate_proxy_profile_name,
+        PWA_ICON_512_PNG, PWA_MANIFEST, PWA_SERVICE_WORKER, count_active_sessions,
+        decrypt_csqtt_link, deploy_dns_profile_or_yandex, dns_provider_by_id, dns_provider_id,
+        encrypt_csqtt_link, make_client_link, manual_dns, normalize_client_vk_hashes,
+        normalize_vk_access_token, process_memory, process_memory_rollup, provider_dns,
+        validate_client_name, validate_proxy_profile_name, validate_workers,
     };
 
     #[test]
@@ -4206,10 +13218,18 @@ mod tests {
     }
 
     #[test]
-    fn deploy_dns_migration_normalizes_known_partial_profiles_or_uses_yandex() {
+    fn legacy_deploy_dns_migration_normalizes_known_partial_profiles_or_uses_yandex() {
+        assert_eq!(
+            deploy_dns_profile_or_yandex("111.88.96.55,203.0.113.7"),
+            "111.88.96.54,111.88.96.55"
+        );
         assert_eq!(
             deploy_dns_profile_or_yandex("111.88.96.51,203.0.113.7"),
-            "111.88.96.50,111.88.96.51"
+            "111.88.96.54,111.88.96.55"
+        );
+        assert_eq!(
+            deploy_dns_profile_or_yandex("95.182.120.241,203.0.113.7"),
+            "193.233.112.67,193.233.112.88"
         );
         assert_eq!(
             deploy_dns_profile_or_yandex("8.8.8.8,1.1.1.1"),
@@ -4222,9 +13242,29 @@ mod tests {
     }
 
     #[test]
+    fn manual_dns_accepts_one_or_two_ipv4_addresses() {
+        assert_eq!(manual_dns(Some("1.1.1.1"), None).unwrap(), "1.1.1.1");
+        assert_eq!(
+            manual_dns(Some(" 1.1.1.1 "), Some(" 1.0.0.1 ")).unwrap(),
+            "1.1.1.1,1.0.0.1"
+        );
+    }
+
+    #[test]
+    fn manual_dns_rejects_empty_primary_and_invalid_ipv4() {
+        assert!(manual_dns(None, None).is_err());
+        assert!(manual_dns(Some(""), None).is_err());
+        assert!(manual_dns(Some("1.1.1.256"), None).is_err());
+        assert!(manual_dns(Some("1.1.1.1"), Some("not-an-ip")).is_err());
+    }
+
+    #[test]
     fn panel_uses_the_complete_dns_provider_list_without_network_checks() {
         assert!(PANEL_HTML.contains("DNS Адреса"));
         assert!(PANEL_HTML.contains("id=\"dns_provider\""));
+        assert!(PANEL_HTML.contains("<option value=\"custom\">Ручной DNS</option>"));
+        assert!(PANEL_HTML.contains("id=\"dns_manual\""));
+        assert!(PANEL_HTML.contains("placeholder=\"ipv4,ipv4\""));
         assert!(PANEL_HTML.contains("Yandex DNS"));
         assert!(PANEL_HTML.contains("Rostelecom DNS"));
         assert!(PANEL_HTML.contains("NextDNS"));
@@ -4234,8 +13274,8 @@ mod tests {
         assert!(!PANEL_HTML.contains("/api/dns-providers"));
         assert!(!PANEL_HTML.contains("dns_provider_health"));
         assert!(!PANEL_HTML.contains("refreshDnsProviderPings"));
-        assert!(!PANEL_HTML.contains("id=\"dns_primary\""));
-        assert!(!PANEL_HTML.contains("id=\"dns_secondary\""));
+        assert!(PANEL_HTML.contains("dns_provider: 'custom'"));
+        assert!(PANEL_HTML.contains("syncDnsControls"));
     }
 
     #[test]
@@ -4269,6 +13309,17 @@ mod tests {
             .collect::<Vec<_>>()
             .join(",");
         assert!(normalize_client_vk_hashes(&seven).is_err());
+    }
+
+    #[test]
+    fn vk_token_accepts_one_compact_value_or_empty() {
+        assert_eq!(
+            normalize_vk_access_token("  vk1.token-_%2B  ").unwrap(),
+            "vk1.token-_%2B"
+        );
+        assert_eq!(normalize_vk_access_token(" ").unwrap(), "");
+        assert!(normalize_vk_access_token("token with space").is_err());
+        assert!(normalize_vk_access_token(&"x".repeat(4097)).is_err());
     }
 
     #[test]
@@ -4311,7 +13362,13 @@ mod tests {
         assert!(PANEL_HTML.contains("pwa-icon-192.png"));
         assert!(PWA_SERVICE_WORKER.contains("url.pathname.startsWith('/api/')"));
         assert!(PWA_SERVICE_WORKER.contains("SHELL_ASSETS"));
-        assert!(PWA_SERVICE_WORKER.contains("fetch(request).catch"));
+        assert!(!PWA_SERVICE_WORKER.contains("OFFLINE_PAGE"));
+        assert!(!PWA_SERVICE_WORKER.contains("request.mode === 'navigate'"));
+    }
+
+    #[test]
+    fn participant_cards_contain_ip_info() {
+        assert!(PANEL_HTML.contains("IP:"));
     }
 
     #[test]
@@ -4348,5 +13405,96 @@ mod tests {
         assert_eq!(memory.private, 660);
         assert_eq!(memory.shared, 15);
         assert_eq!(memory.swap_pss, 7);
+    }
+
+    #[test]
+    fn csqtt_link_encryption_and_decryption() {
+        let payload = "connect?v=2&host=1.2.3.4&peer=46000&password=testpass";
+        let encrypted1 = encrypt_csqtt_link(payload);
+        let encrypted2 = encrypt_csqtt_link(payload);
+        assert!(encrypted1.starts_with("csqtt://"));
+        assert_eq!(
+            encrypted1, encrypted2,
+            "link encryption must be deterministic for identical payload"
+        );
+        let decrypted = decrypt_csqtt_link(&encrypted1).expect("decryption should succeed");
+        assert_eq!(decrypted, payload);
+    }
+
+    #[test]
+    fn csqtt_link_legacy_plaintext_rejected() {
+        use base64::Engine;
+        let payload = "connect?v=2&host=1.2.3.4&peer=46000&password=legacy";
+        let legacy_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        let legacy_link = format!("csqtt://{legacy_b64}");
+        assert!(decrypt_csqtt_link(&legacy_link).is_none());
+    }
+
+    #[test]
+    fn make_client_link_contains_password_and_aes_roundtrip() {
+        let link = make_client_link("1.2.3.4", 46000, "abc1234567890123", "", false, "");
+        assert!(link.starts_with("csqtt://"));
+        let decrypted = decrypt_csqtt_link(&link).expect("must decrypt");
+        assert!(decrypted.contains("password=abc1234567890123"));
+        assert!(!decrypted.contains("client="));
+        assert!(!decrypted.contains("&workers="));
+    }
+
+    #[test]
+    fn owner_link_contains_owner_password_without_workers() {
+        let link = make_client_link("1.2.3.4", 46000, "ownerpass1234567", "", false, "");
+        let decrypted = decrypt_csqtt_link(&link).expect("must decrypt");
+        assert!(decrypted.contains("password=ownerpass1234567"));
+        assert!(!decrypted.contains("client="));
+        assert!(!decrypted.contains("&workers="));
+    }
+
+    #[test]
+    fn count_active_sessions_isolates_passwords() {
+        use crate::protocol::Session;
+        use dashmap::DashMap;
+        use std::net::SocketAddr;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let sessions = DashMap::new();
+        let debug_flag = Arc::new(AtomicBool::new(false));
+        let addr: SocketAddr = "127.0.0.1:46001".parse().unwrap();
+
+        let s1 = Session::new(
+            1,
+            addr,
+            "pass_a",
+            1,
+            "salt1",
+            false,
+            debug_flag.clone(),
+            100,
+        );
+        sessions.insert(1, s1);
+
+        assert_eq!(count_active_sessions(&sessions, "pass_a"), 1);
+        assert_eq!(count_active_sessions(&sessions, "pass_b"), 0);
+
+        let s_owner = Session::new(2, addr, "owner_pass", 2, "salt2", false, debug_flag, 100);
+        sessions.insert(2, s_owner);
+
+        assert_eq!(count_active_sessions(&sessions, "owner_pass"), 1);
+        assert_eq!(count_active_sessions(&sessions, "pass_a"), 1);
+        assert_eq!(count_active_sessions(&sessions, "pass_b"), 0);
+    }
+
+    #[test]
+    fn workers_validation() {
+        assert_eq!(validate_workers(None), Ok(None));
+        assert_eq!(validate_workers(Some(0)), Ok(None));
+        assert_eq!(validate_workers(Some(3)), Ok(Some(3)));
+        assert_eq!(validate_workers(Some(36)), Ok(Some(36)));
+        assert_eq!(validate_workers(Some(99)), Ok(Some(99)));
+        assert_eq!(validate_workers(Some(100)), Ok(Some(100)));
+        assert!(validate_workers(Some(1)).is_err());
+        assert!(validate_workers(Some(2)).is_err());
+        assert!(validate_workers(Some(101)).is_err());
     }
 }

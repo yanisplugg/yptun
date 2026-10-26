@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::auth::{TurnCredentials, parse_turn_credentials};
 use crate::profiles::Profile;
 use anyhow::{Context, Result, bail};
@@ -17,11 +14,11 @@ use url::{Url, form_urlencoded};
 use uuid::Uuid;
 
 const VK_API_VERSION: &str = "5.285";
-const VK_CLIENT_ID: &str = "6287487";
+const VK_APP_ID: u64 = 6287487;
 const OK_APPLICATION_KEY: &str = "CGMMEJLGDIHBABABA";
 const DEFAULT_OK_API: &str = "https://calls.okcdn.ru/fb.do";
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
-pub const MAX_ACCOUNT_CREDENTIALS: usize = 9;
+pub const MAX_ACCOUNT_CREDENTIALS: usize = 15;
 
 #[derive(Deserialize)]
 pub struct Bootstrap {
@@ -63,7 +60,6 @@ enum RequestSite {
 
 pub async fn start(
     bootstrap: Bootstrap,
-    device_id: &str,
     multiple_devices: bool,
     profile: &Profile,
 ) -> Result<StartedCalls> {
@@ -80,7 +76,8 @@ pub async fn start(
         .build()
         .context("инициализация браузерного HTTP-клиента")?;
     let access_token = bootstrap.token;
-    let creator_session = open_account_session(&client, &access_token, device_id).await?;
+    let device_id = Uuid::new_v4().to_string();
+    let creator_session = open_account_session(&client, &access_token, &device_id).await?;
     let api_url = creator_session.api_url;
     let session_key = creator_session.session_key;
     let info = post_form(
@@ -108,7 +105,7 @@ pub async fn start(
         "with_join_link": true,
         "join_by_link": true,
         "community_user_id": 0,
-        "caller_app_id": 6287487
+        "caller_app_id": VK_APP_ID
     })
     .to_string();
     let protocol_version = if multiple_devices { "6" } else { "5" };
@@ -223,7 +220,7 @@ async fn open_account_session(
         post_form(
             client,
             &format!(
-                "https://api.vk.ru/method/messages.getCallToken?v={VK_API_VERSION}&client_id={VK_CLIENT_ID}"
+                "https://api.vk.ru/method/messages.getCallToken?v={VK_API_VERSION}&client_id={VK_APP_ID}"
             ),
             &[("env", "production"), ("access_token", access_token)],
             RequestSite::Vk,
@@ -359,7 +356,7 @@ impl ActiveCalls {
                         let value = post_form(
                             &client,
                             &format!(
-                                "https://api.vk.ru/method/calls.forceFinish?v={VK_API_VERSION}&client_id={VK_CLIENT_ID}"
+                                "https://api.vk.ru/method/calls.forceFinish?v={VK_API_VERSION}&client_id={VK_APP_ID}"
                             ),
                             &[
                                 ("call_id", conversation_id.as_str()),
@@ -421,6 +418,11 @@ async fn post_form(
         .await
         .context("HTTP-запрос")?;
     let status = response.status();
+    if let Some(length) = response.content_length()
+        && length > MAX_RESPONSE_BYTES as u64
+    {
+        bail!("слишком большой HTTP-ответ");
+    }
     let bytes = response.bytes().await.context("чтение HTTP-ответа")?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         bail!("слишком большой HTTP-ответ");
@@ -585,8 +587,8 @@ mod tests {
     }
 
     #[test]
-    fn account_credentials_are_bounded_to_nine_sessions() {
-        assert_eq!(MAX_ACCOUNT_CREDENTIALS, 9);
+    fn account_credentials_are_bounded_to_fifteen_sessions() {
+        assert_eq!(MAX_ACCOUNT_CREDENTIALS, 15);
     }
 
     #[test]

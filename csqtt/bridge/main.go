@@ -48,7 +48,7 @@ type options struct {
 	VKHashes    string `json:"vk_hashes"`
 	Password    string `json:"password"`
 	Workers     int    `json:"workers"`
-	DeviceID    string `json:"device_id"`
+	DeviceID    string `json:"device_id"` // ignored since csqtt 2.5.0 (client dropped --device-id)
 	Obfs        string `json:"obfs"`         // audio | video
 	TurnTCP     bool   `json:"turn_tcp"`     // TURN over TCP/TLS instead of UDP
 	Fingerprint string `json:"fingerprint"`  // chrome | firefox | safari | edge | opera
@@ -57,7 +57,7 @@ type options struct {
 	Captcha     string `json:"captcha_mode"` // auto | rjs
 	TurnHost    string `json:"turn_host"`    // TURN override
 	TurnPort    string `json:"turn_port"`    // TURN override
-	Redistrib   bool   `json:"redistribute"` // allow more workers than hashes×27
+	Redistrib   bool   `json:"redistribute"` // ignored since csqtt 2.5.0 (client dropped --allow-hash-redistribution)
 	MTU         int    `json:"mtu"`          // netstack MTU, default 1300 (csqtt's own)
 	Generation  int64  `json:"generation"`   // -gen
 	Salt        string `json:"salt"`         // -salt
@@ -122,7 +122,9 @@ func run(stdin *bufio.Reader, o options) error {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, o.Client, clientArgs(o, udpPort)...)
-	cmd.Env = append(os.Environ(), "CSQTT_EVENTS=1", "RAYON_NUM_THREADS=2")
+	// v2.5.0 took the password out of argv (it showed in the process list) into CSQTT_PASSWORD, and
+	// dropped --device-id / --allow-hash-redistribution.
+	cmd.Env = append(os.Environ(), "CSQTT_EVENTS=1", "RAYON_NUM_THREADS=2", "CSQTT_PASSWORD="+o.Password)
 	cmd.Cancel = func() error { return cmd.Process.Kill() }
 	cmd.WaitDelay = 2 * time.Second
 	cin, err := cmd.StdinPipe()
@@ -313,20 +315,15 @@ func clientArgs(o options, udpPort int) []string {
 		"--listen", "127.0.0.1:" + strconv.Itoa(udpPort),
 		"--vk", o.VKHashes,
 		"--vk-hash-mode", "manual",
-		"--password", o.Password,
 	}
 	if o.Workers > 0 {
 		args = append(args, "-n", strconv.Itoa(o.Workers))
-	}
-	if o.Redistrib {
-		args = append(args, "--allow-hash-redistribution")
 	}
 	add := func(flag, v string) {
 		if strings.TrimSpace(v) != "" {
 			args = append(args, flag, strings.TrimSpace(v))
 		}
 	}
-	add("--device-id", o.DeviceID)
 	add("--obfs", o.Obfs)
 	add("--fingerprint", o.Fingerprint)
 	add("--client-ids", o.ClientIDs)

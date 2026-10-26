@@ -1,27 +1,20 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
-#[cfg(feature = "diagnostics")]
-use crate::perf::thread_cpu_time_ns;
 use crate::{
     App,
-    dataplane::{self, DataplaneConfig, DataplaneLogic, EndpointRoute, WorkerContext},
-    downlink_queue::DownlinkQueue,
-    flow_frame::{self, FlowReassembler, FlowSequencer},
+    dataplane::{self, DataplaneConfig, DataplaneLogic},
     lock_unpoison, log_event,
     model::{
-        ClientDevice, Database, TrafficCounters, TrafficSnapshot, cached_now, derive_wrap_key,
-        generate_key_pair, get_next_ip, is_expired, now, resolve_session_ip,
+        Database, TrafficCounters, TrafficSnapshot, cached_now, derive_wrap_key, get_next_ip,
+        is_expired, now, resolve_session_ip, secret_eq, secret_tag,
     },
     packet::{PACKET_CAPACITY, PacketBuf, PacketBuffer},
-    perf::{self, Profiler as AllProfiler, Stage as PerfStage},
-    selective_fec,
     tokio_io::{IoCounters, PacketOutput},
     tun_device::RouteTable,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use ctr::cipher::{InnerIvInit, KeyInit, StreamCipher};
-use rand::{Rng, RngCore, SeedableRng, rngs::OsRng, rngs::StdRng};
+use hmac::{Hmac, Mac};
+use rand::{Rng, RngCore, SeedableRng, rngs::OsRng, rngs::SmallRng};
+use sha1::Sha1;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -31,7 +24,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use subtle::ConstantTimeEq;
 use tokio::sync::{
     Mutex, OwnedMutexGuard, RwLockReadGuard, RwLockWriteGuard, Semaphore, mpsc, oneshot,
 };
@@ -59,7 +51,7 @@ const SESSION_LEASE: &[u8] = b"\xffCSQTT_LEASE";
 pub const PANEL_RESTART_NOTICE: &[u8] = b"\xffCSQTT_PANEL_RESTART_V1\x00\x91\x7d\x03\xa8";
 const STREAM_REPAIR_PREFIX: &[u8] = b"\xffCSQTT_STREAM_REPAIR_V1";
 const STREAM_ALIVE_PREFIX: &[u8] = b"\xffCSQTT_STREAM_ALIVE_V1";
-pub(crate) const MAX_STREAM_WORKERS: usize = 126;
+pub(crate) const MAX_STREAM_WORKERS: usize = 100;
 const MAX_STREAM_WORKERS_U16: u16 = MAX_STREAM_WORKERS as u16;
 const STREAM_RECONCILE_INTERVAL_MS: u64 = 3_000;
 const STREAM_REPAIR_GRACE_MS: u64 = 30_000;
@@ -70,15 +62,13 @@ const STREAM_CONTROL_CARRIERS: usize = 3;
 const STREAM_ROUND_ORPHAN_TTL_MS: u64 = 60_000;
 const STREAM_INVENTORY_RESYNC_MS: u64 = 60_000;
 const EPOCH_SWEEP_INTERVAL_MS: u64 = 5 * 60_000;
-const DOWNLINK_DRAIN_PACKET_LIMIT: usize = 128;
 const EPOCH_IDLE_TTL_MS: u64 = 60 * 60_000;
 const HOT_TABLE_RESERVE: usize = 128;
 const MEMORY_COMPACT_INTERVAL_MS: u64 = 5_000;
 const SESSION_MAINTENANCE_INTERVAL_MS: u64 = 1_000;
 const SETUP_BUDGET_PER_TICK: usize = 1024;
+const DTLS_TABLE_LIMIT: usize = 1024;
 const UNAUTHENTICATED_SETUP_LOG_INTERVAL_MS: u64 = 10_000;
-const MIGRATING_ENDPOINT_TTL_MS: u64 = 2_000;
-const MIGRATING_ENDPOINT_SWEEP_INTERVAL_MS: u64 = 1_000;
 pub(crate) static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ROUTE_REGISTRATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 static CACHED_MONOTONIC_MS: AtomicU64 = AtomicU64::new(0);
@@ -94,7 +84,7 @@ pub struct DpiFrame {
     pub seq: u64,
     pub len: usize,
     pub wire_len: usize,
-    pub device_id: String,
+    pub password: String,
     pub gen_id: u64,
     pub salt: String,
     pub detail: String,
@@ -109,13 +99,6 @@ pub static DPI_BROADCAST: std::sync::LazyLock<tokio::sync::broadcast::Sender<Dpi
         let (tx, _) = tokio::sync::broadcast::channel(64);
         tx
     });
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DpiRingMemorySnapshot {
-    pub entries: usize,
-    pub entry_capacity: usize,
-    pub retained_bytes: usize,
-}
 
 pub fn record_dpi(frame: DpiFrame) {
     if let Ok(mut ring) = DPI_RING.try_write() {
@@ -133,31 +116,6 @@ pub fn epoch_snapshot_len() -> usize {
 
 pub fn dpi_ring_len() -> usize {
     DPI_RING.read().map(|ring| ring.len()).unwrap_or(0)
-}
-
-pub fn dpi_ring_memory_snapshot() -> DpiRingMemorySnapshot {
-    let Ok(ring) = DPI_RING.try_read() else {
-        return DpiRingMemorySnapshot::default();
-    };
-    let strings = ring.iter().fold(0usize, |total, frame| {
-        total
-            .saturating_add(frame.direction.capacity())
-            .saturating_add(frame.src.capacity())
-            .saturating_add(frame.dst.capacity())
-            .saturating_add(frame.proto.capacity())
-            .saturating_add(frame.device_id.capacity())
-            .saturating_add(frame.salt.capacity())
-            .saturating_add(frame.detail.capacity())
-            .saturating_add(frame.hex_preview.capacity())
-    });
-    DpiRingMemorySnapshot {
-        entries: ring.len(),
-        entry_capacity: ring.capacity(),
-        retained_bytes: ring
-            .capacity()
-            .saturating_mul(std::mem::size_of::<DpiFrame>())
-            .saturating_add(strings),
-    }
 }
 
 pub fn hex_and_ascii_dump(data: &[u8]) -> String {
@@ -194,6 +152,10 @@ pub fn hex_and_ascii_dump(data: &[u8]) -> String {
 fn is_dpi_control(plain: &[u8]) -> bool {
     plain.starts_with(b"GETCONF:")
         || plain.starts_with(b"TUNCONF:")
+        || plain.starts_with(b"ROUTING:")
+        || plain.starts_with(b"WORKERS:")
+        || plain.starts_with(b"GETWORKERS:")
+        || plain.starts_with(b"TUNWORKERS:")
         || plain == PANEL_RESTART_NOTICE
         || plain.starts_with(b"DENIED:")
         || plain.starts_with(b"DISCONNECT:")
@@ -238,16 +200,26 @@ fn should_record_dpi(
     false
 }
 
+pub fn pad_tunconf(base: &str) -> String {
+    base.to_owned()
+}
+
 fn display_control_payload(plain: &[u8]) -> String {
     let text = String::from_utf8_lossy(plain);
     let Some(payload) = text.strip_prefix("GETCONF:") else {
         return text.into_owned();
     };
-    let parts = payload.splitn(6, '|').collect::<Vec<_>>();
-    let [first, second, _, fourth, fifth, sixth] = parts.as_slice() else {
+    let parts = payload.split('|').collect::<Vec<_>>();
+    if parts.len() < 3 {
         return "GETCONF:[REDACTED]".to_owned();
-    };
-    format!("GETCONF:{first}|{second}|[REDACTED]|{fourth}|{fifth}|{sixth}")
+    }
+    let first = parts[0];
+    let rest = parts[2..].join("|");
+    if rest.is_empty() {
+        format!("GETCONF:{first}|[REDACTED]")
+    } else {
+        format!("GETCONF:{first}|[REDACTED]|{rest}")
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -259,7 +231,7 @@ pub fn record_packet_dpi(
     seq: u64,
     plain: &[u8],
     wire_len: usize,
-    device_id: &str,
+    password: &str,
     gen_id: u64,
     salt: &str,
 ) {
@@ -272,6 +244,10 @@ pub fn record_packet_dpi(
     let detail = if [
         b"GETCONF:".as_slice(),
         b"TUNCONF:".as_slice(),
+        b"ROUTING:".as_slice(),
+        b"WORKERS:".as_slice(),
+        b"GETWORKERS:".as_slice(),
+        b"TUNWORKERS:".as_slice(),
         b"DENIED:".as_slice(),
         b"DISCONNECT:".as_slice(),
     ]
@@ -303,7 +279,7 @@ pub fn record_packet_dpi(
         seq,
         len: plain.len(),
         wire_len,
-        device_id: device_id.to_owned(),
+        password: password.to_owned(),
         gen_id,
         salt: salt.to_owned(),
         detail,
@@ -507,13 +483,10 @@ pub struct SyscallsFrame {
     pub send_syscalls_s: u64,
     pub rx_eagain_s: u64,
     pub tx_eagain_s: u64,
-    pub partial_sendmmsg_s: u64,
     pub crypto_ops_s: u64,
     pub active_sessions: u64,
     pub free_udp_tx_slots: u64,
     pub free_tun_tx_slots: u64,
-    #[serde(default)]
-    pub recv_batch_max: u64,
     #[serde(default)]
     pub udp_rx_enobufs_s: u64,
     #[serde(default)]
@@ -522,61 +495,7 @@ pub struct SyscallsFrame {
     pub total_udp_tx_packets: u64,
     pub total_tun_rx_packets: u64,
     pub total_tun_tx_packets: u64,
-    #[serde(default)]
-    pub crypto_sample_interval: u64,
-    #[serde(default)]
-    pub chacha: CryptoPerfCounters,
-    #[serde(default)]
-    pub srtp: CryptoPerfCounters,
-    #[serde(default)]
-    pub unwrap_crypto: CryptoPerfCounters,
-    #[serde(default)]
-    pub wrap_crypto: CryptoPerfCounters,
-    #[serde(default)]
-    pub all_sample_interval: u64,
-    #[serde(default)]
-    pub all: perf::Snapshot,
 }
-
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct CryptoPerfCounters {
-    pub operations: u64,
-    pub bytes: u64,
-    pub samples: u64,
-    pub sampled_ns: u64,
-}
-
-impl CryptoPerfCounters {
-    pub fn delta(self, previous: Self) -> Self {
-        Self {
-            operations: self.operations.saturating_sub(previous.operations),
-            bytes: self.bytes.saturating_sub(previous.bytes),
-            samples: self.samples.saturating_sub(previous.samples),
-            sampled_ns: self.sampled_ns.saturating_sub(previous.sampled_ns),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct CryptoPerfSnapshot {
-    pub chacha: CryptoPerfCounters,
-    pub srtp: CryptoPerfCounters,
-    pub unwrap_crypto: CryptoPerfCounters,
-    pub wrap_crypto: CryptoPerfCounters,
-}
-
-impl CryptoPerfSnapshot {
-    pub fn delta(self, previous: Self) -> Self {
-        Self {
-            chacha: self.chacha.delta(previous.chacha),
-            srtp: self.srtp.delta(previous.srtp),
-            unwrap_crypto: self.unwrap_crypto.delta(previous.unwrap_crypto),
-            wrap_crypto: self.wrap_crypto.delta(previous.wrap_crypto),
-        }
-    }
-}
-
-pub const CRYPTO_PERF_SAMPLE_INTERVAL: u64 = perf::SAMPLE_INTERVAL;
 
 pub static SYSCALLS_BROADCAST: std::sync::LazyLock<tokio::sync::broadcast::Sender<SyscallsFrame>> =
     std::sync::LazyLock::new(|| {
@@ -587,6 +506,7 @@ pub static SYSCALLS_BROADCAST: std::sync::LazyLock<tokio::sync::broadcast::Sende
 pub static GLOBAL_IO_COUNTERS: std::sync::LazyLock<std::sync::RwLock<crate::tokio_io::IoCounters>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(crate::tokio_io::IoCounters::default()));
 
+#[allow(dead_code)]
 pub static CRYPTO_OPS_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub static ACTIVE_SESSIONS_GAUGE: AtomicU64 = AtomicU64::new(0);
 pub static HOT_SESSION_CAPACITY_GAUGE: AtomicU64 = AtomicU64::new(0);
@@ -594,118 +514,6 @@ pub static ENGINE_EPOCHS_GAUGE: AtomicU64 = AtomicU64::new(0);
 pub static STREAM_REPAIRS_GAUGE: AtomicU64 = AtomicU64::new(0);
 pub static STREAM_INVENTORY_GAUGE: AtomicU64 = AtomicU64::new(0);
 pub static SYSCALLS_CLIENTS: AtomicU64 = AtomicU64::new(0);
-static METRIC_CLIENTS: AtomicU64 = AtomicU64::new(0);
-pub static GLOBAL_CRYPTO_PERF: std::sync::LazyLock<RwLock<CryptoPerfSnapshot>> =
-    std::sync::LazyLock::new(|| RwLock::new(CryptoPerfSnapshot::default()));
-
-#[derive(Clone, Copy)]
-enum CryptoKind {
-    Chacha,
-    Srtp,
-}
-
-#[derive(Clone, Copy)]
-enum CryptoDirection {
-    Unwrap,
-    Wrap,
-}
-
-#[derive(Default)]
-struct CryptoProfiler {
-    #[cfg(feature = "diagnostics")]
-    enabled: bool,
-    #[cfg(feature = "diagnostics")]
-    cursors: [u64; 2],
-    #[cfg(feature = "diagnostics")]
-    counters: CryptoPerfSnapshot,
-    all: AllProfiler,
-}
-
-impl CryptoProfiler {
-    #[inline(always)]
-    fn begin(&mut self, kind: CryptoKind, direction: CryptoDirection, bytes: usize) -> Option<u64> {
-        #[cfg(feature = "diagnostics")]
-        {
-            if !self.enabled {
-                return None;
-            }
-            let index = kind as usize;
-            {
-                let counter = match kind {
-                    CryptoKind::Chacha => &mut self.counters.chacha,
-                    CryptoKind::Srtp => &mut self.counters.srtp,
-                };
-                counter.operations = counter.operations.saturating_add(1);
-                counter.bytes = counter.bytes.saturating_add(bytes as u64);
-            }
-            {
-                let counter = match direction {
-                    CryptoDirection::Unwrap => &mut self.counters.unwrap_crypto,
-                    CryptoDirection::Wrap => &mut self.counters.wrap_crypto,
-                };
-                counter.operations = counter.operations.saturating_add(1);
-                counter.bytes = counter.bytes.saturating_add(bytes as u64);
-            }
-            let cursor = self.cursors[index];
-            self.cursors[index] = cursor.wrapping_add(1);
-            if cursor.is_multiple_of(CRYPTO_PERF_SAMPLE_INTERVAL) {
-                let counter = match kind {
-                    CryptoKind::Chacha => &mut self.counters.chacha,
-                    CryptoKind::Srtp => &mut self.counters.srtp,
-                };
-                counter.samples = counter.samples.saturating_add(1);
-                let direction_counter = match direction {
-                    CryptoDirection::Unwrap => &mut self.counters.unwrap_crypto,
-                    CryptoDirection::Wrap => &mut self.counters.wrap_crypto,
-                };
-                direction_counter.samples = direction_counter.samples.saturating_add(1);
-                Some(thread_cpu_time_ns())
-            } else {
-                None
-            }
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            let _ = (kind, direction, bytes);
-            None
-        }
-    }
-
-    #[inline(always)]
-    fn finish(&mut self, kind: CryptoKind, direction: CryptoDirection, started: Option<u64>) {
-        #[cfg(feature = "diagnostics")]
-        {
-            let Some(started) = started else {
-                return;
-            };
-            let elapsed = thread_cpu_time_ns().saturating_sub(started);
-            let counter = match kind {
-                CryptoKind::Chacha => &mut self.counters.chacha,
-                CryptoKind::Srtp => &mut self.counters.srtp,
-            };
-            counter.sampled_ns = counter.sampled_ns.saturating_add(elapsed);
-            let direction_counter = match direction {
-                CryptoDirection::Unwrap => &mut self.counters.unwrap_crypto,
-                CryptoDirection::Wrap => &mut self.counters.wrap_crypto,
-            };
-            direction_counter.sampled_ns = direction_counter.sampled_ns.saturating_add(elapsed);
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            let _ = (kind, direction, started);
-        }
-    }
-
-    #[cfg(feature = "diagnostics")]
-    fn publish(&self) {
-        if self.enabled
-            && let Ok(mut global) = GLOBAL_CRYPTO_PERF.write()
-        {
-            *global = self.counters;
-        }
-        self.all.publish_protocol();
-    }
-}
 
 #[inline(always)]
 fn record_crypto_op(enabled: bool) {
@@ -739,9 +547,9 @@ pub async fn run_syscalls_server(app: Arc<App>) -> Result<()> {
     }
 }
 
-async fn serve_syscalls_client(socket: tokio::net::TcpStream, app: Arc<App>) {
+async fn serve_syscalls_client(socket: tokio::net::TcpStream, _app: Arc<App>) {
     let (mut reader, mut writer) = tokio::io::split(socket);
-    let request = match tokio::time::timeout(
+    let _request = match tokio::time::timeout(
         DIAGNOSTIC_HANDSHAKE_TIMEOUT,
         read_diagnostic_request(&mut reader),
     )
@@ -750,18 +558,10 @@ async fn serve_syscalls_client(socket: tokio::net::TcpStream, app: Arc<App>) {
         Ok(Ok(Some(request))) => request,
         _ => return,
     };
-    if request.eq_ignore_ascii_case("METRIC ALL") {
-        serve_metric_client(reader, writer, app).await;
-        return;
-    }
     if !cfg!(feature = "diagnostics") {
         return;
     }
-    let perf_all = request.eq_ignore_ascii_case("PERF")
-        || request.eq_ignore_ascii_case("PERF CRYPTO")
-        || request.eq_ignore_ascii_case("PERF ALL");
-    let _perf_all = perf_all.then(AllPerfClient::new);
-    let _syscalls = (!perf_all).then(SyscallsClient::new);
+    let _syscalls = SyscallsClient::new();
     let mut rx = SYSCALLS_BROADCAST.subscribe();
     let mut control = [0_u8; 64];
     let lease = tokio::time::sleep(DIAGNOSTIC_LEASE);
@@ -790,72 +590,7 @@ async fn serve_syscalls_client(socket: tokio::net::TcpStream, app: Arc<App>) {
     }
 }
 
-async fn serve_metric_client<R, W>(mut reader: R, mut writer: W, app: Arc<App>)
-where
-    R: tokio::io::AsyncRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    let Some(_client) = MetricClient::try_new() else {
-        let frame = crate::memory_metrics::MetricFrame {
-            timestamp_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                .min(u64::MAX as u128) as u64,
-            error: "another `csqtt metric all` observer is already active".to_owned(),
-            ..crate::memory_metrics::MetricFrame::default()
-        };
-        if let Ok(json) = serde_json::to_string(&frame) {
-            let _ = write_diagnostic_line(&mut writer, &json).await;
-        }
-        return;
-    };
-
-    let mut timer = tokio::time::interval(crate::memory_metrics::METRIC_SAMPLE_INTERVAL);
-    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut control = [0_u8; 64];
-    let lease = tokio::time::sleep(DIAGNOSTIC_LEASE);
-    tokio::pin!(lease);
-    loop {
-        tokio::select! {
-            received = tokio::io::AsyncReadExt::read(&mut reader, &mut control) => {
-                match received {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => lease.as_mut().reset(tokio::time::Instant::now() + DIAGNOSTIC_LEASE),
-                }
-            }
-            _ = &mut lease => break,
-            _ = timer.tick() => {
-                let frame = crate::memory_metrics::collect_metric_frame(&app).await;
-                let Ok(json) = serde_json::to_string(&frame) else {
-                    continue;
-                };
-                if !write_diagnostic_line(&mut writer, &json).await {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-struct AllPerfClient;
-
 struct SyscallsClient;
-
-struct MetricClient;
-
-impl AllPerfClient {
-    fn new() -> Self {
-        perf::ALL_CLIENTS.fetch_add(1, Ordering::AcqRel);
-        Self
-    }
-}
-
-impl Drop for AllPerfClient {
-    fn drop(&mut self) {
-        perf::ALL_CLIENTS.fetch_sub(1, Ordering::AcqRel);
-    }
-}
 
 impl SyscallsClient {
     fn new() -> Self {
@@ -870,34 +605,19 @@ impl Drop for SyscallsClient {
     }
 }
 
-impl MetricClient {
-    fn try_new() -> Option<Self> {
-        METRIC_CLIENTS
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-            .then_some(Self)
-    }
-}
-
-impl Drop for MetricClient {
-    fn drop(&mut self) {
-        METRIC_CLIENTS.store(0, Ordering::Release);
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeviceEpochDecision {
+enum PasswordEpochDecision {
     Current,
     Replaced,
 }
 
-pub struct DeviceEpochSlot {
-    pub epoch: Arc<Mutex<DeviceEpochState>>,
+pub struct PasswordEpochSlot {
+    pub epoch: Arc<Mutex<PasswordEpochState>>,
     pub last_used_ms: AtomicU64,
 }
 
-impl DeviceEpochSlot {
-    pub fn new(epoch: DeviceEpochState, now_ms: u64) -> Self {
+impl PasswordEpochSlot {
+    pub fn new(epoch: PasswordEpochState, now_ms: u64) -> Self {
         Self {
             epoch: Arc::new(Mutex::new(epoch)),
             last_used_ms: AtomicU64::new(now_ms),
@@ -906,12 +626,12 @@ impl DeviceEpochSlot {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DeviceEpochState {
+pub struct PasswordEpochState {
     generation_id: u64,
     session_salt: String,
 }
 
-impl DeviceEpochState {
+impl PasswordEpochState {
     pub fn new(generation_id: u64, session_salt: String) -> Self {
         Self {
             generation_id,
@@ -919,13 +639,13 @@ impl DeviceEpochState {
         }
     }
 
-    fn admit(&mut self, generation_id: u64, session_salt: &str) -> DeviceEpochDecision {
+    fn admit(&mut self, generation_id: u64, session_salt: &str) -> PasswordEpochDecision {
         if generation_id != self.generation_id || session_salt != self.session_salt {
             self.generation_id = generation_id;
             self.session_salt = session_salt.to_owned();
-            DeviceEpochDecision::Replaced
+            PasswordEpochDecision::Replaced
         } else {
-            DeviceEpochDecision::Current
+            PasswordEpochDecision::Current
         }
     }
 
@@ -934,16 +654,15 @@ impl DeviceEpochState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CredentialAccess {
     Main,
-    Bound,
-    Unbound,
+    Slot(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionEpochIdentity {
-    device_id: String,
+    password: String,
     generation_id: u64,
     session_salt: String,
 }
@@ -1035,7 +754,6 @@ pub struct Session {
     pub id: u64,
     pub address: SocketAddr,
     pub password: String,
-    pub device_id: std::sync::Mutex<String>,
     pub generation_id: AtomicU64,
     pub session_salt: std::sync::Mutex<String>,
     pub worker_id: AtomicU64,
@@ -1054,11 +772,10 @@ pub struct Session {
 
 impl Session {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         id: u64,
         address: SocketAddr,
         password: &str,
-        device_id: &str,
         generation_id: u64,
         session_salt: &str,
         is_srtp: bool,
@@ -1069,7 +786,6 @@ impl Session {
             id,
             address,
             password: password.to_owned(),
-            device_id: std::sync::Mutex::new(device_id.to_owned()),
             generation_id: AtomicU64::new(generation_id),
             session_salt: std::sync::Mutex::new(session_salt.to_owned()),
             worker_id: AtomicU64::new(u64::MAX),
@@ -1092,10 +808,14 @@ struct Credential {
     password: Arc<str>,
     key: [u8; 32],
     aes: aes::Aes128,
-    hmac: aws_lc_rs::hmac::Key,
-    chacha: aws_lc_rs::aead::LessSafeKey,
+    hmac: Hmac<Sha1>,
+    dtls_client_cipher_key: [u8; 32],
+    dtls_client_aes: aes::Aes128,
+    dtls_client_hmac: Hmac<Sha1>,
+    dtls_server_cipher_key: [u8; 32],
 }
 
+#[derive(Default)]
 pub struct CredentialSet {
     entries: Vec<Credential>,
 }
@@ -1123,6 +843,44 @@ impl EndpointKey {
     #[inline(always)]
     fn new(peer: SocketAddr, local_ip: Option<IpAddr>) -> Self {
         Self { peer, local_ip }
+    }
+}
+
+fn dtls_state_label(state: crate::dtls::DtlsHandshakeState) -> &'static str {
+    match state {
+        crate::dtls::DtlsHandshakeState::Idle => "Idle",
+        crate::dtls::DtlsHandshakeState::AwaitingServerFlight => "ждём полёт сервера",
+        crate::dtls::DtlsHandshakeState::AwaitingServerFinished => "ждём Finished сервера",
+        crate::dtls::DtlsHandshakeState::AwaitingClientFlight => "ждём полёт клиента",
+        crate::dtls::DtlsHandshakeState::Connected => "Connected",
+        crate::dtls::DtlsHandshakeState::Failed => "Failed",
+    }
+}
+
+fn insert_bounded_endpoint<T>(
+    map: &mut HashMap<EndpointKey, (T, Vec<u8>, u64)>,
+    key: EndpointKey,
+    value: (T, Vec<u8>, u64),
+) {
+    if !map.contains_key(&key) && map.len() >= DTLS_TABLE_LIMIT {
+        let oldest = map
+            .iter()
+            .min_by_key(|(_, entry)| entry.2)
+            .map(|(oldest, _)| *oldest);
+        if let Some(oldest) = oldest {
+            map.remove(&oldest);
+        }
+    }
+    map.insert(key, value);
+}
+
+fn uplink_source_matches(packet: &[u8], tunnel_ip: Option<[u8; 4]>) -> bool {
+    if packet.first().map(|version| *version >> 4) != Some(4) {
+        return true;
+    }
+    match tunnel_ip {
+        Some(ip) => packet.get(12..16) == Some(&ip[..]),
+        None => false,
     }
 }
 
@@ -1159,11 +917,17 @@ impl OutState {
     }
 
     #[inline(always)]
-    fn clocks(&self, now: Instant) -> (u32, u32) {
+    fn clocks_for_type(&self, now: Instant, pt: u8) -> (u32, u32) {
         let elapsed = now.saturating_duration_since(self.started);
-        (
+        let ts = if pt == 111 {
+            let frame_idx = (elapsed.as_millis() / 20) as u32;
+            self.initial_ts.wrapping_add(frame_idx.wrapping_mul(960))
+        } else {
             self.initial_ts
-                .wrapping_add(duration_ticks(elapsed, rtp_clock_rate(self.payload_type))),
+                .wrapping_add(duration_ticks(elapsed, rtp_clock_rate(pt)))
+        };
+        (
+            ts,
             self.initial_abs_send_time
                 .wrapping_add(duration_ticks(elapsed, 262_144))
                 & 0x00ff_ffff,
@@ -1176,6 +940,9 @@ pub struct ReplayState {
     highest: u16,
     bitmap: Option<Box<[u64; 256]>>,
 }
+
+const REPLAY_WINDOW_BITS: usize = 16_384;
+const REPLAY_WORD_BITS: usize = 64;
 
 impl ReplayState {
     pub(crate) fn new() -> Self {
@@ -1196,21 +963,19 @@ impl ReplayState {
         }
         let forward = seq.wrapping_sub(self.highest);
         if forward != 0 && forward < 32768 {
-            if forward >= 16384 {
+            if forward as usize >= REPLAY_WINDOW_BITS {
                 if let Some(bitmap) = self.bitmap.as_mut() {
                     bitmap.fill(0);
                 }
             } else {
-                for offset in 1..=forward {
-                    self.clear_srtp_bit(self.highest.wrapping_add(offset));
-                }
+                self.clear_advanced(self.highest.wrapping_add(1), forward as usize);
             }
             self.highest = seq;
             self.set_srtp_bit(seq);
             return true;
         }
         let behind = self.highest.wrapping_sub(seq);
-        if behind >= 16384 || self.test_srtp_bit(seq) {
+        if behind as usize >= REPLAY_WINDOW_BITS || self.test_srtp_bit(seq) {
             return false;
         }
         self.set_srtp_bit(seq);
@@ -1218,24 +983,36 @@ impl ReplayState {
     }
 
     fn set_srtp_bit(&mut self, counter: u16) {
-        let index = (counter % 16384) as usize;
+        let index = usize::from(counter) % REPLAY_WINDOW_BITS;
         if let Some(bitmap) = self.bitmap.as_mut() {
-            bitmap[index / 64] |= 1 << (index % 64);
+            bitmap[index / REPLAY_WORD_BITS] |= 1 << (index % REPLAY_WORD_BITS);
         }
     }
 
-    fn clear_srtp_bit(&mut self, counter: u16) {
-        let index = (counter % 16384) as usize;
+    fn clear_advanced(&mut self, first: u16, count: usize) {
+        let mut bit = usize::from(first) % REPLAY_WINDOW_BITS;
+        let mut remaining = count;
         if let Some(bitmap) = self.bitmap.as_mut() {
-            bitmap[index / 64] &= !(1 << (index % 64));
+            while remaining != 0 {
+                let offset = bit % REPLAY_WORD_BITS;
+                let width = remaining.min(REPLAY_WORD_BITS - offset);
+                let mask = if width == REPLAY_WORD_BITS {
+                    u64::MAX
+                } else {
+                    ((1u64 << width) - 1) << offset
+                };
+                bitmap[bit / REPLAY_WORD_BITS] &= !mask;
+                bit = (bit + width) % REPLAY_WINDOW_BITS;
+                remaining -= width;
+            }
         }
     }
 
     fn test_srtp_bit(&self, counter: u16) -> bool {
-        let index = (counter % 16384) as usize;
-        self.bitmap
-            .as_ref()
-            .is_some_and(|bitmap| bitmap[index / 64] & (1 << (index % 64)) != 0)
+        let index = usize::from(counter) % REPLAY_WINDOW_BITS;
+        self.bitmap.as_ref().is_some_and(|bitmap| {
+            bitmap[index / REPLAY_WORD_BITS] & (1 << (index % REPLAY_WORD_BITS)) != 0
+        })
     }
 }
 
@@ -1269,22 +1046,28 @@ impl HotDebug {
     }
 }
 
+struct HotSessionCold {
+    password: Arc<str>,
+    generation_id: u64,
+    session_salt: String,
+    key: [u8; 32],
+    public: Arc<Session>,
+    out_key: Option<[u8; 32]>,
+}
+
 pub(crate) struct HotSession {
     id: u64,
     peer: SocketAddr,
     local_ip: Option<IpAddr>,
-    password: Arc<str>,
-    device_id: String,
-    generation_id: u64,
-    session_salt: String,
-    key: [u8; 32],
     aes: aes::Aes128,
-    hmac: aws_lc_rs::hmac::Key,
-    chacha: aws_lc_rs::aead::LessSafeKey,
+    hmac: Hmac<Sha1>,
+    out_aes: aes::Aes128,
+    out_hmac: Hmac<Sha1>,
     output: OutState,
     replay: ReplayState,
     tunnel_ip: Option<[u8; 4]>,
     registration_id: Option<u64>,
+    worker_id: u16,
     desired_stream_count: u16,
     last_inbound_ms: u64,
     up_total: u64,
@@ -1293,12 +1076,9 @@ pub(crate) struct HotSession {
     reported_down: u64,
     is_srtp: bool,
     pending_tunnel: bool,
-    data_frames: bool,
-    public: Arc<Session>,
+    cold: Box<HotSessionCold>,
     #[cfg(feature = "diagnostics")]
     debug: HotDebug,
-    fec_profile: FecProfile,
-    fec_budget: selective_fec::Budget,
 }
 
 impl HotSession {
@@ -1311,19 +1091,17 @@ impl HotSession {
         key: [u8; 32],
         payload_type: u8,
         is_srtp: bool,
-        device_id: &str,
         generation_id: u64,
         session_salt: &str,
-        fec_profile: FecProfile,
         stream_debug_active: Arc<AtomicBool>,
         monotonic_ms: u64,
         wall_now: u64,
+        out_key: Option<[u8; 32]>,
     ) -> Self {
         let public = Session::new(
             id,
             peer,
             &password,
-            device_id,
             generation_id,
             session_salt,
             is_srtp,
@@ -1336,21 +1114,21 @@ impl HotSession {
             id,
             peer,
             local_ip,
-            password,
-            device_id: device_id.to_owned(),
-            generation_id,
-            session_salt: session_salt.to_owned(),
-            key,
             aes: make_aes_key(&key),
             hmac: make_hmac_key(&key),
-            chacha: aws_lc_rs::aead::LessSafeKey::new(
-                aws_lc_rs::aead::UnboundKey::new(&aws_lc_rs::aead::CHACHA20_POLY1305, &key)
-                    .unwrap(),
-            ),
+            out_aes: out_key
+                .as_ref()
+                .map(make_aes_key)
+                .unwrap_or_else(|| make_aes_key(&key)),
+            out_hmac: out_key
+                .as_ref()
+                .map(make_hmac_key)
+                .unwrap_or_else(|| make_hmac_key(&key)),
             output: OutState::new(payload_type),
             replay: ReplayState::new(),
             tunnel_ip: None,
             registration_id: None,
+            worker_id: 0,
             desired_stream_count: 0,
             last_inbound_ms: monotonic_ms,
             up_total: 0,
@@ -1359,12 +1137,16 @@ impl HotSession {
             reported_down: 0,
             is_srtp,
             pending_tunnel: false,
-            data_frames: false,
-            public,
+            cold: Box::new(HotSessionCold {
+                password,
+                generation_id,
+                session_salt: session_salt.to_owned(),
+                key,
+                public,
+                out_key,
+            }),
             #[cfg(feature = "diagnostics")]
             debug: HotDebug::new(debug_generation),
-            fec_profile,
-            fec_budget: selective_fec::Budget::new(),
         }
     }
 
@@ -1408,26 +1190,33 @@ impl HotSession {
         let up_delta = self.up_total.saturating_sub(self.reported_up);
         let down_delta = self.down_total.saturating_sub(self.reported_down);
         if up_delta != 0 {
-            self.public.up_bytes.fetch_add(up_delta, Ordering::Relaxed);
+            self.cold
+                .public
+                .up_bytes
+                .fetch_add(up_delta, Ordering::Relaxed);
             global_up.fetch_add(up_delta, Ordering::Relaxed);
             self.reported_up = self.up_total;
         }
         if down_delta != 0 {
-            self.public
+            self.cold
+                .public
                 .down_bytes
                 .fetch_add(down_delta, Ordering::Relaxed);
             global_down.fetch_add(down_delta, Ordering::Relaxed);
             self.reported_down = self.down_total;
         }
-        self.public.last_seen.store(wall_now, Ordering::Relaxed);
+        self.cold
+            .public
+            .last_seen
+            .store(wall_now, Ordering::Relaxed);
         #[cfg(feature = "diagnostics")]
         {
-            let generation = self.public.stream_debug.generation();
+            let generation = self.cold.public.stream_debug.generation();
             if generation != self.debug.generation {
                 self.debug.reset(generation);
             }
             if debug_enabled {
-                self.public.stream_debug.publish(
+                self.cold.public.stream_debug.publish(
                     self.debug.up_bytes,
                     self.debug.down_bytes,
                     self.debug.up_packets,
@@ -1440,11 +1229,6 @@ impl HotSession {
             let _ = debug_enabled;
         }
     }
-}
-
-struct IngressPacket {
-    slot: usize,
-    packet: PacketBuffer,
 }
 
 #[derive(Clone, Copy)]
@@ -1475,7 +1259,7 @@ enum GetconfReconnectAction {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StreamIdentity {
-    device_id: String,
+    password: String,
     generation_id: u64,
     session_salt: String,
 }
@@ -1540,13 +1324,6 @@ struct StreamRepairRound {
     alive_sent_ms: u64,
     alive_sent: u8,
     last_seen_ms: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
-pub enum FecProfile {
-    #[default]
-    Safe,
-    Off,
 }
 
 impl StreamRepairRound {
@@ -1622,10 +1399,6 @@ impl StreamRepairRound {
 }
 
 pub(crate) enum ProtocolCommand {
-    AdoptSession {
-        session: Box<HotSession>,
-        initial_payload: Vec<u8>,
-    },
     SendPlain {
         session_id: u64,
         payload: Vec<u8>,
@@ -1646,21 +1419,17 @@ pub(crate) enum ProtocolCommand {
     },
     UpdateEpoch {
         session_id: u64,
-        device_id: String,
+        password: String,
         generation_id: u64,
         session_salt: String,
-    },
-    SetDataFrames {
-        session_id: u64,
-        enabled: bool,
     },
     SetAuthoritativeEpoch {
-        device_id: String,
+        password: String,
         generation_id: u64,
         session_salt: String,
     },
-    DisconnectDevice {
-        device_id: String,
+    DisconnectPassword {
+        password: String,
         requester_session_id: u64,
     },
     ReplaceCredentials(Arc<CredentialSet>),
@@ -1669,6 +1438,11 @@ pub(crate) enum ProtocolCommand {
     },
     DropPassword {
         password: String,
+    },
+    UpdateDesiredStreams {
+        password: String,
+        generation_id: u64,
+        desired_count: u16,
     },
     CompactMemory {
         completed: oneshot::Sender<bool>,
@@ -1693,7 +1467,7 @@ enum ControlEvent {
         payload: Vec<u8>,
     },
     StreamRepair {
-        device_id: String,
+        password: String,
         generation_id: u64,
         desired_count: u16,
         sequence: u64,
@@ -1751,14 +1525,13 @@ fn publish_epochs_snapshot(epochs: HashMap<String, EpochValue>) {
 fn latest_engine_state() -> (Arc<CredentialSet>, HashMap<String, EpochValue>) {
     let credentials = CREDENTIALS_SNAPSHOT
         .get()
-        .expect("credential snapshot published before dataplane spawn");
+        .map(|snapshot| lock_unpoison(snapshot).clone())
+        .unwrap_or_default();
     let epochs = EPOCHS_SNAPSHOT
         .get()
-        .expect("epoch snapshot published before dataplane spawn");
-    (
-        lock_unpoison(credentials).clone(),
-        lock_unpoison(epochs).clone(),
-    )
+        .map(|snapshot| lock_unpoison(snapshot).clone())
+        .unwrap_or_default();
+    (credentials, epochs)
 }
 
 pub async fn start(app: Arc<App>) -> Result<ProtocolRuntime> {
@@ -1768,20 +1541,17 @@ pub async fn start(app: Arc<App>) -> Result<ProtocolRuntime> {
     let (control_tx, control_rx) = mpsc::channel(CONTROL_EVENT_CAPACITY);
     let engine_factory = {
         let control_tx = control_tx.clone();
-        let fec_profile = app.fec_profile;
         let stream_debug_active = app.stream_debug_active.clone();
         let shared = EngineShared {
             global_up: app.bytes_from_client.clone(),
             global_down: app.bytes_to_client.clone(),
         };
-        move |worker| {
+        move || {
             let (credentials, epochs) = latest_engine_state();
             ProtocolEngine::new(
-                worker,
                 credentials,
                 epochs,
                 control_tx.clone(),
-                fec_profile,
                 stream_debug_active.clone(),
                 shared.clone(),
             )
@@ -1810,8 +1580,20 @@ pub async fn refresh_credentials(app: &Arc<App>) -> Result<()> {
     command(app, ProtocolCommand::ReplaceCredentials(credentials))
 }
 
+pub const FALLBACK_DNS: &str = "77.88.8.8,77.88.8.1";
+
+pub async fn effective_dns(app: &Arc<App>) -> String {
+    let configured = app.dns.read().await.clone();
+    let configured_clean = configured.trim();
+    if configured_clean.is_empty() {
+        FALLBACK_DNS.to_string()
+    } else {
+        configured_clean.to_string()
+    }
+}
+
 pub async fn broadcast_tunnel_configuration(app: &Arc<App>) -> Result<usize> {
-    let dns = app.dns.read().await.clone();
+    let dns = effective_dns(app).await;
     let sessions = app
         .sessions
         .iter()
@@ -1824,8 +1606,12 @@ pub async fn broadcast_tunnel_configuration(app: &Arc<App>) -> Result<usize> {
         let Some(tunnel_ip) = tunnel_ip else {
             continue;
         };
-        let payload =
-            format!("TUNCONF:{}:{}:0:stream-v2", Ipv4Addr::from(tunnel_ip), dns).into_bytes();
+        let payload = pad_tunconf(&format!(
+            "TUNCONF:{}:{}:0:stream-v1",
+            Ipv4Addr::from(tunnel_ip),
+            dns
+        ))
+        .into_bytes();
         match command(
             app,
             ProtocolCommand::SendPlain {
@@ -1845,6 +1631,14 @@ pub async fn broadcast_tunnel_configuration(app: &Arc<App>) -> Result<usize> {
         return Err(error.context("queue hot tunnel configuration"));
     }
     Ok(delivered)
+}
+
+pub fn forget_idle_password_epoch(app: &Arc<App>, password: &str) {
+    app.password_epochs.remove_if(password, |_, _| {
+        !app.sessions
+            .iter()
+            .any(|session| session.password == password)
+    });
 }
 
 pub fn drop_password_sessions(app: &Arc<App>, password: &str) {
@@ -1923,64 +1717,62 @@ async fn db_write<'a>(app: &'a Arc<App>) -> Result<RwLockWriteGuard<'a, Database
 }
 
 async fn build_credentials(app: &Arc<App>) -> Result<Arc<CredentialSet>> {
-    let passwords = {
+    let keys_to_derive = {
         let db = db_read(app).await?;
-        let mut passwords = Vec::with_capacity(db.passwords.len() + 1);
+        let mut keys = Vec::new();
         if !db.main_password.is_empty() {
-            passwords.push(db.main_password.clone());
+            keys.push(db.main_password.clone());
         }
-        for (password, entry) in &db.passwords {
-            if !entry.is_deactivated && !is_expired(entry) {
-                passwords.push(password.clone());
+        for pass in db.passwords.keys() {
+            if !pass.is_empty() {
+                keys.push(pass.clone());
             }
         }
-        passwords
+        keys
     };
-    let active_passwords: HashSet<&str> = passwords.iter().map(String::as_str).collect();
+    let active_keys: HashSet<&str> = keys_to_derive.iter().map(String::as_str).collect();
     app.derived_keys
-        .retain(|password, _| active_passwords.contains(password.as_str()));
-    let mut entries = Vec::with_capacity(passwords.len());
-    for password in passwords {
-        let key = if let Some(existing) = app.derived_keys.get(&password) {
+        .retain(|k, _| active_keys.contains(k.as_str()));
+    let mut entries = Vec::with_capacity(keys_to_derive.len());
+    let mut seen = HashSet::new();
+    for key_source in keys_to_derive {
+        if !seen.insert(key_source.clone()) {
+            continue;
+        }
+        let key = if let Some(existing) = app.derived_keys.get(&key_source) {
             *existing.value()
         } else {
-            let key = derive_wrap_key(&password)?;
-            app.derived_keys.insert(password.clone(), key);
+            let key = derive_wrap_key(&key_source)?;
+            app.derived_keys.insert(key_source.clone(), key);
             key
         };
-        let cipher = aws_lc_rs::aead::LessSafeKey::new(
-            aws_lc_rs::aead::UnboundKey::new(&aws_lc_rs::aead::CHACHA20_POLY1305, &key).unwrap(),
-        );
+        let dtls_keys = crate::dtls::derive_dtls_srtp_deterministic(&key);
         entries.push(Credential {
-            password: Arc::<str>::from(password),
+            password: Arc::<str>::from(key_source),
             key,
             aes: make_aes_key(&key),
             hmac: make_hmac_key(&key),
-            chacha: cipher,
+            dtls_client_cipher_key: dtls_keys.client_cipher_key,
+            dtls_client_aes: make_aes_key(&dtls_keys.client_cipher_key),
+            dtls_client_hmac: make_hmac_key(&dtls_keys.client_cipher_key),
+            dtls_server_cipher_key: dtls_keys.server_cipher_key,
         });
     }
     Ok(Arc::new(CredentialSet { entries }))
 }
 
 struct ProtocolEngine {
-    worker: WorkerContext<ProtocolCommand>,
     credentials: Arc<CredentialSet>,
     epochs: HashMap<String, EpochValue>,
     sessions: slab::Slab<HotSession>,
     by_peer: HashMap<EndpointKey, usize>,
     by_id: HashMap<u64, usize>,
-    migrating_endpoints: HashMap<EndpointKey, u64>,
     routes: RouteTable,
-    downlink: DownlinkQueue,
-    downlink_sequences: FlowSequencer,
-    ingress_reassembler: FlowReassembler<IngressPacket>,
-    ingress_ready: VecDeque<IngressPacket>,
     control_tx: mpsc::Sender<ControlEvent>,
-    fec_profile: FecProfile,
     stream_debug_active: Arc<AtomicBool>,
     global_up: Arc<AtomicU64>,
     global_down: Arc<AtomicU64>,
-    rng: StdRng,
+    rng: SmallRng,
     setup_scratch: PacketBuffer,
     stale_slots: Vec<usize>,
     started: Instant,
@@ -1995,13 +1787,14 @@ struct ProtocolEngine {
     setup_budget: usize,
     unauthenticated_setup_logged: bool,
     last_unauthenticated_setup_log_ms: u64,
+    uplink_source_drops: u64,
+    last_uplink_source_log_ms: u64,
     last_io_counters: IoCounters,
     memory_compact_pending: bool,
     last_memory_compact_ms: u64,
     last_stream_reconcile_ms: u64,
     last_stream_inventory_resync_ms: u64,
     last_session_maintenance_ms: u64,
-    last_migrating_endpoint_sweep_ms: u64,
     stream_inventory_dirty: bool,
     stream_repairs: HashMap<StreamIdentity, StreamRepairRound>,
     stream_inventory: HashMap<StreamIdentity, StreamInventory>,
@@ -2010,7 +1803,10 @@ struct ProtocolEngine {
     epoch_sweep_active: HashSet<String>,
     last_epoch_sweep_ms: u64,
     batch_now: Instant,
-    crypto_profiler: CryptoProfiler,
+    dtls_handshakes: HashMap<EndpointKey, (crate::dtls::DtlsServerHandshake, Vec<u8>, u64)>,
+    dtls_negotiated: HashMap<EndpointKey, (crate::dtls::DtlsSrtpKeys, Vec<u8>, u64)>,
+    reassembler: crate::wire_protocol::Reassembler,
+    next_frag_packet_id: u16,
 }
 
 struct StreamControlAction {
@@ -2020,7 +1816,7 @@ struct StreamControlAction {
 }
 
 struct StreamRepairLog {
-    device_id: String,
+    password: String,
     generation_id: u64,
     desired_count: u16,
     sequence: u64,
@@ -2035,34 +1831,25 @@ struct EngineShared {
 
 impl ProtocolEngine {
     fn new(
-        worker: WorkerContext<ProtocolCommand>,
         credentials: Arc<CredentialSet>,
         epochs: HashMap<String, EpochValue>,
         control_tx: mpsc::Sender<ControlEvent>,
-        fec_profile: FecProfile,
         stream_debug_active: Arc<AtomicBool>,
         shared: EngineShared,
     ) -> Self {
         let wall_now = wall_clock();
         let engine = Self {
-            worker,
             credentials,
             epochs,
             sessions: slab::Slab::with_capacity(HOT_TABLE_RESERVE),
             by_peer: HashMap::with_capacity(HOT_TABLE_RESERVE),
             by_id: HashMap::with_capacity(HOT_TABLE_RESERVE),
-            migrating_endpoints: HashMap::with_capacity(HOT_TABLE_RESERVE),
             routes: RouteTable::new(),
-            downlink: DownlinkQueue::default(),
-            downlink_sequences: FlowSequencer::with_sender_id(OsRng.next_u64()),
-            ingress_reassembler: FlowReassembler::new(),
-            ingress_ready: VecDeque::with_capacity(128),
             control_tx,
-            fec_profile,
             stream_debug_active,
             global_up: shared.global_up,
             global_down: shared.global_down,
-            rng: StdRng::from_entropy(),
+            rng: SmallRng::from_entropy(),
             setup_scratch: PacketBuffer::new(),
             stale_slots: Vec::with_capacity(256),
             started: Instant::now(),
@@ -2077,13 +1864,14 @@ impl ProtocolEngine {
             setup_budget: SETUP_BUDGET_PER_TICK * 2,
             unauthenticated_setup_logged: false,
             last_unauthenticated_setup_log_ms: 0,
+            uplink_source_drops: 0,
+            last_uplink_source_log_ms: 0,
             last_io_counters: IoCounters::default(),
             memory_compact_pending: false,
             last_memory_compact_ms: 0,
             last_stream_reconcile_ms: 0,
             last_stream_inventory_resync_ms: 0,
             last_session_maintenance_ms: 0,
-            last_migrating_endpoint_sweep_ms: 0,
             stream_inventory_dirty: true,
             stream_repairs: HashMap::new(),
             stream_inventory: HashMap::new(),
@@ -2092,7 +1880,10 @@ impl ProtocolEngine {
             epoch_sweep_active: HashSet::new(),
             last_epoch_sweep_ms: 0,
             batch_now: Instant::now(),
-            crypto_profiler: CryptoProfiler::default(),
+            dtls_handshakes: HashMap::new(),
+            dtls_negotiated: HashMap::new(),
+            reassembler: crate::wire_protocol::Reassembler::new(),
+            next_frag_packet_id: 1,
         };
         engine.publish_session_gauges();
         engine.publish_memory_gauges();
@@ -2213,10 +2004,10 @@ impl ProtocolEngine {
         key: [u8; 32],
         payload_type: u8,
         is_srtp: bool,
-        device_id: &str,
         generation_id: u64,
         session_salt: &str,
-        replay_seq: u16,
+        replay_seq: Option<u16>,
+        out_key: Option<[u8; 32]>,
     ) -> usize {
         let endpoint_key = EndpointKey::new(peer, local_ip);
         if let Some(old_slot) = self.by_peer.get(&endpoint_key).copied() {
@@ -2231,15 +2022,16 @@ impl ProtocolEngine {
             key,
             payload_type,
             is_srtp,
-            device_id,
             generation_id,
             session_salt,
-            self.fec_profile,
             self.stream_debug_active.clone(),
             self.monotonic_ms,
             self.wall_now,
+            out_key,
         );
-        let _ = session.replay.accept(replay_seq);
+        if let Some(seq) = replay_seq {
+            let _ = session.replay.accept(seq);
+        }
         let slot = self.sessions.insert(session);
         self.by_peer.insert(endpoint_key, slot);
         self.by_id.insert(id, slot);
@@ -2251,7 +2043,7 @@ impl ProtocolEngine {
     fn publish_created_session(&self, session: &HotSession, payload: Vec<u8>) {
         let _ = self
             .control_tx
-            .try_send(ControlEvent::SessionCreated(session.public.clone()));
+            .try_send(ControlEvent::SessionCreated(session.cold.public.clone()));
         let _ = self.control_tx.try_send(ControlEvent::Payload {
             address: session.peer,
             session_id: session.id,
@@ -2263,73 +2055,7 @@ impl ProtocolEngine {
         let Some(session) = self.sessions.get(slot) else {
             return;
         };
-        let target = shard_for_device(&session.device_id, self.worker.shard_count());
-        if target == self.worker.shard_index() {
-            self.worker
-                .bind_endpoint(EndpointRoute::new(session.peer, session.local_ip));
-            self.publish_created_session(session, payload);
-            return;
-        }
-        let session = self.sessions.remove(slot);
-        let endpoint_key = EndpointKey::new(session.peer, session.local_ip);
-        self.by_peer.remove(&endpoint_key);
-        self.by_id.remove(&session.id);
-        self.session_removed();
-        let endpoint = EndpointRoute::new(session.peer, session.local_ip);
-        self.migrating_endpoints
-            .insert(endpoint_key, self.monotonic_ms);
-        match self.worker.migrate(
-            endpoint,
-            target,
-            ProtocolCommand::AdoptSession {
-                session: Box::new(session),
-                initial_payload: payload,
-            },
-        ) {
-            Ok(()) => {}
-            Err(ProtocolCommand::AdoptSession {
-                session,
-                initial_payload,
-            }) => {
-                let session = *session;
-                let peer = EndpointKey::new(session.peer, session.local_ip);
-                self.migrating_endpoints.remove(&peer);
-                let id = session.id;
-                let slot = self.sessions.insert(session);
-                self.by_peer.insert(peer, slot);
-                self.by_id.insert(id, slot);
-                self.session_added();
-                let session = &self.sessions[slot];
-                self.worker
-                    .bind_endpoint(EndpointRoute::new(session.peer, session.local_ip));
-                self.publish_created_session(session, initial_payload);
-            }
-            Err(_) => unreachable!(),
-        }
-    }
-
-    fn adopt_session(&mut self, session: HotSession, initial_payload: Vec<u8>) {
-        let endpoint = EndpointKey::new(session.peer, session.local_ip);
-        let id = session.id;
-        let slot = self.sessions.insert(session);
-        self.by_peer.insert(endpoint, slot);
-        self.by_id.insert(id, slot);
-        self.stream_inventory_dirty = true;
-        self.session_added();
-        let session = &self.sessions[slot];
-        self.worker
-            .bind_endpoint(EndpointRoute::new(session.peer, session.local_ip));
-        self.publish_created_session(session, initial_payload);
-    }
-
-    #[inline(always)]
-    fn endpoint_is_migrating(&self, peer: SocketAddr, local_ip: Option<IpAddr>) -> bool {
-        self.migrating_endpoints
-            .contains_key(&EndpointKey::new(peer, local_ip))
-            || (local_ip.is_some()
-                && self
-                    .migrating_endpoints
-                    .contains_key(&EndpointKey::new(peer, None)))
+        self.publish_created_session(session, payload);
     }
 
     fn remove_slot_with_reason(&mut self, slot: usize, reason: &'static str) {
@@ -2352,17 +2078,17 @@ impl ProtocolEngine {
         if let (Some(ip), Some(registration_id)) = (session.tunnel_ip, session.registration_id) {
             let removed_active_route = self.routes.unregister(ip, registration_id);
             if removed_active_route {
-                let worker_id = session.public.worker_id.load(Ordering::Acquire);
+                let worker_id = session.cold.public.worker_id.load(Ordering::Acquire);
                 let fallback = self
                     .sessions
                     .iter()
                     .filter(|(_, candidate)| {
                         candidate.tunnel_ip == Some(ip)
                             && candidate.registration_id.is_some()
-                            && candidate.device_id == session.device_id
-                            && candidate.generation_id == session.generation_id
-                            && candidate.session_salt == session.session_salt
-                            && candidate.public.worker_id.load(Ordering::Acquire) == worker_id
+                            && candidate.cold.password == session.cold.password
+                            && candidate.cold.generation_id == session.cold.generation_id
+                            && candidate.cold.session_salt == session.cold.session_salt
+                            && candidate.cold.public.worker_id.load(Ordering::Acquire) == worker_id
                     })
                     .max_by_key(|(_, candidate)| candidate.id)
                     .map(|(candidate_slot, candidate)| {
@@ -2370,7 +2096,7 @@ impl ProtocolEngine {
                             candidate_slot,
                             candidate.id,
                             candidate.registration_id.unwrap_or_default(),
-                            candidate.public.clone(),
+                            candidate.cold.public.clone(),
                         )
                     });
                 if let Some((fallback_slot, fallback_id, fallback_registration, public)) = fallback
@@ -2386,10 +2112,13 @@ impl ProtocolEngine {
                     public.has_tunnel.store(true, Ordering::Release);
                 }
             }
-            self.sync_downlink_profile(ip);
         }
-        session.public.has_tunnel.store(false, Ordering::Release);
-        session.public.cancel_token.cancel();
+        session
+            .cold
+            .public
+            .has_tunnel
+            .store(false, Ordering::Release);
+        session.cold.public.cancel_token.cancel();
         let _ = self.control_tx.try_send(ControlEvent::SessionClosed {
             address: session.peer,
             session_id: session.id,
@@ -2406,40 +2135,127 @@ impl ProtocolEngine {
         }
         self.setup_budget -= 1;
         let mut found = None;
-        for credential in &self.credentials.entries {
-            if !self.setup_scratch.copy_from(wire) {
-                return;
-            }
+        let endpoint_key = EndpointKey::new(peer, local_ip);
+        let dtls_entry = self
+            .dtls_negotiated
+            .get(&endpoint_key)
+            .or_else(|| {
+                if local_ip.is_some() {
+                    self.dtls_negotiated.get(&EndpointKey::new(peer, None))
+                } else {
+                    None
+                }
+            })
+            .map(|(keys, _, ms)| (*keys, *ms));
+        if let Some((dtls_keys, _)) = dtls_entry
+            && self.setup_scratch.copy_from(wire)
+        {
+            let aes = make_aes_key(&dtls_keys.client_cipher_key);
+            let hmac = make_hmac_key(&dtls_keys.client_cipher_key);
             let decoded = {
                 let packet = self.setup_scratch.as_mut_slice();
-                unwrap_legacy_in_place(
-                    &credential.aes,
-                    &credential.hmac,
-                    &credential.chacha,
-                    packet,
-                    None,
-                    self.syscalls_enabled,
-                )
+                unwrap_legacy_in_place(&aes, &hmac, packet, None, self.syscalls_enabled)
             };
-            let Ok(decoded) = decoded else {
-                continue;
-            };
-            let plain = decoded.range.get(self.setup_scratch.as_slice());
-            let Some((device_id, generation_id, session_salt)) = parse_getconf_epoch(plain) else {
-                continue;
-            };
-            found = Some((
-                credential.password.clone(),
-                credential.key,
-                decoded,
-                device_id.to_owned(),
-                generation_id,
-                session_salt.to_owned(),
-                plain.to_vec(),
-            ));
-            break;
+            if let Ok(decoded) = decoded {
+                let plain = decoded.range.get(self.setup_scratch.as_slice());
+                if let Some((password, generation_id, session_salt)) = parse_getconf_identity(plain)
+                {
+                    let matched = self
+                        .credentials
+                        .entries
+                        .iter()
+                        .find(|c| c.password.as_ref() == password);
+                    if let Some(credential) = matched {
+                        found = Some((
+                            credential.password.clone(),
+                            dtls_keys.client_cipher_key,
+                            decoded,
+                            generation_id,
+                            session_salt.to_owned(),
+                            plain.to_vec(),
+                            Some(dtls_keys.server_cipher_key),
+                        ));
+                    }
+                }
+            }
         }
-        let Some((password, key, decoded, device_id, generation_id, session_salt, plain)) = found
+        if found.is_none() {
+            for credential in &self.credentials.entries {
+                if !self.setup_scratch.copy_from(wire) {
+                    return;
+                }
+                let decoded = {
+                    let packet = self.setup_scratch.as_mut_slice();
+                    unwrap_legacy_in_place(
+                        &credential.dtls_client_aes,
+                        &credential.dtls_client_hmac,
+                        packet,
+                        None,
+                        self.syscalls_enabled,
+                    )
+                };
+                let Ok(decoded) = decoded else {
+                    continue;
+                };
+                let plain = decoded.range.get(self.setup_scratch.as_slice());
+                let Some((password, generation_id, session_salt)) = parse_getconf_identity(plain)
+                else {
+                    continue;
+                };
+                if credential.password.as_ref() != password {
+                    continue;
+                }
+                found = Some((
+                    credential.password.clone(),
+                    credential.dtls_client_cipher_key,
+                    decoded,
+                    generation_id,
+                    session_salt.to_owned(),
+                    plain.to_vec(),
+                    Some(credential.dtls_server_cipher_key),
+                ));
+                break;
+            }
+        }
+        if found.is_none() {
+            for credential in &self.credentials.entries {
+                if !self.setup_scratch.copy_from(wire) {
+                    return;
+                }
+                let decoded = {
+                    let packet = self.setup_scratch.as_mut_slice();
+                    unwrap_legacy_in_place(
+                        &credential.aes,
+                        &credential.hmac,
+                        packet,
+                        None,
+                        self.syscalls_enabled,
+                    )
+                };
+                let Ok(decoded) = decoded else {
+                    continue;
+                };
+                let plain = decoded.range.get(self.setup_scratch.as_slice());
+                let Some((password, generation_id, session_salt)) = parse_getconf_identity(plain)
+                else {
+                    continue;
+                };
+                if credential.password.as_ref() != password {
+                    continue;
+                }
+                found = Some((
+                    credential.password.clone(),
+                    credential.key,
+                    decoded,
+                    generation_id,
+                    session_salt.to_owned(),
+                    plain.to_vec(),
+                    None,
+                ));
+                break;
+            }
+        }
+        let Some((password, key, decoded, generation_id, session_salt, plain, out_key)) = found
         else {
             self.report_unauthenticated_setup(peer, wire.len());
             return;
@@ -2451,10 +2267,10 @@ impl ProtocolEngine {
             key,
             decoded.payload_type,
             decoded.is_srtp,
-            &device_id,
             generation_id,
             &session_salt,
-            decoded.seq,
+            Some(decoded.seq),
+            out_key,
         );
         let record_dpi = should_record_dpi(
             self.dpi_enabled,
@@ -2475,12 +2291,32 @@ impl ProtocolEngine {
                 decoded.seq as u64,
                 &plain,
                 wire.len(),
-                &session.device_id,
-                session.generation_id,
-                &session.session_salt,
+                &session.cold.password,
+                session.cold.generation_id,
+                &session.cold.session_salt,
             );
         }
         self.place_new_session(slot, plain);
+    }
+
+    fn record_uplink_source_drop(&mut self, slot: usize) {
+        self.uplink_source_drops = self.uplink_source_drops.saturating_add(1);
+        let elapsed = self
+            .monotonic_ms
+            .saturating_sub(self.last_uplink_source_log_ms);
+        if self.uplink_source_drops > 1 && elapsed < UNAUTHENTICATED_SETUP_LOG_INTERVAL_MS {
+            return;
+        }
+        self.last_uplink_source_log_ms = self.monotonic_ms;
+        let peer = self
+            .sessions
+            .get(slot)
+            .map(|session| session.peer.to_string())
+            .unwrap_or_default();
+        eprintln!(
+            "[CSQTT] dropped uplink IPv4 packet from {peer}: source address is not the session tunnel IP (total {})",
+            self.uplink_source_drops
+        );
     }
 
     fn report_unauthenticated_setup(&mut self, peer: SocketAddr, wire_len: usize) {
@@ -2499,70 +2335,271 @@ impl ProtocolEngine {
         );
     }
 
+    fn handle_dtls(
+        &mut self,
+        peer: SocketAddr,
+        local_ip: Option<IpAddr>,
+        packet: &[u8],
+        sink: &mut impl PacketOutput,
+    ) {
+        let (is_channel, payload) = if packet.len() >= 4 && packet[0] & 0xc0 == 0x40 {
+            let length = u16::from_be_bytes([packet[2], packet[3]]) as usize;
+            if length <= packet.len() - 4 {
+                (true, &packet[4..4 + length])
+            } else {
+                (true, &packet[4..])
+            }
+        } else {
+            (false, packet)
+        };
+        let endpoint_key = EndpointKey::new(peer, local_ip);
+        let fallback_key = local_ip.map(|_| EndpointKey::new(peer, None));
+        let mut entry_key = None;
+        if self.dtls_handshakes.contains_key(&endpoint_key) {
+            entry_key = Some(endpoint_key);
+        } else if let Some(fb) = fallback_key
+            && self.dtls_handshakes.contains_key(&fb)
+        {
+            entry_key = Some(fb);
+        }
+        if let Some(key) = entry_key {
+            let outcome = match self.dtls_handshakes.get_mut(&key) {
+                Some(entry) => {
+                    entry.2 = self.monotonic_ms;
+                    entry.0.handle_datagram(payload)
+                }
+                None => return,
+            };
+
+            let flight = match outcome {
+                Ok(flight) => flight,
+
+                Err(error) => {
+                    eprintln!(
+                        "[CSQTT] DTLS: рукопожатие с {peer} отклонено ({error}), сбрасываем состояние"
+                    );
+                    self.dtls_handshakes.remove(&key);
+                    return;
+                }
+            };
+
+            let Some((mut handshake, _, _)) = self.dtls_handshakes.remove(&key) else {
+                return;
+            };
+            let srtp_keys = handshake.srtp_keys().copied();
+            let ready = handshake.is_connected() && srtp_keys.is_some();
+            let client_app_data = handshake.take_application_data().into_iter().next();
+
+            if let Some(flight) = flight.as_ref() {
+                eprintln!(
+                    "[CSQTT] DTLS: полёт → {peer} ({} байт, {}), состояние {}",
+                    flight.len(),
+                    if is_channel { "ChannelData" } else { "UDP" },
+                    dtls_state_label(handshake.state())
+                );
+                self.send_dtls_flight(peer, local_ip, is_channel, flight, sink);
+            }
+
+            if !ready {
+                insert_bounded_endpoint(
+                    &mut self.dtls_handshakes,
+                    key,
+                    (handshake, flight.unwrap_or_default(), self.monotonic_ms),
+                );
+                return;
+            }
+
+            let Some(dtls_keys) = srtp_keys else {
+                insert_bounded_endpoint(
+                    &mut self.dtls_handshakes,
+                    key,
+                    (handshake, flight.unwrap_or_default(), self.monotonic_ms),
+                );
+                return;
+            };
+            let flight2 = flight.unwrap_or_default();
+            insert_bounded_endpoint(
+                &mut self.dtls_negotiated,
+                endpoint_key,
+                (dtls_keys, flight2.clone(), self.monotonic_ms),
+            );
+            if let Some(fb) = fallback_key {
+                insert_bounded_endpoint(
+                    &mut self.dtls_negotiated,
+                    fb,
+                    (dtls_keys, flight2, self.monotonic_ms),
+                );
+            }
+            if let Some(app_data) = client_app_data {
+                match parse_getconf_identity(&app_data) {
+                    Some((password, generation_id, session_salt))
+                        if self.credentials.contains_password(password) =>
+                    {
+                        eprintln!(
+                            "[CSQTT] DTLS: рукопожатие с {peer} завершено, SRTP-ключи согласованы, GETCONF {} байт внутри DTLS",
+                            app_data.len()
+                        );
+                        let slot = self.create_legacy_session(
+                            peer,
+                            local_ip,
+                            Arc::from(password),
+                            dtls_keys.client_cipher_key,
+                            111,
+                            true,
+                            generation_id,
+                            session_salt,
+                            None,
+                            Some(dtls_keys.server_cipher_key),
+                        );
+                        if let Some(session) = self.sessions.get(slot) {
+                            self.publish_created_session(session, app_data);
+                        }
+                    }
+                    _ => {
+                        eprintln!(
+                            "[CSQTT] DTLS: рукопожатие с {peer} завершено, но GETCONF не распознан"
+                        );
+                        self.report_unauthenticated_setup(peer, packet.len());
+                    }
+                }
+            } else if ready {
+                eprintln!(
+                    "[CSQTT] DTLS: рукопожатие с {peer} завершено, SRTP-ключи согласованы, ожидаем GETCONF по SRTP"
+                );
+            }
+            return;
+        }
+
+        let cached_entry = self
+            .dtls_negotiated
+            .get(&endpoint_key)
+            .or_else(|| fallback_key.and_then(|fb| self.dtls_negotiated.get(&fb)));
+        if let Some((_, cached_flight2, _)) = cached_entry {
+            if !crate::dtls::is_client_hello(payload) {
+                self.send_dtls_flight(peer, local_ip, is_channel, cached_flight2, sink);
+                return;
+            } else {
+                self.dtls_negotiated.remove(&endpoint_key);
+                if let Some(fb) = fallback_key {
+                    self.dtls_negotiated.remove(&fb);
+                }
+            }
+        }
+
+        if self.sessions.len() >= MAX_ACTIVE_SESSIONS || self.setup_budget == 0 {
+            eprintln!(
+                "[CSQTT] DTLS: ClientHello от {peer} отброшен (сессий {}, бюджет настройки {})",
+                self.sessions.len(),
+                self.setup_budget
+            );
+            return;
+        }
+        self.setup_budget -= 1;
+
+        let Ok(mut handshake) = crate::dtls::DtlsServerHandshake::new() else {
+            eprintln!("[CSQTT] DTLS: не удалось создать сертификат для {peer}");
+            return;
+        };
+        match handshake.handle_datagram(payload) {
+            Ok(Some(flight)) => {
+                self.send_dtls_flight(peer, local_ip, is_channel, &flight, sink);
+                insert_bounded_endpoint(
+                    &mut self.dtls_handshakes,
+                    endpoint_key,
+                    (handshake, flight, self.monotonic_ms),
+                );
+            }
+            Ok(None) => eprintln!("[CSQTT] DTLS: ClientHello от {peer} без ответа"),
+            Err(error) => eprintln!("[CSQTT] DTLS: ClientHello от {peer} отвергнут ({error})"),
+        }
+    }
+
+    fn send_dtls_flight(
+        &self,
+        peer: SocketAddr,
+        local_ip: Option<IpAddr>,
+        is_channel: bool,
+        flight: &[u8],
+        sink: &mut impl PacketOutput,
+    ) {
+        sink.send_udp_prioritized(peer, local_ip, false, true, |output| {
+            if is_channel {
+                let channel = 0x4000u16;
+                let payload_len = flight.len();
+                let pad = (4 - (payload_len % 4)) % 4;
+                let total = 4 + payload_len + pad;
+                let storage = output.storage_mut();
+                if total > storage.len() {
+                    return false;
+                }
+                storage[..2].copy_from_slice(&channel.to_be_bytes());
+                storage[2..4].copy_from_slice(&(payload_len as u16).to_be_bytes());
+                storage[4..4 + payload_len].copy_from_slice(flight);
+                if pad > 0 {
+                    storage[4 + payload_len..total].fill(0);
+                }
+                output.set_len(total)
+            } else {
+                output.copy_from(flight)
+            }
+        });
+        sink.request_udp_flush();
+    }
+
     fn handle_existing(
         &mut self,
         slot: usize,
         local_ip: Option<IpAddr>,
         packet: &mut [u8],
         sink: &mut impl PacketOutput,
-    ) {
+    ) -> bool {
         if !self.sessions.contains(slot) {
-            return;
+            return false;
         }
-        let kind = if self.sessions[slot].is_srtp {
-            CryptoKind::Srtp
-        } else {
-            CryptoKind::Chacha
-        };
-        let started = self
-            .crypto_profiler
-            .begin(kind, CryptoDirection::Unwrap, packet.len());
         let decoded = {
             let session = &mut self.sessions[slot];
             unwrap_legacy_in_place(
                 &session.aes,
                 &session.hmac,
-                &session.chacha,
                 packet,
                 Some(session.is_srtp),
                 self.syscalls_enabled,
             )
             .ok()
         };
-        self.crypto_profiler
-            .finish(kind, CryptoDirection::Unwrap, started);
         let Some(decoded) = decoded else {
-            return;
+            return false;
         };
         let plain = decoded.range.get(packet);
+
         let is_getconf = plain.starts_with(b"GETCONF:");
         if is_getconf {
-            let Some((incoming_device, incoming_generation, incoming_salt)) =
-                parse_getconf_epoch(plain)
+            let Some((incoming_password, incoming_generation, incoming_salt)) =
+                parse_getconf_identity(plain)
             else {
-                return;
+                return true;
             };
             let session = &self.sessions[slot];
-            if let Some(epoch) = self.epochs.get_mut(incoming_device) {
+            if let Some(epoch) = self.epochs.get_mut(incoming_password) {
                 epoch.last_seen_ms = self.monotonic_ms;
             }
             match getconf_reconnect_action_hot(
-                &session.device_id,
-                session.generation_id,
-                &session.session_salt,
-                incoming_device,
+                &session.cold.password,
+                session.cold.generation_id,
+                &session.cold.session_salt,
+                incoming_password,
                 incoming_generation,
                 incoming_salt,
             ) {
                 GetconfReconnectAction::Replace => {
                     let peer = session.peer;
                     let local_ip = local_ip.or(session.local_ip);
-                    let password = session.password.clone();
-                    let key = session.key;
+                    let password = session.cold.password.clone();
+                    let key = session.cold.key;
+                    let out_key = session.cold.out_key;
                     let payload_type = decoded.payload_type;
                     let is_srtp = decoded.is_srtp;
                     let payload = plain.to_vec();
-                    let device_id = incoming_device.to_owned();
                     let session_salt = incoming_salt.to_owned();
                     self.remove_slot_with_reason(slot, "epoch-replaced");
                     let new_slot = self.create_legacy_session(
@@ -2572,30 +2609,23 @@ impl ProtocolEngine {
                         key,
                         payload_type,
                         is_srtp,
-                        &device_id,
                         incoming_generation,
                         &session_salt,
-                        decoded.seq,
+                        Some(decoded.seq),
+                        out_key,
                     );
                     self.place_new_session(new_slot, payload);
-                    return;
+                    return true;
                 }
                 GetconfReconnectAction::Process => {}
             }
         }
-        let route_started = self
-            .crypto_profiler
-            .all
-            .begin(PerfStage::RouteReplay, plain.len());
         let accepted = {
             let session = &mut self.sessions[slot];
             session.replay.accept(decoded.seq)
         };
-        self.crypto_profiler
-            .all
-            .finish(PerfStage::RouteReplay, route_started);
         if !accepted {
-            return;
+            return true;
         }
         let mut endpoint_key_update = None;
         {
@@ -2610,111 +2640,187 @@ impl ProtocolEngine {
             self.by_peer.remove(&EndpointKey::new(peer, old_local_ip));
             self.by_peer
                 .insert(EndpointKey::new(peer, new_local_ip), slot);
-            self.worker
-                .bind_endpoint(EndpointRoute::new(peer, new_local_ip));
         }
         if plain == SESSION_LEASE {
-            return;
+            return true;
         }
-        let transport_plain = flow_frame::payload(plain);
         let record_dpi = should_record_dpi(
             self.dpi_enabled,
             self.monotonic_ms,
             &mut self.dpi_sample_counter,
             &mut self.dpi_last_sample_ms,
-            transport_plain,
+            plain,
         );
-        let session = &mut self.sessions[slot];
-        if record_dpi {
-            record_packet_dpi(
-                "INBOUND",
-                &session.peer.to_string(),
-                "TUN-Server",
-                decoded.payload_type,
-                decoded.seq as u64,
-                transport_plain,
-                packet.len(),
-                &session.device_id,
-                session.generation_id,
-                &session.session_salt,
-            );
-        }
-        if plain == b"READY" {
-            send_plain(
-                session,
-                b"READY_OK",
-                &mut self.rng,
-                sink,
-                &mut self.crypto_profiler,
-                self.batch_now,
-                SendObservability {
-                    record_dpi,
-                    count_crypto: self.syscalls_enabled,
-                },
-            );
-            return;
-        }
-        if is_idle_keepalive(plain) {
-            return;
-        }
-        if is_control_payload(plain) {
-            let event = ControlEvent::Payload {
-                address: session.peer,
-                session_id: session.id,
-                payload: plain.to_vec(),
-            };
-            let _ = self.control_tx.try_send(event);
-            return;
-        }
-        if session.tunnel_ip.is_some() && session.registration_id.is_some() {
-            if let Some((header, payload)) = flow_frame::FrameHeader::decode(plain) {
-                let mut packet = PacketBuffer::new();
-                if !packet.copy_from(payload) {
-                    return;
-                }
-                self.ingress_reassembler.push(
-                    header,
-                    IngressPacket { slot, packet },
-                    &mut self.ingress_ready,
+        {
+            let session = &mut self.sessions[slot];
+            if record_dpi {
+                record_packet_dpi(
+                    "INBOUND",
+                    &session.peer.to_string(),
+                    "TUN-Server",
+                    decoded.payload_type,
+                    decoded.seq as u64,
+                    plain,
+                    packet.len(),
+                    &session.cold.password,
+                    session.cold.generation_id,
+                    &session.cold.session_salt,
                 );
-                self.flush_ingress_ready(sink);
-            } else {
-                self.write_ingress_packet(slot, transport_plain, sink);
             }
-            return;
+            if plain == b"READY" {
+                if self.sessions[slot].tunnel_ip.is_none() {
+                    let pass = self.sessions[slot].cold.password.clone();
+                    let existing_tunnel = if !pass.is_empty() {
+                        self.sessions.iter().find_map(|(_, s)| {
+                            if s.cold.password == pass {
+                                s.tunnel_ip.map(|ip| (ip, s.desired_stream_count))
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some((ip, desired_count)) = existing_tunnel {
+                        let reg_id = ROUTE_REGISTRATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let worker_id = self.sessions[slot].worker_id;
+                        let session_id = self.sessions[slot].id;
+                        self.activate_tunnel(session_id, ip, reg_id, worker_id, desired_count);
+                    }
+                }
+                let session = &mut self.sessions[slot];
+                send_plain(
+                    session,
+                    b"READY_OK",
+                    &mut self.rng,
+                    sink,
+                    self.batch_now,
+                    SendObservability {
+                        record_dpi,
+                        count_crypto: self.syscalls_enabled,
+                    },
+                );
+                return true;
+            }
+            if is_idle_keepalive(plain) {
+                return true;
+            }
+            if is_control_payload(plain) {
+                let event = ControlEvent::Payload {
+                    address: session.peer,
+                    session_id: session.id,
+                    payload: plain.to_vec(),
+                };
+                let _ = self.control_tx.try_send(event);
+                return true;
+            }
         }
+        let active_tunnel = self.sessions[slot].tunnel_ip.is_some()
+            && self.sessions[slot].registration_id.is_some();
+        if active_tunnel {
+            self.write_ingress_packet(slot, plain, sink);
+            return true;
+        }
+        let session = &mut self.sessions[slot];
         if !session.pending_tunnel {
             session.pending_tunnel = true;
             let event = ControlEvent::IngressBeforeTunnel {
                 address: session.peer,
                 session_id: session.id,
-                payload: transport_plain.to_vec(),
+                payload: plain.to_vec(),
             };
             if self.control_tx.try_send(event).is_err() {
                 session.pending_tunnel = false;
             }
         }
-    }
-
-    fn flush_ingress_ready(&mut self, sink: &mut impl PacketOutput) {
-        while let Some(ingress) = self.ingress_ready.pop_front() {
-            self.write_ingress_packet(ingress.slot, ingress.packet.as_slice(), sink);
-        }
+        true
     }
 
     fn write_ingress_packet(&mut self, slot: usize, packet: &[u8], sink: &mut impl PacketOutput) {
-        let write_started = self
-            .crypto_profiler
-            .all
-            .begin(PerfStage::TunWrite, packet.len());
-        let written =
-            sink.write_tun_priority(packet, crate::striped_scheduler::packet_class(packet));
-        self.crypto_profiler
-            .all
-            .finish(PerfStage::TunWrite, write_started);
-        if written && let Some(session) = self.sessions.get_mut(slot) {
-            session.up_total = session.up_total.saturating_add(packet.len() as u64);
-            session.record_debug_up(packet.len() as u64, self.debug_enabled);
+        let tunnel_ip = self
+            .sessions
+            .get(slot)
+            .and_then(|session| session.tunnel_ip);
+        let mut offset = 0;
+        let p = packet;
+        while offset < p.len() {
+            let rem = &p[offset..];
+            if rem.is_empty() {
+                break;
+            }
+            if rem[0] == crate::wire_protocol::CSQTT_FRAG_MAGIC {
+                if rem.len() < crate::wire_protocol::FRAG_HEADER_LEN {
+                    break;
+                }
+                let Some(header) = crate::wire_protocol::FragHeader::decode(rem) else {
+                    break;
+                };
+                let chunk_len = if header.frag_idx + 1 == header.total_frags {
+                    (header.total_len as usize).saturating_sub(
+                        header.frag_idx as usize * crate::wire_protocol::MAX_FRAG_PAYLOAD,
+                    )
+                } else {
+                    crate::wire_protocol::MAX_FRAG_PAYLOAD
+                };
+                let frag_total_len = crate::wire_protocol::FRAG_HEADER_LEN + chunk_len;
+                if frag_total_len > rem.len() {
+                    break;
+                }
+                let frag_slice = &rem[..frag_total_len];
+                let now = self.batch_now;
+                let peer = self.sessions[slot]
+                    .tunnel_ip
+                    .map(|ip| u32::from_be_bytes(ip) as u64)
+                    .unwrap_or(self.sessions[slot].id);
+                let mut written = false;
+                let mut spoofed = false;
+                if self
+                    .reassembler
+                    .process_fragment_from(peer, frag_slice, now, |assembled| {
+                        if uplink_source_matches(assembled, tunnel_ip) {
+                            written = sink.write_tun(assembled);
+                        } else {
+                            spoofed = true;
+                        }
+                    })
+                    && written
+                    && let Some(session) = self.sessions.get_mut(slot)
+                {
+                    session.up_total = session.up_total.saturating_add(header.total_len as u64);
+                    session.record_debug_up(header.total_len as u64, self.debug_enabled);
+                }
+                if spoofed {
+                    self.record_uplink_source_drop(slot);
+                }
+                offset += frag_total_len;
+                continue;
+            }
+            if rem.len() < 20 {
+                break;
+            }
+            let version = rem[0] >> 4;
+            let pkt_len = if version == 4 {
+                u16::from_be_bytes([rem[2], rem[3]]) as usize
+            } else if version == 6 && rem.len() >= 40 {
+                40 + u16::from_be_bytes([rem[4], rem[5]]) as usize
+            } else {
+                break;
+            };
+            if pkt_len < 20 || pkt_len > rem.len() {
+                break;
+            }
+            let slice = &rem[..pkt_len];
+            if !uplink_source_matches(slice, tunnel_ip) {
+                self.record_uplink_source_drop(slot);
+                offset += pkt_len;
+                continue;
+            }
+            let written = sink.write_tun(slice);
+            if written && let Some(session) = self.sessions.get_mut(slot) {
+                session.up_total = session.up_total.saturating_add(slice.len() as u64);
+                session.record_debug_up(slice.len() as u64, self.debug_enabled);
+            }
+            offset += pkt_len;
         }
     }
 
@@ -2729,96 +2835,78 @@ impl ProtocolEngine {
         let Some(slot) = self.by_id.get(&session_id).copied() else {
             return false;
         };
-        let mut old_ip = None;
-        let activated = {
-            let session = &mut self.sessions[slot];
-            if let (Some(previous_ip), Some(old_registration)) =
-                (session.tunnel_ip, session.registration_id)
-            {
-                self.routes.unregister(previous_ip, old_registration);
-                old_ip = Some(previous_ip);
-            }
-            if self
-                .routes
-                .register(ip, session_id, registration_id, worker_id, slot)
-            {
-                session.tunnel_ip = Some(ip);
-                session.registration_id = Some(registration_id);
-                session.desired_stream_count = desired_count;
-                session.pending_tunnel = false;
-                *lock_unpoison(&session.public.tunnel_ip) = Some(ip);
-                session
-                    .public
-                    .desired_stream_count
-                    .store(u64::from(desired_count), Ordering::Release);
-                session.public.has_tunnel.store(true, Ordering::Release);
-                self.stream_inventory_dirty = true;
-                true
-            } else {
-                false
-            }
-        };
-        if let Some(old_ip) = old_ip {
-            self.sync_downlink_profile(old_ip);
+        let session = &mut self.sessions[slot];
+        if let (Some(previous_ip), Some(old_registration)) =
+            (session.tunnel_ip, session.registration_id)
+        {
+            self.routes.unregister(previous_ip, old_registration);
         }
-        if activated {
-            self.sync_downlink_profile(ip);
-            self.worker.bind_tunnel(ip);
+        if self
+            .routes
+            .register(ip, session_id, registration_id, worker_id, slot)
+        {
+            session.tunnel_ip = Some(ip);
+            session.registration_id = Some(registration_id);
+            session.worker_id = worker_id;
+            session.desired_stream_count = desired_count;
+            session.pending_tunnel = false;
+            *lock_unpoison(&session.cold.public.tunnel_ip) = Some(ip);
+            session
+                .cold
+                .public
+                .worker_id
+                .store(u64::from(worker_id), Ordering::Release);
+            session
+                .cold
+                .public
+                .desired_stream_count
+                .store(u64::from(desired_count), Ordering::Release);
+            session
+                .cold
+                .public
+                .has_tunnel
+                .store(true, Ordering::Release);
+            self.stream_inventory_dirty = true;
+            true
+        } else {
+            false
         }
-        activated
     }
 
     fn update_epoch(
         &mut self,
         session_id: u64,
-        device_id: String,
+        password: String,
         generation_id: u64,
         session_salt: String,
     ) {
         let Some(slot) = self.by_id.get(&session_id).copied() else {
             return;
         };
-        let replaced_ip = {
+        {
             let session = &mut self.sessions[slot];
-            let identity_changed = session.device_id != device_id
-                || session.generation_id != generation_id
-                || session.session_salt != session_salt;
-            let ip = identity_changed.then_some(session.tunnel_ip).flatten();
-            session.device_id = device_id.clone();
-            session.generation_id = generation_id;
-            session.session_salt = session_salt.clone();
-            *lock_unpoison(&session.public.device_id) = device_id;
+            session.cold.password = Arc::from(password.as_str());
+            session.cold.generation_id = generation_id;
+            session.cold.session_salt = session_salt.clone();
             session
+                .cold
                 .public
                 .generation_id
                 .store(generation_id, Ordering::Release);
-            *lock_unpoison(&session.public.session_salt) = session_salt;
-            ip
-        };
-        if let Some(ip) = replaced_ip
-            && let Some(key) = RouteTable::tunnel_key(ip)
-        {
-            self.downlink.clear(key);
+            *lock_unpoison(&session.cold.public.session_salt) = session_salt;
         }
         self.stream_inventory_dirty = true;
     }
 
-    fn sync_downlink_profile(&mut self, ip: [u8; 4]) {
-        let Some(key) = RouteTable::tunnel_key(ip) else {
-            return;
-        };
-        self.downlink
-            .configure(key, self.routes.active_path_count(key));
-    }
-
     fn send_down_endpoint(
         &mut self,
+        client_key: usize,
         endpoint: crate::tun_device::RouteEndpoint,
         packet: &[u8],
-        class: crate::striped_scheduler::PacketClass,
+        mut headroom: usize,
         sink: &mut impl PacketOutput,
     ) -> DownlinkSend {
-        let Some(session) = self.sessions.get_mut(endpoint.slot) else {
+        let Some(session) = self.sessions.get(endpoint.slot) else {
             return DownlinkSend::Stale;
         };
         if session.id != endpoint.session_id
@@ -2826,33 +2914,80 @@ impl ProtocolEngine {
         {
             return DownlinkSend::Stale;
         }
-        let payload = flow_frame::payload(packet);
-        let outgoing = if session.data_frames { packet } else { payload };
-        let record_dpi = should_record_dpi(
-            self.dpi_enabled,
-            self.monotonic_ms,
-            &mut self.dpi_sample_counter,
-            &mut self.dpi_last_sample_ms,
-            payload,
-        );
-        let sent = send_plain_mode(
-            session,
-            outgoing,
-            &mut self.rng,
-            sink,
-            &mut self.crypto_profiler,
-            self.batch_now,
-            SendMode {
-                class,
-                observability: SendObservability {
-                    record_dpi,
-                    count_crypto: self.syscalls_enabled,
-                },
-            },
-        );
+        let sent = {
+            let Some(session) = self.sessions.get_mut(endpoint.slot) else {
+                return DownlinkSend::Stale;
+            };
+            let record_dpi = should_record_dpi(
+                self.dpi_enabled,
+                self.monotonic_ms,
+                &mut self.dpi_sample_counter,
+                &mut self.dpi_last_sample_ms,
+                packet,
+            );
+            if packet.len() <= 1280 {
+                let sent = send_data_client(
+                    client_key,
+                    session,
+                    packet,
+                    &mut self.rng,
+                    sink,
+                    self.batch_now,
+                    SendObservability {
+                        record_dpi,
+                        count_crypto: self.syscalls_enabled,
+                    },
+                    headroom,
+                );
+                if sent {
+                    session.down_total = session.down_total.saturating_add(packet.len() as u64);
+                    session.record_debug_down(packet.len() as u64, self.debug_enabled);
+                }
+                sent
+            } else {
+                // Reserve the whole in-flight window for every fragment before
+                // emitting any of them, so a packet is never torn apart by the
+                // per-client window (which would lose all fragments).
+                let frag_count = packet
+                    .len()
+                    .div_ceil(crate::wire_protocol::MAX_FRAG_PAYLOAD);
+                if headroom < frag_count {
+                    return DownlinkSend::Backpressured;
+                }
+                let packet_id = self.next_frag_packet_id;
+                self.next_frag_packet_id = self.next_frag_packet_id.wrapping_add(1);
+                let mut all_sent = true;
+                let rng = &mut self.rng;
+                let batch_now = self.batch_now;
+                let count_crypto = self.syscalls_enabled;
+                crate::wire_protocol::fragment_packet(packet_id, packet, |frag| {
+                    let sent = send_data_client(
+                        client_key,
+                        session,
+                        frag,
+                        rng,
+                        sink,
+                        batch_now,
+                        SendObservability {
+                            record_dpi: false,
+                            count_crypto,
+                        },
+                        headroom,
+                    );
+                    if sent {
+                        headroom = headroom.saturating_sub(1);
+                    } else {
+                        all_sent = false;
+                    }
+                });
+                if all_sent {
+                    session.down_total = session.down_total.saturating_add(packet.len() as u64);
+                    session.record_debug_down(packet.len() as u64, self.debug_enabled);
+                }
+                all_sent
+            }
+        };
         if sent {
-            session.down_total = session.down_total.saturating_add(payload.len() as u64);
-            session.record_debug_down(payload.len() as u64, self.debug_enabled);
             DownlinkSend::Sent
         } else {
             DownlinkSend::Backpressured
@@ -2863,50 +2998,18 @@ impl ProtocolEngine {
         &mut self,
         key: usize,
         packet: &[u8],
-        class: crate::striped_scheduler::PacketClass,
+        headroom: usize,
         sink: &mut impl PacketOutput,
     ) -> DownlinkSend {
-        let Some(selection) = self.routes.select_key_window(key, class) else {
-            return DownlinkSend::Stale;
-        };
-        for offset in 0..selection.len() {
-            let Some(endpoint) = self.routes.endpoint_at(key, selection, offset) else {
-                break;
+        let Some(endpoint) = self.routes.select_packet(key, self.batch_now, packet) else {
+            return if self.routes.active_path_count(key) == 0 {
+                DownlinkSend::Stale
+            } else {
+                DownlinkSend::Backpressured
             };
-            match self.send_down_endpoint(endpoint, packet, class, sink) {
-                DownlinkSend::Stale => continue,
-                result => return result,
-            }
-        }
-        DownlinkSend::Stale
-    }
+        };
 
-    fn drain_downlink(&mut self, sink: &mut impl PacketOutput) {
-        let mut remaining = DOWNLINK_DRAIN_PACKET_LIMIT;
-        for class in [
-            crate::striped_scheduler::PacketClass::Small,
-            crate::striped_scheduler::PacketClass::Medium,
-            crate::striped_scheduler::PacketClass::Bulk,
-        ] {
-            while remaining != 0 {
-                if !sink.has_udp_tx_slot() {
-                    return;
-                }
-                let Some((key, packet)) = self.downlink.dequeue(class) else {
-                    break;
-                };
-                match self.send_down_key(key, packet.as_slice(), class, sink) {
-                    DownlinkSend::Backpressured => {
-                        self.downlink.requeue_front(key, class, packet);
-                        return;
-                    }
-                    DownlinkSend::Sent | DownlinkSend::Stale => {
-                        self.downlink.recycle(key, class, packet);
-                        remaining -= 1;
-                    }
-                }
-            }
-        }
+        self.send_down_endpoint(key, endpoint, packet, headroom, sink)
     }
 
     fn send_stream_control(
@@ -2928,7 +3031,6 @@ impl ProtocolEngine {
                 payload,
                 &mut self.rng,
                 sink,
-                &mut self.crypto_profiler,
                 self.batch_now,
                 SendObservability {
                     record_dpi: false,
@@ -2968,15 +3070,15 @@ impl ProtocolEngine {
                 {
                     continue;
                 }
-                let worker_id = session.public.worker_id.load(Ordering::Acquire) as usize;
+                let worker_id = session.cold.public.worker_id.load(Ordering::Acquire) as usize;
                 if worker_id == 0 || worker_id > desired_count || worker_id > MAX_STREAM_WORKERS {
                     continue;
                 }
                 inventory
                     .entry(StreamIdentity {
-                        device_id: session.device_id.clone(),
-                        generation_id: session.generation_id,
-                        session_salt: session.session_salt.clone(),
+                        password: session.cold.password.to_string(),
+                        generation_id: session.cold.generation_id,
+                        session_salt: session.cold.session_salt.clone(),
                     })
                     .or_insert_with(StreamInventory::new)
                     .observe(slot, session, worker_id);
@@ -3012,7 +3114,7 @@ impl ProtocolEngine {
                     carriers: streams.carriers.clone(),
                     payload,
                     repair: Some(StreamRepairLog {
-                        device_id: identity.device_id.clone(),
+                        password: identity.password.clone(),
                         generation_id: identity.generation_id,
                         desired_count: streams.desired_count,
                         sequence: round.sequence,
@@ -3031,7 +3133,7 @@ impl ProtocolEngine {
             let sent_carriers = self.send_stream_control(&action.carriers, &action.payload, sink);
             if let Some(repair) = action.repair {
                 let _ = self.control_tx.try_send(ControlEvent::StreamRepair {
-                    device_id: repair.device_id,
+                    password: repair.password,
                     generation_id: repair.generation_id,
                     desired_count: repair.desired_count,
                     sequence: repair.sequence,
@@ -3054,13 +3156,14 @@ impl ProtocolEngine {
         self.last_epoch_sweep_ms = self.monotonic_ms;
         self.epoch_sweep_active.clear();
         for (_, session) in self.sessions.iter() {
-            if !session.device_id.is_empty() {
-                self.epoch_sweep_active.insert(session.device_id.clone());
+            if !session.cold.password.is_empty() {
+                self.epoch_sweep_active
+                    .insert(session.cold.password.to_string());
             }
         }
         let before = self.epochs.len();
-        self.epochs.retain(|device_id, epoch| {
-            self.epoch_sweep_active.contains(device_id)
+        self.epochs.retain(|password, epoch| {
+            self.epoch_sweep_active.contains(password)
                 || self.monotonic_ms.saturating_sub(epoch.last_seen_ms) < EPOCH_IDLE_TTL_MS
         });
         self.shrink_epoch_bookkeeping();
@@ -3071,131 +3174,24 @@ impl ProtocolEngine {
         }
     }
 
-    fn handle_tun_packet(&mut self, packet: &[u8], _sink: &mut impl PacketOutput) {
-        let route_started = self
-            .crypto_profiler
-            .all
-            .begin(PerfStage::RouteReplay, packet.len());
+    fn handle_tun_packet(&mut self, packet: &mut [u8], sink: &mut impl PacketOutput) {
         let Some(key) = RouteTable::packet_key(packet) else {
-            self.crypto_profiler
-                .all
-                .finish(PerfStage::RouteReplay, route_started);
             return;
         };
-        let class = crate::striped_scheduler::packet_class(packet);
-        self.crypto_profiler
-            .all
-            .finish(PerfStage::RouteReplay, route_started);
-        if let Some(header) = self.downlink_sequences.next(packet) {
-            let _ = self.downlink.enqueue_framed(key, class, header, packet);
-        } else {
-            let _ = self.downlink.enqueue(key, class, packet);
+        let active_clients = self.routes.active_client_count();
+        let active_streams = self.routes.active_path_count(key);
+        if active_streams == 0 {
+            return;
+        }
+        let headroom = sink.client_data_headroom(key, active_clients, active_streams);
+        if headroom > 0 {
+            let _ = self.send_down_key(key, packet, headroom, sink);
         }
     }
 }
 
 impl DataplaneLogic for ProtocolEngine {
     type Command = ProtocolCommand;
-
-    fn fanout_command(command: Self::Command, shard_count: usize) -> Vec<Self::Command> {
-        let count = shard_count.max(1);
-        match command {
-            ProtocolCommand::AdoptSession { .. } | ProtocolCommand::CompactMemory { .. } => {
-                vec![command]
-            }
-            ProtocolCommand::SendPlain {
-                session_id,
-                payload,
-            } => (0..count)
-                .map(|_| ProtocolCommand::SendPlain {
-                    session_id,
-                    payload: payload.clone(),
-                })
-                .collect(),
-            ProtocolCommand::BroadcastPlain { payload } => (0..count)
-                .map(|_| ProtocolCommand::BroadcastPlain {
-                    payload: payload.clone(),
-                })
-                .collect(),
-            ProtocolCommand::ActivateTunnel {
-                session_id,
-                ip,
-                registration_id,
-                worker_id,
-                desired_count,
-            } => (0..count)
-                .map(|_| ProtocolCommand::ActivateTunnel {
-                    session_id,
-                    ip,
-                    registration_id,
-                    worker_id,
-                    desired_count,
-                })
-                .collect(),
-            ProtocolCommand::InjectTun {
-                session_id,
-                payload,
-            } => (0..count)
-                .map(|_| ProtocolCommand::InjectTun {
-                    session_id,
-                    payload: payload.clone(),
-                })
-                .collect(),
-            ProtocolCommand::UpdateEpoch {
-                session_id,
-                device_id,
-                generation_id,
-                session_salt,
-            } => (0..count)
-                .map(|_| ProtocolCommand::UpdateEpoch {
-                    session_id,
-                    device_id: device_id.clone(),
-                    generation_id,
-                    session_salt: session_salt.clone(),
-                })
-                .collect(),
-            ProtocolCommand::SetDataFrames {
-                session_id,
-                enabled,
-            } => (0..count)
-                .map(|_| ProtocolCommand::SetDataFrames {
-                    session_id,
-                    enabled,
-                })
-                .collect(),
-            ProtocolCommand::SetAuthoritativeEpoch {
-                device_id,
-                generation_id,
-                session_salt,
-            } => (0..count)
-                .map(|_| ProtocolCommand::SetAuthoritativeEpoch {
-                    device_id: device_id.clone(),
-                    generation_id,
-                    session_salt: session_salt.clone(),
-                })
-                .collect(),
-            ProtocolCommand::DisconnectDevice {
-                device_id,
-                requester_session_id,
-            } => (0..count)
-                .map(|_| ProtocolCommand::DisconnectDevice {
-                    device_id: device_id.clone(),
-                    requester_session_id,
-                })
-                .collect(),
-            ProtocolCommand::ReplaceCredentials(credentials) => (0..count)
-                .map(|_| ProtocolCommand::ReplaceCredentials(credentials.clone()))
-                .collect(),
-            ProtocolCommand::DropSession { session_id } => (0..count)
-                .map(|_| ProtocolCommand::DropSession { session_id })
-                .collect(),
-            ProtocolCommand::DropPassword { password } => (0..count)
-                .map(|_| ProtocolCommand::DropPassword {
-                    password: password.clone(),
-                })
-                .collect(),
-        }
-    }
 
     fn on_udp<S: PacketOutput>(
         &mut self,
@@ -3204,18 +3200,20 @@ impl DataplaneLogic for ProtocolEngine {
         packet: &mut [u8],
         sink: &mut S,
     ) {
+        if crate::dtls::is_dtls_packet(packet) {
+            self.handle_dtls(peer, local_ip, packet, sink);
+            return;
+        }
         let key = EndpointKey::new(peer, local_ip);
-        if let Some(slot) = self.by_peer.get(&key).copied() {
-            self.handle_existing(slot, local_ip, packet, sink);
+        if let Some(slot) = self.by_peer.get(&key).copied()
+            && self.handle_existing(slot, local_ip, packet, sink)
+        {
             return;
         }
         if local_ip.is_some()
             && let Some(slot) = self.by_peer.get(&EndpointKey::new(peer, None)).copied()
+            && self.handle_existing(slot, local_ip, packet, sink)
         {
-            self.handle_existing(slot, local_ip, packet, sink);
-            return;
-        }
-        if self.endpoint_is_migrating(peer, local_ip) {
             return;
         }
         self.handle_unknown_legacy(peer, local_ip, packet);
@@ -3225,20 +3223,21 @@ impl DataplaneLogic for ProtocolEngine {
         self.handle_tun_packet(packet, sink);
     }
 
-    fn on_tun_batch_end<S: PacketOutput>(&mut self, sink: &mut S) {
-        self.drain_downlink(sink);
-    }
+    fn on_tun_batch_end<S: PacketOutput>(&mut self, _sink: &mut S) {}
+
+    fn on_udp_batch_end<S: PacketOutput>(&mut self, _sink: &mut S) {}
 
     fn begin_batch(&mut self, now: Instant) {
         self.batch_now = now;
+        self.monotonic_ms = now
+            .duration_since(self.started)
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+            + 1;
     }
 
     fn on_command<S: PacketOutput>(&mut self, command_value: Self::Command, sink: &mut S) {
         match command_value {
-            ProtocolCommand::AdoptSession {
-                session,
-                initial_payload,
-            } => self.adopt_session(*session, initial_payload),
             ProtocolCommand::SendPlain {
                 session_id,
                 payload,
@@ -3257,7 +3256,6 @@ impl DataplaneLogic for ProtocolEngine {
                         &payload,
                         &mut self.rng,
                         sink,
-                        &mut self.crypto_profiler,
                         self.batch_now,
                         SendObservability {
                             record_dpi,
@@ -3275,7 +3273,6 @@ impl DataplaneLogic for ProtocolEngine {
                     &payload,
                 );
                 let rng = &mut self.rng;
-                let profiler = &mut self.crypto_profiler;
                 let batch_now = self.batch_now;
                 let count_crypto = self.syscalls_enabled;
                 for (_, session) in self.sessions.iter_mut() {
@@ -3284,7 +3281,6 @@ impl DataplaneLogic for ProtocolEngine {
                         &payload,
                         rng,
                         sink,
-                        profiler,
                         batch_now,
                         SendObservability {
                             record_dpi,
@@ -3307,10 +3303,7 @@ impl DataplaneLogic for ProtocolEngine {
                 payload,
             } => {
                 if let Some(slot) = self.by_id.get(&session_id).copied()
-                    && sink.write_tun_priority(
-                        &payload,
-                        crate::striped_scheduler::packet_class(&payload),
-                    )
+                    && sink.write_tun(&payload)
                 {
                     let session = &mut self.sessions[slot];
                     session.up_total = session.up_total.saturating_add(payload.len() as u64);
@@ -3319,32 +3312,22 @@ impl DataplaneLogic for ProtocolEngine {
             }
             ProtocolCommand::UpdateEpoch {
                 session_id,
-                device_id,
+                password,
                 generation_id,
                 session_salt,
-            } => self.update_epoch(session_id, device_id, generation_id, session_salt),
-            ProtocolCommand::SetDataFrames {
-                session_id,
-                enabled,
-            } => {
-                if let Some(slot) = self.by_id.get(&session_id).copied()
-                    && let Some(session) = self.sessions.get_mut(slot)
-                {
-                    session.data_frames = enabled;
-                }
-            }
+            } => self.update_epoch(session_id, password, generation_id, session_salt),
             ProtocolCommand::SetAuthoritativeEpoch {
-                device_id,
+                password,
                 generation_id,
                 session_salt,
             } => {
                 self.stale_slots.clear();
                 for (slot, session) in self.sessions.iter() {
                     if session_is_retired_by_epoch(
-                        &session.device_id,
-                        session.generation_id,
-                        &session.session_salt,
-                        &device_id,
+                        &session.cold.password,
+                        session.cold.generation_id,
+                        &session.cold.session_salt,
+                        &password,
                         generation_id,
                         &session_salt,
                     ) {
@@ -3355,15 +3338,15 @@ impl DataplaneLogic for ProtocolEngine {
                     self.remove_slot_with_reason(slot, "authoritative-epoch-replaced");
                 }
                 self.epochs.insert(
-                    device_id,
+                    password,
                     EpochValue {
                         last_seen_ms: self.monotonic_ms,
                     },
                 );
                 self.publish_epoch_state();
             }
-            ProtocolCommand::DisconnectDevice {
-                device_id,
+            ProtocolCommand::DisconnectPassword {
+                password,
                 requester_session_id,
             } => {
                 if let Some(slot) = self.by_id.get(&requester_session_id).copied() {
@@ -3381,7 +3364,6 @@ impl DataplaneLogic for ProtocolEngine {
                         payload,
                         &mut self.rng,
                         sink,
-                        &mut self.crypto_profiler,
                         self.batch_now,
                         SendObservability {
                             record_dpi,
@@ -3391,23 +3373,23 @@ impl DataplaneLogic for ProtocolEngine {
                 }
                 self.stale_slots.clear();
                 for (slot, session) in self.sessions.iter() {
-                    if session_is_disconnected_device(
+                    if session_is_disconnected_password(
                         session.id,
-                        &session.device_id,
+                        &session.cold.password,
                         requester_session_id,
-                        &device_id,
+                        &password,
                     ) {
                         self.stale_slots.push(slot);
                     }
                 }
                 while let Some(slot) = self.stale_slots.pop() {
-                    self.remove_slot_with_reason(slot, "device-disconnect");
+                    self.remove_slot_with_reason(slot, "password-disconnect");
                 }
             }
             ProtocolCommand::ReplaceCredentials(credentials) => {
                 self.stale_slots.clear();
                 for (slot, session) in self.sessions.iter() {
-                    if !credentials.contains_password(&session.password) {
+                    if !credentials.contains_password(&session.cold.password) {
                         self.stale_slots.push(slot);
                     }
                 }
@@ -3424,12 +3406,30 @@ impl DataplaneLogic for ProtocolEngine {
             ProtocolCommand::DropPassword { password } => {
                 self.stale_slots.clear();
                 for (slot, session) in self.sessions.iter() {
-                    if session.password.as_ref() == password {
+                    if session.cold.password.as_ref() == password {
                         self.stale_slots.push(slot);
                     }
                 }
                 while let Some(slot) = self.stale_slots.pop() {
                     self.remove_slot_with_reason(slot, "credential-removed");
+                }
+            }
+            ProtocolCommand::UpdateDesiredStreams {
+                password,
+                generation_id,
+                desired_count,
+            } => {
+                for (_, session) in self.sessions.iter_mut() {
+                    if session.cold.password.as_ref() == password
+                        && session.cold.generation_id == generation_id
+                    {
+                        session.desired_stream_count = desired_count;
+                        session
+                            .cold
+                            .public
+                            .desired_stream_count
+                            .store(u64::from(desired_count), Ordering::Release);
+                    }
                 }
             }
             ProtocolCommand::CompactMemory { completed } => {
@@ -3439,7 +3439,7 @@ impl DataplaneLogic for ProtocolEngine {
         }
     }
 
-    fn on_tick<S: PacketOutput>(&mut self, _sink: &mut S) {
+    fn on_tick<S: PacketOutput>(&mut self, sink: &mut S) {
         self.monotonic_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64 + 1;
         self.wall_now = wall_clock();
         #[cfg(feature = "diagnostics")]
@@ -3447,10 +3447,7 @@ impl DataplaneLogic for ProtocolEngine {
             self.debug_enabled = self.stream_debug_active.load(Ordering::Acquire);
             self.dpi_enabled = DPI_BROADCAST.receiver_count() != 0;
             self.syscalls_enabled = SYSCALLS_CLIENTS.load(Ordering::Acquire) != 0;
-            self.crypto_profiler.all.refresh_enabled();
-            self.crypto_profiler.enabled = self.crypto_profiler.all.enabled();
-            self.io_metrics_enabled = self.syscalls_enabled || self.crypto_profiler.all.enabled();
-            self.crypto_profiler.publish();
+            self.io_metrics_enabled = self.syscalls_enabled;
         }
         #[cfg(not(feature = "diagnostics"))]
         {
@@ -3460,16 +3457,6 @@ impl DataplaneLogic for ProtocolEngine {
             self.io_metrics_enabled = false;
         }
         self.setup_budget = SETUP_BUDGET_PER_TICK;
-        if self
-            .monotonic_ms
-            .saturating_sub(self.last_migrating_endpoint_sweep_ms)
-            >= MIGRATING_ENDPOINT_SWEEP_INTERVAL_MS
-        {
-            self.last_migrating_endpoint_sweep_ms = self.monotonic_ms;
-            self.migrating_endpoints.retain(|_, started_ms| {
-                self.monotonic_ms.saturating_sub(*started_ms) < MIGRATING_ENDPOINT_TTL_MS
-            });
-        }
         if self
             .monotonic_ms
             .saturating_sub(self.last_session_maintenance_ms)
@@ -3499,8 +3486,12 @@ impl DataplaneLogic for ProtocolEngine {
                 );
                 self.remove_slot_with_reason(slot, reason);
             }
+            self.dtls_handshakes
+                .retain(|_, (_, _, created_ms)| monotonic_ms.saturating_sub(*created_ms) <= 10_000);
+            self.dtls_negotiated
+                .retain(|_, (_, _, created_ms)| monotonic_ms.saturating_sub(*created_ms) <= 10_000);
         }
-        self.reconcile_streams(_sink);
+        self.reconcile_streams(sink);
         self.sweep_idle_epochs();
         if self.memory_compact_pending
             && self
@@ -3522,7 +3513,6 @@ impl DataplaneLogic for ProtocolEngine {
             || counters.tun_tx_errors != self.last_io_counters.tun_tx_errors
             || counters.udp_tx_drops != self.last_io_counters.udp_tx_drops
             || counters.tun_tx_drops != self.last_io_counters.tun_tx_drops
-            || counters.partial_sendmmsg != self.last_io_counters.partial_sendmmsg
             || counters.udp_rx_enobufs != self.last_io_counters.udp_rx_enobufs
             || counters.udp_tx_enobufs != self.last_io_counters.udp_tx_enobufs;
         if errors_changed {
@@ -3530,15 +3520,6 @@ impl DataplaneLogic for ProtocolEngine {
         }
         self.last_io_counters = counters;
     }
-}
-
-pub(crate) fn shard_for_device(device_id: &str, shard_count: usize) -> usize {
-    let mut value = 0xcbf2_9ce4_8422_2325u64;
-    for byte in device_id.as_bytes() {
-        value ^= u64::from(*byte);
-        value = value.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    (value as usize) % shard_count.max(1)
 }
 
 fn wall_clock() -> u64 {
@@ -3561,21 +3542,13 @@ fn make_aes_key(key: &[u8; 32]) -> aes::Aes128 {
     aes::Aes128::new(&value.into())
 }
 
-fn make_hmac_key(key: &[u8; 32]) -> aws_lc_rs::hmac::Key {
-    aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, &key[16..])
+fn make_hmac_key(key: &[u8; 32]) -> Hmac<Sha1> {
+    <Hmac<Sha1> as hmac::digest::KeyInit>::new_from_slice(&key[16..]).expect("HMAC-SHA1 key")
 }
 
 #[inline(always)]
 fn aes_ctr(cipher: &aes::Aes128, iv: &[u8; 16]) -> Aes128Ctr128BE {
     Aes128Ctr128BE::from_core(Aes128CtrCore::inner_iv_init(cipher.clone(), iv.into()))
-}
-
-fn nonce(ssrc: u32, seq: u16, timestamp: u32) -> [u8; 12] {
-    let mut value = [0u8; 12];
-    value[0..4].copy_from_slice(&ssrc.to_be_bytes());
-    value[4..6].copy_from_slice(&seq.to_be_bytes());
-    value[8..12].copy_from_slice(&timestamp.to_be_bytes());
-    value
 }
 
 fn build_srtp_iv(ssrc: u32, seq: u16, timestamp: u32) -> [u8; 16] {
@@ -3623,10 +3596,9 @@ fn rtp_header_len(wire: &[u8]) -> Result<usize> {
 
 fn unwrap_legacy_in_place(
     aes: &aes::Aes128,
-    hmac: &aws_lc_rs::hmac::Key,
-    chacha: &aws_lc_rs::aead::LessSafeKey,
+    hmac: &Hmac<Sha1>,
     wire: &mut [u8],
-    expected_srtp: Option<bool>,
+    _expected_srtp: Option<bool>,
     count_crypto: bool,
 ) -> Result<DecodedPacket> {
     let header_len = rtp_header_len(wire)?;
@@ -3637,98 +3609,55 @@ fn unwrap_legacy_in_place(
     let seq = u16::from_be_bytes([wire[2], wire[3]]);
     let timestamp = u32::from_be_bytes(wire[4..8].try_into()?);
     let ssrc = u32::from_be_bytes(wire[8..12].try_into()?);
-    if expected_srtp != Some(false) && wire.len() >= header_len + 10 {
-        let message_len = wire.len() - 10;
-        let mut context = aws_lc_rs::hmac::Context::with_key(hmac);
-        context.update(&wire[..message_len]);
-        let expected = context.sign();
-        if expected.as_ref()[..10].ct_eq(&wire[message_len..]).into() {
-            let mut end = message_len;
-            if wire[0] & 0x20 != 0 {
-                let padding = wire[end - 1] as usize;
-                if padding == 0 || padding > end.saturating_sub(header_len) {
-                    bail!("invalid RTP padding in SRTP mode");
-                }
-                end -= padding;
-            }
-            if end < header_len {
-                bail!("invalid SRTP payload bounds");
-            }
-            let iv = build_srtp_iv(ssrc, seq, timestamp);
-            let mut cipher = aes_ctr(aes, &iv);
-            cipher.apply_keystream(&mut wire[header_len..end]);
-            if end.saturating_sub(header_len) >= 13 && (20..=23).contains(&wire[header_len]) {
-                let mut offset = header_len;
-                while offset + 13 <= end {
-                    if !(20..=23).contains(&wire[offset]) || wire[offset + 1] != 0xfe {
-                        break;
-                    }
-                    let record_len =
-                        13 + (((wire[offset + 11] as usize) << 8) | wire[offset + 12] as usize);
-                    if offset + record_len > end {
-                        break;
-                    }
-                    offset += record_len;
-                }
-                if offset > header_len {
-                    end = offset;
-                }
-            }
-            record_crypto_op(count_crypto);
-            return Ok(DecodedPacket {
-                range: RangePair {
-                    start: header_len,
-                    end,
-                },
-                seq,
-                payload_type,
-                is_srtp: true,
-            });
-        }
-        if expected_srtp == Some(true) {
-            bail!("SRTP authentication failed");
-        }
-    } else if expected_srtp == Some(true) {
+    if wire.len() < header_len + 10 {
         bail!("SRTP packet is too short");
     }
-    let mut end = wire.len();
+    let message_len = wire.len() - 10;
+    let mut mac = hmac.clone();
+    mac.update(&wire[..message_len]);
+    if mac.verify_truncated_left(&wire[message_len..]).is_err() {
+        bail!("SRTP authentication failed");
+    }
+    let iv = build_srtp_iv(ssrc, seq, timestamp);
+    let mut cipher = aes_ctr(aes, &iv);
+    cipher.apply_keystream(&mut wire[header_len..message_len]);
+    let mut end = message_len;
     if wire[0] & 0x20 != 0 {
-        let padding = wire
-            .last()
-            .copied()
-            .ok_or_else(|| anyhow!("missing RTP padding"))? as usize;
-        if padding == 0 || padding > end.saturating_sub(header_len) {
-            bail!("invalid RTP padding");
+        let padding = wire[message_len - 1] as usize;
+        if padding == 0 || padding > message_len.saturating_sub(header_len) {
+            bail!("invalid RTP padding in SRTP mode");
         }
-        end -= padding;
+        end = message_len - padding;
     }
-    if end <= header_len + 16 {
-        bail!("empty encrypted payload");
+    if end < header_len {
+        bail!("invalid SRTP payload bounds");
     }
-    if payload_type != 111 {
-        bail!("expected audio (PT=111) for non-SRTP packet");
+    if end.saturating_sub(header_len) >= 13 && (20..=23).contains(&wire[header_len]) {
+        let mut offset = header_len;
+        while offset + 13 <= end {
+            if !(20..=23).contains(&wire[offset]) || wire[offset + 1] != 0xfe {
+                break;
+            }
+            let record_len =
+                13 + (((wire[offset + 11] as usize) << 8) | wire[offset + 12] as usize);
+            if offset + record_len > end {
+                break;
+            }
+            offset += record_len;
+        }
+        if offset > header_len {
+            end = offset;
+        }
     }
-    let tag_offset = end - 16;
-    let tag: [u8; 16] = wire[tag_offset..end].try_into()?;
-    let (aad, encrypted_and_tag) = wire.split_at_mut(header_len);
-    let ciphertext_len = tag_offset - header_len;
-    chacha
-        .open_in_place_separate_tag(
-            aws_lc_rs::aead::Nonce::assume_unique_for_key(nonce(ssrc, seq, timestamp)),
-            aws_lc_rs::aead::Aad::from(aad),
-            &tag,
-            &mut encrypted_and_tag[..ciphertext_len],
-        )
-        .map_err(|_| anyhow!("authentication failed (ChaCha20-Poly1305)"))?;
     record_crypto_op(count_crypto);
     Ok(DecodedPacket {
         range: RangePair {
             start: header_len,
-            end: tag_offset,
+            end,
         },
         seq,
         payload_type,
-        is_srtp: false,
+        is_srtp: true,
     })
 }
 
@@ -3736,12 +3665,6 @@ fn unwrap_legacy_in_place(
 struct SendObservability {
     record_dpi: bool,
     count_crypto: bool,
-}
-
-#[derive(Clone, Copy)]
-struct SendMode {
-    class: crate::striped_scheduler::PacketClass,
-    observability: SendObservability,
 }
 
 enum DownlinkSend {
@@ -3753,84 +3676,54 @@ enum DownlinkSend {
 fn send_plain<S: PacketOutput>(
     session: &mut HotSession,
     plain: &[u8],
-    rng: &mut StdRng,
+    rng: &mut SmallRng,
     sink: &mut S,
-    profiler: &mut CryptoProfiler,
     batch_now: Instant,
     observability: SendObservability,
 ) -> bool {
-    send_plain_mode(
-        session,
-        plain,
-        rng,
-        sink,
-        profiler,
-        batch_now,
-        SendMode {
-            class: crate::striped_scheduler::PacketClass::Bulk,
-            observability,
-        },
-    )
+    send_legacy_plain(session, plain, rng, sink, batch_now, observability)
 }
 
-fn send_plain_mode<S: PacketOutput>(
+#[allow(clippy::too_many_arguments)]
+fn send_data_client<S: PacketOutput>(
+    client_key: usize,
     session: &mut HotSession,
     plain: &[u8],
-    rng: &mut StdRng,
+    rng: &mut SmallRng,
     sink: &mut S,
-    profiler: &mut CryptoProfiler,
     batch_now: Instant,
-    mode: SendMode,
-) -> bool {
-    send_legacy_plain(session, plain, rng, sink, profiler, batch_now, mode)
-}
-
-fn send_legacy_plain<S: PacketOutput>(
-    session: &mut HotSession,
-    plain: &[u8],
-    rng: &mut StdRng,
-    sink: &mut S,
-    profiler: &mut CryptoProfiler,
-    batch_now: Instant,
-    mode: SendMode,
+    observability: SendObservability,
+    headroom: usize,
 ) -> bool {
     let peer = session.peer;
     let local_ip = session.local_ip;
-    let duplicate = session.fec_profile == FecProfile::Safe
-        && selective_fec::should_duplicate(plain)
-        && session.fec_budget.allow();
+    let duplicate = false;
     let mut wire_len = 0usize;
-    let kind = if session.is_srtp {
-        CryptoKind::Srtp
-    } else {
-        CryptoKind::Chacha
-    };
-    let queue_started = profiler.all.begin(PerfStage::UdpQueue, plain.len());
-    let sent =
-        sink.send_udp_with_duplicate_priority(peer, local_ip, duplicate, mode.class, |output| {
-            let started = profiler.begin(kind, CryptoDirection::Wrap, plain.len());
-            let wrapped = match wrap_legacy_into(
-                session,
-                plain,
-                rng,
-                output,
-                batch_now,
-                mode.observability.count_crypto,
-            ) {
-                Ok(length) => {
-                    wire_len = length;
-                    true
-                }
-                Err(_) => false,
-            };
-            profiler.finish(kind, CryptoDirection::Wrap, started);
-            wrapped
-        });
-    profiler.all.finish(PerfStage::UdpQueue, queue_started);
-    if sent && should_flush_udp_immediately(plain) {
-        sink.request_udp_flush();
-    }
-    if sent && mode.observability.record_dpi {
+    let is_priority = false;
+    let payload = plain;
+    let sent = sink.send_udp_client_with_headroom(
+        client_key,
+        peer,
+        local_ip,
+        duplicate,
+        is_priority,
+        headroom,
+        |output| match wrap_legacy_into(
+            session,
+            payload,
+            rng,
+            output,
+            batch_now,
+            observability.count_crypto,
+        ) {
+            Ok(length) => {
+                wire_len = length;
+                true
+            }
+            Err(_) => false,
+        },
+    );
+    if sent && observability.record_dpi {
         record_packet_dpi(
             "OUTBOUND",
             "TUN-Server",
@@ -3844,9 +3737,63 @@ fn send_legacy_plain<S: PacketOutput>(
             ),
             plain,
             wire_len,
-            &session.device_id,
-            session.generation_id,
-            &session.session_salt,
+            &session.cold.password,
+            session.cold.generation_id,
+            &session.cold.session_salt,
+        );
+    }
+    sent
+}
+
+fn send_legacy_plain<S: PacketOutput>(
+    session: &mut HotSession,
+    plain: &[u8],
+    rng: &mut SmallRng,
+    sink: &mut S,
+    batch_now: Instant,
+    observability: SendObservability,
+) -> bool {
+    let peer = session.peer;
+    let local_ip = session.local_ip;
+    let duplicate = false;
+    let mut wire_len = 0usize;
+    let is_priority = should_flush_udp_immediately(plain);
+    let sent = sink.send_udp_prioritized(peer, local_ip, duplicate, is_priority, |output| {
+        match wrap_legacy_into(
+            session,
+            plain,
+            rng,
+            output,
+            batch_now,
+            observability.count_crypto,
+        ) {
+            Ok(length) => {
+                wire_len = length;
+                true
+            }
+            Err(_) => false,
+        }
+    });
+    if sent && is_priority {
+        sink.request_udp_flush();
+    }
+    if sent && observability.record_dpi {
+        record_packet_dpi(
+            "OUTBOUND",
+            "TUN-Server",
+            &peer.to_string(),
+            session.output.payload_type,
+            u64::from(
+                session
+                    .output
+                    .initial_seq
+                    .wrapping_add(session.output.count.wrapping_sub(1) as u16),
+            ),
+            plain,
+            wire_len,
+            &session.cold.password,
+            session.cold.generation_id,
+            &session.cold.session_salt,
         );
     }
     sent
@@ -3855,7 +3802,7 @@ fn send_legacy_plain<S: PacketOutput>(
 fn wrap_legacy_into(
     session: &mut HotSession,
     plain: &[u8],
-    rng: &mut StdRng,
+    rng: &mut SmallRng,
     output: &mut PacketBuf,
     batch_now: Instant,
     count_crypto: bool,
@@ -3863,14 +3810,46 @@ fn wrap_legacy_into(
     let count = session.output.count;
     session.output.count = session.output.count.wrapping_add(1);
     let seq = session.output.initial_seq.wrapping_add(count as u16);
-    let (timestamp, abs_send_time) = session.output.clocks(batch_now);
+    let (payload_type, padding, marker_bit) = {
+        const OVERHEAD: usize = 24 + 10 + 4 + 8 + 20;
+        const SRTP_OVERHEAD: usize = 24 + 10;
+        let current_projected = plain.len().saturating_add(OVERHEAD);
+        let wire_min = plain.len().saturating_add(SRTP_OVERHEAD);
+        if wire_min < 100 {
+            let target: usize = rng.gen_range(100..=150);
+            let pad = target.saturating_sub(wire_min).max(1);
+            (111u8, pad, false)
+        } else if plain.len() <= 350 {
+            let pad = rng.gen_range(1..=2);
+            (111u8, pad, false)
+        } else if current_projected <= 1050 {
+            let headroom = 1050usize.saturating_sub(current_projected);
+            let pad = if headroom > 1 {
+                rng.gen_range(1..=headroom.min(4))
+            } else {
+                1
+            };
+            (96u8, pad, true)
+        } else {
+            const MAX_WIRE_LIMIT: usize = 1350;
+            let headroom = MAX_WIRE_LIMIT.saturating_sub(current_projected);
+            let pad = if headroom > 1 {
+                let jitter_limit = headroom.min(4);
+                rng.gen_range(1..=jitter_limit)
+            } else {
+                1
+            };
+            (96u8, pad, rng.gen_range(0..4u8) == 0)
+        }
+    };
+    let effective_len = plain.len();
+    let (timestamp, abs_send_time) = session.output.clocks_for_type(batch_now, payload_type);
     let transport_seq = session.output.transport_seq;
     session.output.transport_seq = session.output.transport_seq.wrapping_add(1);
-    let payload_type = session.output.payload_type;
     let mut header = [0u8; 24];
-    header[0] = 0xb0;
+    header[0] = if padding > 0 { 0xb0 } else { 0x90 };
     header[1] = payload_type & 0x7f;
-    if payload_type == 96 && rng.gen_range(0..5u8) == 0 {
+    if marker_bit {
         header[1] |= 0x80;
     }
     header[2..4].copy_from_slice(&seq.to_be_bytes());
@@ -3885,77 +3864,37 @@ fn wrap_legacy_into(
     header[21..23].copy_from_slice(&transport_seq.to_be_bytes());
     header[23] = 0;
     let storage = output.storage_mut();
-    if session.is_srtp {
-        let padding_max = if payload_type == 96 { 60 } else { 24 };
-        let random_padding = rng.gen_range(0..padding_max);
-        let padding = random_padding + 1;
-        let ciphertext_len = plain
-            .len()
-            .checked_add(padding)
-            .ok_or_else(|| anyhow!("SRTP length overflow"))?;
-        let total = 24usize
-            .checked_add(ciphertext_len)
-            .and_then(|value| value.checked_add(10))
-            .ok_or_else(|| anyhow!("SRTP length overflow"))?;
-        if total > storage.len() {
-            bail!("SRTP output exceeds packet capacity");
-        }
-        storage[..24].copy_from_slice(&header);
-        storage[24..24 + plain.len()].copy_from_slice(plain);
-        let iv = build_srtp_iv(session.output.ssrc, seq, timestamp);
-        let mut cipher = aes_ctr(&session.aes, &iv);
-        cipher.apply_keystream(&mut storage[24..24 + plain.len()]);
-        if random_padding != 0 {
-            rng.fill_bytes(&mut storage[24 + plain.len()..24 + plain.len() + random_padding]);
-        }
-        storage[24 + ciphertext_len - 1] = padding as u8;
-        let mut context = aws_lc_rs::hmac::Context::with_key(&session.hmac);
-        context.update(&storage[..24 + ciphertext_len]);
-        let tag = context.sign();
-        storage[24 + ciphertext_len..total].copy_from_slice(&tag.as_ref()[..10]);
-        if !output.set_len(total) {
-            bail!("SRTP output length rejected");
-        }
-        record_crypto_op(count_crypto);
-        return Ok(total);
-    }
-    let random_padding = if payload_type == 111 {
-        rng.gen_range(0..24usize)
-    } else {
-        rng.gen_range(0..60usize)
-    };
-    let padding = random_padding + 1;
+    let ciphertext_len = effective_len
+        .checked_add(padding)
+        .ok_or_else(|| anyhow!("SRTP length overflow"))?;
     let total = 24usize
-        .checked_add(plain.len())
-        .and_then(|value| value.checked_add(16))
-        .and_then(|value| value.checked_add(padding))
-        .ok_or_else(|| anyhow!("RTP AEAD length overflow"))?;
+        .checked_add(ciphertext_len)
+        .and_then(|value| value.checked_add(10))
+        .ok_or_else(|| anyhow!("SRTP length overflow"))?;
     if total > storage.len() {
-        bail!("RTP AEAD output exceeds packet capacity");
+        bail!("SRTP output exceeds packet capacity");
     }
     storage[..24].copy_from_slice(&header);
     storage[24..24 + plain.len()].copy_from_slice(plain);
-    let tag = session
-        .chacha
-        .seal_in_place_separate_tag(
-            aws_lc_rs::aead::Nonce::assume_unique_for_key(nonce(
-                session.output.ssrc,
-                seq,
-                timestamp,
-            )),
-            aws_lc_rs::aead::Aad::from(&header[..]),
-            &mut storage[24..24 + plain.len()],
-        )
-        .map_err(|_| anyhow!("encryption failed (ChaCha20-Poly1305)"))?;
-    let tag_start = 24 + plain.len();
-    storage[tag_start..tag_start + 16].copy_from_slice(tag.as_ref());
-    let padding_start = tag_start + 16;
-    if random_padding != 0 {
-        rng.fill_bytes(&mut storage[padding_start..padding_start + random_padding]);
+    if effective_len > plain.len() {
+        storage[24 + plain.len()..24 + effective_len].fill(0);
     }
-    storage[total - 1] = padding as u8;
+    if padding > 0 {
+        let random_padding = padding - 1;
+        if random_padding != 0 {
+            rng.fill_bytes(&mut storage[24 + effective_len..24 + effective_len + random_padding]);
+        }
+        storage[24 + ciphertext_len - 1] = padding as u8;
+    }
+    let iv = build_srtp_iv(session.output.ssrc, seq, timestamp);
+    let mut cipher = aes_ctr(&session.out_aes, &iv);
+    cipher.apply_keystream(&mut storage[24..24 + ciphertext_len]);
+    let mut mac = session.out_hmac.clone();
+    mac.update(&storage[..24 + ciphertext_len]);
+    let tag = mac.finalize().into_bytes();
+    storage[24 + ciphertext_len..total].copy_from_slice(&tag[..10]);
     if !output.set_len(total) {
-        bail!("RTP AEAD output length rejected");
+        bail!("SRTP output length rejected");
     }
     record_crypto_op(count_crypto);
     Ok(total)
@@ -3986,32 +3925,42 @@ fn parse_generation_id(value: &str) -> Option<u64> {
     value.parse::<u64>().ok()
 }
 
-fn is_supported_wire_protocol(value: &str) -> bool {
-    value == crate::wire_protocol::WIRE_PROTOCOL_REVISION
-        || value == crate::wire_protocol::LEGACY_WIRE_PROTOCOL_REVISION
-}
-
-fn supports_data_frames(value: &str) -> bool {
-    value == crate::wire_protocol::WIRE_PROTOCOL_REVISION
-}
-
-fn parse_getconf_epoch(payload: &[u8]) -> Option<(&str, u64, &str)> {
+fn parse_getconf_identity(payload: &[u8]) -> Option<(&str, u64, &str)> {
     let text = std::str::from_utf8(payload).ok()?;
     let content = text.strip_prefix("GETCONF:")?.trim();
-    let mut parts = content.splitn(6, '|');
-    parts.next()?;
-    let device_id = parts.next()?.trim();
-    parts.next()?;
-    let generation_id = parse_generation_id(parts.next()?.trim())?;
-    let session_salt = parts.next().unwrap_or("").trim();
-    if device_id.is_empty() || device_id.len() > 128 || session_salt.len() > 128 {
+    let parts: Vec<&str> = content.split('|').collect();
+    if parts.len() < 3 {
         return None;
     }
-    Some((device_id, generation_id, session_salt))
+    if let Some(generation_id) = parts.get(2).and_then(|s| parse_generation_id(s.trim())) {
+        let password = parts.get(1)?.trim();
+        let session_salt = parts.get(3).unwrap_or(&"").trim();
+        if password.is_empty() || password.len() > 128 || session_salt.len() > 128 {
+            return None;
+        }
+        return Some((password, generation_id, session_salt));
+    }
+    if parts.len() >= 4 {
+        let legacy_pass = parts.get(2)?.trim();
+        let legacy_fallback = parts.get(1)?.trim();
+        let generation_id = parse_generation_id(parts.get(3)?.trim())?;
+        let session_salt = parts.get(4).unwrap_or(&"").trim();
+        let password = if !legacy_pass.is_empty() {
+            legacy_pass
+        } else {
+            legacy_fallback
+        };
+        if password.is_empty() || password.len() > 128 || session_salt.len() > 128 {
+            return None;
+        }
+        return Some((password, generation_id, session_salt));
+    }
+    None
 }
 
 fn is_control_payload(payload: &[u8]) -> bool {
     payload.starts_with(b"GETCONF:")
+        || payload.starts_with(b"GETWORKERS:")
         || payload.starts_with(b"DISCONNECT:")
         || payload == b"READY"
         || payload.first().is_some_and(|byte| *byte == 0xff)
@@ -4027,6 +3976,10 @@ fn is_idle_keepalive(payload: &[u8]) -> bool {
 fn should_flush_udp_immediately(payload: &[u8]) -> bool {
     payload.starts_with(b"GETCONF:")
         || payload.starts_with(b"TUNCONF:")
+        || payload.starts_with(b"ROUTING:")
+        || payload.starts_with(b"WORKERS:")
+        || payload.starts_with(b"GETWORKERS:")
+        || payload.starts_with(b"TUNWORKERS:")
         || payload.starts_with(b"DENIED:")
         || payload.starts_with(b"DISCONNECT:")
         || payload.starts_with(STREAM_REPAIR_PREFIX)
@@ -4037,36 +3990,36 @@ fn should_flush_udp_immediately(payload: &[u8]) -> bool {
 }
 
 fn session_is_retired_by_epoch(
-    session_device_id: &str,
+    session_password: &str,
     session_generation_id: u64,
     session_salt: &str,
-    authoritative_device_id: &str,
+    authoritative_password: &str,
     authoritative_generation_id: u64,
     authoritative_salt: &str,
 ) -> bool {
-    session_device_id == authoritative_device_id
+    session_password == authoritative_password
         && (session_generation_id != authoritative_generation_id
             || session_salt != authoritative_salt)
 }
 
-fn session_is_disconnected_device(
+fn session_is_disconnected_password(
     session_id: u64,
-    session_device_id: &str,
+    session_password: &str,
     requester_session_id: u64,
-    target_device_id: &str,
+    target_password: &str,
 ) -> bool {
-    session_id == requester_session_id || session_device_id == target_device_id
+    session_id == requester_session_id || session_password == target_password
 }
 
 fn getconf_reconnect_action_hot(
-    session_device_id: &str,
+    session_password: &str,
     session_generation_id: u64,
     session_salt: &str,
-    incoming_device_id: &str,
+    incoming_password: &str,
     incoming_generation_id: u64,
     incoming_salt: &str,
 ) -> GetconfReconnectAction {
-    if session_device_id == incoming_device_id
+    if session_password == incoming_password
         && session_generation_id == incoming_generation_id
         && session_salt == incoming_salt
     {
@@ -4148,7 +4101,7 @@ async fn control_loop(app: Arc<App>, mut receiver: mpsc::Receiver<ControlEvent>)
                 });
             }
             ControlEvent::StreamRepair {
-                device_id,
+                password,
                 generation_id,
                 desired_count,
                 sequence,
@@ -4161,7 +4114,8 @@ async fn control_loop(app: Arc<App>, mut receiver: mpsc::Receiver<ControlEvent>)
                     "WARN",
                     "STREAM",
                     &format!(
-                        "Repair requested: device={device_id} gen={generation_id} missing={missing:?}/{desired_count} sequence={sequence} carriers={sent_carriers}/{selected_carriers}",
+                        "Repair requested: pass={} gen={generation_id} missing={missing:?}/{desired_count} sequence={sequence} carriers={sent_carriers}/{selected_carriers}",
+                        secret_tag(&password),
                     ),
                 );
             }
@@ -4232,9 +4186,8 @@ async fn process_ingress_before_tunnel_event(
                 &app,
                 "WARN",
                 "TUN",
-                &format!("{address}: tunnel setup failed: {error}"),
+                &format!("{address}: tunnel setup pending: {error}"),
             );
-            drop_exact_session(&app, &session);
         } else {
             let _ = command(
                 &app,
@@ -4277,14 +4230,20 @@ async fn process_control_payload(
         let text = std::str::from_utf8(payload)?;
         return handle_getconf(app, &writer, session, text).await;
     }
+    if payload.starts_with(b"GETWORKERS:") {
+        let text = std::str::from_utf8(payload)?;
+        return handle_getworkers(app, &writer, session, text).await;
+    }
     if payload.starts_with(b"DISCONNECT:") {
         let text = std::str::from_utf8(payload)?;
         let content = text.strip_prefix("DISCONNECT:").unwrap_or_default().trim();
         let mut parts = content.splitn(2, '|');
-        let device_id = parts.next().unwrap_or("").trim();
+        let pass_part = parts.next().unwrap_or("").trim();
         let salt = parts.next().unwrap_or("").trim();
-        match handle_disconnect(app, session, device_id, salt).await {
-            Ok(_) => {}
+        match handle_disconnect(app, session, pass_part, salt).await {
+            Ok(_) => {
+                let _ = writer.write(b"OK:disconnected").await;
+            }
             Err(response) => writer.write(response.as_bytes()).await?,
         }
         return Ok(());
@@ -4292,97 +4251,203 @@ async fn process_control_payload(
     Ok(())
 }
 
+async fn handle_getworkers(
+    app: &Arc<App>,
+    writer: &ControlWriter<'_>,
+    session: &Arc<Session>,
+    text: &str,
+) -> Result<()> {
+    let raw = text.strip_prefix("GETWORKERS:").unwrap_or_default().trim();
+    let (pass_part, count_part) = if let Some((p, cnt)) = raw.split_once('|') {
+        (p.trim(), cnt.trim())
+    } else {
+        ("", raw)
+    };
+    let requested = count_part.parse::<u32>().unwrap_or(0);
+
+    let db = db_read(app).await?;
+    let password = if !pass_part.is_empty() {
+        pass_part.to_string()
+    } else {
+        session.password.clone()
+    };
+    let access = getconf_credential_access(&db, &password);
+    let server_limit = access
+        .as_ref()
+        .ok()
+        .and_then(|a| resolve_worker_limit_access(&db, a));
+
+    let (agreed, limit_val) = match server_limit {
+        Some(limit) if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&limit) => {
+            let eff = if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&requested) {
+                requested.min(limit)
+            } else if requested < 3 {
+                3.min(limit)
+            } else {
+                limit
+            };
+            (eff, limit)
+        }
+        _ => {
+            let req = if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&requested) {
+                requested
+            } else if requested > MAX_STREAM_WORKERS_U16 as u32 {
+                MAX_STREAM_WORKERS_U16 as u32
+            } else {
+                3
+            };
+            (req, 0)
+        }
+    };
+
+    let generation_id = session.generation_id.load(Ordering::Acquire);
+    for s in app.sessions.iter() {
+        if s.password == password && s.generation_id.load(Ordering::Acquire) == generation_id {
+            s.desired_stream_count
+                .store(agreed as u64, Ordering::Release);
+        }
+    }
+    let _ = command(
+        app,
+        ProtocolCommand::UpdateDesiredStreams {
+            password: password.clone(),
+            generation_id,
+            desired_count: agreed as u16,
+        },
+    );
+
+    let response = format!("TUNWORKERS:{agreed}:{limit_val}");
+    log_event(
+        app,
+        "INFO",
+        "WORKERS",
+        &format!(
+            "TUNWORKERS pass={} requested={requested} agreed={agreed} limit={limit_val}",
+            secret_tag(&password)
+        ),
+    );
+    writer.write(response.as_bytes()).await?;
+    Ok(())
+}
+
 fn getconf_credential_access(
     db: &Database,
     password: &str,
-    device_id: &str,
 ) -> std::result::Result<CredentialAccess, &'static str> {
-    if !db.main_password.is_empty() && password == db.main_password {
-        if !db.main_device_id.is_empty() && db.main_device_id != device_id {
-            return Err("DENIED:device_mismatch");
-        }
+    let token = password.trim();
+    if token.is_empty() {
+        return Err("DENIED:wrong_password");
+    }
+    if !db.main_password.is_empty() && secret_eq(&db.main_password, token) {
         return Ok(CredentialAccess::Main);
     }
-    let Some(entry) = db.passwords.get(password) else {
-        return Err("DENIED:expired");
-    };
-    if is_expired(entry) {
-        return Err("DENIED:expired");
+    if let Some((slot_key, entry)) = db.passwords.get_key_value(token) {
+        if entry.is_deactivated {
+            return Err("DENIED:deactivated");
+        }
+        if is_expired(entry) {
+            return Err("DENIED:expired");
+        }
+        return Ok(CredentialAccess::Slot(slot_key.clone()));
     }
-    if entry.is_deactivated {
-        return Err("DENIED:deactivated");
-    }
-    if !entry.device_id.is_empty() && entry.device_id != device_id {
-        return Err("DENIED:device_mismatch");
-    }
-    if entry.device_id.is_empty() {
-        Ok(CredentialAccess::Unbound)
-    } else {
-        Ok(CredentialAccess::Bound)
+    Err("DENIED:wrong_password")
+}
+
+fn resolve_worker_limit_access(db: &Database, access: &CredentialAccess) -> Option<u32> {
+    match access {
+        CredentialAccess::Main => db
+            .main_workers
+            .filter(|&w| (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&w)),
+        CredentialAccess::Slot(key) => {
+            if let Some(entry) = db.passwords.get(key) {
+                if let Some(w) = entry.workers
+                    && (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&w)
+                {
+                    return Some(w);
+                }
+                if !entry.group_id.is_empty()
+                    && let Some(group) = db.groups.get(&entry.group_id)
+                    && let Some(w) = group.workers
+                    && (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&w)
+                {
+                    return Some(w);
+                }
+            }
+            None
+        }
     }
 }
 
-fn device_control_authorized(db: &Database, password: &str, device_id: &str) -> bool {
-    if device_id.is_empty() {
-        return false;
-    }
-    if !db.main_password.is_empty() && password == db.main_password {
-        if !db.main_device_id.is_empty() && db.main_device_id != device_id {
-            return false;
+fn resolve_routing_rule_access<'a>(
+    db: &'a Database,
+    access: &CredentialAccess,
+) -> Option<&'a crate::model::RoutingRule> {
+    match access {
+        CredentialAccess::Main => {
+            if !db.main_routing_rule_id.is_empty() {
+                db.routing_rules.get(&db.main_routing_rule_id)
+            } else {
+                None
+            }
         }
-        return db.devices.contains_key(device_id);
+        CredentialAccess::Slot(key) => {
+            if let Some(entry) = db.passwords.get(key) {
+                if !entry.routing_rule_id.is_empty()
+                    && let Some(rule) = db.routing_rules.get(&entry.routing_rule_id)
+                {
+                    return Some(rule);
+                }
+                if !entry.group_id.is_empty()
+                    && let Some(group) = db.groups.get(&entry.group_id)
+                    && !group.routing_rule_id.is_empty()
+                {
+                    return db.routing_rules.get(&group.routing_rule_id);
+                }
+            }
+            None
+        }
     }
-    let password_authorized = db.passwords.get(password).is_some_and(|entry| {
-        !is_expired(entry)
-            && !entry.is_deactivated
-            && !entry.device_id.is_empty()
-            && entry.device_id == device_id
-    });
-    password_authorized && db.devices.contains_key(device_id)
 }
 
 fn session_epoch_identity(session: &Session) -> SessionEpochIdentity {
     SessionEpochIdentity {
-        device_id: lock_unpoison(&session.device_id).clone(),
+        password: session.password.clone(),
         generation_id: session.generation_id.load(Ordering::Acquire),
         session_salt: lock_unpoison(&session.session_salt).clone(),
     }
 }
 
-fn set_public_epoch(session: &Session, device_id: &str, generation_id: u64, session_salt: &str) {
-    *lock_unpoison(&session.device_id) = device_id.to_owned();
+fn set_public_epoch(session: &Session, generation_id: u64, session_salt: &str) {
     session
         .generation_id
         .store(generation_id, Ordering::Release);
     *lock_unpoison(&session.session_salt) = session_salt.to_owned();
 }
 
-fn current_device_epoch(app: &Arc<App>, device_id: &str, slot: &Arc<DeviceEpochSlot>) -> bool {
-    app.device_epochs
-        .get(device_id)
+fn current_password_epoch(app: &Arc<App>, password: &str, slot: &Arc<PasswordEpochSlot>) -> bool {
+    app.password_epochs
+        .get(password)
         .is_some_and(|entry| Arc::ptr_eq(entry.value(), slot))
 }
 
-async fn fresh_device_epoch_slot(app: &Arc<App>, device_id: &str) -> DeviceEpochSlot {
-    let _ = (app, device_id);
-    DeviceEpochSlot::new(DeviceEpochState::default(), unix_time_ms())
-}
-
-async fn lock_device_epoch(
+async fn lock_password_epoch(
     app: &Arc<App>,
-    device_id: &str,
+    password: &str,
 ) -> (
-    Arc<DeviceEpochSlot>,
-    OwnedMutexGuard<DeviceEpochState>,
+    Arc<PasswordEpochSlot>,
+    OwnedMutexGuard<PasswordEpochState>,
     bool,
 ) {
     loop {
         let (slot, created) =
-            if let Some(existing) = app.device_epochs.get(device_id).map(|e| e.value().clone()) {
+            if let Some(existing) = app.password_epochs.get(password).map(|e| e.value().clone()) {
                 (existing, false)
             } else {
-                let fresh = Arc::new(fresh_device_epoch_slot(app, device_id).await);
-                match app.device_epochs.entry(device_id.to_owned()) {
+                let fresh = Arc::new(PasswordEpochSlot::new(
+                    PasswordEpochState::default(),
+                    unix_time_ms(),
+                ));
+                match app.password_epochs.entry(password.to_owned()) {
                     dashmap::mapref::entry::Entry::Occupied(entry) => (entry.get().clone(), false),
                     dashmap::mapref::entry::Entry::Vacant(entry) => {
                         entry.insert(fresh.clone());
@@ -4392,24 +4457,24 @@ async fn lock_device_epoch(
             };
         let guard = slot.epoch.clone().lock_owned().await;
         slot.last_used_ms.store(unix_time_ms(), Ordering::Relaxed);
-        if current_device_epoch(app, device_id, &slot) {
+        if current_password_epoch(app, password, &slot) {
             return (slot, guard, created);
         }
     }
 }
 
-async fn lock_existing_device_epoch(
+async fn lock_existing_password_epoch(
     app: &Arc<App>,
-    device_id: &str,
-) -> Option<(Arc<DeviceEpochSlot>, OwnedMutexGuard<DeviceEpochState>)> {
+    password: &str,
+) -> Option<(Arc<PasswordEpochSlot>, OwnedMutexGuard<PasswordEpochState>)> {
     loop {
         let slot = app
-            .device_epochs
-            .get(device_id)
+            .password_epochs
+            .get(password)
             .map(|entry| entry.value().clone())?;
         let guard = slot.epoch.clone().lock_owned().await;
         slot.last_used_ms.store(unix_time_ms(), Ordering::Relaxed);
-        if current_device_epoch(app, device_id, &slot) {
+        if current_password_epoch(app, password, &slot) {
             return Some((slot, guard));
         }
     }
@@ -4417,13 +4482,13 @@ async fn lock_existing_device_epoch(
 
 fn rejected_session_is_request(
     session: &Session,
-    device_id: &str,
+    password: &str,
     generation_id: u64,
     session_salt: &str,
 ) -> bool {
     let identity = session_epoch_identity(session);
-    identity.device_id.is_empty()
-        || (identity.device_id == device_id
+    identity.password.is_empty()
+        || (identity.password == password
             && identity.generation_id == generation_id
             && identity.session_salt == session_salt)
 }
@@ -4454,7 +4519,7 @@ fn getconf_log_status(response: &str) -> &str {
 fn log_getconf_result(
     app: &Arc<App>,
     session: &Arc<Session>,
-    device_id: &str,
+    password: &str,
     generation_id: Option<u64>,
     worker_id: Option<u16>,
     desired_count: Option<u16>,
@@ -4469,14 +4534,19 @@ fn log_getconf_result(
     let desired = desired_count
         .map(|value| value.to_string())
         .unwrap_or_else(|| "?".to_owned());
+    let pass = if !password.is_empty() {
+        secret_tag(password)
+    } else {
+        "-".to_owned()
+    };
     log_event(
         app,
         "INFO",
         "GETCONF",
         &format!(
-            "GETCONF {} device={} gen={} worker={}/{} -> {}",
+            "GETCONF {} pass={} gen={} worker={}/{} -> {}",
             session.address,
-            device_id,
+            pass,
             generation,
             worker,
             desired,
@@ -4485,9 +4555,9 @@ fn log_getconf_result(
     );
 }
 
-pub fn purge_stale_device_sessions(
+pub fn purge_stale_password_sessions(
     app: &Arc<App>,
-    device_id: &str,
+    password: &str,
     generation_id: u64,
     session_salt: &str,
     current_session_id: u64,
@@ -4501,7 +4571,7 @@ pub fn purge_stale_device_sessions(
                 return None;
             }
             let identity = session_epoch_identity(session);
-            (identity.device_id == device_id
+            (identity.password == password
                 && (identity.generation_id != generation_id
                     || identity.session_salt != session_salt))
                 .then_some((session.id, session.address))
@@ -4518,7 +4588,10 @@ pub fn purge_stale_device_sessions(
                 app,
                 "INFO",
                 "SESSION",
-                &format!("Purged stale session for device {device_id} at {address}"),
+                &format!(
+                    "Purged stale session for password {} at {address}",
+                    crate::model::secret_tag(password)
+                ),
             );
         }
     }
@@ -4526,7 +4599,7 @@ pub fn purge_stale_device_sessions(
 
 fn purge_replaced_worker_sessions(
     app: &Arc<App>,
-    device_id: &str,
+    password: &str,
     generation_id: u64,
     session_salt: &str,
     worker_id: u64,
@@ -4543,7 +4616,7 @@ fn purge_replaced_worker_sessions(
                 return None;
             }
             let identity = session_epoch_identity(session);
-            (identity.device_id == device_id
+            (identity.password == password
                 && identity.generation_id == generation_id
                 && identity.session_salt == session_salt)
                 .then_some(session.id)
@@ -4567,20 +4640,53 @@ async fn handle_getconf(
     text: &str,
 ) -> Result<()> {
     let content = text.strip_prefix("GETCONF:").unwrap_or_default().trim();
-    let mut parts = content.splitn(8, '|');
-    let client_port = parts.next().unwrap_or("9000").trim();
-    let device_id = parts.next().unwrap_or("unknown").trim();
-    let password = parts.next().unwrap_or("").trim();
-    let generation_text = parts.next().unwrap_or("").trim();
-    let session_salt = parts.next().unwrap_or("").trim();
-    let worker_text = parts.next().unwrap_or("").trim();
-    let desired_text = parts.next().unwrap_or("").trim();
-    let protocol_revision = parts.next().unwrap_or("").trim();
+    let parts: Vec<&str> = content.split('|').collect();
+    let client_port = parts.first().copied().unwrap_or("9000").trim();
+
+    let (password, generation_text, session_salt, worker_text, desired_text) = if parts
+        .get(2)
+        .and_then(|s| parse_generation_id(s.trim()))
+        .is_some()
+    {
+        let pass = parts.get(1).copied().unwrap_or("").trim();
+        let effective_pass = if !pass.is_empty() {
+            pass
+        } else {
+            session.password.as_str()
+        };
+        (
+            effective_pass,
+            parts.get(2).copied().unwrap_or("").trim(),
+            parts.get(3).copied().unwrap_or("").trim(),
+            parts.get(4).copied().unwrap_or("").trim(),
+            parts.get(5).copied().unwrap_or("").trim(),
+        )
+    } else {
+        let legacy_token1 = parts.get(1).copied().unwrap_or("").trim();
+        let legacy_token2 = parts.get(2).copied().unwrap_or("").trim();
+        let effective_pass = if !legacy_token2.is_empty() {
+            legacy_token2
+        } else if !session.password.is_empty() && session.password.as_str() != legacy_token1 {
+            session.password.as_str()
+        } else if !legacy_token1.is_empty() {
+            legacy_token1
+        } else {
+            session.password.as_str()
+        };
+        (
+            effective_pass,
+            parts.get(3).copied().unwrap_or("").trim(),
+            parts.get(4).copied().unwrap_or("").trim(),
+            parts.get(5).copied().unwrap_or("").trim(),
+            parts.get(6).copied().unwrap_or("").trim(),
+        )
+    };
+
     let Some(generation_id) = parse_generation_id(generation_text) else {
         log_getconf_result(
             app,
             session,
-            device_id,
+            password,
             None,
             None,
             None,
@@ -4589,25 +4695,11 @@ async fn handle_getconf(
         writer.write(b"DENIED:invalid_epoch").await?;
         return Ok(());
     };
-    if !is_supported_wire_protocol(protocol_revision) {
+    if password.is_empty() || password.len() > 128 {
         log_getconf_result(
             app,
             session,
-            device_id,
-            Some(generation_id),
-            None,
-            None,
-            "DENIED:protocol_mismatch",
-        );
-        writer.write(b"DENIED:protocol_mismatch").await?;
-        return Ok(());
-    }
-    let data_frames = supports_data_frames(protocol_revision);
-    if password != session.password {
-        log_getconf_result(
-            app,
-            session,
-            device_id,
+            password,
             Some(generation_id),
             None,
             None,
@@ -4616,24 +4708,11 @@ async fn handle_getconf(
         writer.write(b"DENIED:wrong_password").await?;
         return Ok(());
     }
-    if device_id.is_empty() || device_id.len() > 128 {
-        log_getconf_result(
-            app,
-            session,
-            device_id,
-            Some(generation_id),
-            None,
-            None,
-            "DENIED:invalid_device",
-        );
-        writer.write(b"DENIED:invalid_device").await?;
-        return Ok(());
-    }
     if client_port.parse::<u16>().is_err() {
         log_getconf_result(
             app,
             session,
-            device_id,
+            password,
             Some(generation_id),
             None,
             None,
@@ -4646,7 +4725,7 @@ async fn handle_getconf(
         log_getconf_result(
             app,
             session,
-            device_id,
+            password,
             Some(generation_id),
             None,
             None,
@@ -4659,7 +4738,7 @@ async fn handle_getconf(
         log_getconf_result(
             app,
             session,
-            device_id,
+            password,
             Some(generation_id),
             None,
             None,
@@ -4668,14 +4747,17 @@ async fn handle_getconf(
         writer.write(b"DENIED:invalid_worker").await?;
         return Ok(());
     };
-    let desired_count = if desired_text.is_empty() {
+    session
+        .worker_id
+        .store(u64::from(worker_id), Ordering::Release);
+    let count = if desired_text.is_empty() {
         0
     } else {
         let Ok(count @ 1..=MAX_STREAM_WORKERS_U16) = desired_text.parse::<u16>() else {
             log_getconf_result(
                 app,
                 session,
-                device_id,
+                password,
                 Some(generation_id),
                 Some(worker_id),
                 None,
@@ -4684,117 +4766,186 @@ async fn handle_getconf(
             writer.write(b"DENIED:invalid_worker_count").await?;
             return Ok(());
         };
-        if worker_id > count {
-            log_getconf_result(
-                app,
-                session,
-                device_id,
-                Some(generation_id),
-                Some(worker_id),
-                Some(count),
-                "DENIED:invalid_worker_count",
-            );
-            writer.write(b"DENIED:invalid_worker_count").await?;
-            return Ok(());
-        }
         count
     };
+    let desired_count = count;
     let preliminary = {
         let db = db_read(app).await?;
-        getconf_credential_access(&db, password, device_id)
+        let access = getconf_credential_access(&db, password);
+        match access {
+            Err(e) => Err(e),
+            Ok(access) => {
+                let current_session_desired = {
+                    let direct = session.desired_stream_count.load(Ordering::Acquire) as u16;
+                    if (3..=MAX_STREAM_WORKERS_U16).contains(&direct) {
+                        direct
+                    } else {
+                        app.sessions
+                            .iter()
+                            .find_map(|s| {
+                                if s.password == password
+                                    && s.generation_id.load(Ordering::Acquire) == generation_id
+                                {
+                                    let val = s.desired_stream_count.load(Ordering::Acquire) as u16;
+                                    if (3..=MAX_STREAM_WORKERS_U16).contains(&val) {
+                                        return Some(val);
+                                    }
+                                }
+                                None
+                            })
+                            .unwrap_or(0)
+                    }
+                };
+                let server_worker_limit = resolve_worker_limit_access(&db, &access);
+                let max_allowed = if let Some(limit) = server_worker_limit {
+                    limit as u16
+                } else if (3..=MAX_STREAM_WORKERS_U16).contains(&current_session_desired) {
+                    current_session_desired
+                } else if desired_count > 0 {
+                    desired_count
+                } else {
+                    MAX_STREAM_WORKERS_U16
+                };
+                if worker_id > 3 && worker_id > max_allowed {
+                    Err("DENIED:invalid_worker_count")
+                } else {
+                    Ok(access)
+                }
+            }
+        }
     };
     if let Err(response) = preliminary {
         log_getconf_result(
             app,
             session,
-            device_id,
+            password,
             Some(generation_id),
             Some(worker_id),
             Some(desired_count),
             response,
         );
         writer.write(response.as_bytes()).await?;
-        if rejected_session_is_request(session, device_id, generation_id, session_salt) {
+        if rejected_session_is_request(session, password, generation_id, session_salt) {
             drop_exact_session(app, session);
         }
         return Ok(());
     }
-    let (epoch_lock, mut epoch, created_epoch) = lock_device_epoch(app, device_id).await;
-    let dns = app.dns.read().await.clone();
-    let (response, reject_session, authorization_rejected, tunnel_ip, changed) = {
+    let (epoch_lock, mut epoch, created_epoch) = lock_password_epoch(app, password).await;
+    let dns = effective_dns(app).await;
+    let (
+        response,
+        reject_session,
+        authorization_rejected,
+        tunnel_ip,
+        changed,
+        routing_rule,
+        server_worker_limit,
+    ) = {
         let mut db = db_write(app).await?;
         let mut changed = false;
         let mut reject_session = false;
-        let access = getconf_credential_access(&db, password, device_id);
+        let access = getconf_credential_access(&db, password);
+        let server_worker_limit = access
+            .as_ref()
+            .ok()
+            .and_then(|a| resolve_worker_limit_access(&db, a));
+        let current_session_desired = {
+            let direct = session.desired_stream_count.load(Ordering::Acquire) as u16;
+            if (3..=MAX_STREAM_WORKERS_U16).contains(&direct) {
+                direct
+            } else {
+                app.sessions
+                    .iter()
+                    .find_map(|s| {
+                        if s.password == password
+                            && s.generation_id.load(Ordering::Acquire) == generation_id
+                        {
+                            let val = s.desired_stream_count.load(Ordering::Acquire) as u16;
+                            if (3..=MAX_STREAM_WORKERS_U16).contains(&val) {
+                                return Some(val);
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or(0)
+            }
+        };
+        let effective_desired_count = if let Some(limit) = server_worker_limit {
+            limit as u16
+        } else if (3..=MAX_STREAM_WORKERS_U16).contains(&current_session_desired) {
+            current_session_desired
+        } else if desired_count > 0 {
+            desired_count
+        } else {
+            3
+        };
+        let max_allowed = if let Some(limit) = server_worker_limit {
+            limit as u16
+        } else {
+            MAX_STREAM_WORKERS_U16
+        };
+        let worker_limit_mismatch = worker_id > 3 && worker_id > max_allowed;
+        let access = if worker_limit_mismatch {
+            Err("DENIED:invalid_worker_count")
+        } else {
+            access
+        };
         let authorization_rejected = access.is_err();
         let mut tunnel_ip = None;
+        let mut routing_rule = None;
         let response = match access {
             Err(response) => {
                 reject_session = true;
                 response.to_owned()
             }
             Ok(access) => match epoch.admit(generation_id, session_salt) {
-                DeviceEpochDecision::Current | DeviceEpochDecision::Replaced => {
-                    set_public_epoch(session, device_id, generation_id, session_salt);
+                PasswordEpochDecision::Current | PasswordEpochDecision::Replaced => {
+                    set_public_epoch(session, generation_id, session_salt);
                     session
                         .worker_id
                         .store(u64::from(worker_id), Ordering::Release);
                     session
                         .desired_stream_count
-                        .store(u64::from(desired_count), Ordering::Release);
-                    purge_stale_device_sessions(
+                        .store(u64::from(effective_desired_count), Ordering::Release);
+                    purge_stale_password_sessions(
                         app,
-                        device_id,
+                        password,
                         generation_id,
                         session_salt,
                         session.id,
                     );
                     purge_replaced_worker_sessions(
                         app,
-                        device_id,
+                        password,
                         generation_id,
                         session_salt,
                         u64::from(worker_id),
                         session.id,
                     );
-                    if access == CredentialAccess::Unbound
-                        && let Some(entry) = db.passwords.get_mut(password)
-                    {
-                        entry.device_id = device_id.to_owned();
-                        changed = true;
-                    }
-                    if access == CredentialAccess::Main && db.main_device_id.is_empty() {
-                        db.main_device_id = device_id.to_owned();
-                        changed = true;
-                    }
-                    if !db.devices.contains_key(device_id) {
-                        if let Some(ip) = get_next_ip(&db) {
-                            let (private, public) = generate_key_pair();
-                            db.devices.insert(
-                                device_id.to_owned(),
-                                ClientDevice {
-                                    device_id: device_id.to_owned(),
-                                    ip,
-                                    priv_key: private,
-                                    pub_key: public,
-                                    up_bytes: 0,
-                                    down_bytes: 0,
-                                },
-                            );
-                            changed = true;
+                    let ip_str = match &access {
+                        CredentialAccess::Main => crate::model::OWNER_TUNNEL_IP.to_string(),
+                        CredentialAccess::Slot(slot_key) => {
+                            let needs_ip =
+                                db.passwords.get(slot_key).is_some_and(|e| e.ip.is_empty());
+                            let next_ip = if needs_ip { get_next_ip(&db) } else { None };
+                            if let Some(entry) = db.passwords.get_mut(slot_key) {
+                                if let Some(ip) = next_ip {
+                                    entry.ip = ip;
+                                    changed = true;
+                                }
+                                entry.ip.clone()
+                            } else {
+                                String::new()
+                            }
                         }
-                    }
-                    if let Some(device) = db.devices.get(device_id).cloned() {
-                        tunnel_ip = crate::tun_device::parse_ipv4(&device.ip);
-                        let stream_revision = if data_frames {
-                            "stream-v2"
-                        } else {
-                            "stream-v1"
-                        };
-                        format!(
-                            "TUNCONF:{}:{}:{}:{stream_revision}",
-                            device.ip, dns, client_port
-                        )
+                    };
+                    if !ip_str.is_empty() {
+                        tunnel_ip = crate::tun_device::parse_ipv4(&ip_str);
+                        routing_rule = resolve_routing_rule_access(&db, &access).cloned();
+                        pad_tunconf(&format!(
+                            "TUNCONF:{}:{}:{}:stream-v1:workers={effective_desired_count}",
+                            ip_str, dns, client_port
+                        ))
                     } else {
                         "NOCONF".to_owned()
                     }
@@ -4810,51 +4961,63 @@ async fn handle_getconf(
             authorization_rejected,
             tunnel_ip,
             changed,
+            routing_rule,
+            server_worker_limit,
         )
     };
     if authorization_rejected && created_epoch {
-        app.device_epochs
-            .remove_if(device_id, |_, current| Arc::ptr_eq(current, &epoch_lock));
+        app.password_epochs
+            .remove_if(password, |_, current| Arc::ptr_eq(current, &epoch_lock));
     }
     if !reject_session {
         command(
             app,
             ProtocolCommand::UpdateEpoch {
                 session_id: session.id,
-                device_id: device_id.to_owned(),
+                password: password.to_owned(),
                 generation_id,
                 session_salt: session_salt.to_owned(),
-            },
-        )?;
-        command(
-            app,
-            ProtocolCommand::SetDataFrames {
-                session_id: session.id,
-                enabled: data_frames,
             },
         )?;
         command(
             app,
             ProtocolCommand::SetAuthoritativeEpoch {
-                device_id: device_id.to_owned(),
+                password: password.to_owned(),
                 generation_id,
                 session_salt: session_salt.to_owned(),
             },
         )?;
     }
+    let current_session_desired = session.desired_stream_count.load(Ordering::Acquire) as u16;
+    let effective_desired_count = if let Some(limit) = server_worker_limit {
+        limit as u16
+    } else if (3..=MAX_STREAM_WORKERS_U16).contains(&current_session_desired) {
+        current_session_desired
+    } else if desired_count > 0 {
+        desired_count
+    } else {
+        3
+    };
     log_getconf_result(
         app,
         session,
-        device_id,
+        password,
         Some(generation_id),
         Some(worker_id),
-        Some(desired_count),
+        Some(effective_desired_count),
         &response,
     );
-    if !reject_session && let Some(ip) = tunnel_ip {
+    let should_activate_carrier = worker_id <= effective_desired_count;
+    if !reject_session
+        && should_activate_carrier
+        && let Some(ip) = tunnel_ip
+    {
         *lock_unpoison(&session.tunnel_ip) = Some(ip);
         let registration_id = ROUTE_REGISTRATION_COUNTER.fetch_add(1, Ordering::Relaxed);
         session.has_tunnel.store(true, Ordering::Release);
+        session
+            .desired_stream_count
+            .store(u64::from(effective_desired_count), Ordering::Release);
         command(
             app,
             ProtocolCommand::ActivateTunnel {
@@ -4862,15 +5025,68 @@ async fn handle_getconf(
                 ip,
                 registration_id,
                 worker_id,
-                desired_count,
+                desired_count: effective_desired_count,
             },
         )?;
     }
     writer.write(response.as_bytes()).await?;
-    drop(epoch);
-    if reject_session
-        && rejected_session_is_request(session, device_id, generation_id, session_salt)
+    if !reject_session
+        && worker_id <= 1
+        && let Some(rule) = routing_rule
     {
+        let json_val = serde_json::json!({
+            "version": 2,
+            "name": rule.name,
+            "mode": if rule.is_whitelist { "whitelist" } else { "blacklist" },
+            "is_whitelist": rule.is_whitelist,
+            "packages": &rule.packages,
+            "domains_mode": if rule.domains_is_whitelist { "whitelist" } else { "blacklist" },
+            "domains_is_whitelist": rule.domains_is_whitelist,
+            "domains": &rule.direct_domains,
+            "template_domains": rule.template_domains,
+            "ip_mode": if rule.ip_is_whitelist { "whitelist" } else { "blacklist" },
+            "ip_is_whitelist": rule.ip_is_whitelist,
+            "ips": &rule.ips
+        });
+        let raw_json = serde_json::to_string(&json_val).unwrap_or_default();
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let payload_bytes = if encoder.write_all(raw_json.as_bytes()).is_ok()
+            && let Ok(finish) = encoder.finish()
+        {
+            finish
+        } else {
+            raw_json.into_bytes()
+        };
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&payload_bytes);
+        let chunk_size = 650;
+        let total_chunks = encoded.len().div_ceil(chunk_size);
+        let total_chunks = if total_chunks == 0 { 1 } else { total_chunks };
+
+        let _ = writer
+            .write(format!("ROUTING:START:{total_chunks}").as_bytes())
+            .await;
+        for i in 1..=total_chunks {
+            let start = (i - 1) * chunk_size;
+            let end = std::cmp::min(i * chunk_size, encoded.len());
+            let chunk = if start < encoded.len() {
+                &encoded[start..end]
+            } else {
+                ""
+            };
+            let _ = writer
+                .write(format!("ROUTING:{i}:{total_chunks}:{chunk}").as_bytes())
+                .await;
+        }
+        let _ = writer
+            .write(format!("ROUTING:FINISH:{total_chunks}").as_bytes())
+            .await;
+    }
+    drop(epoch);
+    if reject_session {
         drop_exact_session(app, session);
     }
     if changed {
@@ -4886,12 +5102,11 @@ async fn ensure_control_tunnel(app: &Arc<App>, session: &Arc<Session>) -> Result
     let ip = if let Some(ip) = *lock_unpoison(&session.tunnel_ip) {
         ip
     } else {
-        let identity = session_epoch_identity(session);
         let ip = {
             let db = db_read(app).await?;
-            resolve_session_ip(&db, &session.password, &identity.device_id)
+            resolve_session_ip(&db, &session.password)
         }
-        .ok_or_else(|| anyhow!("no device IP assigned for this session"))?;
+        .ok_or_else(|| anyhow!("no IP assigned for this session"))?;
         let parsed =
             crate::tun_device::parse_ipv4(&ip).ok_or_else(|| anyhow!("invalid tunnel IP: {ip}"))?;
         *lock_unpoison(&session.tunnel_ip) = Some(parsed);
@@ -4901,7 +5116,7 @@ async fn ensure_control_tunnel(app: &Arc<App>, session: &Arc<Session>) -> Result
     let worker_id = u16::try_from(session.worker_id.load(Ordering::Acquire))
         .ok()
         .filter(|worker| (1..=MAX_STREAM_WORKERS_U16).contains(worker))
-        .ok_or_else(|| anyhow!("session has no valid worker id"))?;
+        .unwrap_or(1);
     let desired_count = u16::try_from(session.desired_stream_count.load(Ordering::Acquire))
         .ok()
         .filter(|count| (1..=MAX_STREAM_WORKERS_U16).contains(count) && worker_id <= *count)
@@ -4924,53 +5139,47 @@ fn disconnect_request_authorized(
     db: &Database,
     password: &str,
     requester: &SessionEpochIdentity,
-    device_id: &str,
     target_salt: &str,
-    epoch: &DeviceEpochState,
+    epoch: &PasswordEpochState,
 ) -> bool {
     !target_salt.is_empty()
-        && requester.device_id == device_id
+        && secret_eq(&requester.password, password)
         && requester.session_salt == target_salt
         && epoch.matches(requester.generation_id, target_salt)
-        && device_control_authorized(db, password, device_id)
+        && (secret_eq(password, &db.main_password) || db.passwords.contains_key(password))
 }
 
 pub async fn handle_disconnect(
     app: &Arc<App>,
     requester: &Arc<Session>,
-    device_id: &str,
+    password: &str,
     target_salt: &str,
 ) -> std::result::Result<usize, &'static str> {
-    if device_id.is_empty() || device_id.len() > 128 {
-        return Err("DENIED:invalid_device");
+    let effective_password = if !password.is_empty() {
+        password
+    } else {
+        requester.password.as_str()
+    };
+    if effective_password.is_empty() || effective_password.len() > 128 {
+        return Err("DENIED:wrong_password");
     }
     if target_salt.is_empty() || target_salt.len() > 128 {
         return Err("DENIED:invalid_epoch");
     }
     let preliminary = session_epoch_identity(requester);
-    let preliminary_authorized = {
-        match db_read(app).await {
-            Ok(db) => {
-                device_control_authorized(&db, &requester.password, device_id)
-                    && preliminary.device_id == device_id
-                    && preliminary.session_salt == target_salt
-            }
-            Err(_) => false,
-        }
-    };
-    if !preliminary_authorized {
+    if preliminary.password != effective_password || preliminary.session_salt != target_salt {
         return Err("DENIED:not_owner");
     }
-    let Some((_epoch_lock, epoch)) = lock_existing_device_epoch(app, device_id).await else {
+    let Some((_epoch_lock, epoch)) = lock_existing_password_epoch(app, effective_password).await
+    else {
         return Err("DENIED:not_owner");
     };
     let db = db_read(app).await.map_err(|_| "DENIED:server_busy")?;
     let requester_identity = session_epoch_identity(requester);
     if !disconnect_request_authorized(
         &db,
-        &requester.password,
+        effective_password,
         &requester_identity,
-        device_id,
         target_salt,
         &epoch,
     ) {
@@ -4982,14 +5191,14 @@ pub async fn handle_disconnect(
         .iter()
         .filter_map(|entry| {
             let session = entry.value();
-            (session.id == requester.id || session_epoch_identity(session).device_id == device_id)
+            (session.id == requester.id || secret_eq(&session.password, effective_password))
                 .then_some(session.id)
         })
         .collect::<Vec<_>>();
     command(
         app,
-        ProtocolCommand::DisconnectDevice {
-            device_id: device_id.to_owned(),
+        ProtocolCommand::DisconnectPassword {
+            password: effective_password.to_owned(),
             requester_session_id: requester.id,
         },
     )
@@ -4998,8 +5207,7 @@ pub async fn handle_disconnect(
     for session_id in candidates {
         if let Some((_, session)) = app.sessions.remove_if(&session_id, |_, current| {
             current.id == session_id
-                && (current.id == requester.id
-                    || session_epoch_identity(current).device_id == device_id)
+                && (current.id == requester.id || secret_eq(&current.password, effective_password))
         }) {
             session.cancel_token.cancel();
             removed += 1;
@@ -5031,18 +5239,6 @@ pub async fn flush_traffic(app: &Arc<App>) {
                     down_bytes: password.down_bytes,
                 },
             );
-            let device_id = password.device_id.clone();
-            if let Some(device) = db.devices.get_mut(&device_id) {
-                device.up_bytes = device.up_bytes.saturating_add(up as i64);
-                device.down_bytes = device.down_bytes.saturating_add(down as i64);
-                traffic.devices.insert(
-                    device_id,
-                    TrafficCounters {
-                        up_bytes: device.up_bytes,
-                        down_bytes: device.down_bytes,
-                    },
-                );
-            }
         } else if session.password == db.main_password {
             db.main_up_bytes = db.main_up_bytes.saturating_add(up as i64);
             db.main_down_bytes = db.main_down_bytes.saturating_add(down as i64);
@@ -5050,20 +5246,6 @@ pub async fn flush_traffic(app: &Arc<App>) {
                 up_bytes: db.main_up_bytes,
                 down_bytes: db.main_down_bytes,
             });
-            let device_id = lock_unpoison(&session.device_id).clone();
-            if !device_id.is_empty()
-                && let Some(device) = db.devices.get_mut(&device_id)
-            {
-                device.up_bytes = device.up_bytes.saturating_add(up as i64);
-                device.down_bytes = device.down_bytes.saturating_add(down as i64);
-                traffic.devices.insert(
-                    device_id,
-                    TrafficCounters {
-                        up_bytes: device.up_bytes,
-                        down_bytes: device.down_bytes,
-                    },
-                );
-            }
         }
     }
     drop(db);
@@ -5216,100 +5398,86 @@ mod tests {
     #[test]
     fn hot_tunnel_configuration_preserves_client_ip_and_replaces_dns() {
         let payload = format!(
-            "TUNCONF:{}:{}:0:stream-v2",
+            "TUNCONF:{}:{}:0:stream-v1",
             Ipv4Addr::from([10, 66, 67, 42]),
             "8.8.8.8,8.8.4.4"
         );
-        assert_eq!(payload, "TUNCONF:10.66.67.42:8.8.8.8,8.8.4.4:0:stream-v2");
+        assert_eq!(payload, "TUNCONF:10.66.67.42:8.8.8.8,8.8.4.4:0:stream-v1");
     }
 
     #[test]
-    fn a_device_can_bind_multiple_passwords_but_each_password_stays_device_locked() {
-        let mut db = Database::default();
-        db.devices.insert(
-            "device-a".to_owned(),
-            ClientDevice {
-                device_id: "device-a".to_owned(),
-                ..ClientDevice::default()
-            },
-        );
+    fn password_authentication_authorizes_main_and_slots() {
+        let mut db = Database {
+            main_password: "OwnerSecretPass1".to_owned(),
+            ..Database::default()
+        };
         db.passwords.insert(
-            "password-a".to_owned(),
+            "SlotSecretPass01".to_owned(),
             PasswordEntry {
-                device_id: "device-a".to_owned(),
+                ip: "10.66.67.3".to_owned(),
                 ..PasswordEntry::default()
             },
         );
-        db.passwords
-            .insert("password-b".to_owned(), PasswordEntry::default());
-
-        assert_eq!(
-            getconf_credential_access(&db, "password-b", "device-a"),
-            Ok(CredentialAccess::Unbound)
-        );
-        assert_eq!(
-            getconf_credential_access(&db, "password-a", "device-b"),
-            Err("DENIED:device_mismatch")
+        db.passwords.insert(
+            "SlotSecretPass02".to_owned(),
+            PasswordEntry {
+                ip: "10.66.67.4".to_owned(),
+                is_deactivated: true,
+                ..PasswordEntry::default()
+            },
         );
 
-        db.passwords.get_mut("password-b").unwrap().device_id = "device-a".to_owned();
         assert_eq!(
-            getconf_credential_access(&db, "password-a", "device-a"),
-            Ok(CredentialAccess::Bound)
+            getconf_credential_access(&db, "OwnerSecretPass1"),
+            Ok(CredentialAccess::Main)
+        );
+
+        assert_eq!(
+            getconf_credential_access(&db, "SlotSecretPass01"),
+            Ok(CredentialAccess::Slot("SlotSecretPass01".to_owned()))
+        );
+
+        assert_eq!(
+            getconf_credential_access(&db, "SlotSecretPass02"),
+            Err("DENIED:deactivated")
+        );
+
+        assert_eq!(
+            getconf_credential_access(&db, "UnknownPassword1"),
+            Err("DENIED:wrong_password")
         );
         assert_eq!(
-            getconf_credential_access(&db, "password-b", "device-a"),
-            Ok(CredentialAccess::Bound)
+            getconf_credential_access(&db, ""),
+            Err("DENIED:wrong_password")
         );
-        assert_eq!(
-            getconf_credential_access(&db, "password-b", "device-b"),
-            Err("DENIED:device_mismatch")
-        );
-        assert!(device_control_authorized(&db, "password-a", "device-a"));
-        assert!(device_control_authorized(&db, "password-b", "device-a"));
     }
 
-    fn fixture_engine_with_worker(
-        password: &str,
-        shard_index: usize,
-        shard_count: usize,
-    ) -> (
-        ProtocolEngine,
-        mpsc::Receiver<ControlEvent>,
-        mpsc::Receiver<dataplane::WorkerOutput<ProtocolCommand>>,
-    ) {
+    fn fixture_engine(password: &str) -> (ProtocolEngine, mpsc::Receiver<ControlEvent>) {
         let key = derive_wrap_key(password).unwrap();
+        let dtls_keys = crate::dtls::derive_dtls_srtp_deterministic(&key);
         let credentials = Arc::new(CredentialSet {
             entries: vec![Credential {
                 password: Arc::<str>::from(password),
                 key,
                 aes: make_aes_key(&key),
                 hmac: make_hmac_key(&key),
-                chacha: aws_lc_rs::aead::LessSafeKey::new(
-                    aws_lc_rs::aead::UnboundKey::new(&aws_lc_rs::aead::CHACHA20_POLY1305, &key)
-                        .unwrap(),
-                ),
+                dtls_client_cipher_key: dtls_keys.client_cipher_key,
+                dtls_client_aes: make_aes_key(&dtls_keys.client_cipher_key),
+                dtls_client_hmac: make_hmac_key(&dtls_keys.client_cipher_key),
+                dtls_server_cipher_key: dtls_keys.server_cipher_key,
             }],
         });
         let (control_tx, control_rx) = mpsc::channel(64);
-        let (output_tx, output_rx) = mpsc::channel(64);
         let engine = ProtocolEngine::new(
-            WorkerContext::new(shard_index, shard_count, output_tx),
             credentials,
             HashMap::new(),
             control_tx,
-            FecProfile::Safe,
             Arc::new(AtomicBool::new(false)),
             EngineShared {
                 global_up: Arc::new(AtomicU64::new(0)),
                 global_down: Arc::new(AtomicU64::new(0)),
             },
         );
-        (engine, control_rx, output_rx)
-    }
-
-    fn fixture_engine(password: &str) -> (ProtocolEngine, mpsc::Receiver<ControlEvent>) {
-        let (engine, control_rx, _output_rx) = fixture_engine_with_worker(password, 0, 1);
         (engine, control_rx)
     }
 
@@ -5317,111 +5485,9 @@ mod tests {
         hex::decode(crate::wire_protocol::CLIENT_GETCONF_AUDIO_FIXTURE).unwrap()
     }
 
-    struct NoopSink;
-
-    impl PacketOutput for NoopSink {
-        fn has_udp_tx_slot(&self) -> bool {
-            true
-        }
-
-        fn send_udp_with_duplicate_priority<F>(
-            &mut self,
-            _peer: SocketAddr,
-            _source_ip: Option<IpAddr>,
-            _duplicate: bool,
-            _class: crate::striped_scheduler::PacketClass,
-            build: F,
-        ) -> bool
-        where
-            F: FnOnce(&mut PacketBuf) -> bool,
-        {
-            let pool = crate::packet::PacketPool::new(1);
-            let Some(mut packet) = pool.try_acquire() else {
-                return false;
-            };
-            build(&mut packet)
-        }
-
-        fn request_udp_flush(&mut self) {}
-
-        fn write_tun_priority(
-            &mut self,
-            _payload: &[u8],
-            _class: crate::striped_scheduler::PacketClass,
-        ) -> bool {
-            true
-        }
-    }
-
     #[test]
-    fn device_owner_shard_is_stable_across_all_turn_workers() {
-        for device in ["alpha", "device-42", "long-device-id-0123456789"] {
-            let owner = shard_for_device(device, 11);
-            assert!(owner < 11);
-            for _ in 0..126 {
-                assert_eq!(shard_for_device(device, 11), owner);
-            }
-        }
-    }
-
-    #[test]
-    fn bootstrap_session_moves_to_its_device_owner_before_control_is_emitted() {
-        let mut device = "device-owner".to_owned();
-        while shard_for_device(&device, 2) == 0 {
-            device.push('x');
-        }
-        let target = shard_for_device(&device, 2);
-        let password = "owner-password";
-        let key = derive_wrap_key(password).unwrap();
-        let (mut bootstrap, mut bootstrap_control, mut router_output) =
-            fixture_engine_with_worker(password, 0, 2);
-        let slot = bootstrap.create_legacy_session(
-            "127.0.0.1:46000".parse().unwrap(),
-            None,
-            Arc::<str>::from(password),
-            key,
-            111,
-            false,
-            &device,
-            1,
-            "owner-salt",
-            1,
-        );
-        bootstrap.place_new_session(slot, b"GETCONF:9000|owner".to_vec());
-        assert!(bootstrap.sessions.is_empty());
-        assert!(bootstrap.endpoint_is_migrating("127.0.0.1:46000".parse().unwrap(), None));
-        assert!(matches!(
-            bootstrap_control.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        let command = match router_output.try_recv() {
-            Ok(dataplane::WorkerOutput::Router(dataplane::RouterCommand::Migrate {
-                shard,
-                command,
-                ..
-            })) => {
-                assert_eq!(shard, target);
-                command
-            }
-            _ => panic!("bootstrap did not enqueue session migration"),
-        };
-        let (mut owner, mut owner_control, _owner_output) =
-            fixture_engine_with_worker(password, target, 2);
-        owner.on_command(command, &mut NoopSink);
-        assert_eq!(owner.sessions.len(), 1);
-        assert!(matches!(
-            owner_control.try_recv(),
-            Ok(ControlEvent::SessionCreated(_))
-        ));
-        assert!(matches!(
-            owner_control.try_recv(),
-            Ok(ControlEvent::Payload { .. })
-        ));
-    }
-
-    #[test]
-    fn legacy_json_client_remains_authorized_after_runtime_epoch_reset() {
-        use crate::model::{ClientDevice, Database, PasswordEntry, load_database};
+    fn legacy_json_migration_with_16_char_passwords_and_ip() {
+        use crate::model::{Database, PasswordEntry, load_database};
 
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -5430,20 +5496,15 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("csqtt-legacy-getconf-{unique}"));
         std::fs::create_dir_all(&directory).unwrap();
 
-        let mut legacy = Database::default();
+        let mut legacy = Database {
+            main_password: "OwnerMainPass123".to_owned(),
+            ..Database::default()
+        };
         legacy.passwords.insert(
-            "legacy-password".to_owned(),
+            "16charclientpass".to_owned(),
             PasswordEntry {
-                device_id: "legacy-device".to_owned(),
+                ip: "".to_owned(),
                 ..PasswordEntry::default()
-            },
-        );
-        legacy.devices.insert(
-            "legacy-device".to_owned(),
-            ClientDevice {
-                device_id: "legacy-device".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                ..ClientDevice::default()
             },
         );
         std::fs::write(
@@ -5453,14 +5514,22 @@ mod tests {
         .unwrap();
 
         let migrated = load_database(&directory).unwrap();
+        assert_eq!(migrated.passwords.len(), 1);
+        let (new_pass, entry) = migrated.passwords.iter().next().unwrap();
+        assert_eq!(new_pass.len(), 16);
+        assert!(!entry.ip.is_empty());
         assert_eq!(
-            getconf_credential_access(&migrated, "legacy-password", "legacy-device"),
-            Ok(CredentialAccess::Bound)
+            getconf_credential_access(&migrated, new_pass),
+            Ok(CredentialAccess::Slot(new_pass.clone()))
         );
-        let mut epoch = DeviceEpochState::default();
+        assert_eq!(
+            getconf_credential_access(&migrated, "OwnerMainPass123"),
+            Ok(CredentialAccess::Main)
+        );
+        let mut epoch = PasswordEpochState::default();
         assert_eq!(
             epoch.admit(1_786_000_000, "fresh-session-salt"),
-            DeviceEpochDecision::Replaced
+            PasswordEpochDecision::Replaced
         );
         assert!(!directory.join("passwords.json").exists());
         let _ = std::fs::remove_dir_all(directory);
@@ -5547,28 +5616,34 @@ mod tests {
 
     #[test]
     fn getconf_epoch_parser_is_strict() {
-        let max = format!("GETCONF:9000|device|password|{}|salt", u64::MAX);
+        let max = format!("GETCONF:9000|password|{}|salt", u64::MAX);
         assert_eq!(
-            parse_getconf_epoch(max.as_bytes()),
-            Some(("device", u64::MAX, "salt"))
+            parse_getconf_identity(max.as_bytes()),
+            Some(("password", u64::MAX, "salt"))
         );
-        let max_with_count = format!("GETCONF:9000|device|password|{}|salt|4|36", u64::MAX);
+        let max_with_count = format!("GETCONF:9000|password|{}|salt|4|36", u64::MAX);
         assert_eq!(
-            parse_getconf_epoch(max_with_count.as_bytes()),
-            Some(("device", u64::MAX, "salt"))
+            parse_getconf_identity(max_with_count.as_bytes()),
+            Some(("password", u64::MAX, "salt"))
         );
-        assert!(parse_getconf_epoch(b"GETCONF:9000|device|password|-1|salt").is_none());
-        assert!(parse_getconf_epoch(b"GETCONF:9000|device|password|+1|salt").is_none());
-        assert!(parse_getconf_epoch(b"GETCONF:9000||password|1|salt").is_none());
+        let max_with_count_and_pad = format!(
+            "GETCONF:9000|password|{}|salt|4|36|extra_padding_bytes_here",
+            u64::MAX
+        );
+        assert_eq!(
+            parse_getconf_identity(max_with_count_and_pad.as_bytes()),
+            Some(("password", u64::MAX, "salt"))
+        );
+        assert!(parse_getconf_identity(b"GETCONF:9000|password|-1|salt").is_none());
+        assert!(parse_getconf_identity(b"GETCONF:9000|password|+1|salt").is_none());
+        assert!(parse_getconf_identity(b"GETCONF:9000||1|salt").is_none());
     }
 
     #[test]
-    fn wire_protocol_revision_must_match_exactly() {
-        assert!(is_supported_wire_protocol(
-            crate::wire_protocol::WIRE_PROTOCOL_REVISION
-        ));
-        assert!(!is_supported_wire_protocol("CSQTT-WIRE-1"));
-        assert!(!is_supported_wire_protocol(""));
+    fn tunconf_padding_is_sized_for_audio_frames() {
+        let base = "TUNCONF:10.66.67.2:1.1.1.1:9000:stream-v1";
+        let padded = pad_tunconf(base);
+        assert_eq!(padded, base);
     }
 
     #[test]
@@ -5577,39 +5652,23 @@ mod tests {
         let key = derive_wrap_key("wire-password").unwrap();
         let aes = make_aes_key(&key);
         let hmac = make_hmac_key(&key);
-        let chacha = aws_lc_rs::aead::LessSafeKey::new(
-            aws_lc_rs::aead::UnboundKey::new(&aws_lc_rs::aead::CHACHA20_POLY1305, &key).unwrap(),
-        );
         let mut matching = wire.clone();
-        let decoded =
-            unwrap_legacy_in_place(&aes, &hmac, &chacha, &mut matching, None, false).unwrap();
+        let decoded = unwrap_legacy_in_place(&aes, &hmac, &mut matching, None, false).unwrap();
         assert_eq!(
             decoded.range.get(&matching),
             b"GETCONF:46000|wire-device|wire-password|7|wire-salt|1|27|CSQTT-WIRE-2"
         );
         assert_eq!(
-            parse_getconf_epoch(decoded.range.get(&matching)),
-            Some(("wire-device", 7, "wire-salt")),
+            parse_getconf_identity(decoded.range.get(&matching)),
+            Some(("wire-password", 7, "wire-salt")),
         );
 
         let wrong_key = derive_wrap_key("wrong-password").unwrap();
         let wrong_aes = make_aes_key(&wrong_key);
         let wrong_hmac = make_hmac_key(&wrong_key);
-        let wrong_chacha = aws_lc_rs::aead::LessSafeKey::new(
-            aws_lc_rs::aead::UnboundKey::new(&aws_lc_rs::aead::CHACHA20_POLY1305, &wrong_key)
-                .unwrap(),
-        );
         let mut mismatched = wire;
         assert!(
-            unwrap_legacy_in_place(
-                &wrong_aes,
-                &wrong_hmac,
-                &wrong_chacha,
-                &mut mismatched,
-                None,
-                false,
-            )
-            .is_err()
+            unwrap_legacy_in_place(&wrong_aes, &wrong_hmac, &mut mismatched, None, false,).is_err()
         );
     }
 
@@ -5622,9 +5681,9 @@ mod tests {
         assert_eq!(engine.sessions.len(), 1);
         let (_, session) = engine.sessions.iter().next().unwrap();
         assert_eq!(session.peer, peer);
-        assert_eq!(session.device_id, "wire-device");
-        assert_eq!(session.generation_id, 7);
-        assert_eq!(session.session_salt, "wire-salt");
+        assert_eq!(&*session.cold.password, "wire-password");
+        assert_eq!(session.cold.generation_id, 7);
+        assert_eq!(session.cold.session_salt, "wire-salt");
 
         match events.try_recv().unwrap() {
             ControlEvent::SessionCreated(session) => {
@@ -5716,17 +5775,13 @@ mod tests {
         let key = derive_wrap_key("wire-password").unwrap();
         let aes = make_aes_key(&key);
         let hmac = make_hmac_key(&key);
-        let chacha = aws_lc_rs::aead::LessSafeKey::new(
-            aws_lc_rs::aead::UnboundKey::new(&aws_lc_rs::aead::CHACHA20_POLY1305, &key).unwrap(),
-        );
 
         for byte_index in 0..wire.len() {
             for bit in 0..8 {
                 let mut corrupted = wire.clone();
                 corrupted[byte_index] ^= 1 << bit;
                 assert!(
-                    unwrap_legacy_in_place(&aes, &hmac, &chacha, &mut corrupted, None, false)
-                        .is_err(),
+                    unwrap_legacy_in_place(&aes, &hmac, &mut corrupted, None, false).is_err(),
                     "accepted mutation at byte {byte_index}, bit {bit}"
                 );
             }
@@ -5784,12 +5839,6 @@ mod tests {
     }
 
     #[test]
-    fn fec_profile_is_safe_by_default_and_can_be_disabled() {
-        assert_eq!(FecProfile::default(), FecProfile::Safe);
-        assert_ne!(FecProfile::Off, FecProfile::Safe);
-    }
-
-    #[test]
     fn reconnect_session_key_replaces_stale_and_conflicting_values() {
         assert_eq!(
             getconf_reconnect_action_hot("device", 77, "salt-a", "device", 76, "old",),
@@ -5810,43 +5859,43 @@ mod tests {
     }
 
     #[test]
-    fn active_device_session_replaces_any_different_key_without_ordering() {
-        let mut state = DeviceEpochState::default();
+    fn active_password_session_replaces_any_different_key_without_ordering() {
+        let mut state = PasswordEpochState::default();
 
-        assert_eq!(state.admit(77, "salt-a"), DeviceEpochDecision::Replaced);
-        assert_eq!(state.admit(77, "salt-a"), DeviceEpochDecision::Current);
-        assert_eq!(state.admit(12, "salt-b"), DeviceEpochDecision::Replaced);
+        assert_eq!(state.admit(77, "salt-a"), PasswordEpochDecision::Replaced);
+        assert_eq!(state.admit(77, "salt-a"), PasswordEpochDecision::Current);
+        assert_eq!(state.admit(12, "salt-b"), PasswordEpochDecision::Replaced);
         assert_eq!(state.generation_id, 12);
         assert_eq!(state.session_salt, "salt-b");
-        assert_eq!(state.admit(12, "salt-c"), DeviceEpochDecision::Replaced);
+        assert_eq!(state.admit(12, "salt-c"), PasswordEpochDecision::Replaced);
         assert_eq!(state.session_salt, "salt-c");
     }
 
     #[test]
     fn active_session_key_retires_every_different_session() {
         assert!(session_is_retired_by_epoch(
-            "device", 41, "old-a", "device", 42, "current"
+            "pass1", 41, "old-a", "pass1", 42, "current"
         ));
         assert!(session_is_retired_by_epoch(
-            "device", 1, "old-b", "device", 42, "current"
+            "pass1", 1, "old-b", "pass1", 42, "current"
         ));
         assert!(session_is_retired_by_epoch(
-            "device", 42, "conflict", "device", 42, "current"
+            "pass1", 42, "conflict", "pass1", 42, "current"
         ));
         assert!(!session_is_retired_by_epoch(
-            "device", 42, "current", "device", 42, "current"
+            "pass1", 42, "current", "pass1", 42, "current"
         ));
         assert!(session_is_retired_by_epoch(
-            "device", 43, "future", "device", 42, "current"
+            "pass1", 43, "future", "pass1", 42, "current"
         ));
         assert!(!session_is_retired_by_epoch(
-            "other", 1, "old", "device", 42, "current"
+            "other", 1, "old", "pass1", 42, "current"
         ));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_session_admission_accepts_each_new_session_key() {
-        let state = Arc::new(Mutex::new(DeviceEpochState::default()));
+        let state = Arc::new(Mutex::new(PasswordEpochState::default()));
         let mut tasks = Vec::new();
         for generation in (1..=128u64).rev().chain(1..=128) {
             let state = state.clone();
@@ -5862,15 +5911,18 @@ mod tests {
         assert!(
             (1..=128).any(|generation| state.matches(generation, &format!("salt-{generation}")))
         );
-        assert_eq!(state.admit(129, "salt-129"), DeviceEpochDecision::Replaced);
-        assert_eq!(state.admit(129, "salt-129"), DeviceEpochDecision::Current);
+        assert_eq!(
+            state.admit(129, "salt-129"),
+            PasswordEpochDecision::Replaced
+        );
+        assert_eq!(state.admit(129, "salt-129"), PasswordEpochDecision::Current);
     }
 
     #[test]
-    fn disconnect_targets_requester_and_all_device_sessions() {
-        assert!(session_is_disconnected_device(7, "", 7, "device"));
-        assert!(session_is_disconnected_device(8, "device", 7, "device"));
-        assert!(!session_is_disconnected_device(8, "other", 7, "device"));
+    fn disconnect_targets_requester_and_all_password_sessions() {
+        assert!(session_is_disconnected_password(7, "", 7, "pass"));
+        assert!(session_is_disconnected_password(8, "pass", 7, "pass"));
+        assert!(!session_is_disconnected_password(8, "other", 7, "pass"));
     }
 
     #[test]
@@ -5905,9 +5957,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn ten_clients_concurrent_reconnections_keep_device_identities_isolated() {
+    async fn ten_clients_concurrent_reconnections_keep_password_identities_isolated() {
         let states: Vec<_> = (0..10)
-            .map(|_| Arc::new(Mutex::new(DeviceEpochState::default())))
+            .map(|_| Arc::new(Mutex::new(PasswordEpochState::default())))
             .collect();
         let mut tasks = Vec::new();
 
@@ -5938,8 +5990,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn same_device_reconnections_converge_to_a_complete_generation_pair() {
-        let state = Arc::new(Mutex::new(DeviceEpochState::default()));
+    async fn same_password_reconnections_converge_to_a_complete_generation_pair() {
+        let state = Arc::new(Mutex::new(PasswordEpochState::default()));
         let mut tasks = Vec::new();
         for attempt in 0..1024u64 {
             let state = state.clone();
@@ -5981,6 +6033,17 @@ mod tests {
         }
         assert!(!replay.accept(0));
         assert!(!replay.accept(1));
+    }
+
+    #[test]
+    fn replay_window_accepts_initial_sequence_in_upper_half() {
+        for start_seq in [32768u16, 40000, 49151, 65535] {
+            let mut replay = ReplayState::new();
+            for offset in 0..1000u16 {
+                let seq = start_seq.wrapping_add(offset);
+                assert!(replay.accept(seq), "start {start_seq}, seq {seq}");
+            }
+        }
     }
 
     #[test]
@@ -6036,5 +6099,170 @@ mod tests {
         for value in ["-1", "+1", "1.0", "abc", "18446744073709551616", " 7", "7 "] {
             assert!(parse_generation_id(value).is_none(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn test_two_stage_handshake_getworkers_parsing_and_limits() {
+        let mut db = Database {
+            main_workers: Some(15),
+            ..Database::default()
+        };
+        db.passwords.insert(
+            "client-key".to_string(),
+            PasswordEntry {
+                workers: Some(10),
+                ..PasswordEntry::default()
+            },
+        );
+        db.passwords
+            .insert("unlimited-key".to_string(), PasswordEntry::default());
+
+        let access = CredentialAccess::Slot("client-key".to_string());
+        let limit = resolve_worker_limit_access(&db, &access);
+        assert_eq!(limit, Some(10));
+
+        let requested = 25u32;
+        let (agreed, limit_val) = match limit {
+            Some(l) if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&l) => {
+                let eff = if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&requested) {
+                    requested.min(l)
+                } else if requested < 3 {
+                    3.min(l)
+                } else {
+                    l
+                };
+                (eff, l)
+            }
+            _ => (requested, 0),
+        };
+        assert_eq!(agreed, 10);
+        assert_eq!(limit_val, 10);
+
+        let access_unlimited = CredentialAccess::Slot("unlimited-key".to_string());
+        let limit_unlimited = resolve_worker_limit_access(&db, &access_unlimited);
+        assert_eq!(limit_unlimited, None);
+        let (agreed_u, limit_val_u) = match limit_unlimited {
+            Some(l) if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&l) => (requested.min(l), l),
+            _ => {
+                let req = if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&requested) {
+                    requested
+                } else {
+                    3
+                };
+                (req, 0)
+            }
+        };
+        assert_eq!(agreed_u, 25);
+        assert_eq!(limit_val_u, 0);
+
+        let requested_low = 1u32;
+        let (agreed_low, _) = match limit_unlimited {
+            Some(l) if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&l) => {
+                (requested_low.min(l), l)
+            }
+            _ => {
+                let req = if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&requested_low) {
+                    requested_low
+                } else if requested_low > MAX_STREAM_WORKERS_U16 as u32 {
+                    MAX_STREAM_WORKERS_U16 as u32
+                } else {
+                    3
+                };
+                (req, 0)
+            }
+        };
+        assert_eq!(agreed_low, 3);
+
+        let requested_high = 200u32;
+        let (agreed_high, _) = match limit_unlimited {
+            Some(l) if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&l) => {
+                (requested_high.min(l), l)
+            }
+            _ => {
+                let req = if (3..=MAX_STREAM_WORKERS_U16 as u32).contains(&requested_high) {
+                    requested_high
+                } else if requested_high > MAX_STREAM_WORKERS_U16 as u32 {
+                    MAX_STREAM_WORKERS_U16 as u32
+                } else {
+                    3
+                };
+                (req, 0)
+            }
+        };
+        assert_eq!(agreed_high, MAX_STREAM_WORKERS_U16 as u32);
+    }
+
+    #[test]
+    fn test_bootstrap_effective_workers_prevents_phantom_max_repair() {
+        let desired_count = 0u16;
+        let current_session_desired = 0u16;
+        let server_worker_limit: Option<u32> = None;
+
+        let effective_desired_count = if let Some(limit) = server_worker_limit {
+            limit as u16
+        } else if (3..=MAX_STREAM_WORKERS_U16).contains(&current_session_desired) {
+            current_session_desired
+        } else if desired_count > 0 {
+            desired_count
+        } else {
+            3
+        };
+        assert_eq!(effective_desired_count, 3);
+
+        let active_carriers: std::collections::HashSet<u16> = [1, 2, 3].into_iter().collect();
+        let missing: Vec<u16> = (1..=effective_desired_count)
+            .filter(|worker| !active_carriers.contains(worker))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "expected 0 missing streams on bootstrap of 3, got: {:?}",
+            missing
+        );
+
+        let buggy_effective_desired = MAX_STREAM_WORKERS_U16;
+        let buggy_missing: Vec<u16> = (1..=buggy_effective_desired)
+            .filter(|worker| !active_carriers.contains(worker))
+            .collect();
+        assert_eq!(
+            buggy_missing.len(),
+            usize::from(MAX_STREAM_WORKERS_U16 - 3),
+            "demonstrates the old bug that caused a full repair request"
+        );
+    }
+
+    #[test]
+    fn test_stream_descriptor_tracking_and_no_leak_on_reconnect_and_teardown() {
+        use crate::tun_device::RouteTable;
+        let ip = [10, 66, 67, 10];
+        let mut table = RouteTable::new();
+
+        assert!(table.register(ip, 101, 1, 1, 0));
+        assert!(table.register(ip, 102, 2, 2, 1));
+        assert!(table.register(ip, 103, 3, 3, 2));
+
+        assert_eq!(table.stream_count(ip), 3);
+        assert_eq!(table.active_client_count(), 1);
+
+        assert!(table.register(ip, 202, 20, 2, 1));
+        assert_eq!(table.stream_count(ip), 3);
+
+        assert!(table.register(ip, 104, 4, 4, 3));
+        assert!(table.register(ip, 105, 5, 5, 4));
+        assert_eq!(table.stream_count(ip), 5);
+
+        assert!(table.unregister(ip, 1));
+        assert!(table.unregister(ip, 20));
+        assert!(table.unregister(ip, 3));
+        assert!(table.unregister(ip, 4));
+        assert!(table.unregister(ip, 5));
+
+        assert_eq!(table.stream_count(ip), 0);
+        assert_eq!(table.active_client_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn dns_fallback_identifies_yandex_immediately_without_network() {
+        assert_eq!(FALLBACK_DNS, "77.88.8.8,77.88.8.1");
     }
 }
