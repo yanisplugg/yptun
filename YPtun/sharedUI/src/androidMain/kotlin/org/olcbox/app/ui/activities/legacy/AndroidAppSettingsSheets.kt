@@ -4768,7 +4768,7 @@ private fun AndroidConnectionMode.description(): String {
         AndroidConnectionMode.Tun -> s.systemVpnInterface
         AndroidConnectionMode.Proxy -> s.localSocksEndpoint
         AndroidConnectionMode.Tproxy ->
-            "Transparent-proxy inbound (TCP+UDP) on the LAN — redirect traffic here via iptables TPROXY. Requires root."
+            "Transparent proxy: the app sets up root iptables TPROXY rules and redirects this phone's own TCP+UDP through the core (no VPN key icon). Requires root."
     }
 }
 
