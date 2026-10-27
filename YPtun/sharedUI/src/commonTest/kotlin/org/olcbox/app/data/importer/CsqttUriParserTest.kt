@@ -96,4 +96,19 @@ class CsqttUriParserTest {
         assertEquals("vkcalls", s("vk_auth_mode"))
         assertEquals("dev1", s("device_id"))
     }
+
+    @Test
+    fun readsTheNameFromTheFragment() {
+        val v2 = CsqttUriParser.parse("csqtt://connect?v=2&host=h&peer=46000&password=p&hashes=aaa#%D0%9D%D0%B8%D0%B4%D0%B5%D1%80%D0%BB%D0%B0%D0%BD%D0%B4%D1%8B")!!
+        assertEquals("Нидерланды", v2.name)
+        assertEquals("aaa", v2.hashes)
+        assertEquals("My node", CsqttUriParser.parse("csqtt://secret@203.0.113.7:46001#My%20node")!!.name)
+        assertEquals("", CsqttUriParser.parse("csqtt://secret@203.0.113.7:46001")!!.name)
+    }
+
+    @Test
+    fun composeKeepsTheName() {
+        val vk = VkTurnConfig(core = VkTurnConfig.CORE_CSQTT, csqttPeer = "h", csqttPort = 46000, csqttPassword = "p", vkLink = "aaa")
+        assertEquals("Ams ter", CsqttUriParser.parse(CsqttUriParser.compose(vk, "Ams ter"))!!.name)
+    }
 }

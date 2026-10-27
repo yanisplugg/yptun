@@ -248,6 +248,13 @@ private fun IosApp(
                         }
                     })
                 },
+                onImportTextRequested = { text, onImported, onError ->
+                    dependencies.homeViewModel.onImportFullConfig(
+                        rawText = text,
+                        onComplete = { reloadLocationsAfterImport(onImported) },
+                        onError = onError
+                    )
+                },
                 onImportFromClipboardRequested = { onImported, onError ->
                     dependencies.homeViewModel.onPasteFromClipboard(
                         onComplete = {

@@ -69,6 +69,8 @@ func TestRealMultiClientConcurrent(t *testing.T) {
 			DNSServer:        *realE2EDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
 			Liveness:         liveness,
+			// ai-generated: the echo server is on loopback (egress hardening).
+			UnsafeAllowPrivateTargets: true,
 		})
 	}()
 

@@ -63,6 +63,31 @@ class PanelAllLinksImportTest {
         assertEquals("", byEngine.getValue(EngineType.MasterDns).description)
     }
 
+    /** The panel writes `#desc:<node name>=<text>` with the SAME name it puts in the link, for every family. */
+    @Test
+    fun hostDescriptionReachesEveryFamily() = runTest {
+        val lost = mutableListOf<String>()
+        for ((family, link) in links) {
+            val plain = FakeSource().also { LocationsRepositoryImpl(it).importText(link) }
+            val name = assertNotNull(plain.stored).locations.single().name
+            val source = FakeSource()
+            val enc = java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20")
+            LocationsRepositoryImpl(source).importText("$link\n#desc:$enc=desc-$family\n")
+            val got = assertNotNull(source.stored).locations.single().description
+            if (got != "desc-$family") lost += "$family(name='$name', description='$got')"
+        }
+        assertTrue(lost.isEmpty(), "description lost: $lost")
+    }
+
+    /** The cold-start list is painted from the light index first: it must carry the description too. */
+    @Test
+    fun coldStartIndexKeepsDescription() = runTest {
+        val source = FakeSource()
+        LocationsRepositoryImpl(source).importText(links.getValue("snolc") + "\n#desc:Stealth%20NL-snolc=Fast\n")
+        val index = org.olcbox.app.data.model.LocationViewIndex.from(assertNotNull(source.stored))
+        assertEquals("Fast", index.items.single().description)
+    }
+
     @Test
     fun orderLinesRestorePanelOrderAcrossFamilies() = runTest {
         val body = links.getValue("masterdns") + "\n" + links.getValue("snolc") + "\n#order:Stealth%20NL-snolc\n#order:Stealth%20NL-dns\n"
@@ -100,5 +125,69 @@ class PanelAllLinksImportTest {
         assertEquals(1, engines.count { it == EngineType.Stealth })
         assertEquals(4, engines.count { it == EngineType.VkTurn })
         assertTrue(engines.count { it == EngineType.Standard } >= 1, "trusttunnel/amneziawg must survive: $engines")
+    }
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test
+    fun trustTunnelNameInsideTheBlobBecomesTheLocationName() = runTest {
+        fun tlv(tag: Int, v: String) = v.encodeToByteArray().let { byteArrayOf(tag.toByte(), it.size.toByte()) + it }
+        val blob = tlv(1, "h.example.com") + tlv(2, "203.0.113.7:443") + tlv(12, "🇷🇺Москва (TT)")
+        val link = "tt://?" + kotlin.io.encoding.Base64.UrlSafe.encode(blob).trimEnd('=')
+        val body = links.getValue("snolc") + "\n" + link + "\n"
+        val source = FakeSource()
+        LocationsRepositoryImpl(source).importText(body)
+        val names = assertNotNull(source.stored).locations.map { it.name }
+        assertTrue("🇷🇺Москва (TT)" in names, "names: $names")
+    }
+
+    /** Encrypted subscription (panel "зашифрованная подписка"): lines are `yptun-enc://` + the same links, produced by app/subcrypt.py. */
+    @Test
+    fun encryptedSubscriptionImportsLocked() = runTest {
+        val enc = listOf(
+            "yptun-enc://v1/Do26vXS1jq3CxJ-6XGVBoB_4jbqnlre-nqdQuMD5T7aviLWfI7bNoZiPOuhAr-chTP5UP-B3JokCD1jKM-dQueHVwjHfACHsaTgui-gVVWyxDmPeuvnK_WftJUJ4MoPcVcAXg7dHBqgl5nHTtmvJhk321hM2IHAE7EIJlpjOviH7ZmV_OBQSVoC2kmG238V413NwI1-RLht0rshtEE_pK3unOouIVyEP1A2pn3-jlBUevA_OhDfAtcWqbLYbUSdQvqprt2Qw8fmI0vQQ41bE2izr923TjxGHHLtGSkDviu6B3r2S22ccIdjaLb65kQ",
+            "yptun-enc://v1/--RFO6lshrJ0RXSzEVdsGgyBexlKV-uMANoWEuemt0hUYRbTOtlhGy5TDczqWFNBr7wOFBpOTo-MqkmZ0HXUMXDBKR4Ge4lcDnyEf1MtXIEltN3f64zn1f9IReo3sleNAbMxm18vO0FfECq16Z2jzdlJ62v1KAkAHs73rmUPARQ",
+        )
+        val locked = FakeSource()
+        LocationsRepositoryImpl(locked).importText(enc.joinToString("\n") + "\n")
+        val stored = assertNotNull(locked.stored)
+        assertEquals(setOf(EngineType.OpenFlux, EngineType.Snolc), stored.locations.map { it.location.engine }.toSet())
+        assertTrue(stored.locations.all { it.metadata?.locked == true })
+
+        val open = FakeSource()
+        LocationsRepositoryImpl(open).importText(links.getValue("openflux") + "\n" + links.getValue("snolc") + "\n")
+        assertTrue(assertNotNull(open.stored).locations.none { it.metadata?.locked == true })
+
+        val backup = LocationsRepositoryImpl(locked).exportBundle()
+        assertTrue("cloud.mail.ru" !in backup && "locations\":[]" in backup.replace(" ", ""), "locked locations must stay out of the backup")
+    }
+
+    /** A locked VK-TURN location lets the user set their own VK call link; it is stored as an override. */
+    @Test
+    fun lockedVkTurnLocationAcceptsOwnCallLink() = runTest {
+        val source = FakeSource()
+        val repo = LocationsRepositoryImpl(source)
+        repo.importText("yptun-enc://v1/JVBUZ7U1iOvnfPq-QWNzPehb8T-2iuhOFoaaaChf9K3oITd7cVxM5XGBVXsnX2fqcTy4CIhfD1uWyb1robI-XUa7A4C7v-cHJ8sgOss0fEMfUKK4VG32GKuNKzQc6wVAPutWCRMzMIGrHYzr4W7YmV6sPLI1XNmAQrxQJ0K8Z0Dmw5X-YY-nI1tMHcAEuHZBcC7YKYNwhEPJ1TuEBS6DLfB9Q0ev3Ipg6lfK9EsyCzhfDMgyy8_fGQ_Bke0qwQqotm0zNm8PU51uBOCdmG9ABkXrj63ap2JPXmuPS6WcWDHAquxX2sOyqOOAvxyXdc7lnjokdi5BeUm57rsH3V-5HJfAFlKObJawlIacSL6Ex69BcqLfb7HUfdc4Y2w00ctLWEecHX3zSRvC2UO2\n")
+        val entry = assertNotNull(source.stored).locations.single()
+        assertEquals(true, entry.metadata?.locked)
+        repo.setLocationVkLink(entry.storageId, " https://vk.com/call/join/abc ")
+        val after = assertNotNull(source.stored).locations.single()
+        assertEquals("https://vk.com/call/join/abc", after.location.vkturn?.vkLink)
+        assertEquals("https://vk.com/call/join/abc", after.metadata?.vkLinkOverride)
+        assertEquals(true, after.metadata?.locked)
+    }
+
+    /** The panel may hand out qWDTT/VK-TURN without a VK call link: the location is usable once the user adds one (the app asks at connect). */
+    @Test
+    fun locationWithoutVkLinkNeedsOneThenConnects() = runTest {
+        val source = FakeSource()
+        val repo = LocationsRepositoryImpl(source)
+        repo.importText("qwdtt://config?name=NoVk&peer=203.0.113.5&workers=9&port=9000&pass=pw")
+        val entry = assertNotNull(source.stored).locations.single()
+        assertTrue(entry.location.needsVkLink())
+        assertEquals(false, entry.location.isComplete())
+        repo.setLocationVkLink(entry.storageId, "https://vk.com/call/join/abc")
+        val after = assertNotNull(source.stored).locations.single().location
+        assertEquals(false, after.needsVkLink())
+        assertEquals(true, after.isComplete())
     }
 }

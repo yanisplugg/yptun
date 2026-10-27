@@ -227,6 +227,8 @@ func startLocalSoakTunnel(t *testing.T, transportName string) *tunnelRuntime {
 			RoomURL:          testRoom,
 			KeyHex:           testKeyHex,
 			DNSServer:        localDNSServer,
+			// ai-generated: the echo server is on loopback (egress hardening).
+			UnsafeAllowPrivateTargets: true,
 		})
 	}()
 	room.waitConnected(t, 1)

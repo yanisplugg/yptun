@@ -1014,6 +1014,11 @@ private fun runApp(args: Array<String>) = application {
                 OlcboxAppContent(
                     homeViewModel = dependencies.homeViewModel,
                     onExitClick = { quitApplication(dependencies) },
+                    appBehavior = appBehavior,
+                    onAppBehaviorChanged = dependencies.settings::setAppBehavior,
+                    onShareSubscriptionRequested = { url ->
+                        sharePayload = strings().subscriptionQr to ConfigShareService.subscriptionQrText(url)
+                    },
                     locationViewModel = dependencies.locationViewModel,
                     currentScreen = currentScreen,
                     onNavigate = { screen ->
@@ -1028,6 +1033,13 @@ private fun runApp(args: Array<String>) = application {
                                 reloadLocationsAfterImport()
                             }
                         }
+                    },
+                    onImportTextRequested = { text, onImported, onError ->
+                        dependencies.homeViewModel.onImportFullConfig(
+                            rawText = text,
+                            onComplete = { reloadLocationsAfterImport(onImported) },
+                            onError = onError
+                        )
                     },
                     onImportFromClipboardRequested = { onImported, onError ->
                         dependencies.homeViewModel.onPasteFromClipboard(
@@ -1092,7 +1104,7 @@ private fun runApp(args: Array<String>) = application {
                     onAppSettingsClick = { showDesktopSettings = true },
                     onSplitTunnelingClick = {},
                     confirmBeforeDelete = appBehavior.confirmBeforeDelete,
-                    allowVpsAutoInstall = appBehavior.allowVpsAutoInstall,
+                    allowVpsAutoInstall = !appBehavior.hideSshInstall,
                     pingParallelism = appBehavior.effectivePingParallelism(),
                     freeServersLimit = appBehavior.freeServersLimit,
                     collapsedGroups = appBehavior.collapsedSubscriptionGroups,
@@ -1572,7 +1584,7 @@ private fun DesktopConfigShareOverlay(
                         indication = null,
                         onClick = {}
                     ),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(28.dp),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 6.dp,
                 shadowElevation = 12.dp,
@@ -1607,9 +1619,8 @@ private fun DesktopConfigShareOverlay(
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
                                 .size(240.dp),
-                            shape = RoundedCornerShape(20.dp),
+                            shape = RoundedCornerShape(24.dp),
                             color = Color.White,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
                             DesktopQrCode(
                                 matrix = qrMatrix,
@@ -1620,9 +1631,8 @@ private fun DesktopConfigShareOverlay(
 
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(18.dp),
                         color = MaterialTheme.colorScheme.surfaceContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         SelectionContainer {
                             Text(
@@ -1693,7 +1703,7 @@ private fun DesktopNotice(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.inverseSurface,
         tonalElevation = 6.dp,
         shadowElevation = 8.dp
@@ -1823,8 +1833,8 @@ private fun TrayMenu(
             .fillMaxWidth()
             .wrapContentHeight()
             .padding(8.dp)
-            .shadow(16.dp, RoundedCornerShape(14.dp), clip = false),
-        shape = RoundedCornerShape(14.dp),
+            .shadow(16.dp, RoundedCornerShape(18.dp), clip = false),
+        shape = RoundedCornerShape(18.dp),
         color = scheme.surface,
         border = BorderStroke(1.dp, scheme.outlineVariant),
     ) {
@@ -1916,7 +1926,7 @@ private fun TrayMenuItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 6.dp, vertical = 1.dp)
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(if (hovered && enabled) scheme.primary.copy(alpha = 0.14f) else Color.Transparent)
             .hoverable(interaction, enabled = enabled)
             .clickable(enabled = enabled) { onClick() }
@@ -2157,8 +2167,8 @@ private fun HotkeyCaptureDialog(
                         fontSize = 13.sp,
                     )
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
@@ -2232,8 +2242,8 @@ private fun MyIpDialog(
                 ) {
                     // The IP.
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = scheme.surfaceVariant,
+                        shape = RoundedCornerShape(24.dp),
+                        color = scheme.surfaceContainerHigh,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(

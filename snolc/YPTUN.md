@@ -13,3 +13,7 @@ and on Android (SELinux). Here all modules are linked into ONE static executable
 Build everything: `./build-all.sh` -> prebuilt/ (windows-amd64.exe, android-{arm64,armv7}, linux-{amd64,arm64} static musl).
 musl: no `cc`, so rust-lld + an empty libdl.a stub (libloading asks for -ldl).
 Static musl has no dlopen at all — never use `Library::this()`.
+
+Cascade (YPtun 25.10.2026): `adapter-direct` option `upstream = "127.0.0.1:PORT"` sends every TCP/UDP flow through a local
+SOCKS5 (a snolc client to the exit node) instead of dialing directly; domain names are passed to the exit as-is (no local DNS).
+If the upstream is down flows fail — nothing leaves directly. Panel side: node param `exit_node` on a snolc node.

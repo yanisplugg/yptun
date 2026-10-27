@@ -137,7 +137,7 @@ data class VkTurnConfig(
     /** csqtt connection password — the WRAP key is derived from it on both sides. */
     @SerialName("csqtt_password")
     val csqttPassword: String = "",
-    /** csqtt worker count; 0 → 27 per VK hash (capped at 72). The core rounds to a multiple of 9, max 126. */
+    /** csqtt worker count; 0 → 27 per VK hash (capped at 72). The core rounds to a multiple of 9, max 100 (csqtt 2.5.0; was 126). */
     @SerialName("csqtt_workers")
     val csqttWorkers: Int = 0,
     /** The csqtt core's advanced knobs (camouflage, TURN over TCP, fingerprint, VK app ids…). */
@@ -234,6 +234,8 @@ data class VkTurnConfig(
         const val CORE_FREETURN = "freeturn"
         const val CORE_WDTT = "wdtt"
         const val CORE_CSQTT = "csqtt"
+        /** Worker cap of the csqtt client since 2.5.0 (`MAX_WORKERS` in rust-client/main.rs). */
+        const val CSQTT_MAX_WORKERS = 100
 
         /** Default WDTT server port (matches the wdtt-server default). */
         const val DEFAULT_WDTT_PORT = 56000
@@ -287,7 +289,7 @@ data class VkTurnConfig(
         val o = csqtt
         val hashes = vkLink.split('\n', '\r', '\t', ' ', ',', ';').filter { it.isNotBlank() }
         // 27 workers per hash, capped like the csqtt app's own default maximum.
-        val workers = csqttWorkers.takeIf { it > 0 } ?: (hashes.size.coerceAtLeast(1) * 27).coerceAtMost(72)
+        val workers = csqttWorkers.takeIf { it > 0 }?.coerceAtMost(CSQTT_MAX_WORKERS) ?: (hashes.size.coerceAtLeast(1) * 27).coerceAtMost(72)
         return buildJsonObject {
             put("client", client)
             put("listen", listen)
@@ -1027,6 +1029,10 @@ data class LocationConfig(
      * rejected the proxy/AmneziaWG exits (rawOutbound is only set for plain WireGuard) — that made a
      * "Proxy (tcp) + bonding" VK-TURN location fail isStorable and VANISH on save.
      */
+    /** A VK-TURN location that lacks nothing but the user's VK call link (the panel may leave it out): connecting asks for it. */
+    fun needsVkLink(): Boolean = engine == EngineType.VkTurn &&
+        vkturn?.let { it.isStorable() && it.vkLink.isBlank() } == true && vkTurnExitPresent()
+
     private fun vkTurnExitPresent(): Boolean = when {
         // WDTT connects purely by the wdtt-server IP[:port]; the WireGuard config is fetched FROM the
         // server at runtime (GETCONF/OnConfig), so no stored exit artifact is required here.
@@ -1125,11 +1131,15 @@ data class LocationConfig(
     }
 
     companion object {
-        const val PROVIDER_JAZZ = "jazz"
+        /** SaluteJazz (Sber): имя провайдера в ядре — `salutejazz`; старое `jazz` из сохранённых локаций приводится к нему. */
+        const val PROVIDER_JAZZ = "salutejazz"
         const val PROVIDER_TELEMOST = "telemost"
+        /** WB Stream теперь требует токен аккаунта (гости комнаты не создают) — оставлен для старых локаций, по умолчанию не предлагается. */
         const val PROVIDER_WB_STREAM = "wbstream"
         const val PROVIDER_JITSI = "jitsi"
-        const val DEFAULT_BYPASS_PROVIDER = PROVIDER_WB_STREAM
+        const val PROVIDER_VK_CALLS = "vkcalls"
+        const val PROVIDER_MTS_LINK = "mtslink"
+        const val DEFAULT_BYPASS_PROVIDER = PROVIDER_MTS_LINK
 
         const val TRANSPORT_DATACHANNEL = "datachannel"
         const val TRANSPORT_VP8CHANNEL = "vp8channel"
@@ -1149,6 +1159,8 @@ data class LocationConfig(
         const val DEFAULT_BOND_PORT = 7700
 
         val supportedBypassProviders = listOf(
+            PROVIDER_MTS_LINK,
+            PROVIDER_VK_CALLS,
             PROVIDER_JAZZ,
             PROVIDER_TELEMOST,
             PROVIDER_WB_STREAM,
@@ -1175,15 +1187,23 @@ data class LocationConfig(
                     listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL)
                 PROVIDER_WB_STREAM ->
                     listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_DATACHANNEL)
-                PROVIDER_JITSI, PROVIDER_JAZZ ->
+                PROVIDER_JITSI ->
                     listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL)
+                // Эти три сервиса пропускают не всё (docs/about.md ядра): у SaluteJazz только data-каналы,
+                // у MTS Link и VK Calls SFU не мостит произвольный data-канал — тоннель едет видеотреками.
+                PROVIDER_JAZZ -> listOf(TRANSPORT_DATACHANNEL)
+                PROVIDER_MTS_LINK -> listOf(TRANSPORT_VP8CHANNEL)
+                PROVIDER_VK_CALLS ->
+                    listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL)
                 else -> supportedTransports
             }
         }
 
         fun normalizeProvider(value: String): String {
             return when (value.trim().lowercase()) {
-                PROVIDER_JAZZ, "sberjazz", "sber_jazz" -> PROVIDER_JAZZ
+                PROVIDER_JAZZ, "jazz", "sberjazz", "sber_jazz" -> PROVIDER_JAZZ
+                PROVIDER_VK_CALLS, "vk", "vk_calls", "vk-calls" -> PROVIDER_VK_CALLS
+                PROVIDER_MTS_LINK, "mts", "mts_link", "mts-link" -> PROVIDER_MTS_LINK
                 PROVIDER_TELEMOST, "yandex", "yandex_telemost" -> PROVIDER_TELEMOST
                 PROVIDER_WB_STREAM, "wbstream", "wb-stream", "wildberries" -> PROVIDER_WB_STREAM
                 PROVIDER_JITSI, "jitsi-meet", "jitsi_meet", "meet" -> PROVIDER_JITSI
@@ -1211,7 +1231,9 @@ data class LocationConfig(
                 PROVIDER_TELEMOST -> "Telemost"
                 PROVIDER_WB_STREAM -> "WB Stream"
                 PROVIDER_JITSI -> "Jitsi"
-                else -> "WB Stream"
+                PROVIDER_VK_CALLS -> "VK Calls"
+                PROVIDER_MTS_LINK -> "MTS Link"
+                else -> "MTS Link"
             }
         }
 
@@ -1527,7 +1549,12 @@ data class LocationMetadata(
     val mimo: String? = null,
     val subscription: SubscriptionMetadata? = null,
     /** Pinned by the user: a pinned free server survives the next free-servers search (see saveSelectedFreeServers). */
-    val pinned: Boolean = false
+    val pinned: Boolean = false,
+    /** From an encrypted subscription: the app shows no address, token or key of this location and does not share or export it. */
+    val locked: Boolean = false,
+    /** VK call links the user typed for a locked VK-TURN location; kept over subscription refreshes. */
+    @SerialName("vk_link_override")
+    val vkLinkOverride: String? = null
 ) {
     fun normalized(): LocationMetadata {
         val normalizedSubscription = subscription
@@ -1542,6 +1569,7 @@ data class LocationMetadata(
             ip = ip.cleanMetadataValue(),
             comment = comment.cleanMetadataValue(),
             mimo = mimo.cleanMetadataValue(),
+            vkLinkOverride = vkLinkOverride.cleanMetadataValue(),
             subscription = normalizedSubscription
         )
     }
@@ -1556,6 +1584,8 @@ data class LocationMetadata(
                 comment.isNullOrBlank() &&
                 mimo.isNullOrBlank() &&
                 !pinned &&
+                !locked &&
+                vkLinkOverride.isNullOrBlank() &&
                 (subscription == null || subscription.isEmpty())
     }
 }

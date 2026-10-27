@@ -15,11 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
 
+	"github.com/openlibrecommunity/olcrtc/internal/hostprofile"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 )
@@ -34,8 +33,20 @@ const (
 	// after one ack budget. It stays at four: the budget already scales with
 	// the message's drain time, so four rounds is a long wait, and a Send
 	// that fails is retried by the layer above.
-	maxSendAttempts      = 4
-	sampleBuilderMaxLate = 128
+	maxSendAttempts = 4
+	// fragmentsPerMessage is how many fragments the payload cap allows one
+	// message, and so one smux frame, to need.
+	fragmentsPerMessage = 8
+	// h264FmtpLine is the H264 profile both the local track and its
+	// binding announce: constrained baseline, non-interleaved.
+	h264FmtpLine = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+	// helloEvery is how often the writer beacons while it has other things
+	// to write. A hello carries what this side can do (see
+	// common.FeatureOrdered), so a peer that starts sending the moment it
+	// is ready still learns it within a second.
+	//
+	// ai-generated: this constant.
+	helloEvery = time.Second
 )
 
 var (
@@ -56,12 +67,22 @@ type streamTransport struct {
 	queue       *common.OutboundQueue
 	sender      *common.Sender
 	reassembler *common.Reassembler
+	// window and ordered are the two halves of the ordered path: several
+	// messages in flight out, delivery in the sender's order in. A peer
+	// whose hello does not announce the feature gets the sender above.
+	//
+	// ai-generated: these two fields, peerOrdered, hello and deliverMu.
+	window    *common.Window
+	ordered   *common.Ordered
+	hello     []byte
+	deliverMu sync.Mutex
 
 	closeCh     chan struct{}
 	writerDone  chan struct{}
 	closed      atomic.Bool
 	writerUp    atomic.Bool
 	peerReady   atomic.Bool
+	peerOrdered atomic.Bool
 	startWriter sync.Once
 
 	fragmentSize  int
@@ -100,7 +121,7 @@ func New(ctx context.Context, cfg transport.Config) (transport.Transport, error)
 		MimeType:    webrtc.MimeTypeH264,
 		ClockRate:   90000,
 		Channels:    0,
-		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		SDPFmtpLine: h264FmtpLine,
 	}, "seichannel")
 	if err != nil {
 		return nil, fmt.Errorf("build video track: %w", err)
@@ -139,8 +160,9 @@ func newStreamTransport(
 		bindingToken:  common.BindingToken(cfg.ChannelID, cfg.RoomURL),
 	}
 
+	role := common.LocalRole(cfg.DeviceID)
 	tr.sender = common.NewSender(common.SenderConfig{
-		Role:          common.LocalRole(cfg.DeviceID),
+		Role:          role,
 		Binding:       tr.bindingToken,
 		FragmentSize:  opts.FragmentSize,
 		MaxAttempts:   maxSendAttempts,
@@ -148,10 +170,38 @@ func newStreamTransport(
 		BatchSize:     opts.BatchSize,
 		AckFloor:      time.Duration(opts.AckTimeoutMS) * time.Millisecond,
 	}, tr.queue)
+	// ai-generated: the ordered path and the hello that announces it.
+	size := orderedBounds()
+	tr.window = common.NewWindow(common.WindowConfig{
+		Role:         role,
+		Binding:      tr.bindingToken,
+		FragmentSize: opts.FragmentSize,
+		Messages:     size.messages,
+		Bytes:        size.inFlight,
+	}, tr.sender.Seq())
+	tr.ordered = common.NewOrdered(size.ahead, size.held)
+	tr.hello = common.EncodeHelloFeatures(role, tr.bindingToken, common.FeatureOrdered)
 
 	tr.shaper = transport.NewShaper(cfg.Traffic, tr.Features())
 
 	return tr
+}
+
+// orderedSize bounds the ordered path: how many messages and bytes stay in
+// flight, and how many and how much this side holds for a peer that is
+// behind. Zero takes the package default.
+//
+// ai-generated: this type and orderedBounds.
+type orderedSize struct{ messages, inFlight, ahead, held int }
+
+// orderedBounds sizes the ordered path for this host: a phone's packet
+// tunnel is killed for growing rather than swapped, so it keeps less in
+// flight and holds less for a peer that is behind.
+func orderedBounds() orderedSize {
+	if hostprofile.BuffersAreConstrained() {
+		return orderedSize{messages: 24, inFlight: 192 << 10, ahead: 64, held: 384 << 10}
+	}
+	return orderedSize{}
 }
 
 // Connect starts the transport connection.
@@ -181,12 +231,22 @@ func (p *streamTransport) send(data []byte) error {
 		return ErrTransportClosed
 	}
 
-	err := p.sender.Send(data)
+	// ai-generated: the choice of path. A peer that announced ordered
+	// delivery takes the window, which keeps several messages in flight;
+	// any other peer takes one message at a time, all it can reassemble in
+	// order.
+	send := p.sender.Send
+	if p.peerOrdered.Load() && p.window != nil {
+		send = p.window.Send
+	}
+	err := send(data)
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, common.ErrAckTimeout):
 		return ErrAckTimeout
+	case errors.Is(err, common.ErrWindowClosed):
+		return ErrTransportClosed
 	default:
 		return fmt.Errorf("send fragments: %w", err)
 	}
@@ -196,6 +256,9 @@ func (p *streamTransport) send(data []byte) error {
 func (p *streamTransport) Close() error {
 	if p.closed.CompareAndSwap(false, true) {
 		close(p.closeCh)
+		if p.window != nil {
+			p.window.Close()
+		}
 		if p.writerUp.Load() {
 			<-p.writerDone
 		}
@@ -231,7 +294,17 @@ func (p *streamTransport) ResetPeer() {
 
 func (p *streamTransport) resetPeerState() {
 	p.peerReady.Store(false)
+	// ai-generated: the ordered path's state. The peer has forgotten this
+	// side's sequence numbers, so the window starts a new stream and the
+	// receiver waits to be told where the next one picks up.
+	p.peerOrdered.Store(false)
 	p.reassembler.Reset()
+	if p.ordered != nil {
+		p.ordered.Reset()
+	}
+	if p.window != nil {
+		p.window.Reset()
+	}
 }
 
 // CanSend reports whether transport is ready for sending.
@@ -242,107 +315,160 @@ func (p *streamTransport) CanSend() bool {
 // Features describes the current seichannel transport semantics.
 func (p *streamTransport) Features() transport.Features {
 	return p.shaper.Features(transport.Features{
-		MaxPayloadSize: p.fragmentSize * 8,
+		MaxPayloadSize: p.fragmentSize * fragmentsPerMessage,
 	})
 }
 
+// writerLoop writes one access unit per tick: the acknowledgements and
+// frames waiting, then whatever the window lets out, then a hello when
+// there was nothing else or the last one is a second old.
+//
+// ai-generated: the batching and the window drain; it used to write one
+// access unit per frame and at most a batch of them a tick.
 func (p *streamTransport) writerLoop() {
 	defer close(p.writerDone)
 
 	ticker := time.NewTicker(p.frameInterval)
 	defer ticker.Stop()
 
-	idle := buildVideoAccessUnit(p.sender.Hello())
-	var scratch []byte
+	var (
+		au        []byte
+		payloads  [][]byte
+		lastHello time.Time
+	)
 
 	for {
 		select {
 		case <-p.closeCh:
 			return
-		case <-ticker.C:
+		case now := <-ticker.C:
 			var ok bool
-			scratch, ok = p.writeBatch(idle, scratch)
+			payloads, ok = p.collect(payloads[:0])
 			if !ok {
 				return
 			}
-		}
-	}
-}
-
-func (p *streamTransport) writeBatch(idle, scratch []byte) ([]byte, bool) {
-	for i := range p.batchSize {
-		payload, ok := p.queue.Next()
-		if !ok {
-			return scratch, false
-		}
-		if payload == nil {
-			if i > 0 {
-				return scratch, true
+			if len(payloads) == 0 || now.Sub(lastHello) >= helloEvery {
+				payloads, lastHello = append(payloads, p.helloFrame()), now
 			}
-			_ = p.track.WriteSample(media.Sample{Data: idle, Duration: p.frameInterval})
-			return scratch, true
+			au = buildVideoAccessUnitInto(au[:0], payloads)
+			_ = p.track.WriteSample(media.Sample{Data: au, Duration: p.frameInterval})
 		}
-		// Pion's H264 payloader copies every NAL into RTP-owned storage before
-		// WriteSample returns, so this writer-owned access unit can be reused.
-		scratch = buildVideoAccessUnitInto(scratch[:0], payload)
-		_ = p.track.WriteSample(media.Sample{
-			Data:     scratch,
-			Duration: p.frameInterval,
-		})
 	}
-	return scratch, true
 }
 
+// collect takes this tick's frames: the queue's acknowledgements and
+// one-at-a-time fragments first, then the window's. The second result is
+// false once the transport is closing.
+func (p *streamTransport) collect(payloads [][]byte) ([][]byte, bool) {
+	for len(payloads) < p.batchSize {
+		frame, open := p.queue.Next()
+		if !open {
+			return payloads, false
+		}
+		if frame == nil {
+			break
+		}
+		payloads = append(payloads, frame)
+	}
+	if p.window == nil || len(payloads) >= p.batchSize {
+		return payloads, true
+	}
+	if !p.peerOrdered.Load() && p.window.InFlight() == 0 {
+		return payloads, true
+	}
+	p.window.Drain(p.batchSize-len(payloads), func(frame []byte) bool {
+		payloads = append(payloads, frame)
+		return true
+	})
+	return payloads, true
+}
+
+// helloFrame is this side's beacon, which announces what it can do.
+func (p *streamTransport) helloFrame() []byte {
+	if p.hello != nil {
+		return p.hello
+	}
+	return p.sender.Hello()
+}
+
+// handleRemoteTrack reads the peer's track and hands every SEI payload to
+// the frame path as its packet arrives.
+//
+// ai-generated: the per-packet read; it used to run a sample builder.
 func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 	go func() {
-		sb := samplebuilder.New(sampleBuilderMaxLate, &codecs.H264Packet{}, track.Codec().ClockRate)
-
-		popSamples := func() {
-			for sample := sb.Pop(); sample != nil; sample = sb.Pop() {
-				p.handleSample(sample.Data)
-			}
-		}
-
+		var (
+			reader   packetReader
+			payloads [][]byte
+		)
 		for {
 			packet, _, err := track.ReadRTP()
 			if err != nil {
-				sb.Flush()
-				popSamples()
 				return
 			}
-
-			sb.Push(packet)
-			popSamples()
+			payloads = reader.payloads(packet, payloads[:0])
+			for _, payload := range payloads {
+				p.handlePayload(payload)
+			}
 		}
 	}()
 }
 
+// handleSample takes a whole access unit. Only the tests that build one by
+// hand use it now; the track reader goes packet by packet.
 func (p *streamTransport) handleSample(sample []byte) {
-	// The track reader flushes the sample builder when the track ends, which
-	// is exactly what Close causes: without this the application receives
-	// data after Close has already returned.
+	for _, payload := range extractVideoPayloads(sample) {
+		p.handlePayload(payload)
+	}
+}
+
+// handlePayload decodes one SEI payload and routes the frame it carries.
+func (p *streamTransport) handlePayload(payload []byte) {
+	// The track reader outlives Close by as long as it takes the peer's
+	// track to end, which is exactly what Close causes: without this the
+	// application receives data after Close has already returned.
 	if p.closed.Load() {
 		return
 	}
-	payloads := extractVideoPayloads(sample)
-	for _, payload := range payloads {
-		frame, err := common.DecodeFrame(payload)
-		if err != nil {
-			continue
-		}
-		if !p.acceptFrame(frame) {
-			continue
-		}
+	frame, err := common.DecodeFrame(payload)
+	if err != nil || !p.acceptFrame(frame) {
+		return
+	}
 
-		p.peerReady.Store(true)
+	p.peerReady.Store(true)
 
-		switch frame.Type {
-		case common.FrameTypeHello:
-			// Presence only; readiness is already recorded above.
-		case common.FrameTypeAck:
-			p.resolveAck(frame.Seq, frame.CRC, frame.FragIdx)
-		case common.FrameTypeData:
-			p.handleInboundFrame(frame)
+	switch frame.Type {
+	case common.FrameTypeHello:
+		// ai-generated: the peer's features. Only a peer that says it
+		// delivers stream frames in order gets them.
+		p.peerOrdered.Store(frame.Features&common.FeatureOrdered != 0)
+	case common.FrameTypeAck:
+		p.resolveAck(frame.Seq, frame.CRC, frame.FragIdx)
+	case common.FrameTypeData:
+		p.handleInboundFrame(frame)
+	case common.FrameTypeStream:
+		p.handleStreamFrame(frame)
+	}
+}
+
+// handleStreamFrame takes one fragment of the ordered stream: it is
+// acknowledged as soon as it is stored, and the messages it completes are
+// delivered in the order the peer queued them.
+//
+// ai-generated: this method.
+func (p *streamTransport) handleStreamFrame(frame common.Frame) {
+	if p.ordered == nil {
+		return
+	}
+	p.deliverMu.Lock()
+	defer p.deliverMu.Unlock()
+	ack, ready := p.ordered.Push(frame)
+	if ack {
+		p.sendAck(frame.Seq, frame.CRC, frame.FragIdx)
+	}
+	for _, message := range ready {
+		if p.onData != nil {
+			p.onData(message)
 		}
 	}
 }
@@ -355,7 +481,12 @@ func (p *streamTransport) sendAck(seq, crc uint32, fragIdx uint16) {
 	p.sender.Ack(seq, crc, fragIdx)
 }
 
+// resolveAck marks one acknowledged fragment. Both senders draw sequence
+// numbers from the same counter, so exactly one of them holds this one.
 func (p *streamTransport) resolveAck(seq, crc uint32, fragIdx uint16) {
+	if p.window != nil && p.window.Ack(seq, crc, fragIdx) {
+		return
+	}
 	p.sender.Resolve(seq, crc, fragIdx)
 }
 

@@ -204,6 +204,24 @@ android.sourceSets.getByName("main").jniLibs.srcDir(snolcJniLibsDir.get().asFile
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(copySnolcAndroid) }
 
+// --- Trust Tunnel client (../trusttunnel/prebuilt): the official static linux-aarch64 CLI, as lib/arm64-v8a/libtrusttunnel_client.so ---
+// Run as a SUBPROCESS from nativeLibraryDir like snolc: the AAR's JNI cannot do SOCKS-only (it always wants a TUN fd).
+// ABIs without a build ship without the engine (the AAR is still used for tt:// decoding).
+val trustTunnelPrebuiltDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("trusttunnel/prebuilt")
+val trustTunnelJniLibsDir = layout.buildDirectory.dir("generated/trusttunnel/jniLibs")
+val copyTrustTunnelAndroid = tasks.register<Copy>("copyTrustTunnelAndroid") {
+    from(trustTunnelPrebuiltDir) {
+        include("trusttunnel-client-android-arm64")
+        rename { "libtrusttunnel_client.so" }
+        eachFile { relativePath = RelativePath(true, "arm64-v8a", "libtrusttunnel_client.so") }
+    }
+    includeEmptyDirs = false
+    into(trustTunnelJniLibsDir)
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(trustTunnelJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(copyTrustTunnelAndroid) }
+
 // --- csqtt core (../csqtt): the Rust client + its Go bridge, as lib/<abi>/libcsqtt.so and libcsqtthost.so ---
 // Prebuilt by csqtt/build-all.sh and committed (Rust + the NDK + Go are not CI requirements); both run as
 // SUBPROCESSES from nativeLibraryDir like OpenFlux and snolc. An ABI without a build ships without the core.

@@ -38,6 +38,10 @@ func (s *Session) trickleDrainLoop(
 					logger.Debugf("jitsi trickle ICE: %v", err)
 				}
 			case strings.Contains(raw, "source-add"):
+				// ai-generated: noteSources. A source-add is how a peer
+				// that rejoined announces its new video source, and the
+				// latch needs to know whose it is.
+				s.noteSources(raw, false)
 				if err := neg.HandleSourceAdd(raw); err != nil {
 					logger.Debugf("jitsi source-add: %v", err)
 				}

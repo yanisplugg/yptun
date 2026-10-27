@@ -1,6 +1,5 @@
 package org.olcbox.app.ui.components
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -102,6 +102,7 @@ fun PingButton(
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = pingState !is PingState.Loading) {
                 homeViewModel.viewModelScope.launch {
                     pingState = PingState.Loading
@@ -118,17 +119,12 @@ fun PingButton(
                         PingState.Error("Offline")
                     }
                 }
-            }
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(16.dp)
-            ),
-        shape = RoundedCornerShape(16.dp),
+            },
+        shape = RoundedCornerShape(24.dp),
         color = if (pingState is PingState.Error) {
             MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
         } else {
-            MaterialTheme.colorScheme.surfaceContainerLow
+            MaterialTheme.colorScheme.surfaceContainer
         },
     ) {
         Row(

@@ -15,9 +15,10 @@ package auth
 import (
 	"context"
 	"errors"
-	"net"
 	"slices"
 	"sync"
+
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 var (
@@ -52,9 +53,13 @@ type Config struct {
 	Token string
 	// DNSServer / ProxyAddr / ProxyPort are network knobs for outbound HTTP.
 	DNSServer string
-	Resolver  *net.Resolver
+	Resolver  protect.Lookup
 	ProxyAddr string
 	ProxyPort int
+	// DefaultICE is the ICE mode a room link without a hint of its own takes
+	// (roomhint: "udp", "tcp" or "both"); empty is the engine's own default.
+	// The client side asks for TCP, a server for nothing. ai-generated.
+	DefaultICE string
 }
 
 // Provider produces engine credentials.

@@ -30,6 +30,9 @@ var (
 	ErrCryptoKeyConflict = errors.New("crypto.key and crypto.key_file cannot both be set")
 	// ErrCryptoKeyFileEmpty is returned when crypto.key_file points to an empty file.
 	ErrCryptoKeyFileEmpty = errors.New("crypto key file is empty")
+	// ErrCryptoKeysConflict is returned when a key ring is combined with a single key or with itself.
+	ErrCryptoKeysConflict = errors.New(
+		"crypto.keys or crypto.keys_file cannot be combined with crypto.key, crypto.key_file or each other")
 )
 
 // Settings is the overridable part of the schema. The top-level file and every
@@ -48,6 +51,17 @@ type Settings struct {
 	Liveness  Liveness  `yaml:"liveness"`
 	Lifecycle Lifecycle `yaml:"lifecycle"`
 	Traffic   Traffic   `yaml:"traffic"`
+	UDP       UDP       `yaml:"udp"`
+	Route     Route     `yaml:"route"`
+	DTLS      DTLS      `yaml:"dtls"`
+}
+
+// DTLS selects the ClientHello profile of the engine handshake. An empty or
+// "off" profile keeps the stock Pion handshake; any other value must be a
+// known profile id and is rejected before dialing. Profiles inherit the base
+// settings; an explicit "off" overrides an inherited profile.
+type DTLS struct {
+	Profile string `yaml:"profile"`
 }
 
 // File is the on-disk YAML schema.
@@ -67,6 +81,13 @@ type File struct {
 	Failover Failover  `yaml:"failover"`
 	Data     string    `yaml:"data"`
 	Debug    bool      `yaml:"debug"`
+	Stats    Stats     `yaml:"stats"`
+}
+
+// Stats configures the server's loopback /stats listener. It is process-wide
+// like data, so it lives on the file rather than on a profile.
+type Stats struct {
+	Listen string `yaml:"listen"` // loopback host:port serving GET /stats; empty disables
 }
 
 // Profile is a failover entry that overrides top-level runtime fields.
@@ -93,10 +114,15 @@ type Room struct {
 	Channel string `yaml:"channel"`
 }
 
-// Crypto holds the shared secret used to authenticate and encrypt the tunnel.
+// Crypto holds the shared secret(s) used to authenticate and encrypt the tunnel.
 type Crypto struct {
 	Key     string `yaml:"key"`      // 64-char hex (32 bytes)
 	KeyFile string `yaml:"key_file"` // path to a file containing crypto.key
+	// Keys is a ring the server accepts peers under, one 64-hex key each.
+	// A client uses crypto.key. keys and keys_file cannot be combined with
+	// key or key_file.
+	Keys     []string `yaml:"keys"`
+	KeysFile string   `yaml:"keys_file"` // one key per line, # comments allowed
 }
 
 // Net groups network and transport selection.
@@ -177,6 +203,27 @@ type Traffic struct {
 	MaxDelay       string `yaml:"max_delay"`
 }
 
+// UDP controls the lossy SOCKS5 UDP ASSOCIATE relay. The relay is off unless
+// the file opts in with `udp: { enabled: true }`, so a config without a udp
+// block behaves exactly as before the relay existed. `disabled: true` wins
+// over `enabled: true`. Pointers tell an absent key from a false one, which
+// lets a failover profile override only what it names.
+type UDP struct {
+	Enabled  *bool `yaml:"enabled"`
+	Disabled *bool `yaml:"disabled"`
+	MaxFlows *int  `yaml:"max_flows"`
+}
+
+// Route names the destinations a client dials directly instead of through
+// the tunnel. Direct holds rules inline, one per entry - `domain:<name>`,
+// `full:<name>`, an address or a CIDR prefix - and DirectFile a file of
+// them, one per line with # comments, read relative to the config file and
+// appended to Direct by Load. Empty means everything through the tunnel.
+type Route struct {
+	Direct     []string `yaml:"direct"`
+	DirectFile string   `yaml:"direct_file"`
+}
+
 // Gen controls room-generation mode.
 type Gen struct {
 	Amount int `yaml:"amount"`
@@ -216,23 +263,73 @@ func Load(path string) (File, error) {
 }
 
 func loadExternalSecrets(configPath string, file *File) error {
-	key, err := resolveKey(configPath, file.Crypto)
+	resolved, err := resolveCrypto(configPath, file.Crypto)
 	if err != nil {
 		return err
 	}
 
-	file.Crypto.Key = key
+	file.Crypto = resolved
+
+	if file.Route, err = resolveRoute(configPath, file.Route); err != nil {
+		return err
+	}
 
 	for i := range file.Profiles {
-		key, err := resolveKey(configPath, file.Profiles[i].Crypto)
+		resolved, err := resolveCrypto(configPath, file.Profiles[i].Crypto)
 		if err != nil {
 			return fmt.Errorf("profiles[%d]: %w", i, err)
 		}
 
-		file.Profiles[i].Crypto.Key = key
+		file.Profiles[i].Crypto = resolved
+
+		if file.Profiles[i].Route, err = resolveRoute(configPath, file.Profiles[i].Route); err != nil {
+			return fmt.Errorf("profiles[%d]: %w", i, err)
+		}
 	}
 
 	return nil
+}
+
+// resolveRoute reads route.direct_file, relative to the config file, and
+// appends its lines to route.direct, so that after Load only Direct carries
+// rules.
+func resolveRoute(configPath string, r Route) (Route, error) {
+	if r.DirectFile == "" {
+		return r, nil
+	}
+
+	rulesPath := r.DirectFile
+	if !filepath.IsAbs(rulesPath) {
+		rulesPath = filepath.Join(filepath.Dir(configPath), rulesPath)
+	}
+
+	// #nosec G304 -- direct_file is an explicit path in the user's config file.
+	data, err := os.ReadFile(rulesPath)
+	if err != nil {
+		return Route{}, fmt.Errorf("read route direct file %s: %w", rulesPath, err)
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+	return Route{Direct: append(append([]string(nil), r.Direct...), lines...)}, nil
+}
+
+// resolveCrypto reads the file-backed secrets so that after Load only Key
+// and Keys carry values.
+func resolveCrypto(configPath string, crypto Crypto) (Crypto, error) {
+	// The ring goes first: its conflict check must fire before a key_file
+	// named next to it is ever opened.
+	keys, err := resolveKeys(configPath, crypto)
+	if err != nil {
+		return Crypto{}, err
+	}
+
+	key, err := resolveKey(configPath, crypto)
+	if err != nil {
+		return Crypto{}, err
+	}
+
+	return Crypto{Key: key, Keys: keys}, nil
 }
 
 func resolveKey(configPath string, crypto Crypto) (string, error) {
@@ -245,6 +342,55 @@ func resolveKey(configPath string, crypto Crypto) (string, error) {
 	}
 
 	return readKeyFile(configPath, crypto.KeyFile)
+}
+
+// resolveKeys returns the ring: crypto.keys inline or crypto.keys_file, one
+// key per line. A ring excludes the single key and the two ring forms
+// exclude each other.
+func resolveKeys(configPath string, crypto Crypto) ([]string, error) {
+	hasRing := len(crypto.Keys) > 0 || crypto.KeysFile != ""
+	if !hasRing {
+		return nil, nil
+	}
+
+	hasSingle := crypto.Key != "" || crypto.KeyFile != ""
+	if hasSingle || (len(crypto.Keys) > 0 && crypto.KeysFile != "") {
+		return nil, ErrCryptoKeysConflict
+	}
+
+	if crypto.KeysFile == "" {
+		return crypto.Keys, nil
+	}
+
+	return readKeysFile(configPath, crypto.KeysFile)
+}
+
+// readKeysFile reads one key per line; blank lines and # comments are skipped.
+func readKeysFile(configPath, keysFile string) ([]string, error) {
+	keysPath := keysFile
+	if !filepath.IsAbs(keysPath) {
+		keysPath = filepath.Join(filepath.Dir(configPath), keysPath)
+	}
+
+	// #nosec G304 -- keys_file is an explicit path in the user's config file.
+	data, err := os.ReadFile(keysPath)
+	if err != nil {
+		return nil, fmt.Errorf("read crypto keys file %s: %w", keysPath, err)
+	}
+
+	var keys []string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		keys = append(keys, line)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrCryptoKeyFileEmpty, keysPath)
+	}
+
+	return keys, nil
 }
 
 func readKeyFile(configPath, keyFile string) (string, error) {
@@ -267,11 +413,13 @@ func readKeyFile(configPath, keyFile string) (string, error) {
 	return key, nil
 }
 
-// Apply converts a parsed file into a session config.
+// Apply converts a parsed file into a session config. The UDP relay starts
+// off and only an explicit udp.enabled turns it on.
 func Apply(file File) session.Config {
-	cfg := ApplySettings(session.Config{}, file.Settings)
+	cfg := ApplySettings(session.Config{UDPDisabled: true}, file.Settings)
 	cfg.Mode = file.Mode
 	cfg.Amount = file.Gen.Amount
+	cfg.StatsListen = file.Stats.Listen
 
 	return cfg
 }
@@ -286,6 +434,7 @@ func ApplyProfile(base session.Config, profile Profile) session.Config {
 func ApplySettings(dst session.Config, s Settings) session.Config {
 	dst.Transport = overlay(dst.Transport, s.Net.Transport)
 	dst.DNSServer = overlay(dst.DNSServer, s.Net.DNS)
+	dst.DTLSProfile = overlay(dst.DTLSProfile, s.DTLS.Profile)
 
 	dst.Provider = overlay(dst.Provider, s.Auth.Provider)
 	dst.ProviderToken = overlay(dst.ProviderToken, s.Auth.Token)
@@ -297,6 +446,9 @@ func ApplySettings(dst session.Config, s Settings) session.Config {
 	dst.RoomID = overlay(dst.RoomID, s.Room.ID)
 	dst.ChannelID = overlay(dst.ChannelID, s.Room.Channel)
 	dst.KeyHex = overlay(dst.KeyHex, s.Crypto.Key)
+	if len(s.Crypto.Keys) > 0 {
+		dst.KeysHex = s.Crypto.Keys
+	}
 
 	dst.SOCKSHost = overlay(dst.SOCKSHost, s.SOCKS.Host)
 	dst.SOCKSPort = overlay(dst.SOCKSPort, s.SOCKS.Port)
@@ -332,6 +484,19 @@ func ApplySettings(dst session.Config, s Settings) session.Config {
 
 	dst.TrafficMaxPayloadSize = overlay(dst.TrafficMaxPayloadSize, s.Traffic.MaxPayloadSize)
 	dst.TrafficMinDelay = overlay(dst.TrafficMinDelay, s.Traffic.MinDelay)
+
+	if s.UDP.Enabled != nil {
+		dst.UDPDisabled = !*s.UDP.Enabled
+	}
+	if s.UDP.Disabled != nil {
+		dst.UDPDisabled = dst.UDPDisabled || *s.UDP.Disabled
+	}
+	if s.UDP.MaxFlows != nil {
+		dst.UDPMaxFlows = *s.UDP.MaxFlows
+	}
+	if len(s.Route.Direct) > 0 {
+		dst.DirectRules = strings.Join(s.Route.Direct, "\n") + "\n"
+	}
 	dst.TrafficMaxDelay = overlay(dst.TrafficMaxDelay, s.Traffic.MaxDelay)
 
 	return dst

@@ -1,9 +1,22 @@
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use thiserror::Error;
 
 use crate::{ByteIo, DatagramIo, DatagramRecv};
+
+/// Счётчик движения данных через насосы всех потоков процесса: движок по нему отличает «потоки открыты, но молчат»
+/// (можно спать) от «данные идут» (крутить без пауз). Модули слинкованы статически, поэтому счётчик общий.
+static PROGRESS: AtomicUsize = AtomicUsize::new(0);
+
+pub fn progress() -> usize {
+    PROGRESS.load(Ordering::Relaxed)
+}
+
+fn note_progress() {
+    PROGRESS.fetch_add(1, Ordering::Relaxed);
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PumpReport {
@@ -69,6 +82,7 @@ impl DatagramPump {
                 Poll::Ready(Ok(DatagramRecv::Datagram(length))) if length <= self.buffer.len() => {
                     self.pending = Some(length);
                     report.received = length;
+                    note_progress();
                 }
                 Poll::Ready(Ok(DatagramRecv::BufferTooSmall(required))) => {
                     return Poll::Ready(Err(PumpError::DatagramTooLarge(required)));
@@ -87,6 +101,7 @@ impl DatagramPump {
                 Poll::Ready(Ok(())) => {
                     self.pending = None;
                     report.sent = length;
+                    note_progress();
                 }
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(PumpError::Io(error))),
                 Poll::Pending => return Poll::Pending,
@@ -137,6 +152,7 @@ impl Pump {
                     Poll::Ready(Ok(written)) => {
                         self.start += written;
                         report.written += written;
+                        note_progress();
                         budget -= written;
                         if self.start == self.end {
                             self.start = 0;
@@ -167,6 +183,7 @@ impl Pump {
                 Poll::Ready(Ok(read)) => {
                     self.end = read;
                     report.read += read;
+                    note_progress();
                 }
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error.into())),
                 Poll::Pending => return ready_or_pending(report),

@@ -73,7 +73,7 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 | **Транспорты** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · отпечатки uTLS |
 | **MasterDNS (DNS-туннель)** | Туннель поверх DNS-запросов (MasterDnsVPN: свой ARQ-транспорт, несколько резолверов сразу, дублирование пакетов) — вариант для сетей, где доступен только DNS. Автоустановка сервера на VPS по SSH в один тап. |
 | **Telegram-прокси через WARP** | Лёгкий фоновый сервис: WARP-туннель + локальный SOCKS5 для Telegram, независимо от основного подключения. |
-| **olcRTC** | Транспорт [olcRTC](https://github.com/openlibrecommunity/olcrtc) — трафик идёт через реальные сервисы видеозвонков (Jazz, Telemost, WB Stream, Jitsi); трафик передаётся поверх этих сервисов. |
+| **olcRTC** | Транспорт [olcRTC](https://github.com/ghostlane-project/olcrtc) — трафик идёт через реальные сервисы видеозвонков (Jazz, MTS Link, VK Calls, Telemost, Jitsi); трафик передаётся поверх этих сервисов. |
 | **Умный импорт** | ссылки vless/vmess/trojan/ss, base64, JSON-панели, **полные сырые конфиги Xray / sing-box** (применяются как есть), AmneziaWG `.conf`/QR, olcRTC-URI, Happ-профили, массовый импорт списка ссылок. |
 | **DNS и маршруты** | Happ-совместимые профили маршрутизации (запретить/напрямую/через прокси по `geoip:`/`geosite:`/`asn:`/доменам/CIDR), per-rule правила v2rayNG-стиля, тумблер фильтрации РФ-доменов, свои DNS и fakedns. |
 | **Авто-выбор сервера** | Подключение к быстрейшему живому узлу в один тап, с перебором при неудаче. |
@@ -271,7 +271,7 @@ PR и issue приветствуются. Перед началом заглян
 На плечах гигантов:
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [sing-box](https://github.com/SagerNet/sing-box) ·
-[olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
+[olcRTC](https://github.com/ghostlane-project/olcrtc) ·
 [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) ·
 [OpenFlux](https://github.com/p1neappleXpress/OpenFlux) ·
 [qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) ·

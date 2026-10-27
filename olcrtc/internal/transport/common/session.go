@@ -57,6 +57,56 @@ func NewEngineVideoSession(sess engine.Session) (*EngineVideoSession, error) {
 	return &EngineVideoSession{session: sess, vt: vt}, nil
 }
 
+// PublishRateLimit forwards the ceiling the engine's service polices, 0 when
+// it polices none. ai-generated: this method (olcrtc#26).
+func (v *EngineVideoSession) PublishRateLimit() int {
+	return PublishRateLimit(v.session)
+}
+
+// PublishRateLimit reads the ceiling a session declares, in bytes a second,
+// and returns 0 for a session that declares none. ai-generated: this
+// function (olcrtc#26).
+func PublishRateLimit(session any) int {
+	limited, ok := session.(engine.PublishRateLimited)
+	if !ok {
+		return 0
+	}
+	return limited.PublishRateLimit()
+}
+
+// VideoCodec forwards the codec the engine's service takes, "" when the
+// engine names none and the transport's own applies.
+func (v *EngineVideoSession) VideoCodec() string {
+	return VideoCodec(v.session)
+}
+
+// VideoCodec reads the codec a session names for published video, "" for a
+// session that names none.
+func VideoCodec(session any) string {
+	selector, ok := session.(engine.VideoCodecSelector)
+	if !ok {
+		return ""
+	}
+	return selector.VideoCodec()
+}
+
+// SetKeyframeRequestHandler forwards cb to an engine that reports its relay's
+// keyframe requests, and says whether it does.
+func (v *EngineVideoSession) SetKeyframeRequestHandler(cb func()) bool {
+	return OnKeyframeRequest(v.session, cb)
+}
+
+// OnKeyframeRequest registers cb with a session that reports keyframe
+// requests and says whether it is one.
+func OnKeyframeRequest(session any, cb func()) bool {
+	source, ok := session.(engine.KeyframeRequestSource)
+	if !ok {
+		return false
+	}
+	source.SetKeyframeRequestHandler(cb)
+	return true
+}
+
 // Connect brings up the underlying engine session.
 func (v *EngineVideoSession) Connect(ctx context.Context) error {
 	if err := v.session.Connect(ctx); err != nil {

@@ -36,6 +36,12 @@ interface VpnManager {
     suspend fun checkConnection(locationConfig: LocationConfig): Long?
 
     /**
+     * [ping] for a location list row: [isActive] = this row is the connected location. Only the active
+     * one may be measured through the live tunnel; every other row gets its standalone probe (or null).
+     */
+    suspend fun ping(locationConfig: LocationConfig, isActive: Boolean): Long? = ping(locationConfig)
+
+    /**
      * [ping] in the user's ping mode, but a server only counts as alive when a request actually goes
      * THROUGH its proxy: TCP/ICMP/Auto prove just an open port, and free servers are full of hosts that
      * accept TCP and pass nothing. Platforms without a via-proxy probe fall back to plain [ping].

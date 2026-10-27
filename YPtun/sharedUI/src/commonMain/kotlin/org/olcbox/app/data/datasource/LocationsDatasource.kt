@@ -41,6 +41,7 @@ import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
+import org.olcbox.app.data.share.SubscriptionCrypto
 import org.olcbox.app.data.importer.UriCodec
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
@@ -290,7 +291,9 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun exportBundle(): String {
-        return json.encodeToString(LocationBundleV4.serializer(), getBundle())
+        // Locations of an encrypted subscription stay out of the backup: it would spell out what the panel hides.
+        val bundle = getBundle()
+        return json.encodeToString(LocationBundleV4.serializer(), bundle.copy(locations = bundle.locations.filterNot { it.metadata?.locked == true }))
     }
 
     override suspend fun importText(text: String, subscriptionProxy: SubscriptionFetchProxy?): Boolean {
@@ -494,7 +497,9 @@ class LocationsRepositoryImpl(
                         customName = previousCustomName,
                         cascadeLink = previousCascadeLink
                     )
-                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }.normalized()
+                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }
+                    .withVkLinkOverride(reusedEntry?.metadata?.vkLinkOverride)
+                    .normalized()
             }
 
             // Only reset the selection when the selected server actually vanished from this
@@ -762,6 +767,28 @@ class LocationsRepositoryImpl(
             }
             saveBundleUnlocked(bundle.copy(locations = updated))
         }
+    }
+
+    override suspend fun setLocationVkLink(storageId: String, link: String) {
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.storageId == storageId }) return@withLock
+            val updated = bundle.locations.map { entry ->
+                if (entry.storageId != storageId || entry.vkturn == null) entry
+                else entry.copy(
+                    vkturn = entry.vkturn.copy(vkLink = link.trim()),
+                    metadata = (entry.metadata ?: LocationMetadata()).copy(vkLinkOverride = link.trim()),
+                ).normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    /** The user's own VK call link beats the one the subscription brings. */
+    private fun LocationEntry.withVkLinkOverride(link: String?): LocationEntry {
+        val vk = vkturn
+        if (link.isNullOrBlank() || vk == null) return this
+        return copy(vkturn = vk.copy(vkLink = link), metadata = (metadata ?: LocationMetadata()).copy(vkLinkOverride = link))
     }
 
     override suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String): Boolean {
@@ -1385,7 +1412,22 @@ class LocationsRepositoryImpl(
         ).normalized()
     }
 
+    /** Decrypts `yptun-enc://` lines (encrypted panel subscription) and marks every resulting location locked. */
     private fun parseImport(
+        text: String,
+        subscriptionUrl: String? = null,
+        updateIntervalHours: Int? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): ParsedImport? {
+        val decrypted = SubscriptionCrypto.decryptLines(SubscriptionDecoder.toLinkText(text))
+        val parsed = parseImportPlain(if (decrypted.encrypted) decrypted.text else text, subscriptionUrl, updateIntervalHours, subscriptionMetadata)
+        if (!decrypted.encrypted || parsed == null) return parsed
+        return parsed.copy(bundle = parsed.bundle.copy(locations = parsed.bundle.locations.map {
+            it.copy(metadata = (it.metadata ?: LocationMetadata()).copy(locked = true)).normalized()
+        }))
+    }
+
+    private fun parseImportPlain(
         text: String,
         subscriptionUrl: String? = null,
         updateIntervalHours: Int? = null,
@@ -1463,7 +1505,7 @@ class LocationsRepositoryImpl(
                 merged.locations.sortedBy { e -> order.indexOf(e.name).takeIf { it >= 0 } ?: Int.MAX_VALUE }
             val withMeta = merged.copy(
                 locations = ordered.map { e ->
-                    val withSub = if (sub == null || e.metadata?.subscription != null) e else e.copy(metadata = sub)
+                    val withSub = withPanelSubscription(e, sub)
                     val desc = descByName[withSub.name]
                     if (desc != null && withSub.description.isBlank()) withSub.copy(description = desc) else withSub
                 }
@@ -2145,7 +2187,7 @@ class LocationsRepositoryImpl(
             .mapNotNull { CsqttUriParser.parse(it) }
             .map { link ->
                 val location = LocationConfig(
-                    name = "csqtt ${link.host}",
+                    name = link.name.ifBlank { "csqtt ${link.host}" },
                     engine = EngineType.VkTurn,
                     vkturn = VkTurnConfig(
                         core = VkTurnConfig.CORE_CSQTT,
@@ -3113,4 +3155,20 @@ class LocationsRepositoryImpl(
          */
         const val HEADER_APP_ID = "x-app-id"
     }
+}
+
+/**
+ * Puts the panel's subscription metadata (title, traffic, expiry, support link…) on an imported location. A family whose
+ * parser built its own metadata without a title (olcRTC does: its `#refresh:` header) must still join the panel's
+ * subscription: the list groups by title + URL, so without the title it showed up as a separate "subscription".
+ */
+internal fun withPanelSubscription(e: LocationEntry, sub: LocationMetadata?): LocationEntry {
+    val panel = sub?.subscription ?: return e
+    val own = e.metadata?.subscription ?: return e.copy(metadata = sub)
+    if (!own.name.isNullOrBlank()) return e
+    val merged = panel.copy(
+        update = panel.update ?: own.update, refresh = panel.refresh ?: own.refresh, color = panel.color ?: own.color,
+        icon = panel.icon ?: own.icon, used = panel.used ?: own.used, available = panel.available ?: own.available,
+    )
+    return e.copy(metadata = (e.metadata ?: LocationMetadata()).copy(subscription = merged))
 }

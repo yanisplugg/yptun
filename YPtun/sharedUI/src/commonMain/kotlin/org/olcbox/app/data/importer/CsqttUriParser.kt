@@ -11,7 +11,7 @@ import org.olcbox.app.data.model.VkTurnConfig
  *
  * `host` is the server, `peer` its DTLS port (46000 by default), `hashes` the VK call hashes joined by
  * `+`. Older links are `csqtt://<password>@host:port`. Maps onto a VK-TURN location whose core is
- * [VkTurnConfig.CORE_CSQTT].
+ * [VkTurnConfig.CORE_CSQTT]. An optional `#<name>` fragment (percent-encoded) names the location.
  */
 object CsqttUriParser {
 
@@ -23,17 +23,20 @@ object CsqttUriParser {
         val password: String,
         /** VK hashes, ONE PER LINE — the storage format of [VkTurnConfig.vkLink]. */
         val hashes: String,
+        /** Location name from the `#fragment`; blank when the link has none. */
+        val name: String = "",
     )
 
     fun parse(uri: String): CsqttLink? {
         val trimmed = uri.trim()
         if (!trimmed.startsWith(SCHEME, ignoreCase = true)) return null
-        val rest = trimmed.substring(SCHEME.length)
+        val name = trimmed.substringAfter('#', "").let { if (it.isBlank()) "" else UriCodec.percentDecode(it).trim() }
+        val rest = trimmed.substring(SCHEME.length).substringBefore('#')
         val query = rest.substringAfter('?', "")
         if (rest.substringBefore('?').trimEnd('/').equals("connect", ignoreCase = true) && query.isNotBlank()) {
-            return parseV2(query)
+            return parseV2(query)?.copy(name = name)
         }
-        return parseLegacy(rest)
+        return parseLegacy(rest)?.copy(name = name)
     }
 
     private fun parseV2(query: String): CsqttLink? {
@@ -63,7 +66,7 @@ object CsqttUriParser {
     }
 
     /** Re-emits the connection link for a stored csqtt VK-TURN location (round-trips [parse]). */
-    fun compose(vk: VkTurnConfig): String {
+    fun compose(vk: VkTurnConfig, name: String = ""): String {
         val addr = vk.csqttPeerAddr()
         val host = addr.substringBeforeLast(':').removePrefix("[").removeSuffix("]")
         val port = addr.substringAfterLast(':').toIntOrNull() ?: VkTurnConfig.DEFAULT_CSQTT_PORT
@@ -73,6 +76,7 @@ object CsqttUriParser {
             append("&peer=").append(port)
             append("&password=").append(encode(vk.csqttPassword.trim()))
             if (hashes.isNotEmpty()) append("&hashes=").append(hashes.joinToString("+") { encode(it) })
+            if (name.isNotBlank()) append('#').append(encode(name.trim()))
         }
     }
 

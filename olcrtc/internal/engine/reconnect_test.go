@@ -143,3 +143,47 @@ func TestReconnectorCallbacksAreRaceSafe(t *testing.T) {
 		t.Fatal("callbacks were never invoked")
 	}
 }
+
+// A provider event raised while the reconnect callback runs is about a room
+// this attempt never saw, so it survives the drain that follows a successful
+// attempt (#31). The server's callback closes every peer of the session it is
+// replacing, which is where that window came from.
+func TestARequestRaisedDuringAnAttemptIsKept(t *testing.T) {
+	var r *Reconnector
+	r = NewReconnector(ReconnectorConfig{
+		MaxAttempts: 4,
+		Reconnect: func(context.Context) error {
+			// The provider moves the room while we are still reconnecting.
+			if got := r.Request(false, false); got != ReconnectQueued {
+				t.Errorf("request during the attempt = %v, want queued", got)
+			}
+			return nil
+		},
+	})
+
+	if terminal := r.handleAttempt(t.Context(), nil); terminal {
+		t.Fatal("the reconnect loop ended on a successful attempt")
+	}
+	if !r.Drain() {
+		t.Fatal("the request raised during the attempt was thrown away")
+	}
+}
+
+// One raised before the attempt is the same event that started it, and is
+// still coalesced away.
+func TestARequestRaisedBeforeAnAttemptIsDropped(t *testing.T) {
+	r := NewReconnector(ReconnectorConfig{
+		MaxAttempts: 4,
+		Reconnect:   func(context.Context) error { return nil },
+	})
+	if got := r.Request(false, false); got != ReconnectQueued {
+		t.Fatalf("request = %v, want queued", got)
+	}
+
+	if terminal := r.handleAttempt(t.Context(), nil); terminal {
+		t.Fatal("the reconnect loop ended on a successful attempt")
+	}
+	if r.Drain() {
+		t.Fatal("a request from before the attempt outlived it")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,5 +97,40 @@ func TestRunWithAddressForwardsActualAddress(t *testing.T) {
 	}
 	if got != actualAddr {
 		t.Fatalf("callback address = %q, want %q", got, actualAddr)
+	}
+}
+
+func TestRunParsesDirectRules(t *testing.T) {
+	var got internalclient.Config
+	client := &Client{
+		cfg: Config{DirectRules: "domain:ru\n10.0.0.0/8\n"},
+		run: func(_ context.Context, cfg internalclient.Config, _ func(string)) error {
+			got = cfg
+			return errRunner
+		},
+	}
+	if err := client.Run(context.Background()); !errors.Is(err, errRunner) {
+		t.Fatalf("Run() error = %v, want %v", err, errRunner)
+	}
+	if got.Direct == nil || !got.Direct.MatchDomain("a.ru") || !got.Direct.MatchHost("10.1.2.3") {
+		t.Fatalf("Direct = %v, want the parsed rules", got.Direct)
+	}
+}
+
+func TestRunRefusesBadDirectRules(t *testing.T) {
+	ran := false
+	client := &Client{
+		cfg: Config{DirectRules: "domain:ru\nkeyword:x\n"},
+		run: func(context.Context, internalclient.Config, func(string)) error {
+			ran = true
+			return nil
+		},
+	}
+	err := client.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "direct rules") || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("Run() error = %v, want a direct rules error naming line 2", err)
+	}
+	if ran {
+		t.Fatal("the runner ran with rules that do not parse")
 	}
 }

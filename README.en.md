@@ -70,7 +70,7 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 | **Transports** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS fingerprints |
 | **MasterDNS (DNS tunnel)** | A tunnel over DNS queries (MasterDnsVPN: custom ARQ transport, several resolvers at once, packet duplication) — an option for networks where only DNS is available. One-tap server install on a VPS over SSH. |
 | **Telegram proxy over WARP** | A lightweight background service: a WARP tunnel + a local SOCKS5 for Telegram, independent of the main connection. |
-| **olcRTC** | The [olcRTC](https://github.com/openlibrecommunity/olcrtc) transport — traffic rides real video-call services (Jazz, Telemost, WB Stream, Jitsi); traffic is carried over these services. |
+| **olcRTC** | The [olcRTC](https://github.com/ghostlane-project/olcrtc) transport — traffic rides real video-call services (Jazz, MTS Link, VK Calls, Telemost, Jitsi); traffic is carried over these services. |
 | **Smart import** | vless/vmess/trojan/ss links, base64, JSON panels, **full raw Xray / sing-box configs** (applied as-is), AmneziaWG `.conf`/QR, olcRTC URIs, Happ profiles, bulk link-list import. |
 | **DNS & routing** | Happ-compatible routing profiles (deny/direct/proxy by `geoip:`/`geosite:`/`asn:`/domains/CIDR), v2rayNG-style per-rule routing, an RU-domain filter toggle, custom DNS and fakedns. |
 | **Auto server pick** | One-tap connect to the fastest reachable node, with failover. |
@@ -260,7 +260,7 @@ PRs and issues welcome. Before you start, see:
 Standing on the shoulders of giants:
 [Xray-core](https://github.com/XTLS/Xray-core) ·
 [sing-box](https://github.com/SagerNet/sing-box) ·
-[olcRTC](https://github.com/openlibrecommunity/olcrtc) ·
+[olcRTC](https://github.com/ghostlane-project/olcrtc) ·
 [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) ·
 [OpenFlux](https://github.com/p1neappleXpress/OpenFlux) ·
 [qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) ·

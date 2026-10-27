@@ -19,6 +19,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/framing"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/muxconn"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/tunnelcore"
@@ -258,9 +259,16 @@ func TestSocks5ConnectErrors(t *testing.T) {
 }
 
 func TestSetupResolver(t *testing.T) {
-	resolver := tunnelcore.Resolver(nil, "127.0.0.1:53")
-	if resolver == nil || !resolver.PreferGo || resolver.Dial == nil {
-		t.Fatalf("Resolver() = %+v", resolver)
+	resolver, ok := tunnelcore.Resolver(nil, "127.0.0.1:53").(*protect.Resolver)
+	if !ok || resolver == nil {
+		t.Fatalf("Resolver() = %T, want *protect.Resolver", resolver)
+	}
+	if servers := resolver.Servers(); len(servers) == 0 || servers[0] != "127.0.0.1:53" {
+		t.Fatalf("Resolver().Servers() = %v, want the configured server first", servers)
+	}
+	custom := &net.Resolver{PreferGo: true}
+	if got := tunnelcore.Resolver(custom, "127.0.0.1:53"); got != custom {
+		t.Fatalf("Resolver(custom) = %v, want the custom lookup kept", got)
 	}
 }
 
@@ -303,7 +311,7 @@ func TestShutdownClosesLinkAndConn(t *testing.T) {
 	ln := &serverLinkStub{}
 	s := &Server{
 		ln:   ln,
-		keys: keys,
+		ring: cryptopkg.SingleEntry(keys, ""),
 		conn: muxconn.New(ln, keys),
 	}
 	s.shutdown()
@@ -333,8 +341,9 @@ func TestDialWithoutProxy(t *testing.T) {
 	if !ok {
 		t.Fatalf("listener addr type = %T, want *net.TCPAddr", ln.Addr())
 	}
-	s := &Server{resolver: net.DefaultResolver}
-	conn, err := s.dial(ConnectRequest{Addr: testConnectAddr, Port: tcpAddr.Port})
+	// ai-generated: the loopback listener needs the egress policy lifted (egress hardening).
+	s := &Server{resolver: net.DefaultResolver, unsafeAllowPrivateTargets: true}
+	conn, err := s.dial(context.Background(), ConnectRequest{Addr: testConnectAddr, Port: tcpAddr.Port})
 	if err != nil {
 		t.Fatalf("dial() error = %v", err)
 	}
@@ -344,7 +353,7 @@ func TestDialWithoutProxy(t *testing.T) {
 
 func TestDialProxyError(t *testing.T) {
 	s := &Server{socksProxyAddr: testConnectAddr, socksProxyPort: 1}
-	if _, err := s.dial(ConnectRequest{Addr: "example.com", Port: 443}); err == nil || !strings.Contains(err.Error(), "failed to dial proxy") {
+	if _, err := s.dial(context.Background(), ConnectRequest{Addr: "example.com", Port: 443}); err == nil || !strings.Contains(err.Error(), "failed to dial proxy") {
 		t.Fatalf("dial() error = %v", err)
 	}
 }
@@ -439,7 +448,7 @@ func TestReinstallSessionFiresOnClose(t *testing.T) {
 	}
 	s := &Server{
 		ln:        &serverLinkStub{},
-		keys:      keys,
+		ring:      cryptopkg.SingleEntry(keys, ""),
 		sessionID: "sid-123",
 		deviceID:  "dev-123",
 		onClose:   func(sid, reason string) { got.sid = sid; got.reason = reason },
@@ -565,7 +574,7 @@ func TestStartControlLoopResetsPeerBeforeReinstall(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		ln:      ln,
-		keys:    keys,
+		ring:    cryptopkg.SingleEntry(keys, ""),
 		conn:    muxconn.New(ln, keys),
 		session: serverSess,
 		health:  runtime.NewHealthTracker(nil),
@@ -657,6 +666,8 @@ func TestDispatchFiresOnTraffic(t *testing.T) {
 	s := &Server{
 		sessionID: "traffic-sid",
 		resolver:  net.DefaultResolver,
+		// ai-generated: the loopback listener needs the egress policy lifted (egress hardening).
+		unsafeAllowPrivateTargets: true,
 		onTraffic: func(sid, addr string, in, out uint64) {
 			rec.sid = sid
 			rec.addr = addr
@@ -733,7 +744,7 @@ func TestReinstallSessionClosesOldConnBeforeSwap(t *testing.T) {
 	}
 	s := &Server{
 		ln:           ln,
-		keys:         keys,
+		ring:         cryptopkg.SingleEntry(keys, ""),
 		conn:         conn,
 		session:      sess,
 		onClose:      func(string, string) {},
@@ -826,6 +837,8 @@ func TestAcceptSingletonHandshakeStoresServerFields(t *testing.T) {
 
 	s := newHandshakeServer()
 	s.liveness = control.Config{Interval: time.Hour, Timeout: time.Hour, Failures: 1}
+	s.meter = newMeter()
+	s.group = muxconn.PrePinned(newServerTestKeys(t), "key-single")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
@@ -852,6 +865,58 @@ func TestAcceptSingletonHandshakeStoresServerFields(t *testing.T) {
 	if dev != "device-B" {
 		t.Fatalf("stored deviceID = %q, want device-B", dev)
 	}
+	if got := meteredKey(s.meter, s.currentSessionID()); got != "key-single" {
+		t.Fatalf("meter bound the session to key %q, want key-single", got)
+	}
+}
+
+// meteredKey reports which key id the meter attributes sessionID to.
+func meteredKey(m *meter, sessionID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessionKey[sessionID]
+}
+
+// TestEstablishPeerSessionBindsTheMeterToThePinnedKey covers the handshake
+// path of peer-routing transports without a per-peer control plane
+// (datachannel over jitsi or livekit): the meter must learn the session's
+// key there too, or every byte of such a peer goes unattributed.
+func TestEstablishPeerSessionBindsTheMeterToThePinnedKey(t *testing.T) {
+	serverSess, clientSess, cleanup := smuxPair(t)
+	defer cleanup()
+
+	s := newHandshakeServer()
+	s.liveness = control.Config{Interval: time.Hour, Timeout: time.Hour, Failures: 1}
+	s.meter = newMeter()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.baseCtx = ctx
+	defer func() {
+		cancel()
+		s.wg.Wait()
+	}()
+	keys := newServerTestKeys(t)
+	peer := newPeerSession("peer-x", false, muxconn.PrePinned(keys, "key-x"))
+	if !peer.attachData(muxconn.NewGrouped(&peerRoutingStub{}, peer.group), serverSess) {
+		t.Fatal("attachData() refused a fresh peer")
+	}
+
+	go func() {
+		stream, err := clientSess.OpenStream()
+		if err != nil {
+			return
+		}
+		_, _, _ = handshake.Client(stream, "device-C", nil)
+	}()
+
+	if !s.establishPeerSession(peer) {
+		t.Fatal("establishPeerSession() failed")
+	}
+	if peer.sid() == "" {
+		t.Fatal("establishPeerSession did not store the session id")
+	}
+	if got := meteredKey(s.meter, peer.sid()); got != "key-x" {
+		t.Fatalf("meter bound the peer's session to key %q, want key-x", got)
+	}
 }
 
 // TestPeerSessionConcurrentAccess is the race regression: the handshake
@@ -864,7 +929,7 @@ func TestPeerSessionConcurrentAccess(t *testing.T) {
 	ln := &serverLinkStub{}
 	s := &Server{
 		ln:           ln,
-		keys:         keys,
+		ring:         cryptopkg.SingleEntry(keys, ""),
 		onClose:      func(string, string) {},
 		health:       runtime.NewHealthTracker(nil),
 		peerSessions: make(map[string]*peerSession),
@@ -982,7 +1047,10 @@ func TestDispatchAcksDialFailure(t *testing.T) {
 	go func() {
 		stream, err := serverSess.AcceptStream()
 		if err == nil {
-			(&Server{resolver: net.DefaultResolver}).handleStream(context.Background(), stream, "sid")
+			// ai-generated: the policy is lifted so port 1 is a real refused
+			// dial, not a blocked target (egress hardening).
+			s := &Server{resolver: net.DefaultResolver, unsafeAllowPrivateTargets: true}
+			s.handleStream(context.Background(), stream, "sid")
 		}
 	}()
 
@@ -1053,7 +1121,7 @@ func TestServeSingleWakesOnSessionInstall(t *testing.T) {
 	keys := newServerTestKeys(t)
 	s := &Server{
 		ln:           &serverLinkStub{},
-		keys:         keys,
+		ring:         cryptopkg.SingleEntry(keys, ""),
 		sessionID:    "sid-serve",
 		resolver:     net.DefaultResolver,
 		onClose:      func(string, string) {},

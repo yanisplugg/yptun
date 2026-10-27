@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.snolc.SnolcFiles
+import org.olcbox.app.vpn.snolc.resolveSnolcHost
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +33,7 @@ internal class DesktopSnolc(
         val dir = DesktopPaths.appDataDir().resolve("snolc")
         Files.createDirectories(dir.resolve("state"))
         Files.createDirectories(dir.resolve("modules"))
-        SnolcFiles.client(listenHost, listenPort, config.host, config.port, config.debug, socksUsername, socksPassword).forEach { (name, body) ->
+        SnolcFiles.client(listenHost, listenPort, resolveSnolcHost(config.host), config.port, config.debug, socksUsername, socksPassword).forEach { (name, body) ->
             Files.writeString(dir.resolve(name), body)
         }
         Files.writeString(dir.resolve("pub.hex"), config.publicKey)

@@ -1,26 +1,22 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::{
-    client_perf::{self, Stage as PerfStage},
-    flow_frame::{self, FlowSequencer},
+    obfs::{ObfsConfig, ObfsState, SessionCipher},
     packet::{PacketBuf, PacketPool},
     stats::Stats,
-    striped_scheduler::{DispatchTicket, PacketClass, packet_class},
-    tun, udp_batch,
+    tun,
+    turn::TurnAllocation,
 };
 use anyhow::Result;
 use arc_swap::{ArcSwap, ArcSwapOption};
 use crossbeam_queue::ArrayQueue;
 use socket2::SockRef;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet},
     fs::File,
     future::Future,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -31,379 +27,480 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
-use tokio::time::Instant;
+#[cfg(unix)]
+const TUN_RX_BURST: usize = 32;
+#[cfg(unix)]
+const TUN_RX_BURST_BYTES: usize = 14_240;
+#[cfg(unix)]
+const TUN_TX_BURST: usize = 128;
+const UDP_RX_BURST: usize = 128;
 
-const RETURN_CAPACITY: usize = 1024;
-const RETURN_LATENCY_CAPACITY: usize = 128;
-const RETURN_PRIORITY_CAPACITY: usize = 384;
-const RETURN_BULK_CAPACITY: usize =
-    RETURN_CAPACITY - RETURN_LATENCY_CAPACITY - RETURN_PRIORITY_CAPACITY;
-pub(crate) const CLIENT_WORKER_PACKET_CHUNK: usize =
-    crate::striped_scheduler::BULK_STREAM_STRIPE_PACKET_CHUNK;
+pub const TB_RATE_BYTES_PER_SEC: f64 = 247_000.0;
+pub const TB_CAPACITY_BYTES: f64 = 10_500.0;
+pub const QUANTUM_BYTES: usize = 10_500;
+pub const MAX_DEFICIT: f64 = -4_500.0;
 
-const QUEUE_ACTIVE: u64 = 1;
+const ADAPTIVE_MIN_RATE_BYTES_PER_SEC: f64 = 150_000.0;
+const ADAPTIVE_MAX_RATE_BYTES_PER_SEC: f64 = TB_RATE_BYTES_PER_SEC;
+const ADAPTIVE_DECREASE_FACTOR: f64 = 0.85;
+const ADAPTIVE_INCREASE_BYTES_PER_SEC: f64 = 5_000.0;
+const ADAPTIVE_ADJUST_INTERVAL: Duration = Duration::from_millis(100);
+
+const FLOW_BURST_BYTES: usize = 16 * 1024;
+const FLOW_TABLE_MAX: usize = 1024;
+const FLOW_EVICT_EVERY: u32 = 1024;
+const FLOW_IDLE_TTL: Duration = Duration::from_secs(30);
+const SMALL_UDP_MAX_LEN: usize = 300;
+const SMALL_UDP_STICKY: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum FlowKey {
+    V4 {
+        src: [u8; 4],
+        dst: [u8; 4],
+        proto: u8,
+        sport: u16,
+        dport: u16,
+    },
+    V6 {
+        src: [u8; 16],
+        dst: [u8; 16],
+        proto: u8,
+        sport: u16,
+        dport: u16,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FlowState {
+    idx: usize,
+    last_seen: std::time::Instant,
+    burst_left: usize,
+    sticky_until: Option<std::time::Instant>,
+}
+
+fn transport_ports(packet: &[u8], offset: usize, proto: u8) -> (u16, u16) {
+    if (proto == 6 || proto == 17) && packet.len() >= offset + 4 {
+        (
+            u16::from_be_bytes([packet[offset], packet[offset + 1]]),
+            u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]),
+        )
+    } else {
+        (0, 0)
+    }
+}
+
+fn flow_key(packet: &[u8]) -> Option<FlowKey> {
+    let version = packet.first()? >> 4;
+    match version {
+        4 => {
+            if packet.len() < 20 {
+                return None;
+            }
+            let ihl = (packet[0] & 0x0f) as usize * 4;
+            if ihl < 20 || packet.len() < ihl {
+                return None;
+            }
+            let proto = packet[9];
+            let src = [packet[12], packet[13], packet[14], packet[15]];
+            let dst = [packet[16], packet[17], packet[18], packet[19]];
+            let fragment_offset = u16::from_be_bytes([packet[6], packet[7]]) & 0x1fff;
+            let (sport, dport) = if fragment_offset == 0 {
+                transport_ports(packet, ihl, proto)
+            } else {
+                (0, 0)
+            };
+            Some(FlowKey::V4 {
+                src,
+                dst,
+                proto,
+                sport,
+                dport,
+            })
+        }
+        6 => {
+            if packet.len() < 40 {
+                return None;
+            }
+            let proto = packet[6];
+            let src: [u8; 16] = packet[8..24].try_into().ok()?;
+            let dst: [u8; 16] = packet[24..40].try_into().ok()?;
+            let (sport, dport) = transport_ports(packet, 40, proto);
+            Some(FlowKey::V6 {
+                src,
+                dst,
+                proto,
+                sport,
+                dport,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn is_small_udp(key: &FlowKey, packet_len: usize) -> bool {
+    packet_len <= SMALL_UDP_MAX_LEN
+        && matches!(
+            key,
+            FlowKey::V4 { proto: 17, .. } | FlowKey::V6 { proto: 17, .. }
+        )
+}
 
 #[cfg(unix)]
-enum TunWriteState {
-    Complete,
-    Continue,
-    Wait,
-    Backoff,
-    Yield,
-    Closed,
-    Failed,
+const TUN_REPLACEMENT_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(unix)]
+const TUN_RETRY_TOLERANCE: u32 = 40;
+#[cfg(unix)]
+const TUN_EOF_TOLERANCE: u32 = 4;
+#[cfg(unix)]
+const TUN_RETRY_BACKOFF_STEP_MS: u64 = 25;
+#[cfg(unix)]
+const TUN_RETRY_BACKOFF_MAX_MS: u64 = 400;
+#[cfg(unix)]
+const TUN_RETRY_BACKOFF_STEPS: u32 = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Termination {
+    TunLost,
+    Fatal,
 }
 
-struct ReturnReorder {
-    reassembler: flow_frame::FlowReassembler<PacketBuf>,
-    ready: VecDeque<PacketBuf>,
+#[derive(Clone, Copy, Debug)]
+struct RateController {
+    rate: f64,
+    congested: bool,
+    last_adjust: Option<std::time::Instant>,
 }
 
-impl ReturnReorder {
+impl RateController {
     fn new() -> Self {
         Self {
-            reassembler: flow_frame::FlowReassembler::new(),
-            ready: VecDeque::with_capacity(64),
+            rate: TB_RATE_BYTES_PER_SEC,
+            congested: false,
+            last_adjust: None,
         }
     }
 
-    fn push(&mut self, mut packet: PacketBuf) {
-        if let Some((header, _)) = flow_frame::FrameHeader::decode(packet.as_slice()) {
-            if packet.trim_front(flow_frame::FRAME_LEN).is_ok() {
-                self.reassembler.push(header, packet, &mut self.ready);
-            }
+    fn mark_congested(&mut self) {
+        self.congested = true;
+    }
+
+    fn tick(&mut self, now: std::time::Instant) {
+        let Some(last) = self.last_adjust else {
+            self.last_adjust = Some(now);
+            return;
+        };
+        if now.saturating_duration_since(last) < ADAPTIVE_ADJUST_INTERVAL {
+            return;
+        }
+        if self.congested {
+            self.rate = (self.rate * ADAPTIVE_DECREASE_FACTOR).max(ADAPTIVE_MIN_RATE_BYTES_PER_SEC);
+            self.congested = false;
         } else {
-            self.ready.push_back(packet);
+            self.rate =
+                (self.rate + ADAPTIVE_INCREASE_BYTES_PER_SEC).min(ADAPTIVE_MAX_RATE_BYTES_PER_SEC);
         }
+        self.last_adjust = Some(now);
     }
-
-    fn pop(&mut self) -> Option<PacketBuf> {
-        self.ready.pop_front()
-    }
-}
-
-fn frame_outbound_packet(sequences: &mut FlowSequencer, packet: &mut PacketBuf) -> bool {
-    let Some(header) = sequences.next(packet.as_slice()) else {
-        return true;
-    };
-    let Ok(prefix) = packet.prepend(flow_frame::FRAME_LEN) else {
-        return false;
-    };
-    header.encode(prefix)
-}
-
-#[derive(Clone, Copy, Default)]
-struct RoundRobinCursor {
-    current_worker: usize,
-    remaining: usize,
 }
 
 #[derive(Default)]
-struct FastPathScheduler {
-    workers: Arc<Vec<WorkerChannels>>,
-    worker_count: usize,
-    cursors: [RoundRobinCursor; 3],
+pub struct UplinkState {
+    pub last_update: Option<std::time::Instant>,
+    pub tokens: Vec<f64>,
+    rates: Vec<RateController>,
+    pub cursor: usize,
+    flows: HashMap<FlowKey, FlowState>,
+    flow_evict_counter: u32,
 }
 
-impl FastPathScheduler {
-    fn new() -> Self {
-        Self {
-            workers: Arc::new(Vec::new()),
-            worker_count: 0,
-            cursors: [RoundRobinCursor::default(); 3],
+impl UplinkState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update_tokens(&mut self, count: usize, now: std::time::Instant) {
+        if count <= 1 {
+            return;
+        }
+
+        if self.tokens.len() != count {
+            self.tokens.resize(count, TB_CAPACITY_BYTES);
+            self.rates.resize_with(count, RateController::new);
+            self.last_update = Some(now);
+            // Индексы воркеров сдвинулись — старые flowlet-привязки больше не
+            // действительны.
+            self.flows.clear();
+            self.flow_evict_counter = 0;
+        }
+
+        for controller in self.rates.iter_mut() {
+            controller.tick(now);
+        }
+
+        let start = match self.last_update {
+            Some(s) => s,
+            None => {
+                self.last_update = Some(now);
+                now
+            }
+        };
+
+        let elapsed = now.saturating_duration_since(start).as_secs_f64();
+        if elapsed >= 0.0001 {
+            self.last_update = Some(now);
+            for (t, controller) in self.tokens.iter_mut().zip(self.rates.iter()) {
+                *t = (*t + elapsed * controller.rate).min(TB_CAPACITY_BYTES);
+            }
         }
     }
 
-    #[inline(always)]
-    fn begin(
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn try_follow_stream(
         &mut self,
-        source: &ArcSwap<Vec<WorkerChannels>>,
-        packet: &[u8],
-    ) -> Option<DispatchTicket> {
-        let class = packet_class(packet);
-        if self.cursors[class.index()].remaining == 0 {
-            self.workers = source.load_full();
-            self.sync_worker_count(self.workers.len());
+        stream_idx: usize,
+        count: usize,
+        packet_len: usize,
+        now: std::time::Instant,
+    ) -> bool {
+        if count <= 1 {
+            return true;
         }
-        self.begin_for_class(self.worker_count, class)
+        if stream_idx >= count {
+            return false;
+        }
+        self.update_tokens(count, now);
+
+        let len_f = packet_len as f64;
+        self.tokens[stream_idx] = (self.tokens[stream_idx] - len_f).max(MAX_DEFICIT);
+        true
     }
 
-    #[inline(always)]
-    fn begin_with_count(&mut self, worker_count: usize, packet: &[u8]) -> Option<DispatchTicket> {
-        self.begin_for_class(worker_count, packet_class(packet))
+    fn evict_flows(&mut self, now: std::time::Instant) {
+        self.flow_evict_counter = self.flow_evict_counter.wrapping_add(1);
+        if self.flow_evict_counter % FLOW_EVICT_EVERY != 0 && self.flows.len() < FLOW_TABLE_MAX {
+            return;
+        }
+        self.flows
+            .retain(|_, state| now.saturating_duration_since(state.last_seen) < FLOW_IDLE_TTL);
+        if self.flows.len() >= FLOW_TABLE_MAX {
+            self.flows.clear();
+        }
     }
 
-    #[inline(always)]
-    fn begin_for_class(
-        &mut self,
-        worker_count: usize,
-        class: PacketClass,
-    ) -> Option<DispatchTicket> {
-        if worker_count == 0 {
+    /// Выбираем здоровый поток с наибольшим запасом токенов, обходя список
+    /// начиная с `cursor`. Токены здесь не списываются.
+    fn choose_stream(&mut self, workers: &[WorkerEntry]) -> Option<usize> {
+        let count = workers.len();
+        if count == 0 {
             return None;
         }
-        if self.worker_count != worker_count {
-            self.sync_worker_count(worker_count);
-        }
-        let cursor = &mut self.cursors[class.index()];
-        if cursor.remaining == 0 {
-            cursor.remaining = class.stream_chunk();
-        }
-        let start_slot = cursor.current_worker;
-        cursor.remaining -= 1;
-        if cursor.remaining == 0 {
-            cursor.current_worker += 1;
-            if cursor.current_worker == worker_count {
-                cursor.current_worker = 0;
+        let start = self.cursor.min(count - 1);
+        let mut best_idx = None;
+        let mut best_tokens = f64::NEG_INFINITY;
+        for offset in 0..count {
+            let idx = (start + offset) % count;
+            let allocation = &workers[idx].channels.allocation;
+            if !allocation.is_sendable() {
+                if allocation.is_alive()
+                    && let Some(controller) = self.rates.get_mut(idx)
+                {
+                    controller.mark_congested();
+                }
+                continue;
+            }
+            if self.tokens[idx] > best_tokens {
+                best_tokens = self.tokens[idx];
+                best_idx = Some(idx);
             }
         }
-        Some(DispatchTicket { start_slot, class })
-    }
-
-    #[inline(always)]
-    fn workers(&self) -> &[WorkerChannels] {
-        &self.workers
-    }
-
-    #[inline(always)]
-    fn sync_worker_count(&mut self, worker_count: usize) {
-        if self.worker_count != worker_count {
-            self.worker_count = worker_count;
-            self.cursors = [RoundRobinCursor::default(); 3];
+        if let Some(idx) = best_idx {
+            self.cursor = (idx + 1) % count;
         }
+        best_idx
     }
-}
 
-struct QueuedPacket {
-    packet: PacketBuf,
-    epoch: u64,
-}
-
-struct PacketQueue {
-    queue: ArrayQueue<QueuedPacket>,
-    notify: Notify,
-    state: AtomicU64,
-    senders: AtomicUsize,
-    receiver_open: AtomicBool,
-}
-
-pub struct PacketSender {
-    shared: Arc<PacketQueue>,
-}
-
-pub struct PacketReceiver {
-    shared: Arc<PacketQueue>,
-}
-
-impl Clone for PacketSender {
-    fn clone(&self) -> Self {
-        self.shared.senders.fetch_add(1, Ordering::Relaxed);
-        Self {
-            shared: self.shared.clone(),
+    /// Равномерное размазывание по здоровым потокам с per-flow порядком:
+    /// маленькие UDP-потоки (игры/голос) закрепляются за одним воркером, а
+    /// TCP/крупный UDP идёт берстами по 16 КБ и переезжает на другой воркер
+    /// только на границе берста. Внутри берста порядок пакетов сохраняется,
+    /// поэтому TCP не видит per-packet reordering, как в старом водопаде.
+    fn select_deficit_waterfall(
+        &mut self,
+        workers: &[WorkerEntry],
+        total_len: usize,
+        packet_len: usize,
+        flow: Option<FlowKey>,
+        now: std::time::Instant,
+    ) -> usize {
+        let count = workers.len();
+        if count <= 1 {
+            return 0;
         }
-    }
-}
+        self.update_tokens(count, now);
+        let len_f = total_len as f64;
 
-impl Drop for PacketSender {
-    fn drop(&mut self) {
-        if self.shared.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.shared.notify.notify_waiters();
-        }
-    }
-}
-
-impl PacketSender {
-    pub fn try_send(&self, packet: PacketBuf) -> std::result::Result<(), PacketBuf> {
-        self.send(packet, false)
-    }
-
-    pub fn force_send(&self, packet: PacketBuf) -> std::result::Result<(), PacketBuf> {
-        self.send(packet, true)
-    }
-
-    fn send(&self, packet: PacketBuf, force: bool) -> std::result::Result<(), PacketBuf> {
-        client_perf::measure_sampled(PerfStage::PacketQueue, 128, || {
-            self.send_inner(packet, force)
-        })
-    }
-
-    fn send_inner(&self, packet: PacketBuf, force: bool) -> std::result::Result<(), PacketBuf> {
-        if !self.shared.receiver_open.load(Ordering::Acquire) {
-            return Err(packet);
-        }
-        let state = self.shared.state.load(Ordering::Acquire);
-        if state & QUEUE_ACTIVE == 0 {
-            return Err(packet);
-        }
-        let queued = QueuedPacket {
-            packet,
-            epoch: state >> 1,
+        let Some(key) = flow else {
+            let Some(idx) = self.choose_stream(workers) else {
+                return 0;
+            };
+            self.tokens[idx] = (self.tokens[idx] - len_f).max(MAX_DEFICIT);
+            return idx;
         };
-        if force {
-            drop(self.shared.queue.force_push(queued));
-        } else if let Err(queued) = self.shared.queue.push(queued) {
-            return Err(queued.packet);
+
+        self.evict_flows(now);
+        let small_udp = is_small_udp(&key, packet_len);
+
+        if let Some(mut state) = self.flows.get(&key).copied() {
+            state.last_seen = now;
+            if small_udp {
+                state.sticky_until = Some(now + SMALL_UDP_STICKY);
+            }
+            let sticky = state.sticky_until.is_some_and(|until| now < until);
+            let assigned_ok =
+                state.idx < count && workers[state.idx].channels.allocation.is_sendable();
+            if assigned_ok && (sticky || state.burst_left >= total_len) {
+                let idx = state.idx;
+                state.burst_left = state.burst_left.saturating_sub(total_len);
+                self.flows.insert(key, state);
+                self.tokens[idx] = (self.tokens[idx] - len_f).max(MAX_DEFICIT);
+                return idx;
+            }
+
+            let Some(idx) = self.choose_stream(workers) else {
+                return 0;
+            };
+            state.idx = idx;
+            state.burst_left = FLOW_BURST_BYTES.saturating_sub(total_len);
+            self.flows.insert(key, state);
+            self.tokens[idx] = (self.tokens[idx] - len_f).max(MAX_DEFICIT);
+            return idx;
         }
-        self.shared.notify.notify_one();
-        Ok(())
+
+        let Some(idx) = self.choose_stream(workers) else {
+            return 0;
+        };
+        self.flows.insert(
+            key,
+            FlowState {
+                idx,
+                last_seen: now,
+                burst_left: FLOW_BURST_BYTES.saturating_sub(total_len),
+                sticky_until: small_udp.then(|| now + SMALL_UDP_STICKY),
+            },
+        );
+        self.tokens[idx] = (self.tokens[idx] - len_f).max(MAX_DEFICIT);
+        idx
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn select(&mut self, count: usize, packet_len: usize, now: std::time::Instant) -> usize {
+        if count <= 1 {
+            return 0;
+        }
+
+        self.update_tokens(count, now);
+
+        let len_f = packet_len as f64;
+        for idx in 0..count {
+            if self.tokens[idx] >= len_f {
+                self.tokens[idx] -= len_f;
+                self.cursor = idx;
+                return idx;
+            }
+        }
+        let mut best_idx = 0;
+        let mut best_tokens = self.tokens[0];
+        for idx in 1..count {
+            if self.tokens[idx] > best_tokens {
+                best_tokens = self.tokens[idx];
+                best_idx = idx;
+            }
+        }
+        self.tokens[best_idx] = (self.tokens[best_idx] - len_f).max(MAX_DEFICIT);
+        self.cursor = best_idx;
+        best_idx
     }
 }
 
-impl PacketReceiver {
-    pub fn try_recv(&self) -> Option<PacketBuf> {
-        client_perf::measure_sampled(PerfStage::PacketQueue, 128, || self.try_recv_inner())
-    }
-
-    fn try_recv_inner(&self) -> Option<PacketBuf> {
-        loop {
-            let queued = self.shared.queue.pop()?;
-            let state = self.shared.state.load(Ordering::Acquire);
-            if state & QUEUE_ACTIVE != 0 && queued.epoch == state >> 1 {
-                return Some(queued.packet);
-            }
-        }
-    }
-
-    pub async fn recv(&self, cancel: &CancellationToken) -> Option<PacketBuf> {
-        loop {
-            if cancel.is_cancelled() {
-                return None;
-            }
-            if let Some(packet) = self.try_recv() {
-                return Some(packet);
-            }
-            if self.shared.senders.load(Ordering::Acquire) == 0 {
-                return None;
-            }
-            let notified = self.shared.notify.notified();
-            if let Some(packet) = self.try_recv() {
-                return Some(packet);
-            }
-            if self.shared.senders.load(Ordering::Acquire) == 0 {
-                return None;
-            }
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return None,
-                _ = notified => {}
-            }
-        }
-    }
-
-    fn resume(&self) {
-        let previous = self.shared.state.load(Ordering::Acquire) >> 1;
-        let epoch = previous.saturating_add(1);
-        self.shared.state.store(epoch << 1, Ordering::Release);
-        self.purge();
-        self.shared
-            .state
-            .store((epoch << 1) | QUEUE_ACTIVE, Ordering::Release);
-        self.shared.notify.notify_waiters();
-    }
-
-    fn suspend(&self) {
-        let state = self.shared.state.load(Ordering::Acquire);
-        self.shared
-            .state
-            .store(state & !QUEUE_ACTIVE, Ordering::Release);
-        self.purge();
-        self.shared.notify.notify_waiters();
-    }
-
-    fn purge(&self) {
-        while self.shared.queue.pop().is_some() {}
-    }
-
-    pub(crate) fn is_closed(&self) -> bool {
-        self.shared.senders.load(Ordering::Acquire) == 0 && self.shared.queue.is_empty()
-    }
-
-    pub(crate) fn has_queued_packet(&self) -> bool {
-        !self.shared.queue.is_empty()
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.shared.queue.len()
-    }
-}
-
-impl Drop for PacketReceiver {
-    fn drop(&mut self) {
-        self.shared.receiver_open.store(false, Ordering::Release);
-        self.purge();
-        self.shared.notify.notify_waiters();
-    }
-}
-
-pub fn packet_channel(capacity: usize, active: bool) -> (PacketSender, PacketReceiver) {
-    let state = u64::from(active) * QUEUE_ACTIVE;
-    let shared = Arc::new(PacketQueue {
-        queue: ArrayQueue::new(capacity.max(1)),
-        notify: Notify::new(),
-        state: AtomicU64::new(state),
-        senders: AtomicUsize::new(1),
-        receiver_open: AtomicBool::new(true),
-    });
-    (
-        PacketSender {
-            shared: shared.clone(),
-        },
-        PacketReceiver { shared },
-    )
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TunWriteState {
+    Complete,
+    Wait,
+    Backoff,
+    Yield,
+    Dropped,
 }
 
 #[derive(Clone)]
 pub struct WorkerChannels {
     pub id: usize,
     pub incarnation_id: u64,
-    pub turn_path: Arc<str>,
-    pub latency: PacketSender,
-    pub priority: PacketSender,
-    pub bulk: PacketSender,
+    pub allocation: Arc<TurnAllocation>,
+    pub cipher: Arc<SessionCipher>,
+    pub config: ObfsConfig,
+    pub write_state: Arc<ObfsState>,
 }
 
-fn interleave_turn_paths(workers: &mut Vec<WorkerChannels>) {
-    workers.sort_unstable_by(|left, right| {
-        left.turn_path
-            .cmp(&right.turn_path)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    let sorted = std::mem::take(workers);
-    let mut groups = Vec::<Vec<WorkerChannels>>::new();
-    for worker in sorted {
-        if let Some(group) = groups.last_mut()
-            && group
-                .first()
-                .is_some_and(|first| first.turn_path == worker.turn_path)
-        {
-            group.push(worker);
-        } else {
-            groups.push(vec![worker]);
+#[derive(Clone, Debug, Default)]
+pub struct DomainRoutingConfig {
+    pub enabled: bool,
+    pub exclude_ru_zones: bool,
+    pub template_domains: bool,
+    pub direct_domains: Arc<Vec<String>>,
+    pub is_whitelist: bool,
+    pub ip_routing_enabled: bool,
+    pub ip_is_whitelist: bool,
+    pub ip_rules: Arc<Vec<crate::sni::IpRule>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueueProfile {
+    pub inbound_capacity: usize,
+    pub outbound_capacity: usize,
+}
+
+pub const INGRESS_CAPACITY_PKTS: usize = 256;
+pub const INGRESS_CAPACITY_MAX_PKTS: usize = 1024;
+pub const INGRESS_PKTS_PER_WORKER: usize = 16;
+
+static INBOUND_DOWNLINK_EVICTED: AtomicU64 = AtomicU64::new(0);
+
+impl QueueProfile {
+    pub fn for_worker_count(workers: usize) -> Self {
+        Self {
+            inbound_capacity: workers
+                .saturating_mul(INGRESS_PKTS_PER_WORKER)
+                .clamp(INGRESS_CAPACITY_PKTS, INGRESS_CAPACITY_MAX_PKTS),
+            outbound_capacity: 32,
         }
     }
-    for offset in 0usize.. {
-        let mut added = false;
-        for group in &groups {
-            if let Some(worker) = group.get(offset) {
-                workers.push(worker.clone());
-                added = true;
-            }
-        }
-        if !added {
-            return;
-        }
-    }
+}
+
+#[derive(Clone)]
+pub struct WorkerEntry {
+    pub channels: WorkerChannels,
 }
 
 pub struct Dispatcher {
-    workers: ArcSwap<Vec<WorkerChannels>>,
-    return_latency_tx: PacketSender,
-    return_priority_tx: PacketSender,
-    return_tx: PacketSender,
+    workers: ArcSwap<Vec<WorkerEntry>>,
+    inbound: ArrayQueue<PacketBuf>,
+    #[allow(dead_code)]
+    outbound_capacity: usize,
+    tun_wake: Arc<Notify>,
+    pub(crate) tun_io_lost: Arc<Notify>,
     cancel: CancellationToken,
     tasks: tokio::sync::Mutex<Vec<JoinHandle<()>>>,
+    domain_routing: Arc<ArcSwap<DomainRoutingConfig>>,
+    direct_ips: Arc<ArcSwap<HashSet<IpAddr>>>,
+    dns_domain_map: Arc<crate::sni::DnsDomainMap>,
+    direct_relay: Option<Arc<crate::direct_relay::DirectRelay>>,
+    uplink_state: Mutex<UplinkState>,
+    pool: Arc<PacketPool>,
+    reassembler: crate::wire_protocol::ShardedReassembler,
+    next_frag_id: std::sync::atomic::AtomicU16,
+    termination: Arc<OnceLock<Termination>>,
 }
 
 impl Dispatcher {
@@ -412,69 +509,157 @@ impl Dispatcher {
         file: File,
         pool: Arc<PacketPool>,
         stats: Arc<Stats>,
+        _wrap_key: [u8; 32],
+        _mode: crate::obfs::ObfsMode,
         cancel: CancellationToken,
-    ) -> Arc<Self> {
-        let (return_latency_tx, mut return_latency_rx) =
-            packet_channel(RETURN_LATENCY_CAPACITY, true);
-        let (return_priority_tx, mut return_priority_rx) =
-            packet_channel(RETURN_PRIORITY_CAPACITY, true);
-        let (return_tx, mut return_rx) = packet_channel(RETURN_BULK_CAPACITY, true);
+    ) -> Result<Arc<Self>> {
+        let profile = QueueProfile::for_worker_count(27);
         let dispatcher = Arc::new(Self {
             workers: ArcSwap::from_pointee(Vec::new()),
-            return_latency_tx,
-            return_priority_tx,
-            return_tx,
+            inbound: ArrayQueue::new(profile.inbound_capacity),
+            outbound_capacity: profile.outbound_capacity,
+            tun_wake: Arc::new(Notify::new()),
+            tun_io_lost: Arc::new(Notify::new()),
             cancel: cancel.clone(),
             tasks: tokio::sync::Mutex::new(Vec::new()),
+            domain_routing: Arc::new(ArcSwap::from_pointee(DomainRoutingConfig::default())),
+            direct_ips: Arc::new(ArcSwap::from_pointee(HashSet::new())),
+            dns_domain_map: Arc::new(crate::sni::DnsDomainMap::default()),
+            direct_relay: None,
+            uplink_state: Mutex::new(UplinkState::new()),
+            pool: pool.clone(),
+            reassembler: crate::wire_protocol::ShardedReassembler::new(),
+            next_frag_id: std::sync::atomic::AtomicU16::new(1),
+            termination: Arc::new(OnceLock::new()),
         });
         let io_dispatcher = dispatcher.clone();
-        let task = spawn_critical("test TUN dispatcher", cancel, async move {
-            let (fd_tx, mut fd_rx) = mpsc::channel(1);
-            io_dispatcher
-                .run_tun(
-                    file,
-                    &mut return_latency_rx,
-                    &mut return_priority_rx,
-                    &mut return_rx,
-                    pool,
-                    stats,
-                    &mut fd_rx,
-                )
-                .await;
-            drop(fd_tx);
-        });
+        let task = spawn_critical(
+            "test TUN dispatcher",
+            cancel,
+            dispatcher.termination.clone(),
+            async move {
+                let (fd_tx, mut fd_rx) = mpsc::channel(1);
+                io_dispatcher.run_tun(file, pool, stats, &mut fd_rx).await;
+                drop(fd_tx);
+            },
+        );
         dispatcher.tasks.lock().await.push(task);
-        dispatcher
+        Ok(dispatcher)
     }
 
+    #[cfg(test)]
     pub async fn start(
         listen: &str,
         tun_uds: Option<String>,
         pool: Arc<PacketPool>,
         stats: Arc<Stats>,
+        _wrap_key: [u8; 32],
+        _mode: crate::obfs::ObfsMode,
         cancel: CancellationToken,
     ) -> Result<(Arc<Self>, String)> {
-        let tun_mode = tun_uds.is_some();
-        let (return_latency_tx, return_latency_rx) =
-            packet_channel(RETURN_LATENCY_CAPACITY, !tun_mode);
-        let (return_priority_tx, return_priority_rx) =
-            packet_channel(RETURN_PRIORITY_CAPACITY, !tun_mode);
-        let (return_tx, return_rx) = packet_channel(RETURN_BULK_CAPACITY, !tun_mode);
+        Self::start_with_domain_routing(
+            listen,
+            tun_uds,
+            pool,
+            stats,
+            cancel,
+            DomainRoutingConfig::default(),
+            27,
+        )
+        .await
+    }
+
+    pub async fn start_with_domain_routing(
+        listen: &str,
+        tun_uds: Option<String>,
+        pool: Arc<PacketPool>,
+        stats: Arc<Stats>,
+        cancel: CancellationToken,
+        domain_routing: DomainRoutingConfig,
+        worker_count: usize,
+    ) -> Result<(Arc<Self>, String)> {
+        let profile = QueueProfile::for_worker_count(worker_count);
+        let domain_routing = Arc::new(ArcSwap::from_pointee(domain_routing));
+        let direct_ips = Arc::new(ArcSwap::from_pointee(HashSet::new()));
+        let dns_domain_map = Arc::new(crate::sni::DnsDomainMap::default());
+        let (direct_inbound_tx, mut direct_inbound_rx) =
+            mpsc::channel(crate::direct_relay::DIRECT_RELAY_INBOUND_CAPACITY);
+        let direct_relay = Some(Arc::new(crate::direct_relay::DirectRelay::new(
+            domain_routing.clone(),
+            direct_ips.clone(),
+            dns_domain_map.clone(),
+            pool.clone(),
+            direct_inbound_tx,
+        )?));
         let dispatcher = Arc::new(Self {
             workers: ArcSwap::from_pointee(Vec::new()),
-            return_latency_tx,
-            return_priority_tx,
-            return_tx,
+            inbound: ArrayQueue::new(profile.inbound_capacity),
+            outbound_capacity: profile.outbound_capacity,
+            tun_wake: Arc::new(Notify::new()),
+            tun_io_lost: Arc::new(Notify::new()),
             cancel: cancel.clone(),
             tasks: tokio::sync::Mutex::new(Vec::new()),
+            domain_routing,
+            direct_ips,
+            dns_domain_map,
+            direct_relay,
+            uplink_state: Mutex::new(UplinkState::new()),
+            pool: pool.clone(),
+            reassembler: crate::wire_protocol::ShardedReassembler::new(),
+            next_frag_id: std::sync::atomic::AtomicU16::new(1),
+            termination: Arc::new(OnceLock::new()),
         });
+        crate::log_error!(
+            "[КЛИЕНТ] Профиль очередей для {worker_count} потоков: буфер I/O: {} pkts, квант: {} байт",
+            profile.inbound_capacity,
+            QUANTUM_BYTES
+        );
+
+        let pump_dispatcher = dispatcher.clone();
+        let pump_cancel = dispatcher.cancel.clone();
+        let pump_task = spawn_critical(
+            "direct relay inbound pump",
+            pump_cancel.clone(),
+            dispatcher.termination.clone(),
+            async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = pump_cancel.cancelled() => return,
+                        pkt = direct_inbound_rx.recv() => {
+                            match pkt {
+                                Some(pkt) => {
+                                    pump_dispatcher.push_inbound(pkt);
+                                }
+                                None => return,
+                            }
+                        }
+                    }
+                }
+            },
+        );
+        dispatcher.tasks.lock().await.push(pump_task);
+
         if let Some(name) = tun_uds {
             crate::log_error!("[КЛИЕНТ] Запуск UDS-слушателя: {name} для получения TUN FD...");
-            let receiver = tun::FdReceiver::bind(&name)?;
-            let (fd_tx, mut fd_rx) = mpsc::channel(4);
+            let bind_name = name.clone();
+            let receiver = match tokio::task::spawn_blocking(move || {
+                tun::FdReceiver::bind(&bind_name)
+            })
+            .await
+            {
+                Ok(result) => result?,
+                Err(error) => {
+                    return Err(anyhow::anyhow!("TUN FD bind task failed: {error}"));
+                }
+            };
+            let (fd_tx, mut fd_rx) = mpsc::channel(16);
             let receive_cancel = dispatcher.cancel.clone();
-            let receive_task =
-                spawn_critical("TUN FD receiver", receive_cancel.clone(), async move {
+            let receive_task = spawn_critical(
+                "TUN FD receiver",
+                receive_cancel.clone(),
+                dispatcher.termination.clone(),
+                async move {
                     loop {
                         let file = match receiver.receive(&receive_cancel).await {
                             Ok(file) => file,
@@ -487,38 +672,43 @@ impl Dispatcher {
                                 continue;
                             }
                         };
-                        if fd_tx.send(file).await.is_err() {
-                            return;
+                        crate::log_error!("[UDS] Новый TUN FD успешно получен из сокета");
+                        if let Err(error) = fd_tx.send(file).await {
+                            if receive_cancel.is_cancelled() {
+                                return;
+                            }
+                            crate::log_error!(
+                                "[UDS] Канал передачи FD временно недоступен: {error}"
+                            );
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                         }
                     }
-                });
+                },
+            );
             let io_dispatcher = dispatcher.clone();
             let task_cancel = dispatcher.cancel.clone();
-            let io_task = spawn_critical("TUN dispatcher", task_cancel.clone(), async move {
-                let mut return_latency_rx = return_latency_rx;
-                let mut return_priority_rx = return_priority_rx;
-                let mut return_rx = return_rx;
-                while let Some(file) = tokio::select! {
-                    _ = task_cancel.cancelled() => None,
-                    file = fd_rx.recv() => file,
-                } {
-                    crate::log_error!("[КЛИЕНТ] TUN FD успешно получен!");
-                    return_latency_rx.resume();
-                    return_priority_rx.resume();
-                    return_rx.resume();
-                    io_dispatcher
-                        .run_tun(
-                            file,
-                            &mut return_latency_rx,
-                            &mut return_priority_rx,
-                            &mut return_rx,
-                            pool.clone(),
-                            stats.clone(),
-                            &mut fd_rx,
-                        )
-                        .await;
-                }
-            });
+            let pool_for_io = pool.clone();
+            let stats_for_io = stats.clone();
+            let io_task = spawn_critical(
+                "TUN dispatcher",
+                task_cancel.clone(),
+                dispatcher.termination.clone(),
+                async move {
+                    while !task_cancel.is_cancelled() {
+                        let file = tokio::select! {
+                            _ = task_cancel.cancelled() => break,
+                            file = fd_rx.recv() => match file {
+                                Some(f) => f,
+                                None => break,
+                            },
+                        };
+                        crate::log_error!("[КЛИЕНТ] TUN FD успешно получен!");
+                        io_dispatcher
+                            .run_tun(file, pool_for_io.clone(), stats_for_io.clone(), &mut fd_rx)
+                            .await;
+                    }
+                },
+            );
             dispatcher.tasks.lock().await.push(io_task);
             dispatcher.tasks.lock().await.push(receive_task);
             Ok((dispatcher, "0".to_owned()))
@@ -532,26 +722,25 @@ impl Dispatcher {
             let read_client = client.clone();
             let read_pool = pool.clone();
             let read_stats = stats.clone();
-            let read_cancel = dispatcher.cancel.clone();
-            let read_task = spawn_critical("UDP reader", read_cancel, async move {
-                read_dispatcher
-                    .read_udp(read_socket, read_client, read_pool, read_stats)
-                    .await;
-            });
+            let read_task = spawn_critical(
+                "UDP reader",
+                dispatcher.cancel.clone(),
+                dispatcher.termination.clone(),
+                async move {
+                    read_dispatcher
+                        .read_udp(read_socket, read_client, read_pool, read_stats)
+                        .await;
+                },
+            );
             let write_dispatcher = dispatcher.clone();
-            let write_cancel = dispatcher.cancel.clone();
-            let write_task = spawn_critical("UDP writer", write_cancel, async move {
-                write_dispatcher
-                    .write_udp(
-                        socket,
-                        client,
-                        return_latency_rx,
-                        return_priority_rx,
-                        return_rx,
-                        stats,
-                    )
-                    .await;
-            });
+            let write_task = spawn_critical(
+                "UDP writer",
+                dispatcher.cancel.clone(),
+                dispatcher.termination.clone(),
+                async move {
+                    write_dispatcher.write_udp(socket, client, stats).await;
+                },
+            );
             dispatcher
                 .tasks
                 .lock()
@@ -563,11 +752,14 @@ impl Dispatcher {
 
     pub fn register(&self, channels: WorkerChannels) {
         let id = channels.id;
+        let entry = WorkerEntry {
+            channels: channels.clone(),
+        };
         self.workers.rcu(|workers| {
             let mut updated = (**workers).clone();
-            updated.retain(|worker| worker.id != id);
-            updated.push(channels.clone());
-            interleave_turn_paths(&mut updated);
+            updated.retain(|worker| worker.channels.id != id);
+            updated.push(entry.clone());
+            updated.sort_by_key(|worker| worker.channels.id);
             Arc::new(updated)
         });
     }
@@ -575,8 +767,9 @@ impl Dispatcher {
     pub fn unregister(&self, id: usize, incarnation_id: u64) {
         self.workers.rcu(|workers| {
             let mut updated = (**workers).clone();
-            updated.retain(|worker| worker.id != id || worker.incarnation_id != incarnation_id);
-            interleave_turn_paths(&mut updated);
+            updated.retain(|worker| {
+                worker.channels.id != id || worker.channels.incarnation_id != incarnation_id
+            });
             Arc::new(updated)
         });
     }
@@ -586,24 +779,72 @@ impl Dispatcher {
         self.workers.load().len()
     }
 
-    #[cfg(test)]
-    pub fn worker(&self, id: usize) -> Option<WorkerChannels> {
-        self.workers
-            .load()
-            .iter()
-            .find(|worker| worker.id == id)
-            .cloned()
+    #[inline(always)]
+    pub fn pop_inbound(&self) -> Option<PacketBuf> {
+        self.inbound.pop()
     }
 
-    pub fn return_packet(&self, packet: PacketBuf) {
-        client_perf::measure_sampled(PerfStage::ReaderReturn, 64, || {
-            let sender = match packet_class(packet.as_slice()) {
-                PacketClass::Small => &self.return_latency_tx,
-                PacketClass::Medium => &self.return_priority_tx,
-                PacketClass::Bulk => &self.return_tx,
-            };
-            let _ = sender.force_send(packet);
-        });
+    pub fn push_inbound(&self, packet: PacketBuf) {
+        let wake = self.inbound.len() <= 2;
+        let mut packet = packet;
+        if let Err(returned) = self.inbound.push(packet) {
+            packet = returned;
+            let evicted = self.inbound.pop();
+            drop(evicted);
+            let _ = self.inbound.push(packet);
+            let total = INBOUND_DOWNLINK_EVICTED.fetch_add(1, Ordering::Relaxed) + 1;
+            if total <= 8 || total.is_multiple_of(1000) {
+                crate::log_error!(
+                    "[ОШИБКА] Даунлинк: пакет #{total} вытеснен из приёмной очереди (лимит {})",
+                    self.inbound.capacity()
+                );
+            }
+        }
+        if wake {
+            self.tun_wake.notify_one();
+        }
+    }
+
+    pub fn return_packet(&self, mut packet: PacketBuf) {
+        strip_legacy_downlink_prefix(&mut packet);
+        self.inspect_domain_routing(&packet);
+        self.push_inbound(packet);
+    }
+
+    pub fn handle_incoming_fragment(&self, slice: &[u8]) {
+        let now = std::time::Instant::now();
+        let pool = &self.pool;
+        self.reassembler
+            .process_fragment_from(0, slice, now, |assembled| {
+                if let Some(mut pkt) = pool.try_acquire() {
+                    let area = pkt.read_area();
+                    if assembled.len() <= area.len() {
+                        area[..assembled.len()].copy_from_slice(assembled);
+                        if pkt.set_read_len(assembled.len()).is_ok() {
+                            self.return_packet(pkt);
+                        }
+                    }
+                }
+            });
+    }
+
+    pub fn termination(&self) -> Option<Termination> {
+        self.termination.get().copied()
+    }
+
+    fn terminate(&self, reason: Termination) {
+        let _ = self.termination.set(reason);
+        self.cancel.cancel();
+    }
+
+    #[cfg(unix)]
+    fn fail_on_panic(&self, name: &str, result: Result<(), tokio::task::JoinError>) {
+        if let Err(error) = result
+            && error.is_panic()
+        {
+            crate::log_error!("[СУПЕРВИЗОР] {name} завершился аварийно: {error}");
+            self.terminate(Termination::Fatal);
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -617,9 +858,6 @@ impl Dispatcher {
     async fn run_tun(
         self: &Arc<Self>,
         initial_file: File,
-        latency_receiver: &mut PacketReceiver,
-        priority_receiver: &mut PacketReceiver,
-        bulk_receiver: &mut PacketReceiver,
         pool: Arc<PacketPool>,
         stats: Arc<Stats>,
         replacements: &mut mpsc::Receiver<File>,
@@ -632,24 +870,80 @@ impl Dispatcher {
                 Ok(device) => Arc::new(device),
                 Err(error) => {
                     crate::log_error!("[ОШИБКА] Не удалось зарегистрировать TUN FD: {error}");
+                    self.tun_io_lost.notify_one();
+                    self.terminate(Termination::TunLost);
                     return;
                 }
             };
+            let generation_cancel = self.cancel.child_token();
+            let read_dispatcher = self.clone();
+            let read_cancel = generation_cancel.clone();
+            let read_device = device.clone();
+            let read_pool = pool.clone();
+            let read_stats = stats.clone();
+            let mut read_task = tokio::spawn(async move {
+                read_dispatcher
+                    .read_tun(read_device, read_pool, read_stats, read_cancel)
+                    .await;
+            });
+
+            let write_dispatcher = self.clone();
+            let write_cancel = generation_cancel.clone();
+            let write_stats = stats.clone();
+            let mut write_task = tokio::spawn(async move {
+                write_dispatcher
+                    .write_tun(device, write_stats, write_cancel)
+                    .await;
+            });
+
             let received = tokio::select! {
-                _ = self.cancel.cancelled() => return,
+                _ = self.cancel.cancelled() => None,
                 replacement = replacements.recv() => replacement,
-                _ = self.clone().read_tun(device.clone(), pool.clone(), stats.clone()) => None,
-                _ = self.write_tun(device, latency_receiver, priority_receiver, bulk_receiver, stats.clone()) => None,
+                result = &mut read_task => {
+                    self.fail_on_panic("TUN reader", result);
+                    None
+                }
+                result = &mut write_task => {
+                    self.fail_on_panic("TUN writer", result);
+                    None
+                }
             };
+            generation_cancel.cancel();
+            if !read_task.is_finished() {
+                let _ = read_task.await;
+            }
+            if !write_task.is_finished() {
+                let _ = write_task.await;
+            }
+            if self.cancel.is_cancelled() {
+                return;
+            }
             let next = match received {
                 Some(file) => file,
-                None => match tokio::select! {
-                    _ = self.cancel.cancelled() => return,
-                    replacement = replacements.recv() => replacement,
-                } {
-                    Some(file) => file,
-                    None => return,
-                },
+                None => {
+                    crate::log_error!("[TUN] I/O сессия завершилась, ожидаем новый TUN FD...");
+                    self.tun_io_lost.notify_one();
+                    let replacement = tokio::select! {
+                        _ = self.cancel.cancelled() => return,
+                        replacement = tokio::time::timeout(TUN_REPLACEMENT_TIMEOUT, replacements.recv()) => replacement,
+                    };
+                    match replacement {
+                        Ok(Some(file)) => file,
+                        Ok(None) => {
+                            crate::log_error!("[TUN] Канал замены TUN FD закрыт, TUN потерян");
+                            self.terminate(Termination::TunLost);
+                            return;
+                        }
+                        Err(_) => {
+                            crate::log_error!(
+                                "[TUN] Новый TUN FD не получен за {} с, TUN потерян",
+                                TUN_REPLACEMENT_TIMEOUT.as_secs()
+                            );
+                            self.terminate(Termination::TunLost);
+                            return;
+                        }
+                    }
+                }
             };
             crate::log_error!("[КЛИЕНТ] TUN FD заменён без перезапуска потоков");
             file = next;
@@ -660,14 +954,64 @@ impl Dispatcher {
     async fn run_tun(
         self: &Arc<Self>,
         _file: File,
-        _latency_receiver: &mut PacketReceiver,
-        _priority_receiver: &mut PacketReceiver,
-        _bulk_receiver: &mut PacketReceiver,
         _pool: Arc<PacketPool>,
         _stats: Arc<Stats>,
         _replacements: &mut mpsc::Receiver<File>,
     ) {
         crate::log_error!("[ОШИБКА] TUN FD поддерживается только на Android и Unix");
+        self.terminate(Termination::TunLost);
+    }
+
+    #[inline(always)]
+    fn is_forwardable_packet(slice: &[u8]) -> bool {
+        if slice.len() < 20 {
+            return false;
+        }
+        let version = slice[0] >> 4;
+        match version {
+            4 => {
+                let ihl = (slice[0] & 0x0f) as usize * 4;
+                if ihl < 20 || slice.len() < ihl {
+                    return false;
+                }
+                let total_len = u16::from_be_bytes([slice[2], slice[3]]) as usize;
+                if total_len < ihl || total_len > slice.len() {
+                    return false;
+                }
+                let dst_ip = [slice[16], slice[17], slice[18], slice[19]];
+                if dst_ip[0] == 0 || dst_ip[0] == 127 || dst_ip[0] >= 224 {
+                    return false;
+                }
+                if dst_ip[0] == 169 && dst_ip[1] == 254 {
+                    return false;
+                }
+                true
+            }
+            6 => {
+                if slice.len() < 40 {
+                    return false;
+                }
+                let payload_len = u16::from_be_bytes([slice[4], slice[5]]) as usize;
+                if payload_len + 40 > slice.len() {
+                    return false;
+                }
+                let dst = &slice[24..40];
+                if dst.iter().all(|&b| b == 0) {
+                    return false;
+                }
+                if dst[..15].iter().all(|&b| b == 0) && dst[15] == 1 {
+                    return false;
+                }
+                if dst[0] == 0xff {
+                    return false;
+                }
+                if dst[0] == 0xfe && (dst[1] & 0xc0) == 0x80 {
+                    return false;
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     #[cfg(unix)]
@@ -676,73 +1020,111 @@ impl Dispatcher {
         device: Arc<tokio::io::unix::AsyncFd<File>>,
         pool: Arc<PacketPool>,
         stats: Arc<Stats>,
+        cancel: CancellationToken,
     ) {
-        use std::os::fd::AsRawFd;
-
-        let mut scheduler = FastPathScheduler::new();
-        let mut flow_sequences = FlowSequencer::new();
+        let mut eof_streak = 0u32;
+        let mut error_streak = 0u32;
         loop {
             let readiness = tokio::select! {
-                _ = self.cancel.cancelled() => return,
+                biased;
+                _ = cancel.cancelled() => return,
                 result = device.readable() => result,
             };
             let mut guard = match readiness {
                 Ok(guard) => guard,
                 Err(error) => {
-                    crate::log_error!("[ОШИБКА] Ожидание чтения TUN завершено: {error}");
-                    return;
+                    if is_dead_tun_error(&error) {
+                        crate::log_error!("[TUN] Ожидание чтения TUN: дескриптор мёртв ({error})");
+                        return;
+                    }
+                    crate::log_error!("[ОШИБКА] Ожидание чтения TUN: {error}, повтор...");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
                 }
             };
 
             let mut burst = 0usize;
-            while burst < 32 {
+            let mut burst_bytes = 0usize;
+            let mut retry_delay = None;
+            while burst < TUN_RX_BURST && burst_bytes < TUN_RX_BURST_BYTES {
                 let Some(mut packet) = pool.try_acquire() else {
+                    if burst == 0 {
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => return,
+                            _ = pool.wait_available() => {}
+                        }
+                    }
                     break;
                 };
-                let result = client_perf::measure_sampled(PerfStage::TunRx, 64, || {
+                let result = {
+                    let area = packet.read_area();
                     guard.try_io(|inner| {
-                        let area = packet.read_area();
-                        let length = unsafe {
-                            libc::read(
-                                inner.get_ref().as_raw_fd(),
-                                area.as_mut_ptr().cast(),
-                                area.len(),
-                            )
-                        };
-                        if length < 0 {
-                            Err(std::io::Error::last_os_error())
-                        } else {
-                            Ok(length as usize)
-                        }
+                        use std::io::Read;
+
+                        let mut source = inner.get_ref();
+                        source.read(area)
                     })
-                });
+                };
                 match result {
-                    Ok(Ok(0)) => return,
-                    Ok(Ok(length)) => {
-                        burst += 1;
-                        if packet.set_read_len(length).is_err() {
+                    Ok(Ok(0)) => {
+                        eof_streak += 1;
+                        if eof_streak >= TUN_EOF_TOLERANCE {
+                            crate::log_error!(
+                                "[TUN] Чтение TUN: интерфейс закрыт (EOF ×{eof_streak})"
+                            );
                             return;
                         }
-                        if !frame_outbound_packet(&mut flow_sequences, &mut packet) {
+                        retry_delay = Some(tun_retry_backoff(eof_streak));
+                        break;
+                    }
+                    Ok(Ok(length)) => {
+                        burst += 1;
+                        burst_bytes += length;
+                        eof_streak = 0;
+                        error_streak = 0;
+                        if packet.set_read_len(length).is_err() {
+                            continue;
+                        }
+                        if !Self::is_forwardable_packet(packet.as_slice()) {
+                            continue;
+                        }
+                        if self.workers.load().is_empty() {
                             continue;
                         }
                         stats
                             .total_bytes_up
                             .fetch_add(length as i64, Ordering::Relaxed);
-                        self.dispatch(&mut scheduler, packet);
+                        self.dispatch(packet).await;
                     }
-                    Ok(Err(error)) if is_retryable_tun_error(&error) => {
+                    Ok(Err(error)) if is_transient_tun_error(&error) => {
+                        error_streak += 1;
+                        if error_streak >= TUN_RETRY_TOLERANCE {
+                            crate::log_error!(
+                                "[TUN] Чтение TUN: интерфейс не отвечает ({error}) после {error_streak} попыток, переподнимаем"
+                            );
+                            return;
+                        }
+                        retry_delay = Some(tun_retry_backoff(error_streak));
                         break;
                     }
-                    Ok(Err(error)) if is_closed_tun_error(&error) => {
-                        crate::log_error!("[TUN] Интерфейс закрыт, ожидаем новый FD");
+                    Ok(Err(error)) if is_dead_tun_error(&error) => {
+                        crate::log_error!("[TUN] Чтение TUN: дескриптор мёртв: {error}");
                         return;
                     }
                     Ok(Err(error)) => {
-                        crate::log_error!("[ОШИБКА] Чтение TUN завершено: {error}");
-                        return;
+                        crate::log_error!("[ОШИБКА] Чтение TUN: {error}");
+                        retry_delay = Some(Duration::from_millis(20));
+                        break;
                     }
                     Err(_) => break,
+                }
+            }
+            if let Some(delay) = retry_delay {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return,
+                    _ = tokio::time::sleep(delay) => {}
                 }
             }
         }
@@ -755,93 +1137,321 @@ impl Dispatcher {
         pool: Arc<PacketPool>,
         stats: Arc<Stats>,
     ) {
-        let mut receive_batch = Vec::with_capacity(udp_batch::MAX_DATAGRAMS);
-        let mut sources = [SocketAddr::from(([0, 0, 0, 0], 0)); udp_batch::MAX_DATAGRAMS];
-        let mut scheduler = FastPathScheduler::new();
-        let mut flow_sequences = FlowSequencer::new();
         loop {
             let readiness = tokio::select! {
+                biased;
                 _ = self.cancel.cancelled() => return,
                 result = socket.readable() => result,
             };
             if readiness.is_err() {
-                tokio::select! {
-                    _ = self.cancel.cancelled() => return,
-                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             }
 
-            receive_batch.clear();
-            while receive_batch.len() < udp_batch::MAX_DATAGRAMS {
-                let Some(packet) = pool.try_acquire() else {
+            let mut burst = 0usize;
+            while burst < UDP_RX_BURST {
+                let Some(mut packet) = pool.try_acquire() else {
+                    if burst == 0 {
+                        tokio::select! {
+                            biased;
+                            _ = self.cancel.cancelled() => return,
+                            _ = pool.wait_available() => {}
+                        }
+                    }
                     break;
                 };
-                receive_batch.push(packet);
-            }
-            if receive_batch.is_empty() {
-                tokio::select! {
-                    _ = self.cancel.cancelled() => return,
-                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
-                }
-                continue;
-            }
-
-            let batch_len = receive_batch.len();
-            let result = client_perf::measure_sampled(PerfStage::UdpRx, 64, || {
-                udp_batch::try_recv_from(
-                    &socket,
-                    receive_batch.as_mut_slice(),
-                    &mut sources[..batch_len],
-                )
-            });
-            match result {
-                Ok(received) => {
-                    for (index, packet) in receive_batch.drain(..received).enumerate() {
-                        let address = sources[index];
+                match socket.try_recv_from(packet.read_area()) {
+                    Ok((length, address)) => {
+                        burst += 1;
+                        if packet.set_read_len(length).is_err() {
+                            continue;
+                        }
+                        if !Self::is_forwardable_packet(packet.as_slice()) {
+                            continue;
+                        }
                         let previous = client.load();
                         if previous.as_deref() != Some(&address) {
                             client.store(Some(Arc::new(address)));
                         }
-                        client_perf::observe(PerfStage::UdpRx);
-                        let mut packet = packet;
-                        if !frame_outbound_packet(&mut flow_sequences, &mut packet) {
-                            continue;
-                        }
                         stats
                             .total_bytes_up
                             .fetch_add(packet.len() as i64, Ordering::Relaxed);
-                        self.dispatch(&mut scheduler, packet);
+                        self.dispatch(packet).await;
                     }
-                    receive_batch.clear();
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    receive_batch.clear();
-                }
-                Err(_) => {
-                    receive_batch.clear();
-                    tokio::select! {
-                        _ = self.cancel.cancelled() => return,
-                        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        break;
                     }
+                    Err(_) => break,
                 }
             }
         }
     }
 
-    fn dispatch(&self, scheduler: &mut FastPathScheduler, packet: PacketBuf) {
-        self.dispatch_now(scheduler, packet);
+    pub fn update_domain_routing(&self, payload: &str) {
+        let mut enabled = false;
+        let mut ru = false;
+        let mut template = false;
+        let mut is_whitelist = false;
+        let mut ip_routing_enabled = false;
+        let mut ip_is_whitelist = false;
+        let mut domains = Vec::new();
+        let mut ip_rules = Vec::new();
+        for part in payload.split(';') {
+            if let Some((k, v)) = part.split_once('=') {
+                match k.trim() {
+                    "enabled" => enabled = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"),
+                    "ru" => ru = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"),
+                    "template" => {
+                        template = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true")
+                    }
+                    "whitelist" | "is_whitelist" => {
+                        is_whitelist = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true")
+                    }
+                    "ip_enabled" => {
+                        ip_routing_enabled =
+                            v.trim() == "1" || v.trim().eq_ignore_ascii_case("true")
+                    }
+                    "ip_whitelist" | "ip_is_whitelist" => {
+                        ip_is_whitelist = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true")
+                    }
+                    "domains" => {
+                        domains = crate::sni::parse_direct_domains(v.trim());
+                    }
+                    "ips" => {
+                        ip_rules = crate::sni::parse_ip_rules(v.trim());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        domains.truncate(1024);
+        let new_config = DomainRoutingConfig {
+            enabled,
+            exclude_ru_zones: ru,
+            template_domains: template,
+            direct_domains: Arc::new(domains.clone()),
+            is_whitelist,
+            ip_routing_enabled,
+            ip_is_whitelist,
+            ip_rules: Arc::new(ip_rules),
+        };
+        self.domain_routing.store(Arc::new(new_config.clone()));
+        crate::log_error!(
+            "[КЛИЕНТ] Горячее обновление доменов: вкл={}, RU={}, шаблоны={}, кастомных={}, ЧС/БС={}, IP вкл={}, IP ЧС/БС={}, IP правил={}",
+            enabled,
+            ru,
+            template,
+            domains.len(),
+            is_whitelist,
+            ip_routing_enabled,
+            ip_is_whitelist,
+            new_config.ip_rules.len()
+        );
+        if let Some(relay) = &self.direct_relay {
+            relay.sync_domain_routing(&new_config);
+        }
     }
 
-    fn dispatch_now(&self, scheduler: &mut FastPathScheduler, packet: PacketBuf) {
-        let Some(ticket) = client_perf::measure_sampled(PerfStage::Scheduler, 64, || {
-            scheduler.begin(&self.workers, packet.as_slice())
-        }) else {
+    #[inline(always)]
+    fn inspect_domain_routing(&self, packet: &PacketBuf) {
+        let config = self.domain_routing.load();
+        if !config.enabled && !config.ip_routing_enabled {
             return;
+        }
+        let slice = packet.as_slice();
+        if let Some((domain, _is_resp, ips)) = crate::sni::parse_ip_packet_dns(slice) {
+            if !ips.is_empty() {
+                self.dns_domain_map.insert_multiple(&ips, &domain);
+            }
+            if config.enabled
+                && !ips.is_empty()
+                && crate::sni::is_direct_domain_mode(
+                    &domain,
+                    config.is_whitelist,
+                    config.exclude_ru_zones,
+                    config.template_domains,
+                    &config.direct_domains,
+                )
+            {
+                self.direct_ips.rcu(|current| {
+                    let mut updated = (**current).clone();
+                    for &ip in &ips {
+                        if updated.insert(ip) {
+                            crate::log_error!("[DNS-РОУТИНГ] Прямой домен: {domain} -> {ip}");
+                        }
+                    }
+                    Arc::new(updated)
+                });
+            }
+        }
+        if let Some((sni, _port)) = crate::sni::parse_ip_packet_sni(slice)
+            && let Some(dst) = crate::sni::extract_dst_addr(slice)
+        {
+            let ip = dst.ip();
+            self.dns_domain_map.insert(ip, sni.to_string());
+            if config.enabled
+                && crate::sni::is_direct_domain_mode(
+                    sni,
+                    config.is_whitelist,
+                    config.exclude_ru_zones,
+                    config.template_domains,
+                    &config.direct_domains,
+                )
+                && !self.direct_ips.load().contains(&ip)
+            {
+                self.direct_ips.rcu(|current| {
+                    let mut updated = (**current).clone();
+                    if updated.insert(ip) {
+                        crate::log_error!("[SNI-РОУТИНГ] Прямой домен: {sni} -> {ip}");
+                    }
+                    Arc::new(updated)
+                });
+            }
+        }
+    }
+
+    async fn send_to_workers(&self, mut packet: PacketBuf, workers: &[WorkerEntry]) {
+        let count = workers.len();
+        if count == 0 {
+            return;
+        }
+
+        let packet_len = packet.len();
+        let flow = flow_key(packet.as_slice());
+        let effective_len = packet_len.saturating_add(66);
+        let selected_idx = {
+            let mut state = match self.uplink_state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            state.select_deficit_waterfall(
+                workers,
+                effective_len,
+                packet_len,
+                flow,
+                std::time::Instant::now(),
+            )
         };
-        let workers = scheduler.workers();
-        if let Err(packet) = enqueue_selected_worker(workers, ticket, packet) {
-            let _ = replace_oldest_in_selected_queue(workers, ticket, packet);
+
+        let target = &workers[selected_idx];
+        let wrapped = target.channels.cipher.wrap(
+            &mut packet,
+            &target.channels.config,
+            &target.channels.write_state,
+        );
+        if wrapped.is_ok() {
+            let failed = match target.channels.allocation.try_send_fast(packet) {
+                None => false,
+                Some(packet) => target.channels.allocation.send(packet).await.is_err(),
+            };
+            if failed {
+                self.mark_uplink_congested(selected_idx);
+            }
+        }
+    }
+
+    fn mark_uplink_congested(&self, idx: usize) {
+        let mut state = match self.uplink_state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(controller) = state.rates.get_mut(idx) {
+            controller.mark_congested();
+        }
+    }
+
+    async fn send_fragments_to_workers(
+        &self,
+        fragments: Vec<PacketBuf>,
+        workers: &[WorkerEntry],
+        flow: Option<FlowKey>,
+        packet_len: usize,
+    ) {
+        let count = workers.len();
+        if count == 0 || fragments.is_empty() {
+            return;
+        }
+
+        let total_eff: usize = fragments.iter().map(|f| f.len().saturating_add(66)).sum();
+        let selected_idx = {
+            let mut state = match self.uplink_state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            state.select_deficit_waterfall(
+                workers,
+                total_eff,
+                packet_len,
+                flow,
+                std::time::Instant::now(),
+            )
+        };
+
+        let target = &workers[selected_idx];
+        let mut failed = false;
+        for mut frag in fragments {
+            let wrapped = target.channels.cipher.wrap(
+                &mut frag,
+                &target.channels.config,
+                &target.channels.write_state,
+            );
+            if wrapped.is_ok() {
+                failed |= match target.channels.allocation.try_send_fast(frag) {
+                    None => false,
+                    Some(frag) => target.channels.allocation.send(frag).await.is_err(),
+                };
+            }
+        }
+        if failed {
+            self.mark_uplink_congested(selected_idx);
+        }
+    }
+
+    pub async fn dispatch(&self, packet: PacketBuf) {
+        self.inspect_domain_routing(&packet);
+        if let Some(relay) = &self.direct_relay
+            && relay.try_handle(&packet).await
+        {
+            return;
+        }
+        let workers = self.workers.load();
+        if workers.is_empty() {
+            return;
+        }
+
+        if packet.len() <= 1280 {
+            self.send_to_workers(packet, &workers).await;
+        } else {
+            let packet_len = packet.len();
+            let flow = flow_key(packet.as_slice());
+            let expected_frags = packet
+                .len()
+                .div_ceil(crate::wire_protocol::MAX_FRAG_PAYLOAD);
+            let packet_id = self.next_frag_id.fetch_add(1, Ordering::Relaxed);
+            let slice = packet.as_slice();
+            let pool = self.pool.clone();
+            let mut frags = Vec::with_capacity(expected_frags);
+            crate::wire_protocol::fragment_packet(packet_id, slice, |frag| {
+                if let Some(mut p) = pool.try_acquire() {
+                    let area = p.read_area();
+                    if frag.len() <= area.len() {
+                        area[..frag.len()].copy_from_slice(frag);
+                        if p.set_read_len(frag.len()).is_ok() {
+                            frags.push(p);
+                        }
+                    }
+                }
+            });
+            if frags.len() == expected_frags {
+                self.send_fragments_to_workers(frags, &workers, flow, packet_len)
+                    .await;
+            } else {
+                crate::log_error!(
+                    "[ОШИБКА] Dispatcher: фрагмент целиком потерян: {} из {} (буферы)",
+                    frags.len(),
+                    expected_frags
+                );
+            }
         }
     }
 
@@ -849,146 +1459,147 @@ impl Dispatcher {
     async fn write_tun(
         &self,
         device: Arc<tokio::io::unix::AsyncFd<File>>,
-        latency_receiver: &mut PacketReceiver,
-        priority_receiver: &mut PacketReceiver,
-        bulk_receiver: &mut PacketReceiver,
         stats: Arc<Stats>,
+        cancel: CancellationToken,
     ) {
-        let mut reorder = ReturnReorder::new();
         let mut pending: Option<(PacketBuf, usize)> = None;
+        let mut dropped = 0u64;
+        let mut error_streak = 0u32;
         loop {
             if pending.is_none() {
-                let Some(packet) = recv_ordered_return_packet(
-                    &mut reorder,
-                    latency_receiver,
-                    priority_receiver,
-                    bulk_receiver,
-                    &self.cancel,
-                )
-                .await
-                else {
-                    return;
-                };
-                pending = Some((packet, 0));
-            }
-
-            let readiness = tokio::select! {
-                _ = self.cancel.cancelled() => return,
-                result = device.writable() => result,
-            };
-            let mut guard = match readiness {
-                Ok(guard) => guard,
-                Err(error) => {
-                    crate::log_error!("[ОШИБКА] Ожидание записи TUN завершено: {error}");
-                    return;
-                }
-            };
-            let mut burst = 0usize;
-            let state = loop {
-                let state = {
-                    let (packet, written) = pending.as_mut().expect("TUN packet is pending");
-                    self.try_write_tun_packet(&mut guard, &stats, packet, written)
-                };
-                match state {
-                    TunWriteState::Complete => {
-                        burst += 1;
-                        if burst == 64 {
-                            pending = None;
-                            break TunWriteState::Complete;
-                        }
-                        pending = next_ordered_return_packet(
-                            &mut reorder,
-                            latency_receiver,
-                            priority_receiver,
-                            bulk_receiver,
-                        )
-                        .map(|packet| (packet, 0));
-                        if pending.is_none() {
-                            break TunWriteState::Complete;
-                        }
+                if let Some(mut packet) = self.pop_inbound() {
+                    strip_legacy_downlink_prefix(&mut packet);
+                    if packet.len() >= 20 && Self::is_forwardable_packet(packet.as_slice()) {
+                        pending = Some((packet, 0));
                     }
-                    TunWriteState::Continue => {}
-                    state => break state,
-                }
-            };
-            drop(guard);
-            match state {
-                TunWriteState::Complete | TunWriteState::Wait => {}
-                TunWriteState::Backoff => {
+                } else {
                     tokio::select! {
-                        _ = self.cancel.cancelled() => return,
-                        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                        biased;
+                        _ = cancel.cancelled() => return,
+                        _ = self.tun_wake.notified() => {},
+                    }
+                    continue;
+                }
+            }
+
+            let mut burst = 0usize;
+            let mut state = TunWriteState::Complete;
+            let mut retry_delay = None;
+            while burst < TUN_TX_BURST {
+                let Some((packet, written)) = pending.as_mut() else {
+                    state = TunWriteState::Complete;
+                    break;
+                };
+                let write_res = device.try_io(tokio::io::Interest::WRITABLE, |inner| {
+                    use std::io::Write;
+
+                    let remaining = &packet.as_slice()[*written..];
+                    let mut sink = inner;
+                    sink.write(remaining)
+                });
+
+                match write_res {
+                    Ok(0) => {
+                        log_dropped_packet(&mut dropped, "запись вернула 0 байт");
+                        pending = None;
+                        state = TunWriteState::Dropped;
+                        break;
+                    }
+                    Ok(length) => {
+                        dropped = 0;
+                        *written += length;
+                        if *written == packet.len() {
+                            error_streak = 0;
+                            stats
+                                .total_bytes_down
+                                .fetch_add(packet.len() as i64, Ordering::Relaxed);
+                            burst += 1;
+                            if let Some(mut next_packet) = self.pop_inbound() {
+                                strip_legacy_downlink_prefix(&mut next_packet);
+                                if next_packet.len() >= 20
+                                    && Self::is_forwardable_packet(next_packet.as_slice())
+                                {
+                                    pending = Some((next_packet, 0));
+                                } else {
+                                    pending = None;
+                                    state = TunWriteState::Complete;
+                                    break;
+                                }
+                            } else {
+                                pending = None;
+                                state = TunWriteState::Complete;
+                                break;
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        state = TunWriteState::Wait;
+                        break;
+                    }
+                    Err(error) if is_transient_tun_error(&error) => {
+                        error_streak += 1;
+                        if error_streak >= TUN_RETRY_TOLERANCE {
+                            crate::log_error!(
+                                "[TUN] Запись TUN: интерфейс не отвечает ({error}) после {error_streak} попыток, переподнимаем"
+                            );
+                            return;
+                        }
+                        state = if matches!(
+                            error.raw_os_error(),
+                            Some(libc::ENOBUFS) | Some(libc::ENOMEM)
+                        ) {
+                            TunWriteState::Backoff
+                        } else {
+                            TunWriteState::Yield
+                        };
+                        retry_delay = Some(tun_retry_backoff(error_streak));
+                        break;
+                    }
+                    Err(error) if is_dead_tun_error(&error) => {
+                        crate::log_error!("[TUN] Запись TUN: дескриптор мёртв: {error}");
+                        return;
+                    }
+                    Err(error) => {
+                        log_dropped_packet(&mut dropped, &error.to_string());
+                        pending = None;
+                        state = TunWriteState::Dropped;
+                        break;
                     }
                 }
-                TunWriteState::Yield => tokio::task::yield_now().await,
-                TunWriteState::Closed | TunWriteState::Failed => return,
-                TunWriteState::Continue => unreachable!(),
             }
-        }
-    }
 
-    #[cfg(unix)]
-    fn try_write_tun_packet(
-        &self,
-        guard: &mut tokio::io::unix::AsyncFdReadyGuard<'_, File>,
-        stats: &Stats,
-        packet: &PacketBuf,
-        written: &mut usize,
-    ) -> TunWriteState {
-        use std::os::fd::AsRawFd;
-
-        let result = client_perf::measure_sampled(PerfStage::TunTx, 64, || {
-            guard.try_io(|inner| {
-                let remaining = &packet.as_slice()[*written..];
-                let length = unsafe {
-                    libc::write(
-                        inner.get_ref().as_raw_fd(),
-                        remaining.as_ptr().cast(),
-                        remaining.len(),
-                    )
-                };
-                if length < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(length as usize)
+            match state {
+                TunWriteState::Wait => {
+                    let readiness = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return,
+                        result = device.writable() => result,
+                    };
+                    if let Err(error) = readiness {
+                        if is_dead_tun_error(&error) {
+                            crate::log_error!("[TUN] Запись TUN: дескриптор мёртв ({error})");
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        continue;
+                    }
                 }
-            })
-        });
-        match result {
-            Ok(Ok(0)) => {
-                crate::log_error!("[ОШИБКА] Запись TUN вернула 0 байт");
-                TunWriteState::Failed
-            }
-            Ok(Ok(length)) => {
-                *written += length;
-                if *written == packet.len() {
-                    stats
-                        .total_bytes_down
-                        .fetch_add(packet.len() as i64, Ordering::Relaxed);
-                    TunWriteState::Complete
-                } else {
-                    TunWriteState::Continue
+                TunWriteState::Backoff | TunWriteState::Yield => {
+                    tokio::task::yield_now().await;
+                }
+                TunWriteState::Complete | TunWriteState::Dropped => {
+                    if burst >= TUN_TX_BURST {
+                        tokio::task::yield_now().await;
+                    }
                 }
             }
-            Ok(Err(error)) if is_retryable_tun_error(&error) => {
-                if matches!(
-                    error.raw_os_error(),
-                    Some(libc::ENOBUFS) | Some(libc::ENOMEM)
-                ) {
-                    TunWriteState::Backoff
-                } else {
-                    TunWriteState::Yield
+            if let Some(delay) = retry_delay {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return,
+                    _ = tokio::time::sleep(delay) => {}
                 }
             }
-            Ok(Err(error)) if is_closed_tun_error(&error) => {
-                crate::log_error!("[TUN] Интерфейс закрыт, ожидаем новый FD");
-                TunWriteState::Closed
-            }
-            Ok(Err(error)) => {
-                crate::log_error!("[ОШИБКА] Запись TUN завершена: {error}");
-                TunWriteState::Failed
-            }
-            Err(_) => TunWriteState::Wait,
         }
     }
 
@@ -996,75 +1607,79 @@ impl Dispatcher {
         &self,
         socket: Arc<UdpSocket>,
         client: Arc<ArcSwapOption<SocketAddr>>,
-        latency_receiver: PacketReceiver,
-        priority_receiver: PacketReceiver,
-        bulk_receiver: PacketReceiver,
         stats: Arc<Stats>,
     ) {
-        let mut send_batch = Vec::with_capacity(udp_batch::MAX_DATAGRAMS);
-        let mut reorder = ReturnReorder::new();
         loop {
-            let Some(packet) = recv_ordered_return_packet(
-                &mut reorder,
-                &latency_receiver,
-                &priority_receiver,
-                &bulk_receiver,
-                &self.cancel,
-            )
-            .await
-            else {
-                return;
+            let Some(address) = client.load().as_deref().copied() else {
+                tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => return,
+                    _ = self.tun_wake.notified() => {},
+                }
+                continue;
             };
-            send_batch.clear();
-            let first_class = packet_class(packet.as_slice());
-            send_batch.push(packet);
-            while send_batch.len() < first_class.datagram_batch() {
-                let higher_priority_waiting = match first_class {
-                    PacketClass::Small => false,
-                    PacketClass::Medium => latency_receiver.has_queued_packet(),
-                    PacketClass::Bulk => {
-                        latency_receiver.has_queued_packet()
-                            || priority_receiver.has_queued_packet()
+
+            let mut packet = match self.pop_inbound() {
+                Some(packet) => packet,
+                None => {
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return,
+                        _ = self.tun_wake.notified() => {},
                     }
-                };
-                if higher_priority_waiting {
-                    break;
+                    continue;
                 }
-                let Some(next) = next_ordered_return_packet(
-                    &mut reorder,
-                    &latency_receiver,
-                    &priority_receiver,
-                    &bulk_receiver,
-                ) else {
-                    break;
-                };
-                if packet_class(next.as_slice()) != first_class {
-                    reorder.ready.push_front(next);
-                    break;
+            };
+            strip_legacy_downlink_prefix(&mut packet);
+
+            match socket.try_send_to(packet.as_slice(), address) {
+                Ok(length) if length == packet.len() => {
+                    stats
+                        .total_bytes_down
+                        .fetch_add(length as i64, Ordering::Relaxed);
                 }
-                send_batch.push(next);
+                Ok(_) => {}
+                Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.write_udp_packet(&socket, Some(address), &stats, &packet)
+                        .await;
+                }
+                Err(_) => {}
             }
 
-            let address = client.load().as_deref().copied();
-            self.write_udp_batch(&socket, address, &stats, &send_batch)
-                .await;
+            let mut burst = 0usize;
+            while burst < 256 {
+                let Some(mut next_packet) = self.pop_inbound() else {
+                    break;
+                };
+                strip_legacy_downlink_prefix(&mut next_packet);
+                burst += 1;
+                match socket.try_send_to(next_packet.as_slice(), address) {
+                    Ok(length) if length == next_packet.len() => {
+                        stats
+                            .total_bytes_down
+                            .fetch_add(length as i64, Ordering::Relaxed);
+                    }
+                    Ok(_) => {}
+                    Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        self.write_udp_packet(&socket, Some(address), &stats, &next_packet)
+                            .await;
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
         }
     }
 
-    async fn write_udp_batch(
+    async fn write_udp_packet(
         &self,
         socket: &UdpSocket,
         address: Option<SocketAddr>,
         stats: &Stats,
-        packets: &[PacketBuf],
+        packet: &PacketBuf,
     ) {
         if let Some(address) = address {
-            let mut datagrams: [&[u8]; udp_batch::MAX_DATAGRAMS] = [&[]; udp_batch::MAX_DATAGRAMS];
-            for (index, packet) in packets.iter().enumerate() {
-                datagrams[index] = packet.as_slice();
-            }
-            let mut sent = 0usize;
-            while sent < packets.len() {
+            loop {
                 let readiness = tokio::select! {
                     biased;
                     _ = self.cancel.cancelled() => return,
@@ -1074,18 +1689,14 @@ impl Dispatcher {
                     return;
                 }
 
-                match client_perf::measure_sampled(PerfStage::UdpTx, 64, || {
-                    udp_batch::try_send_to(socket, address, &datagrams[sent..packets.len()])
-                }) {
-                    Ok(0) => tokio::task::yield_now().await,
-                    Ok(count) => {
-                        for packet in &packets[sent..sent + count] {
-                            stats
-                                .total_bytes_down
-                                .fetch_add(packet.len() as i64, Ordering::Relaxed);
-                        }
-                        sent += count;
+                match socket.try_send_to(packet.as_slice(), address) {
+                    Ok(length) if length == packet.len() => {
+                        stats
+                            .total_bytes_down
+                            .fetch_add(length as i64, Ordering::Relaxed);
+                        return;
                     }
+                    Ok(_) => return,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(_) => return,
                 }
@@ -1094,101 +1705,68 @@ impl Dispatcher {
     }
 }
 
-fn next_return_packet(
-    latency: &PacketReceiver,
-    priority: &PacketReceiver,
-    bulk: &PacketReceiver,
-) -> Option<PacketBuf> {
-    latency
-        .try_recv()
-        .or_else(|| priority.try_recv())
-        .or_else(|| bulk.try_recv())
-}
-
-async fn recv_return_packet(
-    latency: &PacketReceiver,
-    priority: &PacketReceiver,
-    bulk: &PacketReceiver,
-    cancel: &CancellationToken,
-) -> Option<PacketBuf> {
-    loop {
-        if let Some(packet) = next_return_packet(latency, priority, bulk) {
-            return Some(packet);
-        }
-        if latency.is_closed() && priority.is_closed() && bulk.is_closed() {
-            return None;
-        }
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return None,
-            packet = latency.recv(cancel), if !latency.is_closed() => {
-                if let Some(packet) = packet {
-                    return Some(packet);
-                }
-            }
-            packet = priority.recv(cancel), if !priority.is_closed() => {
-                if let Some(packet) = packet {
-                    return Some(packet);
-                }
-            }
-            packet = bulk.recv(cancel), if !bulk.is_closed() => {
-                if let Some(packet) = packet {
-                    return Some(packet);
-                }
-            }
-        }
+#[inline(always)]
+fn strip_legacy_downlink_prefix(packet: &mut PacketBuf) {
+    const LEGACY_PREFIX_LEN: usize = 24;
+    let bytes = packet.as_slice();
+    if !is_ip_packet(bytes)
+        && bytes.len() > LEGACY_PREFIX_LEN
+        && is_ip_packet(&bytes[LEGACY_PREFIX_LEN..])
+    {
+        let _ = packet.trim_front(LEGACY_PREFIX_LEN);
     }
 }
 
-fn next_ordered_return_packet(
-    reorder: &mut ReturnReorder,
-    latency: &PacketReceiver,
-    priority: &PacketReceiver,
-    bulk: &PacketReceiver,
-) -> Option<PacketBuf> {
-    loop {
-        if let Some(packet) = reorder.pop() {
-            return Some(packet);
-        }
-        let packet = next_return_packet(latency, priority, bulk)?;
-        reorder.push(packet);
-    }
+#[inline(always)]
+fn is_ip_packet(packet: &[u8]) -> bool {
+    matches!(packet.first().copied().map(|byte| byte >> 4), Some(4 | 6))
 }
 
-async fn recv_ordered_return_packet(
-    reorder: &mut ReturnReorder,
-    latency: &PacketReceiver,
-    priority: &PacketReceiver,
-    bulk: &PacketReceiver,
-    cancel: &CancellationToken,
-) -> Option<PacketBuf> {
-    loop {
-        if let Some(packet) = reorder.pop() {
-            return Some(packet);
-        }
-        let packet = recv_return_packet(latency, priority, bulk, cancel).await?;
-        reorder.push(packet);
-    }
-}
-
-fn spawn_critical<F>(name: &'static str, cancel: CancellationToken, future: F) -> JoinHandle<()>
+fn spawn_critical<F>(
+    name: &'static str,
+    cancel: CancellationToken,
+    termination: Arc<OnceLock<Termination>>,
+    future: F,
+) -> JoinHandle<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
-        if let Err(error) = tokio::spawn(future).await {
+        if let Err(error) = tokio::spawn(future).await
+            && error.is_panic()
+        {
             crate::log_error!("[СУПЕРВИЗОР] {name} завершился аварийно: {error}");
+            let _ = termination.set(Termination::Fatal);
             cancel.cancel();
         }
     })
 }
 
 #[cfg(unix)]
-fn is_closed_tun_error(error: &std::io::Error) -> bool {
+fn log_dropped_packet(counter: &mut u64, reason: &str) {
+    *counter += 1;
+    if *counter <= 8 || counter.is_multiple_of(1000) {
+        crate::log_error!("[ОШИБКА] Запись TUN: пакет #{counter} отброшен ({reason})");
+    }
+}
+
+#[cfg(unix)]
+fn is_dead_tun_error(error: &std::io::Error) -> bool {
     matches!(
         error.raw_os_error(),
-        Some(code) if code == libc::EIO || code == libc::EBADF || code == libc::ENODEV
+        Some(code) if code == libc::EBADF || code == libc::ENODEV
     )
+}
+
+#[cfg(unix)]
+fn is_transient_tun_error(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::EIO)) || is_retryable_tun_error(error)
+}
+
+#[cfg(unix)]
+fn tun_retry_backoff(streak: u32) -> Duration {
+    let factor = u64::from(streak.clamp(1, TUN_RETRY_BACKOFF_STEPS));
+    Duration::from_millis((TUN_RETRY_BACKOFF_STEP_MS * factor).min(TUN_RETRY_BACKOFF_MAX_MS))
 }
 
 #[cfg(unix)]
@@ -1201,42 +1779,12 @@ fn is_retryable_tun_error(error: &std::io::Error) -> bool {
         )
 }
 
-fn enqueue_selected_worker(
-    workers: &[WorkerChannels],
-    ticket: DispatchTicket,
-    packet: PacketBuf,
-) -> Result<(), PacketBuf> {
-    let Some(worker) = workers.get(ticket.start_slot) else {
-        return Err(packet);
-    };
-    match ticket.class {
-        PacketClass::Small => worker.latency.try_send(packet),
-        PacketClass::Medium => worker.priority.try_send(packet),
-        PacketClass::Bulk => worker.bulk.try_send(packet),
-    }
-}
-
-fn replace_oldest_in_selected_queue(
-    workers: &[WorkerChannels],
-    ticket: DispatchTicket,
-    packet: PacketBuf,
-) -> Result<(), PacketBuf> {
-    let Some(worker) = workers.get(ticket.start_slot) else {
-        return Err(packet);
-    };
-    match ticket.class {
-        PacketClass::Small => worker.latency.force_send(packet),
-        PacketClass::Medium => worker.priority.force_send(packet),
-        PacketClass::Bulk => worker.bulk.force_send(packet),
-    }
-}
-
 async fn bind_udp(address: &str) -> Result<UdpSocket> {
     for attempt in 1..=5 {
         match UdpSocket::bind(address).await {
             Ok(socket) => {
-                SockRef::from(&socket).set_recv_buffer_size(625 * 1024)?;
-                SockRef::from(&socket).set_send_buffer_size(625 * 1024)?;
+                SockRef::from(&socket).set_recv_buffer_size(1024 * 1024)?;
+                SockRef::from(&socket).set_send_buffer_size(256 * 1024)?;
                 return Ok(socket);
             }
             Err(error) if attempt < 5 => {
@@ -1252,966 +1800,517 @@ async fn bind_udp(address: &str) -> Result<UdpSocket> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
-    use std::collections::VecDeque;
-    #[cfg(unix)]
-    use std::{
-        fs::File,
-        io::{IoSlice, Write},
-        os::{
-            fd::{AsRawFd, FromRawFd, IntoRawFd},
-            unix::net::UnixStream,
-        },
-    };
 
-    #[cfg(unix)]
-    fn send_uds_fd(name: &str, file: &File) {
-        use nix::sys::socket::{
-            AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, UnixAddr, connect,
-            sendmsg, socket,
-        };
-
-        let socket = socket(
-            AddressFamily::Unix,
-            SockType::Stream,
-            SockFlag::SOCK_CLOEXEC,
-            None,
-        )
-        .unwrap();
-        connect(
-            socket.as_raw_fd(),
-            &UnixAddr::new_abstract(name.as_bytes()).unwrap(),
-        )
-        .unwrap();
-        let payload = [1u8];
-        let slices = [IoSlice::new(&payload)];
-        let controls = [ControlMessage::ScmRights(&[file.as_raw_fd()])];
-        sendmsg::<UnixAddr>(
-            socket.as_raw_fd(),
-            &slices,
-            &controls,
-            MsgFlags::empty(),
-            None,
-        )
-        .unwrap();
-    }
-
-    #[derive(Clone, Copy, Default)]
-    struct QueueCoverage {
-        full_rejection: usize,
-        forced_replacement: usize,
-        inactive_rejection: usize,
-        suspended: usize,
-        resumed: usize,
-        purged: usize,
-    }
-
-    impl QueueCoverage {
-        fn complete(self) -> bool {
-            self.full_rejection > 0
-                && self.forced_replacement > 0
-                && self.inactive_rejection > 0
-                && self.suspended > 0
-                && self.resumed > 0
-                && self.purged > 0
-        }
-    }
-
-    fn test_dispatcher() -> (
-        Arc<Dispatcher>,
-        PacketReceiver,
-        PacketReceiver,
-        PacketReceiver,
-    ) {
-        let (return_latency_tx, return_latency_rx) = packet_channel(8, true);
-        let (return_priority_tx, return_priority_rx) = packet_channel(16, true);
-        let (return_tx, return_rx) = packet_channel(64, true);
-        (
-            Arc::new(Dispatcher {
-                workers: ArcSwap::from_pointee(Vec::new()),
-                return_latency_tx,
-                return_priority_tx,
-                return_tx,
-                cancel: CancellationToken::new(),
-                tasks: tokio::sync::Mutex::new(Vec::new()),
-            }),
-            return_latency_rx,
-            return_priority_rx,
-            return_rx,
-        )
-    }
-
-    fn channels(
-        id: usize,
-        capacity: usize,
-    ) -> (
-        WorkerChannels,
-        PacketReceiver,
-        PacketReceiver,
-        PacketReceiver,
-    ) {
-        let (latency, latency_rx) = packet_channel(capacity, true);
-        let (priority, priority_rx) = packet_channel(capacity, true);
-        let (bulk, bulk_rx) = packet_channel(capacity, true);
-        (
-            WorkerChannels {
-                id,
-                incarnation_id: id as u64 + 1,
-                turn_path: Arc::from("test"),
-                latency,
-                priority,
-                bulk,
-            },
-            latency_rx,
-            priority_rx,
-            bulk_rx,
-        )
-    }
-
-    #[test]
-    fn registered_workers_interleave_turn_paths() {
-        let (dispatcher, _latency, _priority, _bulk) = test_dispatcher();
-        for (id, turn_path) in [
-            (1, "turn-a"),
-            (2, "turn-a"),
-            (3, "turn-b"),
-            (4, "turn-b"),
-            (5, "turn-c"),
-            (6, "turn-c"),
-        ] {
-            let (mut worker, _latency, _priority, _bulk) = channels(id, 1);
-            worker.turn_path = Arc::from(turn_path);
-            dispatcher.register(worker);
-        }
-        let workers = dispatcher.workers.load();
-        let order: Vec<_> = workers
-            .iter()
-            .map(|worker| worker.turn_path.as_ref())
-            .collect();
-        assert_eq!(
-            order,
-            ["turn-a", "turn-b", "turn-c", "turn-a", "turn-b", "turn-c"]
-        );
-    }
-
-    fn queue_trace_outcome(actions: &[(u8, u8)], replace_oldest: bool) -> (bool, QueueCoverage) {
-        let capacity = 7;
-        let pool = PacketPool::new(32);
-        let (sender, receiver) = packet_channel(capacity, true);
-        let mut model = VecDeque::new();
-        let mut active = true;
-        let mut coverage = QueueCoverage::default();
-        for &(operation, value) in actions {
-            match operation % 6 {
-                0 => {
-                    let mut packet = pool.acquire();
-                    packet.set_read_len(1).unwrap();
-                    packet.as_mut_slice()[0] = value;
-                    let accepted = sender.try_send(packet).is_ok();
-                    let expected = active && model.len() < capacity;
-                    if accepted != expected {
-                        return (false, coverage);
-                    }
-                    if expected {
-                        model.push_back(value);
-                    } else if active {
-                        coverage.full_rejection += 1;
-                    } else {
-                        coverage.inactive_rejection += 1;
-                    }
-                }
-                1 => {
-                    let mut packet = pool.acquire();
-                    packet.set_read_len(1).unwrap();
-                    packet.as_mut_slice()[0] = value;
-                    let accepted = sender.force_send(packet).is_ok();
-                    if accepted != active {
-                        return (false, coverage);
-                    }
-                    if active {
-                        if model.len() == capacity {
-                            coverage.forced_replacement += 1;
-                            if replace_oldest {
-                                model.pop_front();
-                            } else {
-                                model.pop_back();
-                            }
-                        }
-                        model.push_back(value);
-                    } else {
-                        coverage.inactive_rejection += 1;
-                    }
-                }
-                2 => {
-                    let actual = receiver.try_recv().map(|packet| packet.as_slice()[0]);
-                    if actual != model.pop_front() {
-                        return (false, coverage);
-                    }
-                }
-                3 => {
-                    receiver.suspend();
-                    active = false;
-                    model.clear();
-                    coverage.suspended += 1;
-                }
-                4 => {
-                    receiver.resume();
-                    active = true;
-                    model.clear();
-                    coverage.resumed += 1;
-                }
-                _ => {
-                    receiver.purge();
-                    model.clear();
-                    coverage.purged += 1;
-                }
-            }
-        }
-        while let Some(expected) = model.pop_front() {
-            if receiver.try_recv().map(|packet| packet.as_slice()[0]) != Some(expected) {
-                return (false, coverage);
-            }
-        }
-        (
-            receiver.try_recv().is_none() && pool.available() == pool.capacity(),
-            coverage,
-        )
-    }
-
-    fn queue_trace_matches(actions: &[(u8, u8)], replace_oldest: bool) -> bool {
-        queue_trace_outcome(actions, replace_oldest).0
-    }
-
-    fn mix64(mut value: u64) -> u64 {
-        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        value ^ (value >> 31)
-    }
-
-    fn deterministic_queue_actions(seed: u64, length: usize) -> Vec<(u8, u8)> {
-        let mut state = seed;
-        let mut actions = Vec::with_capacity(length);
-        let prefix = [
-            (0, 1),
-            (0, 2),
-            (0, 3),
-            (0, 4),
-            (0, 5),
-            (0, 6),
-            (0, 7),
-            (0, 8),
-            (1, 9),
-            (3, 0),
-            (0, 10),
-            (4, 0),
-            (1, 11),
-            (5, 0),
-        ];
-        actions.extend(prefix.into_iter().take(length));
-        for _ in actions.len()..length {
-            state = mix64(state);
-            actions.push(((state % 6) as u8, (state >> 24) as u8));
-        }
-        actions
-    }
-
-    fn tcp_packet(pool: &Arc<PacketPool>, source_port: u16, sequence: u32) -> PacketBuf {
-        tcp_packet_len(pool, source_port, sequence, 1_200)
-    }
-
-    fn bulk_packet_bytes() -> [u8; 1_200] {
-        let mut packet = [0u8; 1_200];
+    fn ipv4_packet(proto: u8, sport: u16, dport: u16, len: usize) -> Vec<u8> {
+        let mut packet = vec![0u8; len];
         packet[0] = 0x45;
-        packet[9] = 17;
+        packet[2..4].copy_from_slice(&(len as u16).to_be_bytes());
+        packet[9] = proto;
+        packet[12..16].copy_from_slice(&[10, 0, 0, 2]);
+        packet[16..20].copy_from_slice(&[10, 66, 67, 2]);
+        packet[20..22].copy_from_slice(&sport.to_be_bytes());
+        packet[22..24].copy_from_slice(&dport.to_be_bytes());
         packet
     }
 
-    fn tcp_packet_len(
-        pool: &Arc<PacketPool>,
-        source_port: u16,
-        sequence: u32,
-        len: usize,
-    ) -> PacketBuf {
-        assert!(len >= 40);
-        let mut packet = pool.acquire();
-        packet.set_read_len(len).unwrap();
-        let bytes = packet.as_mut_slice();
-        bytes.fill(0);
-        bytes[0] = 0x45;
-        bytes[2..4].copy_from_slice(&(len as u16).to_be_bytes());
-        bytes[8] = 64;
-        bytes[9] = 6;
-        bytes[12..16].copy_from_slice(&[10, 66, 67, 2]);
-        bytes[16..20].copy_from_slice(&[1, 1, 1, 1]);
-        bytes[20..22].copy_from_slice(&source_port.to_be_bytes());
-        bytes[22..24].copy_from_slice(&443u16.to_be_bytes());
-        bytes[24..28].copy_from_slice(&sequence.to_be_bytes());
-        bytes[32] = 5 << 4;
-        bytes[33] = 0x18;
-        packet
+    #[test]
+    fn flow_key_parses_ipv4_and_separates_flows() {
+        let a = ipv4_packet(6, 49152, 80, 60);
+        let b = ipv4_packet(6, 49153, 80, 60);
+        let key_a = flow_key(&a).expect("tcp flow");
+        let key_b = flow_key(&b).expect("tcp flow");
+        assert_ne!(key_a, key_b);
+        assert!(matches!(
+            key_a,
+            FlowKey::V4 {
+                proto: 6,
+                sport: 49152,
+                dport: 80,
+                ..
+            }
+        ));
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn uds_tun_replacement_delivers_data_without_restarting_dispatcher() {
-        let name = format!(
-            "csqtt-dispatcher-test-{}-{}",
-            std::process::id(),
-            rand::random::<u64>()
-        );
+    #[test]
+    fn flow_key_parses_ipv6_transport_ports() {
+        let mut packet = vec![0u8; 60];
+        packet[0] = 0x60;
+        packet[6] = 17;
+        packet[8..24]
+            .copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        packet[24..40]
+            .copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+        packet[40..42].copy_from_slice(&27015u16.to_be_bytes());
+        packet[42..44].copy_from_slice(&27015u16.to_be_bytes());
+        assert!(matches!(
+            flow_key(&packet),
+            Some(FlowKey::V6 {
+                proto: 17,
+                sport: 27015,
+                dport: 27015,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn small_udp_detection_keeps_games_sticky() {
+        let game = ipv4_packet(17, 27015, 27015, 180);
+        let bulk = ipv4_packet(17, 27015, 27015, 400);
+        let tcp = ipv4_packet(6, 27015, 27015, 180);
+        assert!(is_small_udp(&flow_key(&game).unwrap(), game.len()));
+        assert!(!is_small_udp(&flow_key(&bulk).unwrap(), bulk.len()));
+        assert!(!is_small_udp(&flow_key(&tcp).unwrap(), tcp.len()));
+    }
+
+    #[test]
+    fn inbound_delivers_fifo() {
+        let pool = PacketPool::new(16);
+        let inbound = ArrayQueue::new(16);
+
+        let mut p1 = pool.acquire();
+        p1.set_read_len(20).unwrap();
+        p1.as_mut_slice()[0] = 0x45;
+        p1.as_mut_slice()[19] = 1;
+
+        let mut p2 = pool.acquire();
+        p2.set_read_len(20).unwrap();
+        p2.as_mut_slice()[0] = 0x45;
+        p2.as_mut_slice()[19] = 2;
+
+        let _ = inbound.push(p1);
+        let _ = inbound.push(p2);
+
+        assert_eq!(inbound.len(), 2);
+        assert_eq!(inbound.pop().unwrap().as_slice()[19], 1);
+        assert_eq!(inbound.pop().unwrap().as_slice()[19], 2);
+    }
+
+    #[test]
+    fn outbound_delivers_fifo() {
+        let pool = PacketPool::new(16);
+        let outbound = ArrayQueue::new(16);
+
+        let mut p1 = pool.acquire();
+        p1.set_read_len(20).unwrap();
+        p1.as_mut_slice()[0] = 0x45;
+        p1.as_mut_slice()[19] = 1;
+
+        let mut p2 = pool.acquire();
+        p2.set_read_len(20).unwrap();
+        p2.as_mut_slice()[0] = 0x45;
+        p2.as_mut_slice()[19] = 2;
+
+        let _ = outbound.push(p1);
+        let _ = outbound.push(p2);
+
+        assert_eq!(outbound.len(), 2);
+        assert_eq!(outbound.pop().unwrap().as_slice()[19], 1);
+        assert_eq!(outbound.pop().unwrap().as_slice()[19], 2);
+    }
+
+    #[test]
+    fn return_packet_delivers_fifo() {
+        let pool = PacketPool::new(16);
         let cancel = CancellationToken::new();
-        let pool = PacketPool::new(8);
-        let stats = Arc::new(Stats::default());
-        let (dispatcher, _) = Dispatcher::start(
-            "127.0.0.1:0",
-            Some(name.clone()),
-            pool,
-            stats,
-            cancel.clone(),
-        )
-        .await
-        .unwrap();
-        let (worker, latency, _priority, _bulk) = channels(1, 8);
-        dispatcher.register(worker);
-        let (first_reader, first_writer) = UnixStream::pair().unwrap();
-        let first_tun = unsafe { File::from_raw_fd(first_reader.into_raw_fd()) };
-        let (second_reader, mut second_writer) = UnixStream::pair().unwrap();
-        let second_tun = unsafe { File::from_raw_fd(second_reader.into_raw_fd()) };
-
-        send_uds_fd(&name, &first_tun);
-        send_uds_fd(&name, &second_tun);
-        let mut packet = [0u8; 28];
-        let packet_length = packet.len() as u16;
-        packet[0] = 0x45;
-        packet[2..4].copy_from_slice(&packet_length.to_be_bytes());
-        packet[8] = 64;
-        packet[9] = 17;
-        second_writer.write_all(&packet).unwrap();
-
-        let received = tokio::time::timeout(Duration::from_secs(2), latency.recv(&cancel))
-            .await
-            .expect("replacement TUN did not deliver a packet")
-            .expect("dispatcher input closed after TUN replacement");
-        assert_eq!(received.as_slice(), packet);
-        drop(first_writer);
-        dispatcher.shutdown().await;
-    }
-
-    #[test]
-    fn outbound_tcp_frame_preserves_the_inner_packet_and_sequence() {
-        let pool = PacketPool::new(1);
-        let mut packet = tcp_packet(&pool, 50_000, 77);
-        let mut sequences = FlowSequencer::with_sender_id(9);
-        assert!(frame_outbound_packet(&mut sequences, &mut packet));
-        let (header, payload) = flow_frame::FrameHeader::decode(packet.as_slice()).unwrap();
-        assert_eq!(header.sender_id, 9);
-        assert_eq!(header.sequence, 0);
-        assert_eq!(u32::from_be_bytes(payload[24..28].try_into().unwrap()), 77);
-        drop(packet);
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[test]
-    fn return_reorder_restores_out_of_order_tcp_frames_without_copying_payload() {
-        let pool = PacketPool::new(2);
-        let mut first = tcp_packet(&pool, 50_000, 1);
-        let mut second = tcp_packet(&pool, 50_000, 2);
-        let first_header = flow_frame::FrameHeader {
-            sender_id: 9,
-            flow_id: 11,
-            sequence: 0,
-        };
-        let second_header = flow_frame::FrameHeader {
-            sequence: 1,
-            ..first_header
-        };
-        first_header.encode(first.prepend(flow_frame::FRAME_LEN).unwrap());
-        second_header.encode(second.prepend(flow_frame::FRAME_LEN).unwrap());
-        let mut reorder = ReturnReorder::new();
-        reorder.push(second);
-        reorder.push(first);
-        assert_eq!(packet_sequence(&reorder.pop().unwrap()), 1);
-        assert_eq!(packet_sequence(&reorder.pop().unwrap()), 2);
-        assert!(reorder.pop().is_none());
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[test]
-    fn fast_path_scheduler_assigns_exact_bulk_round_robin_chunks() {
-        let mut scheduler = FastPathScheduler::new();
-        let workers = 4;
-        let packet = bulk_packet_bytes();
-        for chunk in 0..9 {
-            for _ in 0..CLIENT_WORKER_PACKET_CHUNK {
-                let ticket = scheduler.begin_with_count(workers, &packet).unwrap();
-                assert_eq!(ticket.start_slot, chunk % workers);
-                assert_eq!(ticket.class, PacketClass::Bulk);
-            }
-        }
-        assert!(scheduler.begin_with_count(0, &packet).is_none());
-        assert_eq!(
-            scheduler
-                .begin_with_count(workers, &packet)
-                .unwrap()
-                .start_slot,
-            1
-        );
-    }
-
-    #[test]
-    fn fast_path_scheduler_balances_every_supported_stream_count() {
-        for workers in [9, 27, 54, 81, 108, 126] {
-            let mut scheduler = FastPathScheduler::new();
-            let mut assigned = vec![0usize; workers];
-            let packet = bulk_packet_bytes();
-            for _ in 0..(workers * CLIENT_WORKER_PACKET_CHUNK * 3) {
-                let ticket = scheduler.begin_with_count(workers, &packet).unwrap();
-                assigned[ticket.start_slot] += 1;
-            }
-            assert!(
-                assigned
-                    .iter()
-                    .all(|count| *count == CLIENT_WORKER_PACKET_CHUNK * 3)
-            );
-        }
-    }
-
-    #[test]
-    fn fast_path_scheduler_keeps_round_robin_cursors_per_packet_class() {
-        let mut scheduler = FastPathScheduler::new();
-        let mut latency = [0u8; 64];
-        latency[0] = 0x45;
-        latency[9] = 6;
-        let mut priority = [0u8; 301];
-        priority[0] = 0x45;
-        priority[9] = 17;
-        let mut bulk = [0u8; 1_200];
-        bulk[0] = 0x45;
-        bulk[9] = 6;
-        let packets = [&latency[..], &priority[..], &bulk[..]];
-
-        for (packet, class, chunk) in [
-            (packets[0], PacketClass::Small, 4),
-            (packets[1], PacketClass::Medium, 16),
-            (packets[2], PacketClass::Bulk, 32),
-        ] {
-            for _ in 0..chunk {
-                let ticket = scheduler.begin_with_count(2, packet).unwrap();
-                assert_eq!(ticket.start_slot, 0);
-                assert_eq!(ticket.class, class);
-            }
-            assert_eq!(scheduler.begin_with_count(2, packet).unwrap().start_slot, 1);
-        }
-    }
-
-    #[test]
-    fn fast_path_scheduler_applies_worker_changes_only_at_a_chunk_boundary() {
-        let mut scheduler = FastPathScheduler::new();
-        let workers = ArcSwap::from_pointee(vec![channels(0, 1).0, channels(1, 1).0]);
-        let packet = bulk_packet_bytes();
-
-        for _ in 0..5 {
-            assert_eq!(scheduler.begin(&workers, &packet).unwrap().start_slot, 0);
-            assert_eq!(scheduler.workers().len(), 2);
-        }
-
-        workers.store(Arc::new(vec![
-            channels(0, 1).0,
-            channels(1, 1).0,
-            channels(2, 1).0,
-        ]));
-
-        for _ in 0..(CLIENT_WORKER_PACKET_CHUNK - 5) {
-            assert_eq!(scheduler.begin(&workers, &packet).unwrap().start_slot, 0);
-            assert_eq!(scheduler.workers().len(), 2);
-        }
-
-        assert_eq!(scheduler.begin(&workers, &packet).unwrap().start_slot, 0);
-        assert_eq!(scheduler.workers().len(), 3);
-    }
-
-    #[test]
-    fn client_dispatcher_routes_one_full_chunk_to_each_worker_before_advancing() {
-        let (dispatcher, _return_latency, _return_priority, _return_bulk) = test_dispatcher();
-        let pool = PacketPool::new(CLIENT_WORKER_PACKET_CHUNK * 3);
-        let mut workers = Vec::new();
-        let mut receivers = Vec::new();
-        for id in 0..3 {
-            let (worker, latency, priority, bulk) = channels(id, CLIENT_WORKER_PACKET_CHUNK);
-            workers.push(worker);
-            receivers.push((latency, priority, bulk));
-        }
-        dispatcher.workers.store(Arc::new(workers));
-        let mut scheduler = FastPathScheduler::new();
-        for sequence in 0..(CLIENT_WORKER_PACKET_CHUNK * 3) {
-            dispatcher.dispatch(&mut scheduler, tcp_packet(&pool, 50_000, sequence as u32));
-        }
-        for (worker, (latency, priority, bulk)) in receivers.iter().enumerate() {
-            assert_eq!(latency.len(), 0);
-            assert_eq!(priority.len(), 0);
-            assert_eq!(bulk.len(), CLIENT_WORKER_PACKET_CHUNK);
-            for offset in 0..CLIENT_WORKER_PACKET_CHUNK {
-                assert_eq!(
-                    packet_sequence(&bulk.try_recv().unwrap()),
-                    (worker * CLIENT_WORKER_PACKET_CHUNK + offset) as u32
-                );
-            }
-        }
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[test]
-    fn saturated_selected_queue_never_redirects_a_chunk_to_another_worker() {
-        let (dispatcher, _return_latency, _return_priority, _return_bulk) = test_dispatcher();
-        let pool = PacketPool::new(2);
-        let (first, _first_latency, _first_priority, first_bulk) = channels(0, 1);
-        let (second, second_latency, second_priority, second_bulk) = channels(1, 1);
-        dispatcher.workers.store(Arc::new(vec![first, second]));
-        let mut scheduler = FastPathScheduler::new();
-
-        dispatcher.dispatch(&mut scheduler, tcp_packet(&pool, 50_000, 1));
-        dispatcher.dispatch(&mut scheduler, tcp_packet(&pool, 50_000, 2));
-
-        assert_eq!(packet_sequence(&first_bulk.try_recv().unwrap()), 2);
-        assert!(second_latency.try_recv().is_none());
-        assert!(second_priority.try_recv().is_none());
-        assert!(second_bulk.try_recv().is_none());
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    fn packet_sequence(packet: &PacketBuf) -> u32 {
-        u32::from_be_bytes(packet.as_slice()[24..28].try_into().unwrap_or_default())
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn direct_downlink_preserves_late_tcp_retransmit() {
-        let (dispatcher, _return_latency_rx, _return_priority_rx, return_rx) = test_dispatcher();
-        let pool = PacketPool::new(4);
-        dispatcher.return_packet(tcp_packet(&pool, 50_000, 0));
-        dispatcher.return_packet(tcp_packet(&pool, 50_000, 2_320));
-        assert_eq!(packet_sequence(&return_rx.try_recv().unwrap()), 0);
-        assert_eq!(packet_sequence(&return_rx.try_recv().unwrap()), 2_320);
-        tokio::time::advance(Duration::from_millis(81)).await;
-        dispatcher.return_packet(tcp_packet(&pool, 50_000, 1_160));
-        assert_eq!(packet_sequence(&return_rx.try_recv().unwrap()), 1_160);
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn direct_downlink_splits_latency_and_bulk_returns() {
-        let (dispatcher, return_latency_rx, _return_priority_rx, return_rx) = test_dispatcher();
-        let pool = PacketPool::new(4);
-        dispatcher.return_packet(tcp_packet_len(&pool, 50_000, 7, 96));
-        dispatcher.return_packet(tcp_packet(&pool, 50_000, 8));
-        assert_eq!(packet_sequence(&return_latency_rx.try_recv().unwrap()), 7);
-        assert_eq!(packet_sequence(&return_rx.try_recv().unwrap()), 8);
-    }
-
-    #[test]
-    fn unregister_and_recover_one_worker_never_changes_its_siblings() {
-        let (dispatcher, _return_latency_rx, _return_priority_rx, _return_rx) = test_dispatcher();
-        for id in 0..9 {
-            dispatcher.register(channels(id, 1).0);
-        }
-        for cycle in 0..10_000 {
-            let id = cycle % 9;
-            dispatcher.unregister(id, id as u64 + 1);
-            assert_eq!(dispatcher.active_count(), 8);
-            for sibling in 0..9 {
-                assert_eq!(dispatcher.worker(sibling).is_some(), sibling != id);
-            }
-            dispatcher.register(channels(id, 1).0);
-            assert_eq!(dispatcher.active_count(), 9);
-        }
-    }
-
-    #[test]
-    fn stale_registration_drop_cannot_unregister_replacement() {
-        let (dispatcher, _return_latency_rx, _return_priority_rx, _return_rx) = test_dispatcher();
-        let mut old = channels(4, 1).0;
-        old.incarnation_id = 40;
-        dispatcher.register(old);
-        let mut replacement = channels(4, 1).0;
-        replacement.incarnation_id = 41;
-        dispatcher.register(replacement);
-
-        dispatcher.unregister(4, 40);
-
-        assert_eq!(dispatcher.active_count(), 1);
-        assert_eq!(dispatcher.worker(4).unwrap().incarnation_id, 41);
-    }
-
-    #[test]
-    fn overload_keeps_queues_and_packet_memory_strictly_bounded() {
-        let (dispatcher, _return_latency_rx, _return_priority_rx, _return_rx) = test_dispatcher();
-        let pool = PacketPool::new(64);
-        let mut workers = Vec::new();
-        let mut receivers = Vec::new();
-        for id in 0..9 {
-            let (worker, latency, priority, bulk) = channels(id, 1);
-            workers.push(worker);
-            receivers.push((latency, priority, bulk));
-        }
-        dispatcher.workers.store(Arc::new(workers));
-        let mut scheduler = FastPathScheduler::new();
-        for sequence in 0..100_000 {
-            let mut packet = pool.try_acquire().unwrap();
-            packet
-                .set_read_len(if sequence % 2 == 0 { 100 } else { 1_000 })
-                .unwrap();
-            dispatcher.dispatch(&mut scheduler, packet);
-        }
-        let mut queued = 0;
-        for (latency, priority, bulk) in &receivers {
-            queued += latency.len() + priority.len() + bulk.len();
-        }
-        assert!(queued <= 18);
-        assert!(queued > 0);
-        assert_eq!(pool.available() + queued, pool.capacity());
-        for (latency, priority, bulk) in &receivers {
-            while latency.try_recv().is_some() {}
-            while priority.try_recv().is_some() {}
-            while bulk.try_recv().is_some() {}
-        }
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[test]
-    fn saturated_queue_replaces_oldest_with_newest() {
-        let pool = PacketPool::new(4);
-        let (sender, receiver) = packet_channel(2, true);
-        for value in 1..=3 {
-            let mut packet = pool.acquire();
-            packet.set_read_len(1).unwrap();
-            packet.as_mut_slice()[0] = value;
-            assert!(sender.force_send(packet).is_ok());
-        }
-        assert_eq!(receiver.try_recv().unwrap().as_slice(), [2]);
-        assert_eq!(receiver.try_recv().unwrap().as_slice(), [3]);
-        assert!(receiver.try_recv().is_none());
-    }
-
-    #[test]
-    fn queued_packets_remain_available_until_the_queue_is_purged() {
-        let pool = PacketPool::new(2);
-        let (sender, receiver) = packet_channel(2, true);
-        assert!(sender.force_send(pool.acquire()).is_ok());
-        assert!(receiver.try_recv().is_some());
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[test]
-    fn suspend_and_resume_purge_previous_network_epoch() {
-        let pool = PacketPool::new(3);
-        let (sender, receiver) = packet_channel(3, true);
-        assert!(sender.force_send(pool.acquire()).is_ok());
-        receiver.suspend();
-        assert_eq!(pool.available(), pool.capacity());
-        assert!(sender.force_send(pool.acquire()).is_err());
-        receiver.resume();
-        assert!(sender.force_send(pool.acquire()).is_ok());
-        assert!(receiver.try_recv().is_some());
-        assert!(receiver.try_recv().is_none());
-    }
-
-    proptest! {
-        #[test]
-        fn packet_queue_matches_bounded_reference_model(
-            actions in proptest::collection::vec((any::<u8>(), any::<u8>()), 1..=2_000)
-        ) {
-            prop_assert!(queue_trace_matches(&actions, true));
-        }
-    }
-
-    #[test]
-    fn queue_oracle_detects_keep_oldest_mutation() {
-        let actions = [
-            (1, 1),
-            (1, 2),
-            (1, 3),
-            (1, 4),
-            (1, 5),
-            (1, 6),
-            (1, 7),
-            (1, 8),
-            (2, 0),
-        ];
-        assert!(queue_trace_matches(&actions, true));
-        assert!(!queue_trace_matches(&actions, false));
-    }
-
-    #[test]
-    fn deterministic_queue_fault_generator_is_reproducible_and_complete() {
-        let first = deterministic_queue_actions(0x1234_5678_9abc_def0, 4_096);
-        let second = deterministic_queue_actions(0x1234_5678_9abc_def0, 4_096);
-        let different = deterministic_queue_actions(0x1234_5678_9abc_def1, 4_096);
-        assert_eq!(first, second);
-        assert_ne!(first, different);
-        let mut covered = [false; 6];
-        for &(operation, _) in &first {
-            covered[usize::from(operation % 6)] = true;
-        }
-        assert!(covered.into_iter().all(|value| value));
-        let (matches, coverage) = queue_trace_outcome(&first, true);
-        assert!(matches);
-        assert!(coverage.complete());
-    }
-
-    #[test]
-    fn queue_coverage_oracle_rejects_each_missing_state_transition() {
-        let complete = QueueCoverage {
-            full_rejection: 1,
-            forced_replacement: 1,
-            inactive_rejection: 1,
-            suspended: 1,
-            resumed: 1,
-            purged: 1,
-        };
-        assert!(complete.complete());
-        for index in 0..6 {
-            let mut mutated = complete;
-            match index {
-                0 => mutated.full_rejection = 0,
-                1 => mutated.forced_replacement = 0,
-                2 => mutated.inactive_rejection = 0,
-                3 => mutated.suspended = 0,
-                4 => mutated.resumed = 0,
-                _ => mutated.purged = 0,
-            }
-            assert!(!mutated.complete());
-        }
-    }
-
-    #[test]
-    #[ignore = "explicit deterministic stability soak"]
-    fn deterministic_queue_chaos_soak() {
-        let seconds = std::env::var("CSQTT_SOAK_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(120)
-            .max(1);
-        let first_seed = std::env::var("CSQTT_SOAK_SEED")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(0);
-        let actions_per_seed = std::env::var("CSQTT_QUEUE_SOAK_ACTIONS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(4_096)
-            .max(14);
-        let started = Instant::now();
-        let mut offset = 0u64;
-        loop {
-            let seed = first_seed.wrapping_add(offset);
-            let actions = deterministic_queue_actions(seed, actions_per_seed);
-            let (matches, coverage) = queue_trace_outcome(&actions, true);
-            assert!(
-                matches && coverage.complete(),
-                "packet queue diverged at reproducible seed {seed}"
-            );
-            offset = offset.wrapping_add(1);
-            if started.elapsed() >= Duration::from_secs(seconds) {
-                break;
-            }
-        }
-    }
-
-    #[test]
-    fn concurrent_send_suspend_resume_storm_never_replays_previous_epoch() {
-        let pool = PacketPool::new(4_096);
-        let (sender, receiver) = packet_channel(64, true);
-        let barrier = Arc::new(std::sync::Barrier::new(9));
-        let mut threads = Vec::new();
-        for thread in 0..8u8 {
-            let sender = sender.clone();
-            let pool = pool.clone();
-            let barrier = barrier.clone();
-            threads.push(std::thread::spawn(move || {
-                barrier.wait();
-                for sequence in 0..25_000u32 {
-                    let mut packet = pool.acquire();
-                    packet.set_read_len(2).unwrap();
-                    packet.as_mut_slice()[0] = thread;
-                    packet.as_mut_slice()[1] = sequence as u8;
-                    drop(sender.force_send(packet));
-                }
-            }));
-        }
-        barrier.wait();
-        for cycle in 0..10_000 {
-            if cycle % 3 == 0 {
-                receiver.suspend();
-            } else if cycle % 3 == 1 {
-                receiver.resume();
-            } else {
-                while receiver.try_recv().is_some() {}
-            }
-        }
-        for thread in threads {
-            thread.join().unwrap();
-        }
-        receiver.suspend();
-        receiver.resume();
-        let mut marker = pool.acquire();
-        marker.set_read_len(1).unwrap();
-        marker.as_mut_slice()[0] = 0xa5;
-        assert!(sender.force_send(marker).is_ok());
-        assert_eq!(receiver.try_recv().unwrap().as_slice(), [0xa5]);
-        assert!(receiver.try_recv().is_none());
-        drop(sender);
-        drop(receiver);
-        assert_eq!(pool.available(), pool.capacity());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn receiver_notification_race_has_no_lost_wakeup() {
-        let pool = PacketPool::new(1);
-        for sequence in 0..2_000 {
-            let (sender, receiver) = packet_channel(1, true);
-            let cancel = CancellationToken::new();
-            let waiter_cancel = cancel.clone();
-            let waiter = tokio::spawn(async move { receiver.recv(&waiter_cancel).await });
-            if sequence % 2 == 0 {
-                tokio::task::yield_now().await;
-            }
-            assert!(sender.force_send(pool.acquire()).is_ok());
-            let packet = tokio::time::timeout(Duration::from_millis(1000), waiter)
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(packet.is_some());
-            drop(packet);
-            drop(sender);
-            assert_eq!(pool.available(), pool.capacity());
-        }
-    }
-
-    #[test]
-    fn receiver_drop_race_releases_every_buffer() {
-        for _ in 0..100 {
-            let pool = PacketPool::new(32);
-            let (sender, receiver) = packet_channel(8, true);
-            let barrier = Arc::new(std::sync::Barrier::new(9));
-            let mut threads = Vec::new();
-            for _ in 0..8 {
-                let sender = sender.clone();
-                let pool = pool.clone();
-                let barrier = barrier.clone();
-                threads.push(std::thread::spawn(move || {
-                    barrier.wait();
-                    drop(sender.force_send(pool.acquire()));
-                }));
-            }
-            barrier.wait();
-            drop(receiver);
-            for thread in threads {
-                thread.join().unwrap();
-            }
-            drop(sender);
-            assert_eq!(pool.available(), pool.capacity());
-        }
-    }
-
-    #[tokio::test]
-    async fn critical_task_panic_is_contained_and_cancels_runtime() {
-        let cancel = CancellationToken::new();
-        let task = spawn_critical("injected", cancel.clone(), async {
-            panic!("injected dispatcher panic");
-        });
-        tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(cancel.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn successful_critical_task_does_not_cancel_runtime() {
-        let cancel = CancellationToken::new();
-        spawn_critical("completed", cancel.clone(), async {})
-            .await
-            .unwrap();
-        assert!(!cancel.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn dispatcher_shutdown_completes_during_total_packet_deficit() {
-        let pool = PacketPool::new(1);
-        let held = pool.acquire();
-        let cancel = CancellationToken::new();
-        let (dispatcher, _) = Dispatcher::start(
-            "127.0.0.1:0",
-            None,
-            pool.clone(),
-            Arc::new(Stats::default()),
+        let dispatcher = Dispatcher {
+            workers: ArcSwap::from_pointee(Vec::new()),
+            inbound: ArrayQueue::new(16),
+            outbound_capacity: 32,
+            tun_wake: Arc::new(Notify::new()),
+            tun_io_lost: Arc::new(Notify::new()),
             cancel,
-        )
-        .await
-        .unwrap();
-        tokio::time::timeout(Duration::from_millis(100), dispatcher.shutdown())
-            .await
-            .unwrap();
-        drop(held);
-        assert_eq!(pool.available(), pool.capacity());
+            tasks: tokio::sync::Mutex::new(Vec::new()),
+            domain_routing: Arc::new(ArcSwap::from_pointee(DomainRoutingConfig::default())),
+            direct_ips: Arc::new(ArcSwap::from_pointee(HashSet::new())),
+            dns_domain_map: Arc::new(crate::sni::DnsDomainMap::default()),
+            direct_relay: None,
+            uplink_state: Mutex::new(UplinkState::new()),
+            pool: pool.clone(),
+            reassembler: crate::wire_protocol::ShardedReassembler::new(),
+            next_frag_id: std::sync::atomic::AtomicU16::new(1),
+            termination: Arc::new(OnceLock::new()),
+        };
+
+        let mut p1 = pool.acquire();
+        let raw1 = [
+            0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x01, 0x01,
+            0x01, 0x01, 0x02, 0x02, 0x02, 0x01,
+        ];
+        p1.set_read_len(raw1.len()).unwrap();
+        p1.as_mut_slice()[..raw1.len()].copy_from_slice(&raw1);
+
+        let mut p2 = pool.acquire();
+        let raw2 = [
+            0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x01, 0x01,
+            0x01, 0x01, 0x02, 0x02, 0x02, 0x02,
+        ];
+        p2.set_read_len(raw2.len()).unwrap();
+        p2.as_mut_slice()[..raw2.len()].copy_from_slice(&raw2);
+
+        dispatcher.return_packet(p1);
+        dispatcher.return_packet(p2);
+
+        let out1 = dispatcher.pop_inbound().expect("packet 1");
+        assert_eq!(out1.as_slice(), &raw1);
+        let out2 = dispatcher.pop_inbound().expect("packet 2");
+        assert_eq!(out2.as_slice(), &raw2);
+    }
+
+    #[test]
+    fn uplink_cascade_waterfall_fills_worker_zero_then_overflows() {
+        let mut state = UplinkState::new();
+        let now = std::time::Instant::now();
+
+        // 3 workers, each has initial TB_CAPACITY_BYTES (10500.0)
+        // 8 packets of 1200 bytes fit entirely into worker 0 (8 * 1200 = 9600 <= 10500)
+        for _ in 0..8 {
+            assert_eq!(state.select(3, 1200, now), 0);
+        }
+        // Worker 0 now has 900 tokens left (< 1200). 9th packet cascades to worker 1!
+        assert_eq!(state.select(3, 1200, now), 1);
+        // Worker 1 now has 9300 tokens left. 10th packet also goes to worker 1:
+        assert_eq!(state.select(3, 1200, now), 1);
+        // Worker 1 takes 6 more packets (total 8: packets 9..16). 17th packet cascades to worker 2:
+        for _ in 0..6 {
+            assert_eq!(state.select(3, 1200, now), 1);
+        }
+        assert_eq!(state.select(3, 1200, now), 2);
+    }
+
+    #[test]
+    fn uplink_cascade_pacing_pins_spaced_ticks_to_worker_zero() {
+        let mut state = UplinkState::new();
+        let mut now = std::time::Instant::now();
+
+        // Game ticks at 64 Hz (15.625 ms), 200 bytes each.
+        // Worker 0 replenishes tokens faster than consumption, keeping 100% of packets on worker 0!
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..30 {
+            let idx = state.select(3, 200, now);
+            seen.insert(idx);
+            now += std::time::Duration::from_micros(15625);
+        }
+        assert_eq!(seen.len(), 1);
+        assert!(seen.contains(&0));
+    }
+
+    #[test]
+    fn adaptive_rate_backs_off_on_congestion_and_recovers() {
+        let mut controller = RateController::new();
+        let mut now = std::time::Instant::now();
+        assert_eq!(controller.rate, TB_RATE_BYTES_PER_SEC);
+        controller.tick(now);
+
+        controller.mark_congested();
+        now += ADAPTIVE_ADJUST_INTERVAL;
+        controller.tick(now);
+        assert!(controller.rate < TB_RATE_BYTES_PER_SEC);
+        let after_first = controller.rate;
+
+        for _ in 0..10 {
+            controller.mark_congested();
+            now += ADAPTIVE_ADJUST_INTERVAL;
+            controller.tick(now);
+        }
+        assert_eq!(controller.rate, ADAPTIVE_MIN_RATE_BYTES_PER_SEC);
+        assert!(controller.rate <= after_first);
+
+        for _ in 0..40 {
+            now += ADAPTIVE_ADJUST_INTERVAL;
+            controller.tick(now);
+        }
+        assert_eq!(controller.rate, TB_RATE_BYTES_PER_SEC);
+    }
+
+    #[test]
+    fn adaptive_rate_adjusts_at_most_once_per_interval() {
+        let mut controller = RateController::new();
+        let mut now = std::time::Instant::now();
+        controller.tick(now);
+        controller.mark_congested();
+        now += Duration::from_millis(50);
+        controller.tick(now);
+        assert_eq!(controller.rate, TB_RATE_BYTES_PER_SEC);
+        now += Duration::from_millis(50);
+        controller.tick(now);
+        assert!(controller.rate < TB_RATE_BYTES_PER_SEC);
+        assert!(!controller.congested);
+    }
+
+    #[test]
+    fn adaptive_token_refill_uses_per_stream_rate() {
+        let mut state = UplinkState::new();
+        let mut now = std::time::Instant::now();
+        state.update_tokens(2, now);
+        assert_eq!(state.rates.len(), 2);
+
+        state.tokens[0] = 0.0;
+        state.tokens[1] = 0.0;
+        state.rates[0].rate = ADAPTIVE_MIN_RATE_BYTES_PER_SEC;
+        state.rates[1].rate = ADAPTIVE_MAX_RATE_BYTES_PER_SEC;
+        state.rates[0].last_adjust = Some(now);
+        state.rates[1].last_adjust = Some(now);
+        state.last_update = Some(now);
+
+        now += Duration::from_millis(10);
+        state.update_tokens(2, now);
+        let low = state.tokens[0];
+        let high = state.tokens[1];
+        assert!(high > low);
+        let expected = (ADAPTIVE_MAX_RATE_BYTES_PER_SEC - ADAPTIVE_MIN_RATE_BYTES_PER_SEC) * 0.010;
+        assert!((high - low - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn queue_profile_ingress_capacity_scales_and_is_bounded() {
+        for (workers, expected) in [
+            (3, 256),
+            (5, 256),
+            (10, 256),
+            (20, 320),
+            (30, 480),
+            (40, 640),
+            (50, 800),
+            (60, 960),
+            (70, 1024),
+            (80, 1024),
+            (90, 1024),
+            (100, 1024),
+        ] {
+            let profile = QueueProfile::for_worker_count(workers);
+            assert_eq!(profile.inbound_capacity, expected);
+            assert_eq!(profile.outbound_capacity, 32);
+        }
+    }
+
+    #[test]
+    fn test_dispatcher_inbound_capacity_and_overflow_replacement() {
+        let profile = QueueProfile::for_worker_count(9);
+        let inbound_capacity = profile.inbound_capacity;
+        let pool = PacketPool::new(inbound_capacity + 16);
+        let cancel = CancellationToken::new();
+        let dispatcher = Dispatcher {
+            workers: ArcSwap::from_pointee(Vec::new()),
+            inbound: ArrayQueue::new(inbound_capacity),
+            outbound_capacity: profile.outbound_capacity,
+            tun_wake: Arc::new(Notify::new()),
+            tun_io_lost: Arc::new(Notify::new()),
+            cancel,
+            tasks: tokio::sync::Mutex::new(Vec::new()),
+            domain_routing: Arc::new(ArcSwap::from_pointee(DomainRoutingConfig::default())),
+            direct_ips: Arc::new(ArcSwap::from_pointee(HashSet::new())),
+            dns_domain_map: Arc::new(crate::sni::DnsDomainMap::default()),
+            direct_relay: None,
+            uplink_state: Mutex::new(UplinkState::new()),
+            pool: pool.clone(),
+            reassembler: crate::wire_protocol::ShardedReassembler::new(),
+            next_frag_id: std::sync::atomic::AtomicU16::new(1),
+            termination: Arc::new(OnceLock::new()),
+        };
+
+        for i in 0..inbound_capacity {
+            let mut p = pool.acquire();
+            let b = (i & 0xff) as u8;
+            p.set_read_len(1500).unwrap();
+            p.as_mut_slice()[0] = 0x45;
+            p.as_mut_slice()[19] = b;
+            let res = dispatcher.inbound.push(p);
+            assert!(res.is_ok());
+        }
+
+        assert_eq!(dispatcher.inbound.len(), inbound_capacity);
+
+        let mut bulk_pkt = pool.acquire();
+        bulk_pkt.set_read_len(1500).unwrap();
+        bulk_pkt.as_mut_slice()[0] = 0x45;
+        bulk_pkt.as_mut_slice()[19] = 0xfe;
+        dispatcher.push_inbound(bulk_pkt);
+        assert_eq!(dispatcher.inbound.len(), inbound_capacity);
+
+        let mut small_pkt = pool.acquire();
+        small_pkt.set_read_len(150).unwrap();
+        small_pkt.as_mut_slice()[0] = 0x45;
+        small_pkt.as_mut_slice()[19] = 0xfd;
+        dispatcher.push_inbound(small_pkt);
+        assert_eq!(dispatcher.inbound.len(), inbound_capacity);
+
+        let first = dispatcher.pop_inbound().unwrap();
+        assert_eq!(first.as_slice()[19], 2);
+
+        let second = dispatcher.pop_inbound().unwrap();
+        assert_eq!(second.as_slice()[19], 3);
     }
 
     #[tokio::test]
-    async fn direct_udp_batches_preserve_idle_pool_and_fifo_order() {
-        let pool = PacketPool::new(128);
-        let stats = Arc::new(Stats::default());
+    async fn test_dispatch_malformed_packets_safety() {
+        let pool = PacketPool::new(16);
         let cancel = CancellationToken::new();
-        let (dispatcher, port) =
-            Dispatcher::start("127.0.0.1:0", None, pool.clone(), stats, cancel)
-                .await
-                .unwrap();
-        let (worker, latency_rx, _priority_rx, _bulk_rx) = channels(0, 128);
-        dispatcher.register(worker);
+        let dispatcher = Dispatcher {
+            workers: ArcSwap::from_pointee(Vec::new()),
+            inbound: ArrayQueue::new(16),
+            outbound_capacity: 64,
+            tun_wake: Arc::new(Notify::new()),
+            tun_io_lost: Arc::new(Notify::new()),
+            cancel,
+            tasks: tokio::sync::Mutex::new(Vec::new()),
+            domain_routing: Arc::new(ArcSwap::from_pointee(DomainRoutingConfig::default())),
+            direct_ips: Arc::new(ArcSwap::from_pointee(HashSet::new())),
+            dns_domain_map: Arc::new(crate::sni::DnsDomainMap::default()),
+            direct_relay: None,
+            uplink_state: Mutex::new(UplinkState::new()),
+            pool: pool.clone(),
+            reassembler: crate::wire_protocol::ShardedReassembler::new(),
+            next_frag_id: std::sync::atomic::AtomicU16::new(1),
+            termination: Arc::new(OnceLock::new()),
+        };
 
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(pool.available(), pool.capacity());
+        let p_empty = pool.acquire();
+        dispatcher.dispatch(p_empty).await;
 
-        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let destination: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-        let payloads: Vec<[u8; 1]> = (0..udp_batch::MAX_DATAGRAMS)
-            .map(|index| [index as u8])
-            .collect();
-        let datagrams: Vec<&[u8]> = payloads.iter().map(|payload| payload.as_slice()).collect();
-        udp_batch::send_to(&peer, destination, &datagrams)
-            .await
-            .unwrap();
-
-        let receive_cancel = CancellationToken::new();
-        for expected in 0..udp_batch::MAX_DATAGRAMS {
-            let packet =
-                tokio::time::timeout(Duration::from_secs(1), latency_rx.recv(&receive_cancel))
-                    .await
-                    .expect("direct UDP packet did not reach its worker")
-                    .expect("worker input closed unexpectedly");
-            assert_eq!(packet.as_slice(), [expected as u8]);
+        for len in 1..20 {
+            let mut p = pool.acquire();
+            p.set_read_len(len).unwrap();
+            p.as_mut_slice()[0] = 0x45;
+            dispatcher.dispatch(p).await;
         }
 
-        for expected in 0..udp_batch::MAX_DATAGRAMS {
-            let mut packet = pool.acquire();
-            packet.set_read_len(1).unwrap();
-            packet.as_mut_slice()[0] = expected as u8 + 0x80;
-            dispatcher.return_packet(packet);
-        }
-        let mut buffer = [0u8; 8];
-        for expected in 0..udp_batch::MAX_DATAGRAMS {
-            let (length, source) =
-                tokio::time::timeout(Duration::from_secs(1), peer.recv_from(&mut buffer))
-                    .await
-                    .expect("direct UDP return packet timed out")
-                    .unwrap();
-            assert_eq!(source, destination);
-            assert_eq!(&buffer[..length], &[expected as u8 + 0x80]);
+        let mut p_bad_ver = pool.acquire();
+        p_bad_ver.set_read_len(20).unwrap();
+        p_bad_ver.as_mut_slice()[0] = 0x15;
+        dispatcher.dispatch(p_bad_ver).await;
+
+        let mut p_bad_ihl = pool.acquire();
+        p_bad_ihl.set_read_len(20).unwrap();
+        p_bad_ihl.as_mut_slice()[0] = 0x40;
+        dispatcher.dispatch(p_bad_ihl).await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_large_packet_direct_relay_bypass() {
+        let pool = PacketPool::new(32);
+        let cancel = CancellationToken::new();
+        let (inbound_tx, _inbound_rx) = tokio::sync::mpsc::channel(64);
+        let domain_routing = Arc::new(ArcSwap::from_pointee(
+            crate::dispatcher::DomainRoutingConfig {
+                enabled: true,
+                is_whitelist: false,
+                exclude_ru_zones: true,
+                template_domains: false,
+                direct_domains: vec!["example.com".to_string()].into(),
+                ip_routing_enabled: false,
+                ip_is_whitelist: false,
+                ip_rules: vec![].into(),
+            },
+        ));
+        let direct_ips = Arc::new(ArcSwap::from_pointee(HashSet::new()));
+        let dns_domain_map = Arc::new(crate::sni::DnsDomainMap::default());
+        let relay = crate::direct_relay::DirectRelay::new(
+            domain_routing.clone(),
+            direct_ips.clone(),
+            dns_domain_map.clone(),
+            pool.clone(),
+            inbound_tx,
+        )
+        .expect("smoltcp test stack must initialize");
+
+        let dst_ip: std::net::IpAddr = "93.184.216.34".parse().unwrap();
+        direct_ips.store(Arc::new(std::iter::once(dst_ip).collect()));
+
+        let dispatcher = Dispatcher {
+            workers: ArcSwap::from_pointee(Vec::new()),
+            inbound: ArrayQueue::new(16),
+            outbound_capacity: 64,
+            tun_wake: Arc::new(Notify::new()),
+            tun_io_lost: Arc::new(Notify::new()),
+            cancel,
+            tasks: tokio::sync::Mutex::new(Vec::new()),
+            domain_routing,
+            direct_ips,
+            dns_domain_map,
+            direct_relay: Some(Arc::new(relay)),
+            uplink_state: Mutex::new(UplinkState::new()),
+            pool: pool.clone(),
+            reassembler: crate::wire_protocol::ShardedReassembler::new(),
+            next_frag_id: std::sync::atomic::AtomicU16::new(1),
+            termination: Arc::new(OnceLock::new()),
+        };
+
+        let src: SocketAddr = "10.66.67.2:54321".parse().unwrap();
+        let dst: SocketAddr = "93.184.216.34:80".parse().unwrap();
+        let syn_raw = crate::direct_relay::build_tcp_packet(src, dst, 1000, 0, 0x02, &[]).unwrap();
+        let mut pkt = pool.try_acquire().unwrap();
+        pkt.extend_tail(syn_raw.len())
+            .unwrap()
+            .copy_from_slice(&syn_raw);
+
+        let initial_frag_id = dispatcher
+            .next_frag_id
+            .load(std::sync::atomic::Ordering::Relaxed);
+        dispatcher.dispatch(pkt).await;
+        let next_frag_id = dispatcher
+            .next_frag_id
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(next_frag_id, initial_frag_id);
+    }
+
+    #[test]
+    fn test_try_follow_stream_respects_deficit_window() {
+        let mut state = UplinkState::new();
+        let now = std::time::Instant::now();
+
+        // 3 workers, initial tokens TB_CAPACITY_BYTES each
+        let chosen = state.select(3, 1154, now);
+        assert_eq!(chosen, 0);
+        assert!((state.tokens[0] - (TB_CAPACITY_BYTES - 1154.0)).abs() < 1e-6);
+
+        // Follow with tail fragment (494 bytes)
+        assert!(state.try_follow_stream(0, 3, 494, now));
+        assert!((state.tokens[0] - (TB_CAPACITY_BYTES - 1154.0 - 494.0)).abs() < 1e-6);
+
+        // Manually lower tokens to near MAX_DEFICIT (-4500.0)
+        state.tokens[0] = -4450.0;
+        // Packet of 50 bytes: -4450 - 50 = -4500 >= -4500
+        assert!(state.try_follow_stream(0, 3, 50, now));
+        assert!((state.tokens[0] - MAX_DEFICIT).abs() < 1e-6);
+
+        // Packet of 100 bytes: clamped to MAX_DEFICIT (-4500.0) without separating fragment
+        assert!(state.try_follow_stream(0, 3, 100, now));
+        assert!((state.tokens[0] - MAX_DEFICIT).abs() < 1e-6);
+
+        // Out of bounds stream index
+        assert!(!state.try_follow_stream(10, 3, 100, now));
+    }
+
+    #[test]
+    fn test_select_cascade_waterfall_cursor() {
+        let mut state = UplinkState::new();
+        let now = std::time::Instant::now();
+
+        // 3 workers, quantum TB_CAPACITY_BYTES (10500)
+        // 8 packets of 1200 bytes fit into worker 0 (9600 <= 10500):
+        for _ in 0..8 {
+            let idx = state.select(3, 1200, now);
+            assert_eq!(idx, 0);
+            assert_eq!(state.cursor, 0);
         }
 
-        dispatcher.shutdown().await;
+        // 9th packet (10800 > 10500) overflows to worker 1:
+        let idx2 = state.select(3, 1200, now);
+        assert_eq!(idx2, 1);
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn test_select_cursor_bounds_after_scale_down() {
+        let mut state = UplinkState::new();
+        let now = std::time::Instant::now();
+
+        // Cursor was at 35 with 40 workers
+        state.cursor = 35;
+        // Workers scaled down to 20: select MUST NOT panic and return index < 20
+        let idx = state.select(20, 1000, now);
+        assert!(idx < 20);
+        assert!(state.cursor < 20);
     }
 }
-
-#[cfg(test)]
-mod throughput_soak_tests;

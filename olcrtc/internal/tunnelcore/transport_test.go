@@ -18,9 +18,9 @@ func TestBuildTransportConfigPreservesRoleFields(t *testing.T) {
 	}, LinkRoleConfig{
 		DeviceID: "device", OnData: onData, OnPeerData: onPeerData,
 		Resolver: resolver, ProxyAddr: "proxy", ProxyPort: 1080,
-		RequireTargetedPeer: true,
+		RequireTargetedPeer: true, DefaultICE: "tcp",
 	})
-	if cfg.DeviceID != "device" || cfg.Resolver != resolver || !cfg.RequireTargetedPeer {
+	if cfg.DeviceID != "device" || cfg.Resolver != resolver || !cfg.RequireTargetedPeer || cfg.DefaultICE != "tcp" {
 		t.Fatalf("role config = %+v", cfg)
 	}
 	if cfg.OnData == nil || cfg.OnPeerData == nil || cfg.ProxyAddr != "proxy" || cfg.ProxyPort != 1080 {

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 #[cfg(not(target_os = "linux"))]
 use crate::model::LocalProxyProfile;
 #[cfg(not(target_os = "linux"))]
@@ -25,7 +22,6 @@ use tokio_util::sync::CancellationToken;
 pub const UDP_FLOW_IDLE: Duration = Duration::from_secs(60);
 #[cfg(target_os = "linux")]
 const SOCKS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(target_os = "linux")]
 const TPROXY_BASE_PORT: u16 = 10666;
 const GLOBAL_TCP_SESSION_LIMIT: usize = 384;
 const GLOBAL_UDP_FLOW_LIMIT: usize = 784;
@@ -37,10 +33,10 @@ const MAX_TCP_SESSION_LIMIT: usize = 2_384;
 const MAX_UDP_FLOW_LIMIT: usize = 4_096;
 const MEMORY_EXPANSION_THRESHOLD_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_MEMORY_EXPANSION_THRESHOLD_BYTES: u64 = 1_200 * 1024 * 1024;
-const DEVICE_TCP_SESSION_LIMIT: usize = 160;
-const DEVICE_UDP_FLOW_LIMIT: usize = 320;
-const DEVICE_TCP_FLOOR: usize = 20;
-const DEVICE_UDP_FLOOR: usize = 40;
+const DEVICE_TCP_SESSION_LIMIT: usize = 512;
+const DEVICE_UDP_FLOW_LIMIT: usize = 1024;
+const DEVICE_TCP_FLOOR: usize = 64;
+const DEVICE_UDP_FLOOR: usize = 128;
 const DEVICE_NORMAL_BUFFER_LIMIT: usize = 4;
 const DEVICE_JUMBO_BUFFER_LIMIT: usize = 1;
 const GLOBAL_NORMAL_BUFFER_LIMIT: usize = 32;
@@ -104,7 +100,7 @@ impl ProxyCapacity {
         {
             (EXPANDED_TCP_SESSION_LIMIT, EXPANDED_UDP_FLOW_LIMIT)
         } else {
-            Self::next_limits(current, crate::memory_metrics::available_memory_bytes())
+            Self::next_limits(current, None)
         };
         if next == current {
             return false;
@@ -590,6 +586,7 @@ struct ProxyBufferPool {
     tcp: BufferClassPool,
     normal: BufferClassPool,
     jumbo: BufferClassPool,
+    wake: tokio::sync::Notify,
 }
 
 impl ProxyBufferPool {
@@ -610,7 +607,12 @@ impl ProxyBufferPool {
                 PROXY_JUMBO_RETAINED_LIMIT,
                 PROXY_JUMBO_BUFFER_BYTES,
             ),
+            wake: tokio::sync::Notify::new(),
         })
+    }
+
+    async fn wait_available(&self) {
+        self.wake.notified().await;
     }
 
     fn acquire_tcp(self: &Arc<Self>) -> Option<ProxyBufferLease> {
@@ -711,6 +713,7 @@ impl Drop for ProxyBufferLease {
             BufferClass::Normal => self.pool.normal.release(buffer),
             BufferClass::Jumbo => self.pool.jumbo.release(buffer),
         }
+        self.pool.wake.notify_waiters();
         self.permit.take();
     }
 }
@@ -776,38 +779,6 @@ impl Drop for OpeningBufferLease {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TproxyMemoryBudget {
-    pub tcp_relay_bytes_per_session: u64,
-    pub udp_normal_buffer_bytes: u64,
-    pub udp_jumbo_buffer_bytes: u64,
-    pub udp_response_bytes_at_limit: u64,
-}
-
-#[cfg(target_os = "linux")]
-pub const fn memory_budget() -> TproxyMemoryBudget {
-    let tcp_relay_bytes_per_session = (linux::RELAY_BUF * 2) as u64;
-    let udp_normal_buffer_bytes = 4 * 1024;
-    let udp_jumbo_buffer_bytes = linux::UDP_RECV_BUF as u64;
-    TproxyMemoryBudget {
-        tcp_relay_bytes_per_session,
-        udp_normal_buffer_bytes,
-        udp_jumbo_buffer_bytes,
-        udp_response_bytes_at_limit: (GLOBAL_NORMAL_BUFFER_LIMIT as u64) * udp_normal_buffer_bytes
-            + (GLOBAL_JUMBO_BUFFER_LIMIT as u64) * udp_jumbo_buffer_bytes,
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub const fn memory_budget() -> TproxyMemoryBudget {
-    TproxyMemoryBudget {
-        tcp_relay_bytes_per_session: 0,
-        udp_normal_buffer_bytes: 0,
-        udp_jumbo_buffer_bytes: 0,
-        udp_response_bytes_at_limit: 0,
-    }
-}
-
 pub struct TproxyStats {
     pub tcp_active: std::sync::atomic::AtomicUsize,
     pub udp_active: std::sync::atomic::AtomicUsize,
@@ -817,6 +788,7 @@ pub struct TproxyStats {
     udp_total: std::sync::atomic::AtomicU64,
     tcp_budget_rejects: std::sync::atomic::AtomicU64,
     udp_budget_rejects: std::sync::atomic::AtomicU64,
+    udp_send_errors: std::sync::atomic::AtomicU64,
     tcp_limit: std::sync::atomic::AtomicUsize,
     udp_limit: std::sync::atomic::AtomicUsize,
     buffer_pools: Mutex<TproxyBufferPools>,
@@ -847,6 +819,7 @@ impl Default for TproxyStats {
             udp_total: std::sync::atomic::AtomicU64::new(0),
             tcp_budget_rejects: std::sync::atomic::AtomicU64::new(0),
             udp_budget_rejects: std::sync::atomic::AtomicU64::new(0),
+            udp_send_errors: std::sync::atomic::AtomicU64::new(0),
             tcp_limit: std::sync::atomic::AtomicUsize::new(GLOBAL_TCP_SESSION_LIMIT),
             udp_limit: std::sync::atomic::AtomicUsize::new(GLOBAL_UDP_FLOW_LIMIT),
             buffer_pools: Mutex::new(TproxyBufferPools::default()),
@@ -916,6 +889,16 @@ impl TproxyStats {
     fn udp_budget_rejected(&self) {
         self.udp_budget_rejects
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn udp_send_failed(&self, error: std::io::Error) {
+        let errors = self
+            .udp_send_errors
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if errors == 1 || errors.is_multiple_of(1000) {
+            eprintln!("[TPROXY] UDP relay send failed ({errors} total): {error}");
+        }
     }
 
     fn set_limits(&self, limits: (usize, usize)) {
@@ -998,8 +981,7 @@ pub fn tproxy_port(runtime_id: u64) -> u16 {
 }
 
 #[cfg(target_os = "linux")]
-#[allow(unused_imports)]
-pub use linux::{TproxySockets, bind_sockets, run};
+pub use linux::{bind_sockets, run};
 
 #[cfg(not(target_os = "linux"))]
 pub struct TproxySockets {
@@ -1168,7 +1150,17 @@ mod linux {
                     stats.set_limits(quotas.limits());
                     return Some(quota);
                 }
-                Err(super::AdmissionError::Inactive | super::AdmissionError::DeviceLimit) => {
+                Err(super::AdmissionError::Inactive) => {
+                    return None;
+                }
+                Err(super::AdmissionError::DeviceLimit) => {
+                    if !quotas.evict_oldest_tcp_and_wait().await {
+                        return None;
+                    }
+                    if let Ok(quota) = quotas.try_acquire_tcp(client_ip) {
+                        stats.set_limits(quotas.limits());
+                        return Some(quota);
+                    }
                     return None;
                 }
                 Err(super::AdmissionError::GlobalLimit) => {}
@@ -1444,9 +1436,10 @@ mod linux {
         }
     }
 
-    // Only clients inside the TUN subnet may use the transparent listeners;
-    // remote packets hitting the public IP must not create proxy circuits.
     fn allowed_client(client: SocketAddrV4) -> bool {
+        if client.ip().is_private() {
+            return true;
+        }
         static SUBNET: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
         let prefix = SUBNET.get_or_init(|| {
             crate::tun_device::TUN_SUBNET
@@ -1472,18 +1465,19 @@ mod linux {
     }
 
     pub(super) fn parse_orig_dst(mut control: &[u8]) -> Option<SocketAddrV4> {
-        while control.len() >= mem::size_of::<libc::cmsghdr>() {
-            let header: &libc::cmsghdr = unsafe { &*(control.as_ptr() as *const libc::cmsghdr) };
-            #[allow(clippy::unnecessary_cast)]
+        let header_len = mem::size_of::<libc::cmsghdr>();
+        let align = mem::size_of::<usize>();
+        while control.len() >= header_len {
+            let header = unsafe { ptr::read_unaligned(control.as_ptr() as *const libc::cmsghdr) };
             let length = header.cmsg_len as usize;
-            if length < mem::size_of::<libc::cmsghdr>() || length > control.len() {
+            if length < header_len || length > control.len() {
                 break;
             }
             if header.cmsg_level == libc::IPPROTO_IP && header.cmsg_type == IP_RECVORIGDSTADDR {
-                let data = &control[mem::size_of::<libc::cmsghdr>()..length];
+                let data = &control[header_len..length];
                 if data.len() >= mem::size_of::<libc::sockaddr_in>() {
                     let sockaddr: libc::sockaddr_in =
-                        unsafe { ptr::read(data.as_ptr() as *const libc::sockaddr_in) };
+                        unsafe { ptr::read_unaligned(data.as_ptr() as *const libc::sockaddr_in) };
                     if sockaddr.sin_family == libc::AF_INET as libc::sa_family_t {
                         return Some(SocketAddrV4::new(
                             Ipv4Addr::from(sockaddr.sin_addr.s_addr.to_ne_bytes()),
@@ -1492,11 +1486,7 @@ mod linux {
                     }
                 }
             }
-            let advance = (length + 3) & !3;
-            if advance == 0 {
-                break;
-            }
-            control = &control[advance.min(control.len())..];
+            control = &control[length.next_multiple_of(align).min(control.len())..];
         }
         None
     }
@@ -1539,28 +1529,24 @@ mod linux {
                 return;
             }
             let mut packet = [0u8; 28];
-            // IPv4 header (20 bytes)
-            packet[0] = 0x45; // Version 4, IHL 5
-            packet[1] = 0x00; // DSCP / ECN
+            packet[0] = 0x45;
+            packet[1] = 0x00;
             packet[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
-            packet[4..6].copy_from_slice(&0u16.to_be_bytes()); // ID
-            packet[6..8].copy_from_slice(&0u16.to_be_bytes()); // No DF: allow fragmentation
-            packet[8] = 64; // TTL
-            packet[9] = libc::IPPROTO_UDP as u8; // Protocol 17
-            // Checksum will be computed
+            packet[4..6].copy_from_slice(&0u16.to_be_bytes());
+            packet[6..8].copy_from_slice(&0u16.to_be_bytes());
+            packet[8] = 64;
+            packet[9] = libc::IPPROTO_UDP as u8;
             packet[12..16].copy_from_slice(&source_ip.octets());
             packet[16..20].copy_from_slice(&dest_ip.octets());
             let ip_checksum = calc_checksum(&packet[..20]);
             packet[10..12].copy_from_slice(&ip_checksum.to_be_bytes());
 
-            // UDP header (8 bytes)
             let udp_len = (8 + payload.len()) as u16;
             packet[20..22].copy_from_slice(&source_port.to_be_bytes());
             packet[22..24].copy_from_slice(&dest_port.to_be_bytes());
             packet[24..26].copy_from_slice(&udp_len.to_be_bytes());
-            packet[26..28].copy_from_slice(&0u16.to_be_bytes()); // Checksum optional in IPv4 UDP
+            packet[26..28].copy_from_slice(&0u16.to_be_bytes());
 
-            // Send using sendmsg with 2 iovecs: header (28 bytes) + payload
             let iov = [
                 libc::iovec {
                     iov_base: packet.as_ptr() as *mut libc::c_void,
@@ -1579,17 +1565,17 @@ mod linux {
                 },
                 sin_zero: [0; 8],
             };
-            let sent = unsafe {
-                let mut msg: libc::msghdr = mem::zeroed();
-                msg.msg_name = &raw_dest as *const libc::sockaddr_in as *mut libc::c_void;
-                msg.msg_namelen = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-                msg.msg_iov = iov.as_ptr() as *mut libc::iovec;
-                msg.msg_iovlen = 2;
-                libc::sendmsg(self.socket.as_raw_fd(), &msg, 0)
-            };
+            let mut msg: libc::msghdr = unsafe { mem::zeroed() };
+            msg.msg_name = &raw_dest as *const libc::sockaddr_in as *mut libc::c_void;
+            msg.msg_namelen = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            msg.msg_iov = iov.as_ptr() as *mut libc::iovec;
+            msg.msg_iovlen = 2;
+            msg.msg_control = std::ptr::null_mut();
+            msg.msg_controllen = 0;
+            msg.msg_flags = 0;
+            let sent = unsafe { libc::sendmsg(self.socket.as_raw_fd(), &msg, 0) };
             if sent < 0 {
                 let errors = self.send_errors.fetch_add(1, Ordering::Relaxed) + 1;
-                // Log the first failure and every thousandth after it.
                 if errors == 1 || errors.is_multiple_of(1000) {
                     eprintln!(
                         "[TPROXY] raw UDP reply send failed ({errors} total): {}",
@@ -1693,14 +1679,12 @@ mod linux {
         });
     }
 
-    fn send_frame(flow: &UdpFlow, destination: SocketAddrV4, payload: &[u8]) {
-        // Zero-allocation SOCKS5 UDP send using stack buffer or sendmsg
-        // SOCKS5 UDP IPv4 header: RSV(2) + FRAG(1) + ATYP(1) + IP(4) + PORT(2) = 10 bytes
+    fn send_frame(flow: &UdpFlow, destination: SocketAddrV4, payload: &[u8]) -> io::Result<()> {
         let mut header = [0u8; 10];
-        header[0] = 0x00; // RSV
-        header[1] = 0x00; // RSV
-        header[2] = 0x00; // FRAG
-        header[3] = 0x01; // ATYP IPv4
+        header[0] = 0x00;
+        header[1] = 0x00;
+        header[2] = 0x00;
+        header[3] = 0x01;
         header[4..8].copy_from_slice(&destination.ip().octets());
         header[8..10].copy_from_slice(&destination.port().to_be_bytes());
 
@@ -1713,7 +1697,12 @@ mod linux {
                 },
                 sin_zero: [0; 8],
             },
-            SocketAddr::V6(_) => return,
+            SocketAddr::V6(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "IPv6 relay is not supported",
+                ));
+            }
         };
 
         let iov = [
@@ -1726,14 +1715,19 @@ mod linux {
                 iov_len: payload.len(),
             },
         ];
-        unsafe {
-            let mut msg: libc::msghdr = mem::zeroed();
-            msg.msg_name = &raw_dest as *const libc::sockaddr_in as *mut libc::c_void;
-            msg.msg_namelen = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-            msg.msg_iov = iov.as_ptr() as *mut libc::iovec;
-            msg.msg_iovlen = 2;
-            libc::sendmsg(flow.relay.as_raw_fd(), &msg, 0);
+        let mut msg: libc::msghdr = unsafe { mem::zeroed() };
+        msg.msg_name = &raw_dest as *const libc::sockaddr_in as *mut libc::c_void;
+        msg.msg_namelen = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        msg.msg_iov = iov.as_ptr() as *mut libc::iovec;
+        msg.msg_iovlen = 2;
+        msg.msg_control = std::ptr::null_mut();
+        msg.msg_controllen = 0;
+        msg.msg_flags = 0;
+        let sent = unsafe { libc::sendmsg(flow.relay.as_raw_fd(), &msg, 0) };
+        if sent < 0 {
+            return Err(io::Error::last_os_error());
         }
+        Ok(())
     }
 
     struct OpeningDatagram {
@@ -1889,7 +1883,17 @@ mod linux {
                     stats.set_limits(quotas.limits());
                     return Some(quota);
                 }
-                Err(super::AdmissionError::Inactive | super::AdmissionError::DeviceLimit) => {
+                Err(super::AdmissionError::Inactive) => {
+                    return None;
+                }
+                Err(super::AdmissionError::DeviceLimit) => {
+                    if !evict_oldest_udp_flow(flows, stats) {
+                        return None;
+                    }
+                    if let Ok(quota) = quotas.try_acquire_udp(client_ip) {
+                        stats.set_limits(quotas.limits());
+                        return Some(quota);
+                    }
                     return None;
                 }
                 Err(super::AdmissionError::GlobalLimit) => {}
@@ -1905,7 +1909,6 @@ mod linux {
     }
 
     fn now_ms() -> i64 {
-        // Monotonic process clock: wall-clock jumps (NTP) would freeze or mass-expire flows.
         static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_millis() as i64
     }
@@ -2078,7 +2081,11 @@ mod linux {
                             );
                             served += 1;
                             for datagram in pending {
-                                send_frame(&flow, datagram.destination, datagram.payload());
+                                if let Err(error) =
+                                    send_frame(&flow, datagram.destination, datagram.payload())
+                                {
+                                    stats.udp_send_failed(error);
+                                }
                             }
                             flows.insert(key, flow);
                         }
@@ -2121,7 +2128,9 @@ mod linux {
                                 if existing_ok {
                                     let flow = &flows[&key];
                                     flow.touch();
-                                    send_frame(flow, destination, payload);
+                                    if let Err(error) = send_frame(flow, destination, payload) {
+                                        stats.udp_send_failed(error);
+                                    }
                                     continue;
                                 }
                                 if let Some(stale) = flows.remove(&key) {
@@ -2160,7 +2169,9 @@ mod linux {
                                         &mut response_tasks,
                                     );
                                     served += 1;
-                                    send_frame(&flow, destination, payload);
+                                    if let Err(error) = send_frame(&flow, destination, payload) {
+                                        stats.udp_send_failed(error);
+                                    }
                                     flows.insert(key, flow);
                                 } else {
                                     let task_tx = open_tx.clone();
@@ -2207,8 +2218,6 @@ mod linux {
                                         &format!("TPROXY UDP receive error: {error}"),
                                     );
                                 }
-                                // Exponential 1ms..50ms backoff instead of a fixed
-                                // stall inside the shared select loop.
                                 recv_error_backoff_ms =
                                     (recv_error_backoff_ms.max(1) * 2).min(50);
                                 guard.clear_ready();
@@ -2265,8 +2274,14 @@ mod linux {
                         .unwrap_or(true);
                     let Some(mut buffer) = buffers.acquire_udp(&quotas, quota.clone(), jumbo)
                     else {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                        break;
+                        let ready = buffers.wait_available();
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => break,
+                            _ = ready => {}
+                            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                        }
+                        continue;
                     };
                     match relay.try_recv_from(buffer.as_mut_slice()) {
                         Ok((length, _source)) => {

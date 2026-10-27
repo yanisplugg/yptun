@@ -11,13 +11,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 // ErrTransportNotFound is returned when a requested transport is not registered.
@@ -42,6 +42,35 @@ var ErrInvalidPeerID = errors.New("invalid peer id")
 // upper layers actually size their frames against (see runtime.MaxPayload).
 type Features struct {
 	MaxPayloadSize int
+	// Datagram reports whether the transport carries unordered, lossy
+	// datagrams next to the byte stream (see DatagramTransport).
+	Datagram bool
+	// WriteInterval asks the layer that seals frames into messages to leave
+	// at least this long between two small messages and to carry the frames
+	// written in between together in the next one. Zero sends every frame as
+	// its own message. A relay that drops messages when a sender outruns it
+	// needs it; muxconn says how it keeps bulk transfers unpaced.
+	//
+	// ai-generated: this field (olcrtc#11).
+	WriteInterval time.Duration
+}
+
+// ErrDatagramUnsupported is returned when a transport cannot send lossy datagrams.
+var ErrDatagramUnsupported = errors.New("transport does not support datagrams")
+
+// DatagramTransport is implemented by transports that can send unordered,
+// lossy datagrams independently of the reliable byte stream.
+type DatagramTransport interface {
+	Transport
+	SendDatagram(data []byte) error
+	DatagramCanSend() bool
+}
+
+// PeerDatagramTransport is implemented by datagram transports that can
+// address individual remote endpoints.
+type PeerDatagramTransport interface {
+	DatagramTransport
+	SendDatagramTo(peerID string, data []byte) error
 }
 
 // Transport defines a byte transport independent of the underlying provider.
@@ -107,6 +136,13 @@ type PeerControlPlane interface {
 // is confirmed ready (first epoch frame received), or ctx is cancelled.
 type PeerReadyTransport interface {
 	WaitForPeer(ctx context.Context) error
+}
+
+// PeerObserver is implemented by transports that can say whether any remote
+// participant has sent a well-formed frame yet, authenticated or not. The
+// client uses it to tell an empty room from a peer that does not answer.
+type PeerObserver interface {
+	PeerSeen() bool
 }
 
 // PeerIdentity is implemented by transports that authenticate a routing peer
@@ -201,16 +237,25 @@ type Config struct {
 	Name          string
 	OnData        func([]byte)
 	OnPeerData    func(peerID string, data []byte)
-	DNSServer     string
-	Resolver      *net.Resolver
-	ProxyAddr     string
-	ProxyPort     int
+	// OnDatagram and OnPeerDatagram receive the lossy datagram lane; a
+	// transport without one never calls them.
+	OnDatagram     func([]byte)
+	OnPeerDatagram func(peerID string, data []byte)
+	DNSServer      string
+	Resolver       protect.Lookup
+	ProxyAddr      string
+	ProxyPort      int
+	DTLSProfile    engine.DTLSProfile
 
 	// RequireTargetedPeer makes single-peer engines ignore broadcast frames
 	// from unrelated olcrtc clients until a peer sends a frame addressed to
 	// this session's local epoch. Server-side transports leave this disabled
 	// so they can accept initial broadcast CLIENT_HELLO frames.
 	RequireTargetedPeer bool
+
+	// DefaultICE is the ICE mode this side asks for where the room link carries
+	// no hint (roomhint): the client side TCP, a server nothing. ai-generated.
+	DefaultICE string
 
 	// Options carries transport-specific tuning. Type is per-transport-package.
 	Options Options
@@ -229,8 +274,11 @@ func (c Config) EngineConfig() enginebuiltin.Config {
 		Name:                c.Name,
 		OnData:              c.OnData,
 		OnPeerData:          c.OnPeerData,
+		OnDatagram:          c.OnDatagram,
+		OnPeerDatagram:      c.OnPeerDatagram,
 		DNSServer:           c.DNSServer,
 		Resolver:            c.Resolver,
+		DTLSProfile:         c.DTLSProfile,
 		ProxyAddr:           c.ProxyAddr,
 		ProxyPort:           c.ProxyPort,
 		RequireTargetedPeer: c.RequireTargetedPeer,
@@ -238,6 +286,7 @@ func (c Config) EngineConfig() enginebuiltin.Config {
 		URL:                 c.URL,
 		Token:               c.Token,
 		ProviderToken:       c.ProviderToken,
+		DefaultICE:          c.DefaultICE,
 	}
 }
 

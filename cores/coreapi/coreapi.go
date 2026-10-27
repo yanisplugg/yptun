@@ -497,7 +497,7 @@ func RtcSetLivenessOptions(intervalMs, timeoutMs, failures int) error {
 
 // RtcStart — an empty transport keeps whatever RtcSetTransport installed.
 func RtcStart(carrier, transport, roomID, clientID, keyHex string, socksPort int, socksUser, socksPass string) error {
-	rtcRuntime.SetLogWriter(tagWriter{"olcrtc"})
+	mobile.SetLogWriter(tagWriter{"olcrtc"})
 	rtcRuntime.SetDeviceID(clientID)
 	if err := errors.Join(
 		rtcRuntime.SetProvider(carrier),

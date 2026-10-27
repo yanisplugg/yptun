@@ -16,12 +16,24 @@
 
 ## Матрица совместимости
 
-| Transport | telemost | wbstream | jitsi |
-|-----------|:--------:|:--------:|:-----:|
-| datachannel | - | ~ | + |
-| vp8channel | + | + | + |
-| seichannel | - | + | + |
-| videochannel | + | + | + |
+| Transport | telemost | wbstream | jitsi | vkcalls | mtslink |
+|-----------|:--------:|:--------:|:-----:|:-------:|:-------:|
+| datachannel | - | ~ | + | - | - |
+| vp8channel | + | + | + | + | + |
+| seichannel | - | + | + | - | - |
+| videochannel | + | + | + | - | - |
+
+`mtslink` несёт только vp8channel, и не как VP8: SFU MTS Link не передаёт
+данные между гостями и пересылает только VP9 и H264, поэтому транспорт одевает
+там свои кадры в VP9 (каждый начинается с настоящего ключевого кадра VP9 - с
+него SFU и начинает пересылку) - 15 Мбит/с вниз и 16 вверх на релизном гейте.
+
+
+`vkcalls` — зеркальный случай `salutejazz`: SFU VK не мостит произвольные
+data-каналы, поэтому байты идут по единственному публикуемому видеослою —
+vp8channel, на измеренных релизным гейтом 13-19 Мбит/с в обе стороны;
+пересылаемое видео SFU заворачивает в RED (RFC 2198), транспорт разворачивает
+на приёме.
 
 **Легенда:**
 - `+` - работает (pass в E2E тестах)
@@ -32,7 +44,7 @@
 
 **WBStream:** все транспорты кроме datachannel работают. DataChannel в обычном guest flow без выдавания модератора не работает - WB Stream выдаёт токены с `canPublishData=false`, и DC не маршрутизирует данные. Чтобы использовать `datachannel` поверх `wbstream`, задай `auth.token` с токеном аккаунта/модератора (`canPublishData=true`); см. `auth.token` в необязательных полях ниже.
 
-**Jitsi:** datachannel стабильно проходит - реализован поверх colibri-ws bridge channel и шлёт байты через `EndpointMessage{raw}` broadcast. Подходит для self-hosted и публичных Jitsi Meet инстансов без аутентификации (`https://meet.jit.si/...` и т.п.; инстансы в docs/jitsi.instances.yaml). Проверьте в браузере, какой из серверов доступен в вашей сети. Видео-транспорты (vp8channel, seichannel, videochannel) экспонируют sendable VideoTrack через pion PeerConnection после Jingle session-accept, а RTP keepalive выполняет нужные Jicofo шаги (LastN, ReceiverVideoConstraints, source-add) для маршрутизации видео, поэтому все четыре транспорта проходят E2E-матрицу.
+**Jitsi:** datachannel стабильно проходит - реализован поверх colibri-ws bridge channel и шлёт байты через `EndpointMessage{raw}` broadcast. Мелкие кадры, записанные подряд, уходят одним сообщением, не чаще одного мелкого сообщения в 5 мс: мост держит в очереди не больше 50 сообщений от одного отправителя и выбрасывает самые старые, когда не успевает пересылать, поэтому всплеск новых соединений по сообщению на кадр терял подтверждения CONNECT. Подходит для self-hosted и публичных Jitsi Meet инстансов без аутентификации (`https://meet.jit.si/...` и т.п.; инстансы в docs/jitsi.instances.yaml). Проверьте в браузере, какой из серверов доступен в вашей сети. Видео-транспорты (vp8channel, seichannel, videochannel) экспонируют sendable VideoTrack через pion PeerConnection после Jingle session-accept, а RTP keepalive выполняет нужные Jicofo шаги (LastN, ReceiverVideoConstraints, source-add) для маршрутизации видео, поэтому все четыре транспорта проходят E2E-матрицу.
 
 **Jitsi + seichannel - отдельная оговорка.** SEI NAL-юниты идут пассажиром в H.264 видеопотоке, а Jicofo на self-hosted инстансах (например `meet.egovm.ru`) периодически режет/откладывает upstream видео когда ресивера в комнате формально нет - для нас это выглядит как `seichannel ack timeout` при формально живом PeerConnection. Периодический RTP keepalive удерживает ресивера в комнате, поэтому e2e матрица теперь ожидает pass, но на сильно нагруженном self-hosted инстансе `datachannel` или `vp8channel` всё ещё надёжнее.
 

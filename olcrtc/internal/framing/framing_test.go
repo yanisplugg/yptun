@@ -75,3 +75,50 @@ func TestZeroMaxAllowsAnything(t *testing.T) {
 		t.Fatalf("roundtrip mismatch")
 	}
 }
+
+// writeRecorder keeps every Write it is handed, separately.
+type writeRecorder struct {
+	writes [][]byte
+}
+
+func (w *writeRecorder) Write(p []byte) (int, error) {
+	w.writes = append(w.writes, bytes.Clone(p))
+	return len(p), nil
+}
+
+// One frame is one Write. Below this package every Write becomes its own smux
+// frame, record and relay message, and a relay that loses or reorders one of
+// them must not be able to separate a length from its body (olcbox#25).
+func TestWriteBytesIsOneWrite(t *testing.T) {
+	var w writeRecorder
+	body := []byte(`{"version":1}`)
+	if err := framing.WriteBytes(&w, body, 1024); err != nil {
+		t.Fatalf("WriteBytes() error = %v", err)
+	}
+	if len(w.writes) != 1 {
+		t.Fatalf("WriteBytes() made %d writes, want 1", len(w.writes))
+	}
+	// The body is 13 bytes, so the big-endian length prefix ends in 13.
+	want := append([]byte{0, 0, 0, 13}, body...)
+	if !bytes.Equal(w.writes[0], want) {
+		t.Fatalf("WriteBytes() wrote %x, want %x", w.writes[0], want)
+	}
+	got, err := framing.ReadBytes(bytes.NewReader(w.writes[0]), 1024)
+	if err != nil {
+		t.Fatalf("ReadBytes() error = %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("ReadBytes() = %q, want %q", got, body)
+	}
+}
+
+// WriteJSON goes through the same single Write.
+func TestWriteJSONIsOneWrite(t *testing.T) {
+	var w writeRecorder
+	if err := framing.WriteJSON(&w, map[string]int{"n": 1}, 1024); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+	if len(w.writes) != 1 {
+		t.Fatalf("WriteJSON() made %d writes, want 1", len(w.writes))
+	}
+}

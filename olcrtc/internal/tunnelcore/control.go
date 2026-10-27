@@ -3,6 +3,7 @@ package tunnelcore
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/xtaci/smux"
 
@@ -28,11 +29,24 @@ type ControlRunner struct {
 	LogFields func() string
 	OnPong    func(control.Health)
 	OnDeath   func(error)
+	// Progress reports payload received from the peer; see control.Config.
+	Progress func() uint64
+	// SendStalled reports that the data plane stopped sending; see
+	// control.Config.
+	SendStalled func() bool
+	// BeforeClose tells the peer this side is leaving, while the stream is
+	// still open; see control.Config.BeforeClose. Nil leaves the peer to
+	// find out through liveness.
+	BeforeClose func()
 }
 
 // Run blocks until the control stream stops, then invokes OnDeath unless ctx was canceled.
-func (r ControlRunner) Run(ctx context.Context, stream *smux.Stream) {
+//
+// ai-generated: stream is any io.ReadWriteCloser, as control.Run takes it, so
+// a caller can keep the close for itself (olcrtc#49).
+func (r ControlRunner) Run(ctx context.Context, stream io.ReadWriteCloser) {
 	cfg := r.tunedConfig()
+	cfg.BeforeClose = r.BeforeClose
 	err := control.Run(ctx, stream, cfg)
 	if ctx.Err() != nil {
 		return
@@ -69,6 +83,14 @@ func (r ControlRunner) tunedConfig() control.Config {
 		if onMissed != nil {
 			onMissed(missed)
 		}
+	}
+	cfg.Progress = r.Progress
+	cfg.OnStalled = func(timedOut int) {
+		logger.Warnf("control pong late %s but the peer is still sending — not counting %d as missed", r.fields(), timedOut)
+	}
+	cfg.SendStalled = r.SendStalled
+	cfg.OnSendStalled = func() {
+		logger.Warnf("control healthy %s but the data plane has stopped sending — tearing the session down", r.fields())
 	}
 	cfg.OnUnhealthy = func(missed int) {
 		r.Health.RecordUnhealthy(missed)

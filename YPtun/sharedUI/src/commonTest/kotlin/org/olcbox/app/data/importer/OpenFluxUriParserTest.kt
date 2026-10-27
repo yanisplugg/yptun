@@ -88,4 +88,22 @@ class OpenFluxUriParserTest {
         assertEquals(true, avito.copy(avitoCookies = "a=b").withSession(true).copy(secret = "k").isComplete())
         assertEquals(avito.transport, avito.withSession(true).withSession(false).transport)
     }
+
+    @Test
+    fun maxLinkCarriesExitUidAndClientToken() {
+        val c = OpenFluxUriParser.parse(link("""{"transports":[{"type":"oneme","uid":"777","token":"cli-tok"}]}"""))!!.config
+        assertEquals(OpenFluxConfig.TRANSPORT_MAX, c.transport)
+        assertEquals("777", c.maxUid)
+        assertEquals("cli-tok", c.maxToken)
+        assertNull(OpenFluxUriParser.parse(link("""{"transports":[{"type":"oneme","uid":"x1","token":"t"}]}""")))
+        assertNull(OpenFluxUriParser.parse(link("""{"transports":[{"type":"oneme","uid":"777"}]}""")))
+    }
+
+    @Test
+    fun avitoLinkCarriesRoomListAndClientCookies() {
+        val c = OpenFluxUriParser.parse(link("""{"transports":[{"type":"avito","url":"ROOMLISTROOMLIST1234567890","cookies":"sid=c1"}]}"""))!!.config
+        assertEquals(OpenFluxConfig.TRANSPORT_AVITO, c.transport)
+        assertEquals("ROOMLISTROOMLIST1234567890", c.docUrl)
+        assertEquals("sid=c1", c.avitoCookies)
+    }
 }

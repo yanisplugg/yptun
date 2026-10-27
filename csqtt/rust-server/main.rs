@@ -1,8 +1,5 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
-#![allow(linker_messages)]
 #![recursion_limit = "256"]
+#![allow(linker_messages)]
 
 #[cfg(target_os = "linux")]
 #[global_allocator]
@@ -24,28 +21,22 @@ pub(crate) fn collect_allocator_thread_heap() -> bool {
 }
 
 mod dataplane;
-mod downlink_queue;
-#[path = "../shared/flow_frame.rs"]
-mod flow_frame;
-mod memory_metrics;
+#[path = "../shared/dtls.rs"]
+pub mod dtls;
 mod model;
 mod net_setup;
 mod packet;
-mod perf;
+mod path_probe;
 mod protocol;
 mod proxy_route;
-#[path = "../shared/selective_fec.rs"]
-mod selective_fec;
-#[path = "../shared/striped_scheduler.rs"]
-mod striped_scheduler;
 mod tokio_io;
 mod tproxy;
 mod tun_device;
-#[cfg(test)]
-mod udp_supervisor;
 mod web_panel;
 #[path = "../shared/wire_protocol.rs"]
 mod wire_protocol;
+
+const WIRE_PROTOCOL_REVISION: &str = "CSQTT-WIRE-3";
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -56,7 +47,6 @@ use model::{
 };
 use protocol::Session;
 use std::{
-    collections::HashMap,
     io::Read,
     net::SocketAddr,
     sync::{
@@ -95,14 +85,6 @@ struct Args {
 
     #[arg(
         long,
-        env = "CSQTT_DEVICE_ID",
-        default_value = "",
-        help = "Идентификатор устройства"
-    )]
-    device_id: String,
-
-    #[arg(
-        long,
         env = "CSQTT_WEB_USER",
         default_value = "admin",
         help = "Логин веб-панели"
@@ -119,10 +101,26 @@ struct Args {
 
     #[arg(
         long,
+        env = "CSQTT_PUBLIC_IP",
+        default_value = "",
+        help = "Внешний IPv4-адрес сервера для клиентских ссылок"
+    )]
+    public_ip: String,
+
+    #[arg(
+        long,
         env = "CSQTT_DNS",
         help = "Один или два DNS IPv4-адреса через запятую"
     )]
     dns: Option<String>,
+
+    #[arg(
+        long,
+        env = "CSQTT_WEB_SECRET_PATH",
+        default_value = "",
+        help = "Секретный префикс пути к веб-панели"
+    )]
+    web_secret_path: String,
 
     #[arg(
         long,
@@ -131,15 +129,6 @@ struct Args {
         help = "Выдавать cookie только по HTTPS"
     )]
     secure_cookie: bool,
-
-    #[arg(
-        long,
-        env = "CSQTT_FEC",
-        value_enum,
-        default_value_t = protocol::FecProfile::Safe,
-        help = "Профиль selective FEC: safe или off"
-    )]
-    fec: protocol::FecProfile,
 
     #[arg(long, help = "Запустить службу CSQTT")]
     start: bool,
@@ -175,8 +164,6 @@ struct Args {
 struct DeployOverrides {
     #[serde(default)]
     main_password: String,
-    #[serde(default)]
-    device_id: String,
 }
 
 fn normalize_dns(value: &str) -> Result<String> {
@@ -196,6 +183,97 @@ fn normalize_dns(value: &str) -> Result<String> {
     Ok(addresses.join(","))
 }
 
+fn is_public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    !ip.is_unspecified() && !ip.is_loopback() && !ip.is_private()
+}
+
+async fn detect_public_ipv4() -> Option<String> {
+    if let Ok(output) = tokio::process::Command::new("ip")
+        .args(["-4", "route", "get", "77.88.8.8"])
+        .output()
+        .await
+        && output.status.success()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let words: Vec<&str> = text.split_whitespace().collect();
+        for i in 0..words.len().saturating_sub(1) {
+            if words[i] == "src"
+                && let Ok(ip) = words[i + 1].parse::<std::net::Ipv4Addr>()
+                && is_public_ipv4(ip)
+            {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    if let Ok(output) = tokio::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output()
+        .await
+        && output.status.success()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            if let Some(pos) = words.iter().position(|&w| w == "inet")
+                && let Some(cidr) = words.get(pos + 1)
+                && let Some(addr) = cidr.split('/').next()
+                && let Ok(ip) = addr.parse::<std::net::Ipv4Addr>()
+                && is_public_ipv4(ip)
+            {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    if let Ok(output) = tokio::process::Command::new("curl")
+        .args([
+            "-4",
+            "-fsS",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "5",
+            "https://api.ipify.org",
+        ])
+        .output()
+        .await
+        && output.status.success()
+    {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Ok(ip) = text.parse::<std::net::Ipv4Addr>()
+            && is_public_ipv4(ip)
+        {
+            return Some(text);
+        }
+    }
+    for host in ["api.ipify.org", "ipv4.icanhazip.com"] {
+        if let Ok(Ok(mut stream)) = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::net::TcpStream::connect((host, 80)),
+        )
+        .await
+        {
+            let req = format!(
+                "GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/7.88.1\r\nConnection: close\r\n\r\n"
+            );
+            if stream.write_all(req.as_bytes()).await.is_ok() {
+                let mut buf = Vec::new();
+                if stream.read_to_end(&mut buf).await.is_ok() {
+                    let text = String::from_utf8_lossy(&buf);
+                    if let Some(body) = text.split("\r\n\r\n").nth(1) {
+                        let ip_str = body.trim();
+                        if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>()
+                            && is_public_ipv4(ip)
+                        {
+                            return Some(ip_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub struct App {
     pub db: RwLock<Database>,
     pub db_persistence: DatabasePersistence,
@@ -206,10 +284,11 @@ pub struct App {
     pub web_port: u16,
     pub web_user: String,
     pub web_pass: String,
+    pub web_secret_path: String,
+    pub public_ip: Arc<RwLock<String>>,
     pub secure_cookie: bool,
-    pub fec_profile: protocol::FecProfile,
     pub sessions: DashMap<u64, Arc<Session>>,
-    pub device_epochs: DashMap<String, Arc<protocol::DeviceEpochSlot>>,
+    pub password_epochs: DashMap<String, Arc<protocol::PasswordEpochSlot>>,
     pub web_sessions: DashMap<String, i64>,
     pub login_limits: DashMap<String, (u32, i64)>,
     pub web_auth_admission: std::sync::Mutex<()>,
@@ -457,39 +536,39 @@ async fn cpu_loop(app: Arc<App>) {
     }
 }
 
-const DEVICE_EPOCH_IDLE_TTL_MS: u64 = 60 * 60 * 1_000;
-const DEVICE_EPOCH_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const PASSWORD_EPOCH_IDLE_TTL_MS: u64 = 60 * 60 * 1_000;
+const PASSWORD_EPOCH_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-async fn device_epoch_sweeper(app: Arc<App>) {
-    let mut ticker = tokio::time::interval(DEVICE_EPOCH_SWEEP_INTERVAL);
+async fn password_epoch_sweeper(app: Arc<App>) {
+    let mut ticker = tokio::time::interval(PASSWORD_EPOCH_SWEEP_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ticker.tick().await;
     loop {
         ticker.tick().await;
         let now_ms = protocol::unix_time_ms();
         let candidates: Vec<String> = app
-            .device_epochs
+            .password_epochs
             .iter()
             .filter(|entry| {
                 now_ms.saturating_sub(entry.value().last_used_ms.load(Ordering::Relaxed))
-                    >= DEVICE_EPOCH_IDLE_TTL_MS
+                    >= PASSWORD_EPOCH_IDLE_TTL_MS
             })
             .map(|entry| entry.key().clone())
             .collect();
-        for device_id in candidates {
-            app.device_epochs.remove_if(&device_id, |_, slot| {
+        for password in candidates {
+            app.password_epochs.remove_if(&password, |_, slot| {
                 if now_ms.saturating_sub(slot.last_used_ms.load(Ordering::Relaxed))
-                    < DEVICE_EPOCH_IDLE_TTL_MS
+                    < PASSWORD_EPOCH_IDLE_TTL_MS
                 {
                     return false;
                 }
                 !app.sessions
                     .iter()
-                    .any(|session| *lock_unpoison(&session.device_id) == device_id)
+                    .any(|session| session.password == password)
             });
         }
-        if app.device_epochs.len().saturating_mul(4) < app.device_epochs.capacity() {
-            app.device_epochs.shrink_to_fit();
+        if app.password_epochs.len().saturating_mul(4) < app.password_epochs.capacity() {
+            app.password_epochs.shrink_to_fit();
         }
     }
 }
@@ -544,6 +623,12 @@ fn run_systemctl(action: &str) -> Result<()> {
         }
         #[cfg(unix)]
         {
+            let init_exe = std::fs::read_link("/proc/1/exe").ok();
+            if init_exe.is_none() || init_exe != std::env::current_exe().ok() {
+                bail!(
+                    "PID 1 контейнера не является этим процессом; выполните docker restart csqtt"
+                );
+            }
             if unsafe { libc::kill(1, libc::SIGTERM) } == 0 {
                 println!("[CLI] Docker-контейнер перезапускается");
                 return Ok(());
@@ -813,8 +898,8 @@ async fn run_dpi_client(samples: usize) -> Result<()> {
                         dt, dir_str, frame.src, frame.dst, frame.len, frame.wire_len
                     );
                     println!(
-                        "  Proto: {} | Seq: #\x1b[1m{}\x1b[0m | Device: \x1b[1;32m{}\x1b[0m | Gen: \x1b[1;33m{}\x1b[0m | Salt: \x1b[1;35m{}\x1b[0m",
-                        pt_str, frame.seq, frame.device_id, frame.gen_id, frame.salt
+                        "  Proto: {} | Seq: #\x1b[1m{}\x1b[0m | Pass: \x1b[1;32m{}\x1b[0m | Gen: \x1b[1;33m{}\x1b[0m | Salt: \x1b[1;35m{}\x1b[0m",
+                        pt_str, frame.seq, frame.password, frame.gen_id, frame.salt
                     );
                     println!("  Detail: \x1b[1;37m{}\x1b[0m", frame.detail);
                     if !frame.hex_preview.is_empty() {
@@ -834,971 +919,6 @@ async fn run_dpi_client(samples: usize) -> Result<()> {
     Ok(())
 }
 
-async fn syscalls_broadcast_loop() {
-    if !cfg!(feature = "diagnostics") {
-        return;
-    }
-    let mut last_counters = *read_unpoison(&crate::protocol::GLOBAL_IO_COUNTERS);
-    let mut last_crypto = crate::protocol::CRYPTO_OPS_COUNTER.load(Ordering::Relaxed);
-    let mut last_crypto_perf = *read_unpoison(&crate::protocol::GLOBAL_CRYPTO_PERF);
-    let mut last_all_perf = read_unpoison(&crate::perf::GLOBAL_DATAPLANE)
-        .merge(*read_unpoison(&crate::perf::GLOBAL_PROTOCOL));
-    let mut last_process_cpu = perf::process_cpu_time_ns();
-    let (mut last_process_user_cpu, mut last_process_system_cpu) = perf::process_cpu_split_ns();
-    let mut last_dataplane_cpu = perf::DATAPLANE_CPU_NS.load(Ordering::Acquire);
-    let mut last_dataplane_sequence = perf::DATAPLANE_CPU_SEQUENCE.load(Ordering::Acquire);
-    let mut last_threads: HashMap<u32, perf::ThreadCpuSnapshot> = HashMap::new();
-    let mut last_sample = std::time::Instant::now();
-    let mut monitoring = false;
-    let mut thread_sampling = false;
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-
-    loop {
-        interval.tick().await;
-
-        if protocol::SYSCALLS_BROADCAST.receiver_count() == 0 {
-            monitoring = false;
-            thread_sampling = false;
-            last_threads.clear();
-            continue;
-        }
-
-        let all_active = perf::ALL_CLIENTS.load(Ordering::Acquire) != 0;
-        if !monitoring {
-            last_counters = *read_unpoison(&crate::protocol::GLOBAL_IO_COUNTERS);
-            last_crypto = crate::protocol::CRYPTO_OPS_COUNTER.load(Ordering::Relaxed);
-            last_crypto_perf = *read_unpoison(&crate::protocol::GLOBAL_CRYPTO_PERF);
-            last_all_perf = crate::perf::GLOBAL_DATAPLANE
-                .read()
-                .unwrap()
-                .merge(*read_unpoison(&crate::perf::GLOBAL_PROTOCOL));
-            last_process_cpu = perf::process_cpu_time_ns();
-            (last_process_user_cpu, last_process_system_cpu) = perf::process_cpu_split_ns();
-            last_dataplane_cpu = perf::DATAPLANE_CPU_NS.load(Ordering::Acquire);
-            last_dataplane_sequence = perf::DATAPLANE_CPU_SEQUENCE.load(Ordering::Acquire);
-            last_threads = if all_active {
-                perf::process_thread_cpu_snapshot()
-                    .into_iter()
-                    .map(|thread| (thread.tid, thread))
-                    .collect()
-            } else {
-                HashMap::new()
-            };
-            last_sample = std::time::Instant::now();
-            monitoring = true;
-            thread_sampling = all_active;
-            continue;
-        }
-
-        let sample_now = std::time::Instant::now();
-        let sample_window_ns = sample_now
-            .saturating_duration_since(last_sample)
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64;
-        let current_process_cpu = perf::process_cpu_time_ns();
-        let process_cpu_ns = current_process_cpu.saturating_sub(last_process_cpu);
-        let (current_process_user_cpu, current_process_system_cpu) = perf::process_cpu_split_ns();
-        let process_user_cpu_ns = current_process_user_cpu.saturating_sub(last_process_user_cpu);
-        let process_system_cpu_ns =
-            current_process_system_cpu.saturating_sub(last_process_system_cpu);
-        let current_dataplane_cpu = perf::DATAPLANE_CPU_NS.load(Ordering::Acquire);
-        let current_dataplane_sequence = perf::DATAPLANE_CPU_SEQUENCE.load(Ordering::Acquire);
-        let current_threads = if all_active {
-            perf::process_thread_cpu_snapshot()
-                .into_iter()
-                .map(|thread| (thread.tid, thread))
-                .collect::<HashMap<_, _>>()
-        } else {
-            HashMap::new()
-        };
-        let mut threads = current_threads
-            .values()
-            .map(|thread| {
-                let previous = last_threads.get(&thread.tid);
-                protocol::ThreadCpuFrame {
-                    tid: thread.tid,
-                    name: thread.name.clone(),
-                    user_cpu_ns: previous
-                        .map_or(0, |value| thread.user_ns.saturating_sub(value.user_ns)),
-                    system_cpu_ns: previous
-                        .map_or(0, |value| thread.system_ns.saturating_sub(value.system_ns)),
-                }
-            })
-            .collect::<Vec<_>>();
-        threads.sort_unstable_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.tid.cmp(&right.tid))
-        });
-        let dataplane_cpu_ns = if thread_sampling
-            && all_active
-            && current_dataplane_sequence != last_dataplane_sequence
-        {
-            current_dataplane_cpu.saturating_sub(last_dataplane_cpu)
-        } else {
-            0
-        };
-
-        let current_counters = *read_unpoison(&crate::protocol::GLOBAL_IO_COUNTERS);
-        let current_crypto = crate::protocol::CRYPTO_OPS_COUNTER.load(Ordering::Relaxed);
-        let current_crypto_perf = *read_unpoison(&crate::protocol::GLOBAL_CRYPTO_PERF);
-        let crypto_perf = current_crypto_perf.delta(last_crypto_perf);
-        let current_all_perf = crate::perf::GLOBAL_DATAPLANE
-            .read()
-            .unwrap()
-            .merge(*read_unpoison(&crate::perf::GLOBAL_PROTOCOL));
-        let all_perf = current_all_perf.delta(last_all_perf);
-        let active_sessions = crate::protocol::ACTIVE_SESSIONS_GAUGE.load(Ordering::Relaxed);
-
-        let frame = protocol::SyscallsFrame {
-            timestamp_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_millis() as u64,
-            sample_window_ns,
-            process_cpu_ns,
-            process_user_cpu_ns,
-            process_system_cpu_ns,
-            dataplane_cpu_ns,
-            dataplane_tid: perf::DATAPLANE_TID.load(Ordering::Acquire) as u32,
-            threads,
-            udp_rx_pps: current_counters
-                .udp_rx_packets
-                .saturating_sub(last_counters.udp_rx_packets),
-            udp_rx_bps: current_counters
-                .udp_rx_bytes
-                .saturating_sub(last_counters.udp_rx_bytes),
-            udp_rx_errors_s: current_counters
-                .udp_rx_errors
-                .saturating_sub(last_counters.udp_rx_errors),
-            udp_tx_pps: current_counters
-                .udp_tx_packets
-                .saturating_sub(last_counters.udp_tx_packets),
-            udp_tx_bps: current_counters
-                .udp_tx_bytes
-                .saturating_sub(last_counters.udp_tx_bytes),
-            udp_tx_errors_s: current_counters
-                .udp_tx_errors
-                .saturating_sub(last_counters.udp_tx_errors),
-            udp_tx_drops_s: current_counters
-                .udp_tx_drops
-                .saturating_sub(last_counters.udp_tx_drops),
-            tun_rx_pps: current_counters
-                .tun_rx_packets
-                .saturating_sub(last_counters.tun_rx_packets),
-            tun_rx_bps: current_counters
-                .tun_rx_bytes
-                .saturating_sub(last_counters.tun_rx_bytes),
-            tun_rx_errors_s: current_counters
-                .tun_rx_errors
-                .saturating_sub(last_counters.tun_rx_errors),
-            tun_tx_pps: current_counters
-                .tun_tx_packets
-                .saturating_sub(last_counters.tun_tx_packets),
-            tun_tx_bps: current_counters
-                .tun_tx_bytes
-                .saturating_sub(last_counters.tun_tx_bytes),
-            tun_tx_errors_s: current_counters
-                .tun_tx_errors
-                .saturating_sub(last_counters.tun_tx_errors),
-            tun_tx_drops_s: current_counters
-                .tun_tx_drops
-                .saturating_sub(last_counters.tun_tx_drops),
-            readiness_wakeups_s: current_counters
-                .readiness_wakeups
-                .saturating_sub(last_counters.readiness_wakeups),
-            recv_syscalls_s: current_counters
-                .udp_recv_syscalls
-                .saturating_sub(last_counters.udp_recv_syscalls),
-            send_syscalls_s: current_counters
-                .udp_send_syscalls
-                .saturating_sub(last_counters.udp_send_syscalls),
-            rx_eagain_s: current_counters
-                .udp_rx_eagain
-                .saturating_sub(last_counters.udp_rx_eagain),
-            tx_eagain_s: current_counters
-                .udp_tx_eagain
-                .saturating_sub(last_counters.udp_tx_eagain),
-            partial_sendmmsg_s: current_counters
-                .partial_sendmmsg
-                .saturating_sub(last_counters.partial_sendmmsg),
-            crypto_ops_s: current_crypto.saturating_sub(last_crypto),
-            active_sessions,
-            free_udp_tx_slots: current_counters.free_udp_tx_slots,
-            free_tun_tx_slots: current_counters.free_tun_tx_slots,
-            recv_batch_max: current_counters.udp_recv_batch_max,
-            udp_rx_enobufs_s: current_counters
-                .udp_rx_enobufs
-                .saturating_sub(last_counters.udp_rx_enobufs),
-            udp_tx_enobufs_s: current_counters
-                .udp_tx_enobufs
-                .saturating_sub(last_counters.udp_tx_enobufs),
-            total_udp_rx_packets: current_counters.udp_rx_packets,
-            total_udp_tx_packets: current_counters.udp_tx_packets,
-            total_tun_rx_packets: current_counters.tun_rx_packets,
-            total_tun_tx_packets: current_counters.tun_tx_packets,
-            crypto_sample_interval: protocol::CRYPTO_PERF_SAMPLE_INTERVAL,
-            chacha: crypto_perf.chacha,
-            srtp: crypto_perf.srtp,
-            unwrap_crypto: crypto_perf.unwrap_crypto,
-            wrap_crypto: crypto_perf.wrap_crypto,
-            all_sample_interval: perf::SAMPLE_INTERVAL,
-            all: all_perf,
-        };
-
-        let _ = protocol::SYSCALLS_BROADCAST.send(frame);
-
-        last_counters = current_counters;
-        last_crypto = current_crypto;
-        last_crypto_perf = current_crypto_perf;
-        last_all_perf = current_all_perf;
-        last_process_cpu = current_process_cpu;
-        last_process_user_cpu = current_process_user_cpu;
-        last_process_system_cpu = current_process_system_cpu;
-        last_dataplane_cpu = current_dataplane_cpu;
-        last_dataplane_sequence = current_dataplane_sequence;
-        last_threads = current_threads;
-        thread_sampling = all_active;
-        last_sample = sample_now;
-    }
-}
-
-async fn run_syscalls_client() -> Result<()> {
-    if !cfg!(feature = "diagnostics") {
-        bail!("csqtt was built without diagnostics; rebuild with --diagnostics");
-    }
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    println!(
-        "\x1b[1;36m════════════════════════════════════════════════════════════════════════════════════\x1b[0m"
-    );
-    println!(
-        "\x1b[1;33m                   CSQTT I/O & SYSCALL MONITOR (1 update/sec)                      \x1b[0m"
-    );
-    println!(
-        "\x1b[1;36m════════════════════════════════════════════════════════════════════════════════════\x1b[0m"
-    );
-
-    let mut stream = match tokio::net::TcpStream::connect("127.0.0.1:46004").await {
-        Ok(s) => s,
-        Err(e) => {
-            bail!(
-                "Could not connect to CSQTT syscalls socket (127.0.0.1:46004): {e}. Ensure csqtt is active!"
-            );
-        }
-    };
-
-    stream.write_all(b"SUBSCRIBE\n").await?;
-
-    let (reader, writer) = stream.into_split();
-    let _heartbeat = diagnostic_heartbeat(writer);
-    let mut buf_reader = BufReader::new(reader);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match buf_reader.read_line(&mut line).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(f) = serde_json::from_str::<protocol::SyscallsFrame>(&line) {
-                    print!("\x1b[2J\x1b[H");
-                    println!(
-                        "\x1b[1;36m═══════════════ CSQTT SYSCALL MONITOR ═══════════════\x1b[0m"
-                    );
-                    println!(
-                        "\x1b[1;33m Sessions: \x1b[1;37m{}\x1b[0m",
-                        f.active_sessions
-                    );
-                    println!();
-                    println!(
-                        "\x1b[1;32m  ▲ UDP RX  \x1b[0m {:>8} pps  {:>10} B/s  err: {}",
-                        f.udp_rx_pps, f.udp_rx_bps, f.udp_rx_errors_s
-                    );
-                    println!(
-                        "\x1b[1;34m  ▼ UDP TX  \x1b[0m {:>8} pps  {:>10} B/s  err: {}  drops: {}",
-                        f.udp_tx_pps, f.udp_tx_bps, f.udp_tx_errors_s, f.udp_tx_drops_s
-                    );
-                    println!(
-                        "\x1b[1;32m  ▲ TUN RX  \x1b[0m {:>8} pps  {:>10} B/s  err: {}",
-                        f.tun_rx_pps, f.tun_rx_bps, f.tun_rx_errors_s
-                    );
-                    println!(
-                        "\x1b[1;34m  ▼ TUN TX  \x1b[0m {:>8} pps  {:>10} B/s  err: {}  drops: {}",
-                        f.tun_tx_pps, f.tun_tx_bps, f.tun_tx_errors_s, f.tun_tx_drops_s
-                    );
-                    println!();
-                    println!(
-                        "\x1b[1;35m  syscalls  \x1b[0m recv/s: {:>8}  send/s: {:>8}",
-                        f.recv_syscalls_s, f.send_syscalls_s
-                    );
-                    println!(
-                        "\x1b[1;35m  wakeups   \x1b[0m {:>8}  max batch: {:>8}",
-                        f.readiness_wakeups_s, f.recv_batch_max
-                    );
-                    println!(
-                        "\x1b[1;35m  eagain    \x1b[0m RX: {:>8}  TX: {:>8}  partial: {}",
-                        f.rx_eagain_s, f.tx_eagain_s, f.partial_sendmmsg_s
-                    );
-                    println!("\x1b[1;35m  crypto/s  \x1b[0m {:>8}", f.crypto_ops_s);
-                    println!();
-                    println!(
-                        "\x1b[2m  free slots │ UDP TX: {}  TUN TX: {}\x1b[0m",
-                        f.free_udp_tx_slots, f.free_tun_tx_slots
-                    );
-                    println!(
-                        "\x1b[2m  totals    │ UDP RX: {}  UDP TX: {}  TUN RX: {}  TUN TX: {}\x1b[0m",
-                        f.total_udp_rx_packets,
-                        f.total_udp_tx_packets,
-                        f.total_tun_rx_packets,
-                        f.total_tun_tx_packets
-                    );
-                    println!(
-                        "\x1b[1;36m═════════════════════════════════════════════════════\x1b[0m"
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn perf_estimated_ns(counters: perf::Counters) -> f64 {
-    if counters.samples == 0 {
-        return 0.0;
-    }
-    counters.sampled_ns as f64 / counters.samples as f64 * counters.operations as f64
-}
-
-fn write_all_perf_row(
-    out: &mut String,
-    name: &str,
-    counters: perf::Counters,
-    sample_window_ns: u64,
-) {
-    use std::fmt::Write;
-    let estimated_ns = perf_estimated_ns(counters);
-    let average_ns = if counters.operations == 0 {
-        0.0
-    } else {
-        estimated_ns / counters.operations as f64
-    };
-    let operations_per_sec =
-        counters.operations as f64 * 1_000_000_000.0 / sample_window_ns.max(1) as f64;
-    let _ = writeln!(
-        out,
-        "{name:<24} {:>9.0} оп/с  {:>9.0} нс/оп  {:>7.2}% ядра  выборок: {}",
-        operations_per_sec,
-        average_ns,
-        estimated_ns * 100.0 / sample_window_ns.max(1) as f64,
-        counters.samples
-    );
-}
-
-fn write_derived_perf_row(
-    out: &mut String,
-    name: &str,
-    operations: u64,
-    estimated_ns: f64,
-    sample_window_ns: u64,
-) {
-    use std::fmt::Write;
-    let average_ns = if operations == 0 {
-        0.0
-    } else {
-        estimated_ns / operations as f64
-    };
-    let operations_per_sec = operations as f64 * 1_000_000_000.0 / sample_window_ns.max(1) as f64;
-    let _ = writeln!(
-        out,
-        "{name:<24} {:>9.0} оп/с  {:>9.0} нс/оп  {:>7.2}% ядра  расчёт",
-        operations_per_sec,
-        average_ns,
-        estimated_ns * 100.0 / sample_window_ns.max(1) as f64
-    );
-}
-
-fn render_perf_all(frame: &protocol::SyscallsFrame) -> String {
-    use std::fmt::Write;
-
-    let mut out = String::with_capacity(4096);
-    let all = frame.all;
-    let dispatch_ns = perf_estimated_ns(all.dispatch);
-    let flush_ns = perf_estimated_ns(all.flush);
-    let bookkeeping_ns = perf_estimated_ns(all.bookkeeping);
-    let wrap_ns = if frame.wrap_crypto.samples == 0 {
-        0.0
-    } else {
-        frame.wrap_crypto.sampled_ns as f64 / frame.wrap_crypto.samples as f64
-            * frame.wrap_crypto.operations as f64
-    };
-    let unwrap_ns = if frame.unwrap_crypto.samples == 0 {
-        0.0
-    } else {
-        frame.unwrap_crypto.sampled_ns as f64 / frame.unwrap_crypto.samples as f64
-            * frame.unwrap_crypto.operations as f64
-    };
-    let udp_queue_ns = perf_estimated_ns(all.udp_queue);
-    let total_ns = dispatch_ns + flush_ns + bookkeeping_ns;
-    let sample_window_ns = frame.sample_window_ns.max(1);
-    let process_percent = frame.process_cpu_ns as f64 * 100.0 / sample_window_ns as f64;
-    let sampled_top_percent = total_ns * 100.0 / sample_window_ns as f64;
-    let dataplane_percent = frame.dataplane_cpu_ns as f64 * 100.0 / sample_window_ns as f64;
-    let user_percent = frame.process_user_cpu_ns as f64 * 100.0 / sample_window_ns as f64;
-    let system_percent = frame.process_system_cpu_ns as f64 * 100.0 / sample_window_ns as f64;
-    let threads_cpu_ns = frame.threads.iter().fold(0u64, |total, thread| {
-        total.saturating_add(thread.user_cpu_ns.saturating_add(thread.system_cpu_ns))
-    });
-    let dataplane_proc_ns = frame
-        .threads
-        .iter()
-        .find(|thread| thread.tid == frame.dataplane_tid)
-        .map_or(0, |thread| {
-            thread.user_cpu_ns.saturating_add(thread.system_cpu_ns)
-        });
-    let other_threads_ns = threads_cpu_ns.saturating_sub(dataplane_proc_ns);
-    let unattributed_ns = frame.process_cpu_ns.saturating_sub(threads_cpu_ns);
-    let other_threads_percent = other_threads_ns as f64 * 100.0 / sample_window_ns as f64;
-    let unattributed_percent = unattributed_ns as f64 * 100.0 / sample_window_ns as f64;
-
-    let _ = writeln!(
-        out,
-        "CSQTT PERF ALL — профиль dataplane за последнюю секунду"
-    );
-    let _ = writeln!(
-        out,
-        "Сессий: {} · UDP RX/TX: {}/{} pps · TUN RX/TX: {}/{} pps · выборка 1/{}\n",
-        frame.active_sessions,
-        frame.udp_rx_pps,
-        frame.udp_tx_pps,
-        frame.tun_rx_pps,
-        frame.tun_tx_pps,
-        frame.all_sample_interval
-    );
-    let _ = writeln!(
-        out,
-        "epoll wakeups: {}/с · recvmmsg: {}/с · sendmmsg: {}/с · макс батч: {}\n",
-        frame.readiness_wakeups_s,
-        frame.recv_syscalls_s,
-        frame.send_syscalls_s,
-        frame.recv_batch_max
-    );
-    let _ = writeln!(
-        out,
-        "EAGAIN RX/TX: {}/{} · частичных sendmmsg: +{}/с · ENOBUFS RX/TX: {}/{}\n",
-        frame.rx_eagain_s,
-        frame.tx_eagain_s,
-        frame.partial_sendmmsg_s,
-        frame.udp_rx_enobufs_s,
-        frame.udp_tx_enobufs_s
-    );
-    let _ = writeln!(
-        out,
-        "I/O ошибки: UDP RX/TX {}/{} · TUN RX/TX {}/{} · drops UDP/TUN {}/{}\n",
-        frame.udp_rx_errors_s,
-        frame.udp_tx_errors_s,
-        frame.tun_rx_errors_s,
-        frame.tun_tx_errors_s,
-        frame.udp_tx_drops_s,
-        frame.tun_tx_drops_s
-    );
-    let _ = writeln!(out, "Верхний уровень, независимая sampled-оценка:");
-    write_all_perf_row(&mut out, "Dispatch (всего)", all.dispatch, sample_window_ns);
-    write_all_perf_row(&mut out, "sendmmsg/flush", all.flush, sample_window_ns);
-    write_all_perf_row(
-        &mut out,
-        "loop bookkeeping",
-        all.bookkeeping,
-        sample_window_ns,
-    );
-    let _ = writeln!(
-        out,
-        "{:<24} {:>31.2}% ядра",
-        "СУММА SAMPLED СТАДИЙ", sampled_top_percent
-    );
-    let _ = writeln!(
-        out,
-        "{:<24} {:>31.2}% ядра",
-        "DATAPLANE THREAD ТОЧНО", dataplane_percent
-    );
-    let _ = writeln!(
-        out,
-        "{:<24} {:>31.2}% ядра",
-        "ПРОЦЕСС CSQTT ТОЧНО", process_percent
-    );
-    let _ = writeln!(
-        out,
-        "{:<24} {:>20.2}% user · {:>6.2}% system",
-        "ПРОЦЕСС CPU SPLIT", user_percent, system_percent
-    );
-    let _ = writeln!(
-        out,
-        "{:<24} {:>31.2}% ядра",
-        "ПРОЧИЕ ПОТОКИ CSQTT", other_threads_percent
-    );
-    let _ = writeln!(
-        out,
-        "{:<24} {:>31.2}% ядра\n",
-        "НЕ АТРИБУТИРОВАНО /PROC", unattributed_percent
-    );
-
-    if !frame.threads.is_empty() {
-        let _ = writeln!(out, "Стабильная разбивка живых потоков по /proc:");
-        for thread in frame.threads.iter().take(16) {
-            let thread_user = thread.user_cpu_ns as f64 * 100.0 / sample_window_ns as f64;
-            let thread_system = thread.system_cpu_ns as f64 * 100.0 / sample_window_ns as f64;
-            let _ = writeln!(
-                out,
-                "{:<18} tid {:>7} {:>7.2}% · {:>6.2}% user · {:>6.2}% system",
-                thread.name,
-                thread.tid,
-                thread_user + thread_system,
-                thread_user,
-                thread_system
-            );
-        }
-        if frame.threads.len() > 16 {
-            let _ = writeln!(out, "ещё потоков: {}", frame.threads.len() - 16);
-        }
-        let _ = writeln!(out);
-    }
-
-    if dataplane_percent > 0.0 && sampled_top_percent > dataplane_percent * 1.25 {
-        let _ = writeln!(
-            out,
-            "Sampled-оценка смещена периодической выборкой; для итога используй точные строки процесса и потоков.\n"
-        );
-    }
-
-    let _ = writeln!(out, "\nПриблизительная sampled-атрибуция внутри Dispatch:");
-    write_all_perf_row(&mut out, "UDP RX overhead", all.udp_rx, sample_window_ns);
-    write_derived_perf_row(
-        &mut out,
-        "parse+unwrap+crypto",
-        frame.unwrap_crypto.operations,
-        unwrap_ns,
-        sample_window_ns,
-    );
-    write_all_perf_row(&mut out, "route/replay", all.route_replay, sample_window_ns);
-    write_all_perf_row(&mut out, "TUN write", all.tun_write, sample_window_ns);
-    write_all_perf_row(&mut out, "TUN RX overhead", all.tun_rx, sample_window_ns);
-    write_derived_perf_row(
-        &mut out,
-        "prepare+wrap+crypto",
-        frame.wrap_crypto.operations,
-        wrap_ns,
-        sample_window_ns,
-    );
-    write_derived_perf_row(
-        &mut out,
-        "UDP queue inclusive",
-        all.udp_queue.operations,
-        udp_queue_ns,
-        sample_window_ns,
-    );
-    let _ = writeln!(
-        out,
-        "\nВнутренние строки sampled независимо и не складываются в точный итог. Истинный общий расход показывает «DATAPLANE THREAD ТОЧНО»; CPU ожидания не включает wall-сон."
-    );
-    out
-}
-
-fn format_metric_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0usize;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else if value >= 100.0 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else if value >= 10.0 {
-        format!("{value:.1} {}", UNITS[unit])
-    } else {
-        format!("{value:.2} {}", UNITS[unit])
-    }
-}
-
-fn format_metric_kib(kib: u64) -> String {
-    format_metric_bytes(kib.saturating_mul(1024))
-}
-
-fn format_metric_limit(limit: Option<u64>) -> String {
-    limit
-        .map(format_metric_bytes)
-        .unwrap_or_else(|| "без лимита / н/д".to_owned())
-}
-
-fn render_metric_all(frame: &memory_metrics::MetricFrame) -> String {
-    use std::fmt::Write;
-
-    let mut out = String::with_capacity(12_288);
-    let _ = writeln!(
-        out,
-        "CSQTT METRIC ALL — снимок памяти сервера (PID {})",
-        frame.pid
-    );
-    let _ = writeln!(
-        out,
-        "Обновление раз в 2 с. RSS/PSS, cgroup и kernel socket memory пересекаются — их нельзя складывать.\n"
-    );
-
-    if frame.process.available {
-        let _ = writeln!(out, "[Процесс /proc/self/status]");
-        let _ = writeln!(
-            out,
-            "RSS {} · пик VmHWM {} · потоки {} · swap {}",
-            format_metric_kib(frame.process.rss_kib),
-            format_metric_kib(frame.process.peak_rss_kib),
-            frame.process.threads,
-            format_metric_kib(frame.process.swap_kib)
-        );
-        let _ = writeln!(
-            out,
-            "RSS-состав: anon {} · file {} · shmem {}\n",
-            format_metric_kib(frame.process.anonymous_kib),
-            format_metric_kib(frame.process.file_kib),
-            format_metric_kib(frame.process.shmem_kib)
-        );
-    } else {
-        let _ = writeln!(out, "[Процесс] /proc/self/status недоступен\n");
-    }
-
-    if frame.smaps_rollup.available {
-        let rollup = &frame.smaps_rollup;
-        let _ = writeln!(out, "[smaps_rollup — более честная доля памяти процесса]");
-        let _ = writeln!(
-            out,
-            "Rss {} · Pss {} · private {} · shared {} · Swap {} / SwapPss {}",
-            format_metric_kib(rollup.rss_kib),
-            format_metric_kib(rollup.pss_kib),
-            format_metric_kib(rollup.private_kib),
-            format_metric_kib(rollup.shared_kib),
-            format_metric_kib(rollup.swap_kib),
-            format_metric_kib(rollup.swap_pss_kib)
-        );
-        let _ = writeln!(
-            out,
-            "PSS-состав: anon {} · file {} · shmem {} · Anonymous RSS-like {}\n",
-            format_metric_kib(rollup.pss_anon_kib),
-            format_metric_kib(rollup.pss_file_kib),
-            format_metric_kib(rollup.pss_shmem_kib),
-            format_metric_kib(rollup.anonymous_kib)
-        );
-    } else {
-        let _ = writeln!(out, "[smaps_rollup] недоступен\n");
-    }
-
-    if frame.mappings.available {
-        let _ = writeln!(out, "[Карта отображений smaps, top по RSS]");
-        for mapping in frame.mappings.categories.iter().take(12) {
-            let _ = writeln!(
-                out,
-                "{:<24} RSS {:>10} · PSS {:>10} · private {:>10} · shared {:>10}",
-                mapping.category,
-                format_metric_kib(mapping.rss_kib),
-                format_metric_kib(mapping.pss_kib),
-                format_metric_kib(mapping.private_kib),
-                format_metric_kib(mapping.shared_kib)
-            );
-        }
-        let _ = writeln!(out);
-    }
-
-    if frame.cgroup.available {
-        let cgroup = &frame.cgroup;
-        let _ = writeln!(
-            out,
-            "[cgroup memory.{} — группа, не только Rust heap]",
-            cgroup.version
-        );
-        let _ = writeln!(
-            out,
-            "current {} · peak {} · max {} · swap current {} · swap max {}",
-            format_metric_bytes(cgroup.current_bytes),
-            format_metric_bytes(cgroup.peak_bytes),
-            format_metric_limit(cgroup.max_bytes),
-            format_metric_limit(cgroup.swap_current_bytes),
-            format_metric_limit(cgroup.swap_max_bytes)
-        );
-        let _ = writeln!(
-            out,
-            "anon {} · file {} · shmem {} · sock {} · kernel_stack {} · pagetables {} · percpu {}",
-            format_metric_bytes(cgroup.anon_bytes),
-            format_metric_bytes(cgroup.file_bytes),
-            format_metric_bytes(cgroup.shmem_bytes),
-            format_metric_bytes(cgroup.sock_bytes),
-            format_metric_bytes(cgroup.kernel_stack_bytes),
-            format_metric_bytes(cgroup.pagetables_bytes),
-            format_metric_bytes(cgroup.percpu_bytes)
-        );
-        let _ = writeln!(
-            out,
-            "slab reclaimable {} · slab unreclaimable {} · file_mapped {} · file_dirty {}\n",
-            format_metric_bytes(cgroup.slab_reclaimable_bytes),
-            format_metric_bytes(cgroup.slab_unreclaimable_bytes),
-            format_metric_bytes(cgroup.file_mapped_bytes),
-            format_metric_bytes(cgroup.file_dirty_bytes)
-        );
-    } else {
-        let _ = writeln!(out, "[cgroup memory] недоступна\n");
-    }
-
-    if frame.sockets.available {
-        let sockets = &frame.sockets;
-        let _ = writeln!(out, "[Сокеты процесса — только текущие очереди payload]");
-        let _ = writeln!(
-            out,
-            "FD socket {} · UDP {} (TX {} / RX {}) · TCP {} (TX {} / RX {})",
-            sockets.socket_fds,
-            sockets.udp_sockets,
-            format_metric_bytes(sockets.udp_tx_queue_bytes),
-            format_metric_bytes(sockets.udp_rx_queue_bytes),
-            sockets.tcp_sockets,
-            format_metric_bytes(sockets.tcp_tx_queue_bytes),
-            format_metric_bytes(sockets.tcp_rx_queue_bytes)
-        );
-        let _ = writeln!(
-            out,
-            "Полное kernel socket allocation смотри выше в cgroup `sock`, а не в этой очереди.\n"
-        );
-    }
-
-    let buffers = &frame.fixed_buffers;
-    let _ = writeln!(out, "[Пул пакетов CSQTT — live payload, не утечка]");
-    let _ = writeln!(
-        out,
-        "Packet pool capacity {} · выделено {} ({}) · удерживается {}",
-        buffers.packet_pool_capacity_slots,
-        buffers.packet_pool_allocated_slots,
-        format_metric_bytes(buffers.packet_pool_allocated_payload_bytes),
-        buffers.packet_pool_retained_slots
-    );
-    let _ = writeln!(
-        out,
-        "UDP TX capacity {} × {} = {} · занято {}/{}",
-        buffers.udp_tx_slots,
-        format_metric_bytes(buffers.packet_capacity_bytes),
-        format_metric_bytes(buffers.udp_tx_payload_bytes),
-        buffers.udp_tx_in_use_slots,
-        buffers.udp_tx_slots
-    );
-    let _ = writeln!(
-        out,
-        "TUN TX capacity {} × {} = {} · занято {}/{}",
-        buffers.tun_tx_slots,
-        format_metric_bytes(buffers.packet_capacity_bytes),
-        format_metric_bytes(buffers.tun_tx_payload_bytes),
-        buffers.tun_tx_in_use_slots,
-        buffers.tun_tx_slots
-    );
-    let _ = writeln!(
-        out,
-        "UDP RX {}: {} × {} = {} · TUN RX {} · всего payload {}",
-        buffers.udp_rx_mode,
-        buffers.udp_rx_slots,
-        format_metric_bytes(buffers.udp_rx_slot_bytes),
-        format_metric_bytes(buffers.udp_rx_payload_bytes),
-        format_metric_bytes(buffers.tun_rx_payload_bytes),
-        format_metric_bytes(buffers.fixed_payload_bytes)
-    );
-    let _ = writeln!(
-        out,
-        "UDP SO_RCVBUF request {} · SO_SNDBUF request {}\n",
-        format_metric_bytes(buffers.udp_socket_rcvbuf_request_bytes),
-        format_metric_bytes(buffers.udp_socket_sndbuf_request_bytes)
-    );
-
-    let runtime = &frame.runtime;
-    let _ = writeln!(
-        out,
-        "[Удерживаемые структуры runtime — allocator {}]",
-        runtime.allocator
-    );
-    let _ = writeln!(
-        out,
-        "hot transport sessions {}/{} (жёсткий {}) · public sessions {} / capacity {} · streams/device до {}",
-        runtime.hot_sessions,
-        runtime.hot_session_capacity,
-        runtime.hot_session_limit,
-        runtime.public_sessions,
-        runtime.public_session_capacity,
-        runtime.max_stream_workers_per_device
-    );
-    let _ = writeln!(
-        out,
-        "epochs engine/device {}/{} (capacity {}) · derived keys {} (key strings {})",
-        runtime.engine_epochs,
-        runtime.device_epochs,
-        runtime.device_epoch_capacity,
-        runtime.derived_keys,
-        format_metric_bytes(runtime.derived_key_string_capacity_bytes)
-    );
-    let _ = writeln!(
-        out,
-        "web sessions {}/{} (keys {}) · login limits {}/{} (keys {})",
-        runtime.web_sessions,
-        runtime.web_session_limit,
-        format_metric_bytes(runtime.web_session_key_capacity_bytes),
-        runtime.login_limits,
-        runtime.login_limit_limit,
-        format_metric_bytes(runtime.login_limit_key_capacity_bytes)
-    );
-    let _ = writeln!(
-        out,
-        "logs {}/{} (strings {}, metadata {}) · DPI {}/{} (retained {})",
-        runtime.log_entries,
-        runtime.log_entry_limit,
-        format_metric_bytes(runtime.log_string_capacity_bytes),
-        format_metric_bytes(runtime.log_ring_metadata_capacity_bytes),
-        runtime.dpi_entries,
-        runtime.dpi_entry_capacity,
-        format_metric_bytes(runtime.dpi_retained_bytes)
-    );
-    let _ = writeln!(
-        out,
-        "stream repair/inventory {}/{} · dataplane commands {}/{} · memory trim {}",
-        runtime.stream_repairs,
-        runtime.stream_inventory,
-        runtime.dataplane_commands_queued,
-        runtime.dataplane_command_capacity,
-        runtime.memory_trim_count
-    );
-    let _ = writeln!(out);
-
-    let _ = writeln!(out, "[Local SOCKS / TPROXY]");
-    let _ = writeln!(
-        out,
-        "{} · TCP {}/{} · UDP {}/{} · payload выделено {} · удерживается {}",
-        if runtime.local_proxy_active {
-            "активен"
-        } else {
-            "не активен"
-        },
-        runtime.local_proxy_tcp_sessions,
-        runtime.local_proxy_tcp_limit,
-        runtime.local_proxy_udp_flows,
-        runtime.local_proxy_udp_limit,
-        format_metric_bytes(runtime.local_proxy_payload_allocated_bytes),
-        format_metric_bytes(runtime.local_proxy_payload_retained_bytes)
-    );
-    let _ = writeln!(
-        out,
-        "opening buffers {} · payload upper bound на полном лимите {} · kernel TCP/UDP buffers — cgroup sock выше\n",
-        format_metric_bytes(runtime.local_proxy_opening_buffer_allocated_bytes),
-        format_metric_bytes(runtime.local_proxy_payload_upper_bound_at_limit_bytes)
-    );
-
-    let storage = &frame.storage;
-    let _ = writeln!(out, "[Persistent storage — диск, не RSS]");
-    let _ = writeln!(
-        out,
-        "SQLite db {} · WAL {} · SHM {} · log {}",
-        format_metric_bytes(storage.sqlite_db_bytes),
-        format_metric_bytes(storage.sqlite_wal_bytes),
-        format_metric_bytes(storage.sqlite_shm_bytes),
-        format_metric_bytes(storage.log_file_bytes)
-    );
-    let _ = writeln!(
-        out,
-        "\nИнтерпретация: растут VmRSS/PSS/RssAnon — ищем удержание в процессе; RSS низкий, а cgroup sock/slab/file высокий — это ядро/cache/другие PID той же группы."
-    );
-    out
-}
-
-async fn run_perf_client() -> Result<()> {
-    if !cfg!(feature = "diagnostics") {
-        bail!("csqtt was built without diagnostics; rebuild with --diagnostics");
-    }
-    use std::io::Write;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let mut stream = tokio::net::TcpStream::connect("127.0.0.1:46004")
-        .await
-        .with_context(
-            || "не удалось подключиться к CSQTT на 127.0.0.1:46004; убедитесь, что служба запущена",
-        )?;
-    stream.write_all(b"PERF ALL\n").await?;
-
-    let (reader, writer) = stream.into_split();
-    let _heartbeat = diagnostic_heartbeat(writer);
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if reader.read_line(&mut line).await? == 0 {
-            break;
-        }
-        let Ok(frame) = serde_json::from_str::<protocol::SyscallsFrame>(&line) else {
-            continue;
-        };
-        let mut output = String::with_capacity(8192);
-        output.push_str("\x1b[2J\x1b[H");
-        output.push_str(&render_perf_all(&frame));
-        output.push_str("Ctrl+C — выход.\n");
-        let mut stdout = std::io::stdout();
-        if let Err(error) = stdout
-            .write_all(output.as_bytes())
-            .and_then(|_| stdout.flush())
-        {
-            if error.kind() == std::io::ErrorKind::BrokenPipe {
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-    }
-    Ok(())
-}
-
-async fn run_metric_client() -> Result<()> {
-    use std::io::Write;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let mut stream = tokio::net::TcpStream::connect("127.0.0.1:46004")
-        .await
-        .with_context(
-            || "не удалось подключиться к CSQTT на 127.0.0.1:46004; убедитесь, что служба запущена",
-        )?;
-    stream.write_all(b"METRIC ALL\n").await?;
-
-    let (reader, writer) = stream.into_split();
-    let _heartbeat = diagnostic_heartbeat(writer);
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if reader.read_line(&mut line).await? == 0 {
-            break;
-        }
-        let Ok(frame) = serde_json::from_str::<memory_metrics::MetricFrame>(&line) else {
-            continue;
-        };
-        if !frame.error.is_empty() {
-            println!("CSQTT METRIC ALL: {}", frame.error);
-            return Ok(());
-        }
-        let mut output = String::with_capacity(16_384);
-        output.push_str("\x1b[2J\x1b[H");
-        output.push_str(&render_metric_all(&frame));
-        output.push_str("Ctrl+C — выход.\n");
-        let mut stdout = std::io::stdout();
-        if let Err(error) = stdout
-            .write_all(output.as_bytes())
-            .and_then(|_| stdout.flush())
-        {
-            if error.kind() == std::io::ErrorKind::BrokenPipe {
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-    }
-    Ok(())
-}
-
 fn print_cli_help() {
     println!(
         "CSQTT — сервер и консоль управления\n\n\
@@ -1808,16 +928,12 @@ fn print_cli_help() {
   csqtt restart               Перезапустить службу\n  \
   csqtt dpi                   Открыть DPI-монитор\n  \
   csqtt dpi s 50              Показать последние 50 DPI-записей и выйти\n  \
-  csqtt syscalls              Открыть монитор I/O и системных вызовов\n  \
-  csqtt perf all              Разложить весь dataplane по этапам\n  \
-  csqtt metric all            Подробный live-снимок памяти сервера\n  \
   csqtt help                  Показать эту справку\n\n\
 Ручной запуск сервера:\n  \
   --listen АДРЕС              UDP-адрес, по умолчанию 0.0.0.0:46000\n  \
   --web-port ПОРТ             HTTPS-порт панели, по умолчанию 46002\n  \
   --config-dir ПУТЬ           Каталог конфигурации, по умолчанию /etc/csqtt\n  \
   --password ПАРОЛЬ           Основной пароль CSQTT\n  \
-  --device-id ID              Идентификатор устройства\n  \
   --web-user ЛОГИН            Логин веб-панели\n  \
   --web-pass ПАРОЛЬ           Пароль веб-панели\n  \
   --dns IP[,IP]               Один или два DNS IPv4-адреса\n  \
@@ -1827,8 +943,6 @@ fn print_cli_help() {
 
 fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(1)
         .enable_all()
         .build()
         .context("create tokio runtime")?;
@@ -1863,23 +977,6 @@ async fn async_main() -> Result<()> {
                 }
                 return run_dpi_client(samples).await;
             }
-            "syscalls" => {
-                return run_syscalls_client().await;
-            }
-            "perf" => {
-                if args_vec.get(2).map(String::as_str) != Some("all") {
-                    println!("Использование:\n  csqtt perf all");
-                    return Ok(());
-                }
-                return run_perf_client().await;
-            }
-            "metric" => {
-                if args_vec.get(2).map(String::as_str) != Some("all") {
-                    println!("Использование:\n  csqtt metric all");
-                    return Ok(());
-                }
-                return run_metric_client().await;
-            }
             _ => {}
         }
     }
@@ -1887,7 +984,7 @@ async fn async_main() -> Result<()> {
     let args = Args::parse();
 
     if args.protocol_revision {
-        println!("{}", wire_protocol::WIRE_PROTOCOL_REVISION);
+        println!("{}", WIRE_PROTOCOL_REVISION);
         return Ok(());
     }
 
@@ -1963,27 +1060,32 @@ async fn async_main() -> Result<()> {
     } else if !deploy_overrides.main_password.is_empty() {
         db.main_password = deploy_overrides.main_password.clone();
     }
-    if !args.device_id.is_empty() {
-        db.main_device_id = args.device_id.clone();
-    } else if !deploy_overrides.device_id.is_empty() {
-        db.main_device_id = deploy_overrides.device_id.clone();
-    }
     if db.main_password.is_empty() {
-        db.main_password = random_password() + &random_password();
+        db.main_password = random_password();
         println!("[INIT] generated main password: {}", db.main_password);
     }
 
-    let runtime_dns =
-        if let Some(configured) = args.dns.as_deref().filter(|value| !value.trim().is_empty()) {
-            normalize_dns(configured)?
-        } else if deploy_overrides_present {
-            web_panel::deploy_dns_profile_or_yandex(&db.dns)
-        } else if !db.dns.trim().is_empty() {
-            normalize_dns(db.dns.trim())?
-        } else {
-            "77.88.8.8,77.88.8.1".to_owned()
-        };
+    let runtime_dns = if let Some(configured) =
+        args.dns.as_deref().filter(|value| !value.trim().is_empty())
+    {
+        normalize_dns(configured)?
+    } else if let Some(known_dns) = web_panel::provider_dns_by_id(&db.dns_provider) {
+        known_dns
+    } else if (deploy_overrides_present && db.dns_provider != "custom") || !db.dns.trim().is_empty()
+    {
+        web_panel::deploy_dns_profile_or_yandex(&db.dns)
+    } else {
+        "77.88.8.8,77.88.8.1".to_owned()
+    };
     db.dns = runtime_dns.clone();
+    db.dns_provider =
+        if db.dns_provider == "custom" || web_panel::dns_provider_is_known(&db.dns_provider) {
+            db.dns_provider.clone()
+        } else {
+            web_panel::dns_provider_id(&db.dns)
+                .unwrap_or("custom")
+                .to_owned()
+        };
     if !matches!(db.auto_restart_interval_hours(), 0 | 12 | 24 | 48 | 72) {
         db.set_auto_restart_interval_hours(DEFAULT_AUTO_RESTART_INTERVAL_HOURS);
     }
@@ -2012,20 +1114,23 @@ async fn async_main() -> Result<()> {
     let (auto_restart_interval_tx, auto_restart_interval_rx) =
         tokio::sync::watch::channel(db.auto_restart_interval_hours());
     let startup_main_password = db.main_password.clone();
+    let initial_public_ip = args.public_ip.trim().to_string();
+    let public_ip_arc = Arc::new(RwLock::new(initial_public_ip));
     let app = Arc::new(App {
         db_persistence: DatabasePersistence::new(args.config_dir.clone())?,
         db: RwLock::new(db),
-        dns: RwLock::new(runtime_dns),
+        dns: RwLock::new(runtime_dns.clone()),
         startup_main_password,
         config_dir: args.config_dir.clone(),
         listen: args.listen,
         web_port: args.web_port,
         web_user: args.web_user,
         web_pass,
+        web_secret_path: args.web_secret_path.trim().trim_matches('/').to_string(),
+        public_ip: public_ip_arc.clone(),
         secure_cookie: args.secure_cookie,
-        fec_profile: args.fec,
         sessions: DashMap::new(),
-        device_epochs: DashMap::new(),
+        password_epochs: DashMap::new(),
         web_sessions,
         login_limits: DashMap::new(),
         web_auth_admission: std::sync::Mutex::new(()),
@@ -2053,7 +1158,31 @@ async fn async_main() -> Result<()> {
         dataplane: std::sync::OnceLock::new(),
     });
 
-    log_event(&app, "INFO", "SYSTEM", " CSQTT Server 2.1.9");
+    {
+        let app_ip = app.public_ip.clone();
+        tokio::spawn(async move {
+            if app_ip.read().await.is_empty()
+                && let Some(detected) = detect_public_ipv4().await
+            {
+                *app_ip.write().await = detected;
+            }
+        });
+    }
+
+    {
+        let app_dns = app.clone();
+        tokio::spawn(async move {
+            let configured = protocol::effective_dns(&app_dns).await;
+            log_event(
+                &app_dns,
+                "INFO",
+                "DNS",
+                &format!("DNS active: [{configured}]"),
+            );
+        });
+    }
+
+    log_event(&app, "INFO", "SYSTEM", " CSQTT Server 2.5.0");
     log_event(
         &app,
         "INFO",
@@ -2083,7 +1212,6 @@ async fn async_main() -> Result<()> {
         }
     });
 
-    tokio::spawn(syscalls_broadcast_loop());
     tokio::spawn(auto_restart_loop(app.clone(), auto_restart_interval_rx));
 
     let cert_path = app.config_dir.join("web_cert.pem");
@@ -2141,7 +1269,7 @@ async fn async_main() -> Result<()> {
     let mut web_task = tokio::spawn(async move { web_panel::run(web_app, tls_config).await });
     tokio::spawn(protocol::session_janitor(app.clone()));
     tokio::spawn(protocol::password_janitor(app.clone()));
-    tokio::spawn(device_epoch_sweeper(app.clone()));
+    tokio::spawn(password_epoch_sweeper(app.clone()));
 
     tokio::spawn(cpu_loop(app.clone()));
 
@@ -2338,9 +1466,6 @@ fn arm_tproxy_child_parent_death() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn tproxy_parent_exited_during_startup(parent_pid: libc::pid_t, docker_mode: bool) -> bool {
-    // In a container csqtt itself is normally PID 1, so its healthy TPROXY
-    // child legitimately sees PPID=1. PR_SET_PDEATHSIG above still handles
-    // real parent termination in both service-manager modes.
     parent_pid == 1 && !docker_mode
 }
 

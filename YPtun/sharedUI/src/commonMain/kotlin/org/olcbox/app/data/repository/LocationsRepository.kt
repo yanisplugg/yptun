@@ -62,6 +62,8 @@ interface LocationsRepository {
     suspend fun setSubscriptionCascade(subscriptionUrl: String, link: String): Boolean
     /** Pins / unpins one location (by storage id); a pinned free server is kept when the free servers are replaced. */
     suspend fun setLocationPinned(storageId: String, pinned: Boolean)
+    /** Own VK call link(s) for a VK-TURN location (blank = back to the subscription's); survives subscription refreshes. */
+    suspend fun setLocationVkLink(storageId: String, link: String)
     /**
      * Points a subscription (all its servers) at another URL — a moved panel, a re-issued link, a typo. Servers,
      * names and settings stay as they are; the next refresh downloads from the new URL. False (nothing changed)

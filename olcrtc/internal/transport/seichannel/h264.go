@@ -32,13 +32,27 @@ var (
 	baseIDR = mustDecodeHex("6588843a2628000902e0")
 )
 
-func buildVideoAccessUnit(payload []byte) []byte {
-	return buildVideoAccessUnitInto(nil, payload)
+// seiNALBudget is how many payload bytes one SEI NAL carries before the
+// next payload starts a new one. Pion sends a NAL that fits the RTP MTU as
+// one packet, so this keeps a NAL of small frames - the acknowledgements a
+// tick carries - inside one packet, where losing it costs one packet's
+// worth of acknowledgements instead of a run of them.
+//
+// ai-generated: the budget and the payload grouping below.
+const seiNALBudget = 1000
+
+func buildVideoAccessUnit(payloads ...[]byte) []byte {
+	return buildVideoAccessUnitInto(nil, payloads)
 }
 
-func buildVideoAccessUnitInto(dst, payload []byte) []byte {
-	maxEscapedPayload := len(payload) + len(payload)/2
-	want := len(baseSPS) + len(basePPS) + len(baseIDR) + maxEscapedPayload + 64
+// buildVideoAccessUnitInto builds one access unit carrying every payload:
+// the parameter sets, the payloads as SEI messages grouped into NAL units,
+// and the slice that makes it a frame.
+func buildVideoAccessUnitInto(dst []byte, payloads [][]byte) []byte {
+	want := len(baseSPS) + len(basePPS) + len(baseIDR) + 64
+	for _, payload := range payloads {
+		want += len(payload) + len(payload)/2 + 32
+	}
 	var out []byte
 	if cap(dst) < want {
 		out = make([]byte, 0, want)
@@ -47,12 +61,38 @@ func buildVideoAccessUnitInto(dst, payload []byte) []byte {
 	}
 	out = appendStartCode(out, baseSPS)
 	out = appendStartCode(out, basePPS)
-	if len(payload) > 0 {
-		out = append(out, 0x00, 0x00, 0x00, 0x01, 0x06)
-		out = appendEscapedSEIRBSP(out, payload)
+	for len(payloads) > 0 {
+		var group [][]byte
+		group, payloads = nextSEIGroup(payloads)
+		out = appendSEINAL(out, group)
 	}
 	out = appendStartCode(out, baseIDR)
 	return out
+}
+
+// nextSEIGroup takes the payloads of the next SEI NAL: as many as fit the
+// budget, and never fewer than one.
+func nextSEIGroup(payloads [][]byte) ([][]byte, [][]byte) {
+	size, n := 0, 0
+	for _, payload := range payloads {
+		if n > 0 && size+len(payload) > seiNALBudget {
+			break
+		}
+		size += len(payload)
+		n++
+	}
+	return payloads[:n], payloads[n:]
+}
+
+// appendSEINAL writes one SEI NAL carrying every payload of the group as a
+// user-data-unregistered message.
+func appendSEINAL(dst []byte, payloads [][]byte) []byte {
+	dst = append(dst, 0x00, 0x00, 0x00, 0x01, 0x06)
+	zeroCount := 0
+	for _, payload := range payloads {
+		dst = appendEscapedSEIMessage(dst, payload, &zeroCount)
+	}
+	return appendEscapedByte(dst, 0x80, &zeroCount)
 }
 
 func extractVideoPayloads(accessUnit []byte) [][]byte {
@@ -103,13 +143,14 @@ func findStartCode(data []byte, start int) (int, int) {
 	return -1, 0
 }
 
-func appendEscapedSEIRBSP(dst, payload []byte) []byte {
-	zeroCount := 0
-	dst = appendEscapedSEIValue(dst, 5, &zeroCount)
-	dst = appendEscapedSEIValue(dst, len(videoSEIUUID)+len(payload), &zeroCount)
-	dst = appendEscapedBytes(dst, videoSEIUUID[:], &zeroCount)
-	dst = appendEscapedBytes(dst, payload, &zeroCount)
-	return appendEscapedByte(dst, 0x80, &zeroCount)
+// appendEscapedSEIMessage writes one user-data-unregistered SEI message.
+// The escape state carries across messages of the same NAL: emulation
+// prevention runs over the NAL's whole byte stream, not one message of it.
+func appendEscapedSEIMessage(dst, payload []byte, zeroCount *int) []byte {
+	dst = appendEscapedSEIValue(dst, 5, zeroCount)
+	dst = appendEscapedSEIValue(dst, len(videoSEIUUID)+len(payload), zeroCount)
+	dst = appendEscapedBytes(dst, videoSEIUUID[:], zeroCount)
+	return appendEscapedBytes(dst, payload, zeroCount)
 }
 
 func appendEscapedSEIValue(dst []byte, value int, zeroCount *int) []byte {

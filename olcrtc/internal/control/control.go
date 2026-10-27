@@ -42,6 +42,41 @@ const (
 	// DefaultFailures is the default number of consecutive missed pongs before
 	// the stream is marked unhealthy.
 	DefaultFailures = 4
+	// maxStalledProbes bounds how many probes in a row payload progress may
+	// excuse. What bounds the queue a pong can sit behind is not the relay.
+	// Neither relay pushes back on a sender - the JVB queues about 2 MB
+	// toward a receiver and drops the rest, Sber's LiveKit 1.5.3 queues
+	// without a limit - so the Jitsi and SaluteJazz engines keep a window
+	// per destination instead. A sender holds back once it has handed the relay
+	// a window of bytes for one peer that the peer has not yet echoed.
+	// Jitsi's (engine/jitsi/relaywindow.go, olcrtc#15) is 512 KiB, on top
+	// of the 256 KB its own send path may hold (bridge.go): under two
+	// seconds each way at the ~5 Mbit/s a JVB carries. SaluteJazz's
+	// (engine/salutejazz/window.go, olcrtc#49) is 192 KiB, sized so that a
+	// ping behind one window and its pong behind another come back inside
+	// the 15 s timeout even on the 34 kB/s SFU-to-receiver leg the gate has
+	// measured through Sber's relay. On those carriers a pong is therefore
+	// never minutes late, and three excused probes - 30 s at the default
+	// 10 s interval - is already more than the delay a window can add.
+	// Eighteen, plus the four failures that follow, was 220 seconds: the
+	// three and a half minutes a client sat on a session the server had
+	// already closed while the server's next session kept the counter
+	// moving (olcbox#25). Now it is seven probes, 70 seconds.
+	//
+	// On a transport with no control plane of its own - datachannel, on
+	// every carrier, and videochannel and seichannel - the excuse cannot
+	// tell a transfer from the peer's own pings. The control stream shares
+	// the data session there, and Progress counts payload on every stream
+	// of it, the control stream's included, so a link that carries the
+	// peer's pings to us but not ours to it has its first three timeouts
+	// excused as if a transfer were in flight. vp8channel runs the control
+	// stream on a conn of its own (muxconn.NewControl), and Progress reads
+	// only the data conn, which the peer's pings never reach. That is a
+	// known limitation, and an issue apart from the queue.
+	//
+	// ai-generated: the account of the windows and of the limitation
+	// (olcrtc#49).
+	maxStalledProbes = 3
 )
 
 // MsgType labels a control message.
@@ -108,6 +143,48 @@ type Config struct {
 	OnMissedPong func(missed int)
 	// OnUnhealthy is called before Run returns [ErrUnhealthy].
 	OnUnhealthy func(missed int)
+	// Progress reports a monotonic count of payload received from the peer.
+	//
+	// On a transport with no control plane of its own the ping shares one
+	// smux session, and one SCTP association, with every bulk stream: a
+	// speedtest queues megabytes ahead of it and the pong comes back tens of
+	// seconds late. A peer whose payload is still arriving is not a dead
+	// link, so while this counter moves a timed-out probe is not counted as
+	// a missed pong — up to [maxStalledProbes] in a row. Nil disables the
+	// check and every timeout counts, as it did before.
+	Progress func() uint64
+	// OnStalled is called when payload progress excuses timed-out probes.
+	OnStalled func(timedOut int)
+	// SendStalled reports whether the data plane has given up putting bytes
+	// on the wire.
+	//
+	// Liveness is measured on the control plane, and on a transport that has
+	// one of its own that plane is a different KCP session with its own send
+	// window. So the two directions can disagree completely: pongs arrive on
+	// time while the data plane has not accepted a byte for half a minute,
+	// and every new stream fails with a write timeout that smux treats as a
+	// deadline rather than a fault. The session stays open, the tunnel
+	// reports healthy, nothing is carried, and no reconnect is ever
+	// triggered, because a reconnect only follows the control stream dying.
+	//
+	// Consulted on every probe. Nil disables the check.
+	SendStalled func() bool
+	// OnSendStalled is called before Run returns because the data plane
+	// stopped sending.
+	OnSendStalled func()
+	// BeforeClose is called once, on cancellation, while the stream can
+	// still carry a frame, so the caller can tell the peer it is leaving.
+	//
+	// Cancelling this context is the first thing a deliberate stop does, and
+	// the watcher below closes the stream the moment it happens - so a close
+	// notice sent afterwards, from the caller's own teardown, is written to a
+	// stream that is already gone and never leaves the process. The peer then
+	// keeps the session, its streams and its KCP state until liveness gives
+	// up on it, which is tens of seconds later.
+	//
+	// Runs on the watcher's goroutine and is bounded by closeNoticeBudget: a
+	// slow notice delays the close, it cannot prevent it.
+	BeforeClose func()
 }
 
 func (cfg Config) withDefaults() Config {
@@ -141,6 +218,7 @@ func Run(ctx context.Context, rw io.ReadWriteCloser, cfg Config) error {
 	errCh := make(chan error, 3)
 	go func() {
 		<-ctx.Done()
+		announceClosing(cfg.BeforeClose)
 		_ = rw.Close()
 	}()
 	go func() { errCh <- state.readLoop(ctx) }()
@@ -155,6 +233,26 @@ func Run(ctx context.Context, rw io.ReadWriteCloser, cfg Config) error {
 	return err
 }
 
+// closeNoticeBudget bounds Config.BeforeClose. Long enough for one frame on a
+// link that still works, short enough that a link that does not cannot hold
+// the stream open while everything above it waits for the close.
+const closeNoticeBudget = 1500 * time.Millisecond
+
+func announceClosing(notify func()) {
+	if notify == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		notify()
+	}()
+	select {
+	case <-done:
+	case <-time.After(closeNoticeBudget):
+	}
+}
+
 type state struct {
 	rw  io.ReadWriteCloser
 	cfg Config
@@ -162,10 +260,13 @@ type state struct {
 
 	out chan Message
 
-	mu       sync.Mutex
-	pending  map[uint64]time.Time
-	nextSeq  uint64
-	failures int
+	mu           sync.Mutex
+	pending      map[uint64]time.Time
+	nextSeq      uint64
+	failures     int
+	stalled      int
+	lastProgress uint64
+	progressSeen bool
 }
 
 func (s *state) readLoop(ctx context.Context) error {
@@ -236,17 +337,29 @@ func (s *state) probeLoop(ctx context.Context) error {
 
 func (s *state) sendProbe(ctx context.Context) error {
 	now := s.now()
+	// Read outside the lock: both are caller-supplied code.
+	moved := s.peerSending()
+	// A link we cannot send on is dead whatever comes back down it. Checked
+	// before the pongs, because the pongs will look fine.
+	if s.cfg.SendStalled != nil && s.cfg.SendStalled() {
+		if s.cfg.OnSendStalled != nil {
+			s.cfg.OnSendStalled()
+		}
+		return fmt.Errorf("%w: the data plane stopped sending", ErrUnhealthy)
+	}
 
 	s.mu.Lock()
-	missedNow := 0
-	for seq, sent := range s.pending {
-		if now.Sub(sent) < s.cfg.Timeout {
-			continue
-		}
-		delete(s.pending, seq)
-		s.failures++
-		missedNow++
+	timedOut := s.expireProbes(now)
+	stalledNow := 0
+	// `moved` alone is not enough to excuse a timeout: a peer can keep
+	// sending down a link we can no longer answer on, which is the exact
+	// shape SendStalled catches above.
+	if timedOut > 0 && moved && s.stalled < maxStalledProbes {
+		s.stalled += timedOut
+		stalledNow, timedOut = timedOut, 0
 	}
+	missedNow := timedOut
+	s.failures += timedOut
 	missed := s.failures
 	if s.failures >= s.cfg.Failures {
 		s.mu.Unlock()
@@ -266,6 +379,9 @@ func (s *state) sendProbe(ctx context.Context) error {
 	if missedNow > 0 && s.cfg.OnMissedPong != nil {
 		s.cfg.OnMissedPong(missed)
 	}
+	if stalledNow > 0 && s.cfg.OnStalled != nil {
+		s.cfg.OnStalled(stalledNow)
+	}
 
 	return s.enqueue(ctx, Message{
 		Version:      ProtoVersion,
@@ -273,6 +389,20 @@ func (s *state) sendProbe(ctx context.Context) error {
 		Seq:          seq,
 		SentUnixNano: now.UnixNano(),
 	})
+}
+
+// expireProbes drops every ping that has waited longer than the timeout and
+// reports how many. The caller holds s.mu.
+func (s *state) expireProbes(now time.Time) int {
+	timedOut := 0
+	for seq, sent := range s.pending {
+		if now.Sub(sent) < s.cfg.Timeout {
+			continue
+		}
+		delete(s.pending, seq)
+		timedOut++
+	}
+	return timedOut
 }
 
 func (s *state) handlePong(msg Message) {
@@ -283,6 +413,7 @@ func (s *state) handlePong(msg Message) {
 	if ok {
 		delete(s.pending, msg.Seq)
 		s.failures = 0
+		s.stalled = 0
 	}
 	s.mu.Unlock()
 
@@ -294,6 +425,21 @@ func (s *state) handlePong(msg Message) {
 		RTT:      now.Sub(sent),
 		LastSeen: now,
 	})
+}
+
+// peerSending reports whether the peer's payload counter has moved since the
+// previous probe. A counter that goes backwards (a session rebuilt under us)
+// counts as movement: what matters is that something arrived.
+func (s *state) peerSending() bool {
+	if s.cfg.Progress == nil {
+		return false
+	}
+	seen := s.cfg.Progress()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	moved := s.progressSeen && seen != s.lastProgress
+	s.lastProgress, s.progressSeen = seen, true
+	return moved
 }
 
 func (s *state) enqueue(ctx context.Context, msg Message) error {

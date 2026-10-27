@@ -139,6 +139,9 @@ class LocationViewModel(
     var editingConfig by mutableStateOf(LocationConfig())
     var editingName by mutableStateOf("")
     var editingId by mutableStateOf<String?>(null)
+    /** The edited location comes from an encrypted subscription: its settings are not shown at all. */
+    val editingLocked: Boolean
+        get() = editingId?.let { id -> locations.find { it.storageId == id }?.metadata?.locked } == true
     var editingSubscriptionUrl by mutableStateOf<String?>(null)
         private set
     var editingSubscriptionIntervalHours by mutableStateOf(SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS.toString())
@@ -282,6 +285,7 @@ class LocationViewModel(
         fullName = name,
         config = LocationConfig(
             name = name,
+            description = description,
             engine = engine,
             bypassProvider = authProvider,
             transport = transport,
@@ -1188,6 +1192,15 @@ class LocationViewModel(
         viewModelScope.launch {
             locationsRepository.setSubscriptionCustomName(subscriptionUrl, name)
             loadLocations()
+        }
+    }
+
+    /** Own VK call link(s) of a (locked) VK-TURN location; blank = the subscription's again. */
+    fun setLocationVkLink(storageId: String, link: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            locationsRepository.setLocationVkLink(storageId, link)
+            loadLocations()
+            onDone()
         }
     }
 

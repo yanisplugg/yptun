@@ -20,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.CoroutineScope
+import org.olcbox.app.vpn.TrustTunnelCore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -56,9 +57,6 @@ import wdttmobile.ConfigSink as WdttConfigSink
 import mdnsmobile.Mdnsmobile
 import mdnsmobile.MasterDnsClient
 import mdnsmobile.SocketProtector as MasterDnsSocketProtector
-import com.adguard.trusttunnel.DeepLink as TrustTunnelDeepLink
-import com.adguard.trusttunnel.VpnClient as TrustTunnelVpnClient
-import com.adguard.trusttunnel.VpnClientListener as TrustTunnelListener
 import mobile.LogWriter
 import mobile.Mobile
 import mobile.Runtime as OlcrtcRuntime
@@ -232,7 +230,7 @@ class OlcboxVpnService : VpnService() {
     /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
     private var snolcProxyActive: Boolean = false
     /** Active Trust Tunnel client (SOCKS-only) for a [ProxyProfile.TYPE_TRUSTTUNNEL] proxy; null otherwise. */
-    private var trustTunnelClient: TrustTunnelVpnClient? = null
+    private var trustTunnelProcess: Process? = null
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -416,6 +414,9 @@ class OlcboxVpnService : VpnService() {
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Olcbox::VpnWakeLock")
             .apply { setReferenceCounted(false) }
+
+        // A killed process leaves the redirect rules pointing at a dead port = no internet at all.
+        if (tproxyFlagFile.exists()) scope.launch { teardownTproxyRules() }
 
         installMobileCallbacks()
         observeSpeedNotificationSetting()
@@ -652,7 +653,7 @@ class OlcboxVpnService : VpnService() {
                 }
             })
         }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
-        mobileRuntime.setLogWriter(object : LogWriter {
+        Mobile.setLogWriter(object : LogWriter {
             override fun writeLog(msg: String) {
                 val line = msg.trimEnd()
                 addLog("rtc: $line")
@@ -972,6 +973,18 @@ class OlcboxVpnService : VpnService() {
             // kept the process bound to the upstream (see releaseProcessBindingUnlessProxy /
             // shouldKeepProcessBound) so the cores can actually reach the internet — without that the
             // SOCKS connected but carried no traffic.
+            // Tproxy: without the root iptables/ip rules nothing ever reaches the tproxy inbound —
+            // "connected" yet the IP never changes — so a failure here is a connection error.
+            if (connectionMode == AndroidConnectionMode.Tproxy) {
+                val failure = applyTproxyRules()
+                if (failure != null) {
+                    addLog("Tproxy rules failed: $failure")
+                    stopMobileAndWait()
+                    setStatus(VpnStatus.Error(failure))
+                    updateNotification(ns.notifConnectionFailed)
+                    return
+                }
+            }
             restoreOrStartConnectedClock()
             setStatus(VpnStatus.Connected)
             resetRecoveryState()
@@ -1125,6 +1138,9 @@ class OlcboxVpnService : VpnService() {
                 profile = proxy,
                 listenPort = socksListenPort,
                 listenHost = socksListenHost,
+                // Tproxy mode: transparent inbound + DNS hijack (UDP/53 redirected here).
+                tproxyPort = tproxyPortOrNull,
+                hijackDns = tproxyPortOrNull != null,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
                 olcrtcChainPort = tunnelPort,
@@ -1211,7 +1227,7 @@ class OlcboxVpnService : VpnService() {
             java.io.File(dir, "state").mkdirs()
             java.io.File(dir, "modules").mkdirs()
             SnolcFiles.client(
-                socksListenHost, snolcPort, snolc.host, snolc.port, snolc.debug,
+                socksListenHost, snolcPort, kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { org.olcbox.app.vpn.snolc.resolveSnolcHost(snolc.host) }, snolc.port, snolc.debug,
                 username = if (proxy != null) "" else socksUsername,
                 password = if (proxy != null) "" else socksPassword,
             ).forEach { (name, body) -> java.io.File(dir, name).writeText(body) }
@@ -1994,6 +2010,9 @@ class OlcboxVpnService : VpnService() {
                     profile = effectiveProfile,
                     listenPort = socksListenPort,
                     listenHost = socksListenHost,
+                    // Tproxy mode: transparent inbound + DNS hijack (UDP/53 redirected here).
+                    tproxyPort = tproxyPortOrNull,
+                    hijackDns = tproxyPortOrNull != null,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
                     olcrtcChainPort = if (chained) chainPort else warpChainPort,
@@ -2020,8 +2039,6 @@ class OlcboxVpnService : VpnService() {
                     secondProfile = secondProfile,
                     // FakeDNS translated from an imported Xray config → reproduced natively on sing-box.
                     fakeDnsSpec = config.fakeDns,
-                    // Transparent-proxy inbound (root-only) — only emitted in Tproxy mode.
-                    tproxyPort = tproxyPortOrNull,
                     // Standalone AmneziaWG (full UDP tunnel behind a local SOCKS): resolve the tunnel's
                     // DNS over TCP (SOCKS CONNECT) instead of the flaky SOCKS UDP-ASSOCIATE, so name
                     // resolution works WITHOUT needing a 2nd proxy to carry DNS. No-op with a 2nd proxy
@@ -2543,6 +2560,9 @@ class OlcboxVpnService : VpnService() {
                         olcrtcChainPort = if (chainProxy != null) awgLocalPort else null,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
+                        // Tproxy mode: transparent inbound + DNS hijack (UDP/53 redirected here).
+                        tproxyPort = tproxyPortOrNull,
+                        hijackDns = tproxyPortOrNull != null,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
                         autoDetectInterface = true,
@@ -2576,6 +2596,9 @@ class OlcboxVpnService : VpnService() {
                         profile = exitProfile,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
+                        // Tproxy mode: transparent inbound + DNS hijack (UDP/53 redirected here).
+                        tproxyPort = tproxyPortOrNull,
+                        hijackDns = tproxyPortOrNull != null,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
                         autoDetectInterface = true,
@@ -2603,6 +2626,9 @@ class OlcboxVpnService : VpnService() {
                             wireguardBase = exitProfile,
                             listenPort = socksListenPort,
                             listenHost = socksListenHost,
+                            // Tproxy mode: transparent inbound + DNS hijack (UDP/53 redirected here).
+                            tproxyPort = tproxyPortOrNull,
+                            hijackDns = tproxyPortOrNull != null,
                             socksUsername = socksUsername,
                             socksPassword = socksPassword,
                             autoDetectInterface = true,
@@ -2624,6 +2650,9 @@ class OlcboxVpnService : VpnService() {
                             profile = exitProfile,
                             listenPort = socksListenPort,
                             listenHost = socksListenHost,
+                            // Tproxy mode: transparent inbound + DNS hijack (UDP/53 redirected here).
+                            tproxyPort = tproxyPortOrNull,
+                            hijackDns = tproxyPortOrNull != null,
                             socksUsername = socksUsername,
                             socksPassword = socksPassword,
                             autoDetectInterface = true,
@@ -3012,6 +3041,98 @@ class OlcboxVpnService : VpnService() {
             runCatching {
                 ProcessBuilder("su", "-c", script).redirectErrorStream(true).start().waitFor()
             }
+        }
+    }
+
+    /** Present while our root redirect rules may be installed (survives a killed process). */
+    private val tproxyFlagFile get() = File(filesDir, "tproxy.applied")
+
+    private fun tproxyTeardownLines(): List<String> = listOf(
+        "export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH",
+        "while iptables -t mangle -D OUTPUT -j YPT_OUT 2>/dev/null; do :; done",
+        "while iptables -t mangle -D PREROUTING -j YPT_PRE 2>/dev/null; do :; done",
+        "while ip6tables -D OUTPUT -j YPT_OUT6 2>/dev/null; do :; done",
+        "iptables -t mangle -F YPT_OUT 2>/dev/null; iptables -t mangle -X YPT_OUT 2>/dev/null",
+        "iptables -t mangle -F YPT_PRE 2>/dev/null; iptables -t mangle -X YPT_PRE 2>/dev/null",
+        "ip6tables -F YPT_OUT6 2>/dev/null; ip6tables -X YPT_OUT6 2>/dev/null",
+        "while ip rule del fwmark $TPROXY_MARK lookup $TPROXY_TABLE pref $TPROXY_PREF 2>/dev/null; do :; done",
+        "ip route flush table $TPROXY_TABLE 2>/dev/null",
+    )
+
+    /**
+     * Root: sends the phone's own TCP+UDP through the tproxy inbound (the Box4Magisk scheme).
+     * mangle OUTPUT marks outgoing packets, `ip rule fwmark` routes them to `local default dev lo`, so
+     * they re-enter on lo where mangle PREROUTING TPROXYs them to the core. Our own UID is skipped
+     * (the core's sockets must reach the real network), as are LAN/local destinations — except DNS,
+     * which is always taken so the core's hijack-dns answers it. IPv6 is rejected for everyone else
+     * (the core is IPv4-strict; a v6 path would leak the real IP). Returns null on success or the
+     * failure text.
+     */
+    private suspend fun applyTproxyRules(): String? = withContext(Dispatchers.IO) {
+        if (!isLocalSocksPortOpen(tproxyPort)) {
+            return@withContext "This engine has no transparent-proxy inbound (needs a sing-box core)"
+        }
+        val uid = android.os.Process.myUid()
+        val m = TPROXY_MARK
+        val lan = listOf("0.0.0.0/8", "10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+            "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4")
+        val out = "iptables -t mangle -A YPT_OUT"
+        val script = (tproxyTeardownLines() + listOf(
+            "ip rule add fwmark $m lookup $TPROXY_TABLE pref $TPROXY_PREF",
+            "ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE",
+            "iptables -t mangle -N YPT_OUT; iptables -t mangle -N YPT_PRE",
+            "$out -m owner --uid-owner $uid -j RETURN",
+            "$out -o lo -j RETURN",
+            "$out -m addrtype --dst-type LOCAL -j RETURN",
+            "$out -p udp --dport 53 -j MARK --set-mark $m",
+            "$out -p tcp --dport 53 -j MARK --set-mark $m",
+        ) + lan.map { "$out -d $it -j RETURN" } + listOf(
+            "$out -p tcp -j MARK --set-mark $m",
+            "$out -p udp -j MARK --set-mark $m",
+            "iptables -t mangle -I OUTPUT -j YPT_OUT",
+            // Only packets we marked and looped back through lo; everything else passes untouched.
+            "iptables -t mangle -A YPT_PRE -m mark ! --mark $m -j RETURN",
+            "iptables -t mangle -A YPT_PRE -p tcp -j TPROXY --on-port $tproxyPort --tproxy-mark $m",
+            "iptables -t mangle -A YPT_PRE -p udp -j TPROXY --on-port $tproxyPort --tproxy-mark $m",
+            "iptables -t mangle -I PREROUTING -j YPT_PRE",
+            "ip6tables -N YPT_OUT6",
+            "ip6tables -A YPT_OUT6 -m owner --uid-owner $uid -j RETURN",
+            "ip6tables -A YPT_OUT6 -o lo -j RETURN",
+            "ip6tables -A YPT_OUT6 -d fe80::/10 -j RETURN",
+            "ip6tables -A YPT_OUT6 -d fc00::/7 -j RETURN",
+            "ip6tables -A YPT_OUT6 -d ff00::/8 -j RETURN",
+            "ip6tables -A YPT_OUT6 -j REJECT",
+            "ip6tables -I OUTPUT -j YPT_OUT6",
+            "if iptables -t mangle -S YPT_PRE | grep -q TPROXY && ip rule | grep -q ' $TPROXY_TABLE'; " +
+                "then echo YPT_OK; else echo YPT_FAIL; fi",
+        )).joinToString("\n")
+        tproxyFlagFile.writeText("1")
+        val result = runCatching {
+            val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
+            val text = p.inputStream.bufferedReader().use { it.readText() }.trim()
+            p.waitFor()
+            text
+        }
+        val text = result.getOrNull()
+        when {
+            result.isFailure -> "Root (su) unavailable: ${result.exceptionOrNull()?.message}"
+            text!!.lines().lastOrNull() == "YPT_OK" -> null
+            else -> text.lines().filter { it != "YPT_FAIL" }.takeLast(3).joinToString(" | ")
+                .ifBlank { "iptables TPROXY rules were not installed (root denied or kernel lacks TPROXY)" }
+        }.also { if (it != null) teardownTproxyRules() }
+    }
+
+    /** Removes everything [applyTproxyRules] installed; no-op (and no `su`) when it never ran. */
+    private suspend fun teardownTproxyRules() {
+        if (!tproxyFlagFile.exists()) return
+        withContext(Dispatchers.IO) {
+            val code = runCatching {
+                val p = ProcessBuilder("su", "-c", tproxyTeardownLines().joinToString("\n"))
+                    .redirectErrorStream(true).start()
+                p.inputStream.readBytes()
+                p.waitFor()
+            }.getOrDefault(-1)
+            if (code == 0) tproxyFlagFile.delete()
         }
     }
 
@@ -3410,6 +3531,7 @@ class OlcboxVpnService : VpnService() {
         cleanupJob = scope.launch {
             try {
                 teardownVpnHotspotShare()
+                teardownTproxyRules()
                 stopVisibleVpnProcesses()
                 if (generation == cleanupGeneration) {
                     setStatus(VpnStatus.Disconnected)
@@ -3531,9 +3653,7 @@ class OlcboxVpnService : VpnService() {
         snolcProcess = null
         snolcProxyActive = false
         runCatching { Awg.stop() }
-        runCatching { trustTunnelClient?.stop() }
-        runCatching { trustTunnelClient?.close() }
-        trustTunnelClient = null
+        stopTrustTunnelProcess()
         val provider = lastMobileProvider
         val wasRunning = mobileRuntime.isRunning()
         // stop(0) means Runtime's own 5 s default; on timeout it stays "stopping" and every
@@ -3626,49 +3746,31 @@ class OlcboxVpnService : VpnService() {
 
     /**
      * If [profile] is Trust Tunnel, decode its `tt://` deep-link into a `[endpoint]` TOML (native
-     * DeepLink.decode), start the AdGuard client in SOCKS-only mode (VpnClient.start(null) — no TUN),
-     * and return a SOCKS proxy pointing at its local listener, so sing-box routes through the Trust
-     * Tunnel like it does through AmneziaWG. Otherwise returns [profile] unchanged.
+     * DeepLink.decode), run the official AdGuard CLI as a SOCKS-only subprocess (no TUN), and return a
+     * SOCKS proxy pointing at its local listener, so sing-box routes through the Trust Tunnel like it
+     * does through AmneziaWG. Otherwise returns [profile] unchanged.
      */
+    private fun stopTrustTunnelProcess() {
+        TrustTunnelCore.stop(trustTunnelProcess)
+        trustTunnelProcess = null
+    }
+
     private suspend fun prepareTrustTunnelProxy(profile: ProxyProfile): ProxyProfile {
         if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
-        runCatching { trustTunnelClient?.stop(); trustTunnelClient?.close() }
-        trustTunnelClient = null
+        stopTrustTunnelProcess()
 
-        val endpointToml = runCatching { TrustTunnelDeepLink.decode(profile.ttConfig) }
-            .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
         val port = trustTunnelLocalPort
-        // Top-level keys must precede any [table]; then the decoded [endpoint], then our SOCKS listener.
-        // No [listener.tun] → SOCKS-only. Kill switch off: our VpnService TUN owns routing, not the client.
-        val configToml = buildString {
-            append("loglevel = \"info\"\n")
-            append("killswitch_enabled = false\n\n")
-            append(endpointToml.trim()).append("\n\n")
-            append("[listener.socks]\n")
-            append("address = \"127.0.0.1:").append(port).append("\"\n")
-        }
-
-        val listener = object : TrustTunnelListener {
-            override fun protectSocket(socket: Int): Boolean {
-                if (connectionMode.isTunless) return true
-                return this@OlcboxVpnService.protect(socket)
-            }
-            // The endpoint certificate is embedded in the tt:// blob and pinned by the native client;
-            // this callback is the app-side hook — accept (the user configured this exact endpoint).
-            override fun verifyCertificate(certificate: ByteArray?, rawChain: List<ByteArray?>?): Boolean = true
-            override fun onStateChanged(state: Int) { addLog("trusttunnel: state=$state") }
-            override fun onConnectionInfo(info: String) { addLog("trusttunnel: $info") }
-        }
+        val configToml = TrustTunnelCore.configToml(profile.ttConfig, port)
 
         addLog("Starting Trust Tunnel SOCKS on 127.0.0.1:$port")
-        val client = TrustTunnelVpnClient(configToml, listener)
-        trustTunnelClient = client
-        if (!client.start(null)) {
-            trustTunnelClient = null
-            throw IllegalStateException("Trust Tunnel client failed to start")
+        val process = TrustTunnelCore.start(this, "trusttunnel", configToml)
+        trustTunnelProcess = process
+        kotlin.concurrent.thread(name = "trusttunnel-log", isDaemon = true) {
+            runCatching { process.inputStream.bufferedReader().forEachLine { addLog("trusttunnel: ${it.take(300)}") } }
         }
         if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
-            throw IllegalStateException("Trust Tunnel SOCKS port $port did not open")
+            val exit = if (process.isAlive) "still starting" else "exited with ${process.exitValue()}"
+            throw IllegalStateException("Trust Tunnel SOCKS port $port did not open ($exit)")
         }
         val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
             "\"server_port\":$port,\"version\":\"5\"}"
@@ -4915,6 +5017,11 @@ class OlcboxVpnService : VpnService() {
         private const val JITSI_RESTART_SETTLE_MS = 2_000L
         private const val TUN2SOCKS_STOP_WAIT_MS = 1_000L
         private const val TUNNEL_HANDOFF_DELAY_MS = 300L
+
+        // Tproxy root rules: packet mark, routing table and ip-rule priority (below Android's 10000+).
+        private const val TPROXY_MARK = "0x7e1"
+        private const val TPROXY_TABLE = 2026
+        private const val TPROXY_PREF = 90
         private const val NETWORK_LOSS_GRACE_MS = 2_500L
         private const val NETWORK_STABILITY_GRACE_MS = 600L
         private const val WATCHDOG_INTERVAL_MS = 15_000L

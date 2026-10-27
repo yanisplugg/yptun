@@ -1,10 +1,22 @@
 name: CI
 
 on:
+  # Branches only: a version tag (docs/versioning.md) names a commit that was
+  # already green when it was merged, and a tag push would otherwise run the
+  # whole matrix and the live gate again on it.
   push:
+    branches: ["**"]
   pull_request:
     branches: ["main", "master"]
   workflow_dispatch:
+
+# ai-generated: one run per ref. A force-push while a run is in flight (a
+# rebase, a fixed commit) used to leave the old run going, and with it the
+# gate holding the live rooms for a commit nobody will merge. The default
+# branch is excluded: its runs are the record of what main did.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/proofkit' }}
 
 env:
   GO_VERSION: "1.26.x"
@@ -15,12 +27,12 @@ jobs:
     name: Hygiene (fmt, tidy, vet)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -43,80 +55,423 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
   test:
-    name: Test (-race, coverage)
+    # ai-generated: the default/lean/testhooks matrix. The lean leg compiles
+    # what the olcrtc_lean tag selects for the mobile bind, which the default
+    # run never builds; it would have caught the lean build losing the livekit
+    # engine that wbstream needs (olcbox#22). The testhooks leg builds and
+    # tests what the gate's local server is built with: the bridge delay S6
+    # relies on is tested only under that tag, and a fork's pull request,
+    # which runs no gate-local, still has the tagged build checked.
+    name: Test (-race, ${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            tags: ""
+          - name: lean
+            tags: "olcrtc_lean"
+          - name: testhooks
+            tags: "olcrtc_testhooks"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Run tests
-        run: go test -count=1 -race -timeout 15m -coverprofile=coverage.out ./...
+        run: go test -count=1 -race -timeout 15m -tags "${{ matrix.tags }}" -coverprofile=coverage.out ./...
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: coverage
+          name: coverage-${{ matrix.name }}
           path: coverage.out
 
-  real-e2e:
-    name: Real E2E (Providers x Transports)
-    # Talks to third-party services, but runs on every push and PR so
-    # breakage is caught immediately instead of waiting for a schedule.
+  gate-plan:
+    # ai-generated: the gate's dry run, the plan printed before anything runs.
+    # It needs no secret, so it runs on every event, a fork's pull request
+    # included. One flavour per build (amendment A8): it fails when a build
+    # plans no cell or a cell of the other flavour.
+    name: Gate plan (dry run)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    outputs:
+      live: ${{ steps.scope.outputs.live }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
+          # The whole history, so the step below can see what this branch
+          # changed against proofkit.
+          fetch-depth: 0
+
+      # The live gate holds the real rooms for most of an hour and only one
+      # runs at a time across the repository, so a branch that cannot change
+      # what the engine does must not take that slot. Today four branches in
+      # flight meant two gates were cancelled by the queue and had to be run
+      # again by hand.
+      #
+      # Conservative on purpose: anything under internal/gate is engine
+      # behaviour as far as the gate is concerned, and only Go tests, Markdown
+      # and the docs tree are ever skipped. proofkit itself always runs.
+      #
+      # ai-generated: the whole step.
+      - name: Decide whether the live gate can tell this branch anything
+        id: scope
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" = "refs/heads/proofkit" ]; then
+            echo 'live=true' >> "$GITHUB_OUTPUT"
+            echo 'The live gate runs: this is proofkit.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          base=$(git merge-base origin/proofkit HEAD 2>/dev/null || true)
+          if [ -z "$base" ]; then
+            echo 'live=true' >> "$GITHUB_OUTPUT"
+            echo 'The live gate runs: this branch has no common history with proofkit.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base" HEAD)
+          live=false
+          while IFS= read -r file; do
+            case "$file" in
+              '') continue ;;
+              internal/gate/*) live=true ;;
+              *.md|docs/*) continue ;;
+              *_test.go) continue ;;
+              *) live=true ;;
+            esac
+          done <<EOF
+          $changed
+          EOF
+          echo "live=$live" >> "$GITHUB_OUTPUT"
+          if [ "$live" = true ]; then
+            echo 'The live gate runs: this branch changes the engine.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo 'The live gate did not run: every file this branch changes is a Go test, Markdown or under docs/, none of which can change what the engine does on a real relay. The gate runs on the push that merges this branch.'
+              echo
+              echo '<details><summary>What changed</summary>'
+              echo
+              echo '```text'
+              echo "$changed"
+              echo '```'
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Run real provider e2e matrix
+      - name: Print the plan
         run: |
-          go test -count=1 -v ./internal/e2e \
-            -olcrtc.real-providers=telemost,wbstream,jitsi \
-            -run '^TestRealProviderTransportMatrix$' \
-            -olcrtc.real-e2e
+          printf '### Gate plan\n\n' >> "$GITHUB_STEP_SUMMARY"
+          for build in cli: mobile:olcrtc_lean; do
+            flavour=${build%%:*} tags=${build#*:}
+            out="$RUNNER_TEMP/plan-$flavour.txt"
+            go test -v -tags "$tags" ./internal/gate -run '^TestGate$' -olcrtc.gate -olcrtc.gate-dry | tee "$out"
+            cells=$(grep -c '^engine-linux/' "$out" || true)
+            own=$(grep -cxE "engine-linux/[a-z0-9]+/[a-z0-9]+/$flavour/S[0-9]+" "$out" || true)
+            if [ "$cells" -eq 0 ] || [ "$own" -ne "$cells" ]; then
+              echo "::error title=Gate plan::the ${tags:-default} build planned $cells cells, $own of them $flavour cells"
+              exit 1
+            fi
+            {
+              echo "<details><summary>$flavour flavour, ${tags:-default} build: $cells cells</summary>"
+              echo
+              echo '```text'
+              grep '^engine-linux/' "$out"
+              echo '```'
+              echo '</details>'
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Say why a fork's pull request runs no gate
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          note="The gate did not run: GitHub gives a pull request from a fork no repository secrets (the room pools, the WB token). It runs on this repository's own events, such as the push that merges this change."
+          echo "::notice title=Gate not run::$note"
+          printf '\n%s\n' "$note" >> "$GITHUB_STEP_SUMMARY"
+
+  gate-local:
+    # ai-generated: the release gate on the real relays, a child server per
+    # pair, one job per provider and flavour. It replaces the real E2E
+    # matrix, which counted a skipped cell as green: here every planned cell
+    # ends pass or fail.
+    #
+    # One job per provider (2026-10-17, after three record runs in a row
+    # went red on one carrier's leg while every other carrier was green):
+    # the jobs run in parallel, a failed one is re-run on its own
+    # (Re-run failed jobs), and one carrier's bad day no longer holds the
+    # whole gate. Inside a job the three flavours run one after the other,
+    # as the sequential steps of the single job they replace did; the room
+    # queue that used to be one slot for the whole repository is per
+    # provider now — jobs of different carriers never shared a room anyway.
+    # A provider x flavour matrix was tried first and does not work:
+    # GitHub keeps only one pending job per concurrency group, so the third
+    # leg of a provider cancelled the queued second one.
+    #
+    # Secrets reach go test through step env only, never argv or script text
+    # (amendment A7). GATE_TELEMOST_ROOMS (a pool of room ids or URLs,
+    # comma-separated) and GATE_MTSLINK_ROOMS (a pool of event join links) are
+    # required; GATE_JITSI_HOSTS is optional, empty means the instance list.
+    # Jitsi and SaluteJazz rooms are made fresh per pair and need no secret.
+    # GATE_WBSTREAM_ROOMS and GATE_WBSTREAM_TOKEN are read only when wbstream
+    # is named: the service closed its beta to its own staff on 2026-10-10
+    # and is out of the default walk (internal/gate localProviders).
+    #
+    # Fork rule: GitHub gives a pull request from a fork no secrets, so this
+    # job does not run for one. It shows as skipped and gate-plan's summary
+    # says why, but GitHub counts a job skipped by `if:` as passing for a
+    # required check: a fork's pull request first gets the gate on the push
+    # that merges it. On this repository's own events it always runs, and a
+    # missing secret fails it. The head repository is compared by name,
+    # which holds whether or not this repository is itself a fork
+    # (head.repo.fork would be true for every branch of a forked repository).
+    name: Gate (${{ matrix.provider }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Telemost and MAX are out of the default walk (internal/gate localProviders):
+        # Telemost's relay cuts every published track to a trickle (#58), and the MAX
+        # account the pair signs in with is locked (2026-10-19). Put each back here
+        # and in localProviders together, the day it works again.
+        provider: [jitsi, salutejazz, vkcalls, mtslink]
+    # ai-generated: the `needs` list beyond gate-plan. The gate holds live
+    # rooms, so a branch whose unit tests or lint already failed must not
+    # take that slot: it cannot merge anyway. Waiting costs the two or three
+    # minutes those jobs take, and a job skipped because a dependency failed
+    # is reported as skipped, not as a pass.
+    needs: [gate-plan, hygiene, lint, test]
+    # The fork rule, and gate-plan's verdict on whether this branch can change
+    # what a real relay sees (see there).
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && needs.gate-plan.outputs.live == 'true'
+    runs-on: ubuntu-latest
+    # The job holds the secrets: its token only reads the repository, and
+    # checkout leaves no credential in .git/config for the test's children.
+    permissions:
+      contents: read
+    # The three flavours of one provider run one after the other inside the
+    # job (see the steps): 25, 60 and 15 minutes of go test plus the builds
+    # and the upload.
+    timeout-minutes: 110
+    # One gate leg at a time per provider, not across the whole repository:
+    # only legs of one provider share that provider's pool rooms, and two
+    # servers in one room (two legs pushed together, or the same WB account
+    # twice) knock each other out. Legs of different providers share nothing
+    # and run in parallel. Queued, never cancelled: a newer push waits
+    # instead of killing a run.
+    concurrency:
+      group: gate-rooms-${{ matrix.provider }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    env:
+      OLCRTC_GATE_ENGINE_REF: ${{ github.ref_name }}
+      OLCRTC_GATE_ENGINE_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Mask and require the secrets
+        env:
+          GATE_TELEMOST_ROOMS: ${{ secrets.GATE_TELEMOST_ROOMS }}
+          GATE_WBSTREAM_ROOMS: ${{ secrets.GATE_WBSTREAM_ROOMS }}
+          GATE_WBSTREAM_TOKEN: ${{ secrets.GATE_WBSTREAM_TOKEN }}
+          GATE_JITSI_HOSTS: ${{ secrets.GATE_JITSI_HOSTS }}
+          GATE_VKCALLS_ROOMS: ${{ secrets.GATE_VKCALLS_ROOMS }}
+          GATE_MTSLINK_ROOMS: ${{ secrets.GATE_MTSLINK_ROOMS }}
+          GATE_MAX_ROOMS: ${{ secrets.GATE_MAX_ROOMS }}
+          GATE_MAX_KEYS: ${{ secrets.GATE_MAX_KEYS }}
+        run: |
+          # Every value is masked before any step could print it. Split on
+          # line breaks too: a line of a value the mask missed would print.
+          entries() { printf '%s\n' "$1" | tr ',' '\n' | tr '\r' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; /^$/d'; }
+          # The runner reads the rest of the line and turns %25 back into %.
+          mask() { if [ -n "$1" ]; then printf '::add-mask::%s\n' "${1//%/%25}"; fi; }
+          # A pool entry, and the room id its URL ends in: the engine logs it bare.
+          while IFS= read -r e; do
+            mask "$e"
+            mask "$(sed -E 's|^[A-Za-z]+://||; s|[?#].*||; s|/+$||; s|.*/||' <<<"$e")"
+          done < <(entries "$GATE_TELEMOST_ROOMS,$GATE_WBSTREAM_ROOMS,$GATE_VKCALLS_ROOMS")
+          # An MTS Link entry is .../j/<owner>/<event>: the link, the event
+          # and the account that owns the room, each on its own too.
+          while IFS= read -r e; do
+            mask "$e"
+            path="$(sed -E 's|^[A-Za-z]+://||; s|[?#].*||; s|/+$||' <<<"$e")"
+            mask "${path##*/}"
+            owner="${path%/*}"; mask "${owner##*/}"
+          done < <(entries "$GATE_MTSLINK_ROOMS")
+          # A Jitsi host as given, and bare, as room URLs and errors carry it.
+          while IFS= read -r e; do
+            mask "$e"
+            mask "$(sed -E 's|^[A-Za-z]+://||; s|[/?#].*||; s|:[0-9]*$||' <<<"$e")"
+          done < <(entries "$GATE_JITSI_HOSTS")
+          while IFS= read -r e; do mask "$e"; done < <(entries "$GATE_WBSTREAM_TOKEN")
+          # A max entry is a join link whose last segment is the room's hash;
+          # the keys are two calls sessions.
+          while IFS= read -r e; do
+            mask "$e"
+            mask "$(sed -E 's|^[A-Za-z]+://||; s|[?#].*||; s|/+$||; s|.*/||' <<<"$e")"
+          done < <(entries "$GATE_MAX_ROOMS")
+          while IFS= read -r e; do mask "$e"; done < <(entries "$GATE_MAX_KEYS")
+
+          # A missing required secret is named here, and every cell that needs
+          # it fails in the report with the same reason, so the job still fails:
+          # a skip is never a pass. The other providers' legs run meanwhile,
+          # so one missing secret does not hide the rest of the gate.
+          require() {
+            if [ -z "$(entries "${!1}")" ]; then
+              echo "::error title=Gate secret not set::$1 is not set. Add it under Settings > Secrets and variables > Actions: $2."
+            fi
+          }
+          require GATE_TELEMOST_ROOMS "a comma-separated pool of Telemost room ids or URLs"
+          require GATE_MTSLINK_ROOMS "a comma-separated pool of MTS Link event join links (https://my.mts-link.ru/j/<owner>/<event>) of endless meetings"
+          require GATE_MAX_ROOMS "a comma-separated pool of max join links (https://max.ru/joincall/<hash>)"
+          require GATE_MAX_KEYS "two comma-separated max calls session keys, the server's first (OLCRTC_GATE_MAX_KEYS)"
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Go
+        id: go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run the gate, cli flavour (default build)
+        env:
+          OLCRTC_GATE_TELEMOST_ROOMS: ${{ secrets.GATE_TELEMOST_ROOMS }}
+          OLCRTC_GATE_WBSTREAM_ROOMS: ${{ secrets.GATE_WBSTREAM_ROOMS }}
+          OLCRTC_GATE_WBSTREAM_TOKEN: ${{ secrets.GATE_WBSTREAM_TOKEN }}
+          OLCRTC_GATE_JITSI_HOSTS: ${{ secrets.GATE_JITSI_HOSTS }}
+          OLCRTC_GATE_VKCALLS_ROOMS: ${{ secrets.GATE_VKCALLS_ROOMS }}
+          OLCRTC_GATE_MTSLINK_ROOMS: ${{ secrets.GATE_MTSLINK_ROOMS }}
+          OLCRTC_GATE_MAX_ROOMS: ${{ secrets.GATE_MAX_ROOMS }}
+          OLCRTC_GATE_MAX_KEYS: ${{ secrets.GATE_MAX_KEYS }}
+        run: |
+          go test -count=1 -timeout 25m ./internal/gate -run '^TestGate$' -v \
+            -olcrtc.gate -olcrtc.gate-target=local -olcrtc.gate-dir=gate-artifacts/cli \
+            -olcrtc.gate-providers=${{ matrix.provider }}
+
+      - name: Run the gate, mobile flavour (olcrtc_lean build)
+        # Its cells are owed to the report whatever the cli run did. The 60 m
+        # budget covers this provider's mobile matrix — every load pair runs
+        # S1-S5 and S7 — with the slow SaluteJazz leg (a 300 s S0 measured):
+        # 45 m minus the report margin cut a run at 2610 s mid-S4 (run
+        # 36483073049).
+        if: ${{ !cancelled() && steps.go.outcome == 'success' }}
+        env:
+          OLCRTC_GATE_TELEMOST_ROOMS: ${{ secrets.GATE_TELEMOST_ROOMS }}
+          OLCRTC_GATE_WBSTREAM_ROOMS: ${{ secrets.GATE_WBSTREAM_ROOMS }}
+          OLCRTC_GATE_WBSTREAM_TOKEN: ${{ secrets.GATE_WBSTREAM_TOKEN }}
+          OLCRTC_GATE_JITSI_HOSTS: ${{ secrets.GATE_JITSI_HOSTS }}
+          OLCRTC_GATE_VKCALLS_ROOMS: ${{ secrets.GATE_VKCALLS_ROOMS }}
+          OLCRTC_GATE_MTSLINK_ROOMS: ${{ secrets.GATE_MTSLINK_ROOMS }}
+          OLCRTC_GATE_MAX_ROOMS: ${{ secrets.GATE_MAX_ROOMS }}
+          OLCRTC_GATE_MAX_KEYS: ${{ secrets.GATE_MAX_KEYS }}
+        run: |
+          go test -count=1 -tags olcrtc_lean -timeout 60m ./internal/gate -run '^TestGate$' -v \
+            -olcrtc.gate -olcrtc.gate-target=local -olcrtc.gate-dir=gate-artifacts/mobile \
+            -olcrtc.gate-providers=${{ matrix.provider }}
+
+      - name: Run the gate, cli flavour with the DTLS profile
+        # The fixed ClientHello profile (dtls.profile, off by default) on
+        # this provider's local servers and the client, cli cells only: a
+        # report of its own, gate-artifacts/cli-dtls. The profile is
+        # experimental and ships off, so a red row is shown in the summary
+        # without failing the job; drop continue-on-error once it ships on.
+        if: ${{ !cancelled() && steps.go.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          OLCRTC_GATE_TELEMOST_ROOMS: ${{ secrets.GATE_TELEMOST_ROOMS }}
+          OLCRTC_GATE_WBSTREAM_ROOMS: ${{ secrets.GATE_WBSTREAM_ROOMS }}
+          OLCRTC_GATE_WBSTREAM_TOKEN: ${{ secrets.GATE_WBSTREAM_TOKEN }}
+          OLCRTC_GATE_JITSI_HOSTS: ${{ secrets.GATE_JITSI_HOSTS }}
+          OLCRTC_GATE_VKCALLS_ROOMS: ${{ secrets.GATE_VKCALLS_ROOMS }}
+          OLCRTC_GATE_MTSLINK_ROOMS: ${{ secrets.GATE_MTSLINK_ROOMS }}
+          OLCRTC_GATE_MAX_ROOMS: ${{ secrets.GATE_MAX_ROOMS }}
+          OLCRTC_GATE_MAX_KEYS: ${{ secrets.GATE_MAX_KEYS }}
+        run: |
+          go test -count=1 -timeout 15m ./internal/gate -run '^TestGate$' -v \
+            -olcrtc.gate -olcrtc.gate-target=local -olcrtc.gate-dir=gate-artifacts/cli-dtls \
+            -olcrtc.gate-providers=${{ matrix.provider }} \
+            -olcrtc.gate-dtls-profile=chrome-linux-138-compat-v1
+
+      - name: Summary
+        if: ${{ always() && steps.go.outcome == 'success' }}
+        run: |
+          # A report that cannot be read fails the step, after the other
+          # flavours' tables are written.
+          PROVIDER='${{ matrix.provider }}'
+          unreadable=0
+          for flavour in cli mobile cli-dtls; do
+            report="gate-artifacts/$flavour/gate-report.json"
+            if [ ! -f "$report" ]; then
+              echo "### Gate (${{ matrix.provider }}): the $flavour run wrote no report"
+            elif ! go run ./cmd/gate-report render "$report" | sed "1s/\$/ ($PROVIDER, $flavour)"/; then
+              echo "### Gate (${{ matrix.provider }}): the $flavour report could not be rendered"
+              unreadable=1
+            fi
+            echo
+          done >> "$GITHUB_STEP_SUMMARY"
+          exit "$unreadable"
+
+      - name: Upload artifacts
+        if: ${{ always() && steps.go.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-${{ matrix.provider }}
+          path: |
+            gate-artifacts/**/*.log
+            gate-artifacts/**/*.csv
+            gate-artifacts/**/*.pb.gz
+            gate-artifacts/**/gate-report.json
 
   build-cli:
     name: Build CLI (Binaries)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -127,7 +482,7 @@ jobs:
         run: mage cross
 
       - name: Upload CLI Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: olcrtc-cli-binaries
           path: build/
@@ -136,17 +491,17 @@ jobs:
     name: Build Android (AAR)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: "temurin"
           java-version: "17"
@@ -163,7 +518,7 @@ jobs:
         run: mage mobile
 
       - name: Upload Android Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: olcrtc-android
           path: build/olcrtc.aar
@@ -172,12 +527,12 @@ jobs:
     name: Build c-shared library
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -188,7 +543,7 @@ jobs:
         run: mage cgo
 
       - name: Upload c-shared artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: olcrtc-cshared
           path: build/libolcrtc.*

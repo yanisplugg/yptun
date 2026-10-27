@@ -2,8 +2,12 @@
 //
 // Each KeySet derives independent client-to-server and server-to-client keys
 // from one PSK. Records use XChaCha20-Poly1305 with a random sender prefix and
-// monotonic counter. Authenticated records pass through a bounded per-prefix
-// replay window shared by every connection using the KeySet.
+// monotonic counter. Every lane — the data plane, the control plane, the
+// datagram lane, told apart by their AAD — numbers its records from its own
+// prefix and counter, and the receiver keeps a bounded replay window per
+// (lane, sender prefix). Lanes travel on independently ordered channels, so
+// one counter and one window for all of them let a small control record
+// numbered far ahead reject a whole data backlog as too old.
 package crypto
 
 import (
@@ -30,7 +34,11 @@ const (
 	noncePrefixSize     = chacha20poly1305.NonceSizeX - 8
 	recordHeaderSize    = len(recordMagic) + 8 + noncePrefixSize
 	replayWindowSize    = 64
-	maxReplaySenders    = 256
+	// Replay states across every lane and sender prefix. A peer now holds
+	// one per lane it uses (data, control, datagram), so a key shared by
+	// many peers needs room for a few hundred of them before the LRU
+	// starts forgetting live senders.
+	maxReplaySenders = 1024
 
 	// WireOverhead is magic, counter, sender prefix, and authentication tag.
 	WireOverhead = recordHeaderSize + chacha20poly1305.Overhead
@@ -101,25 +109,47 @@ type sealState struct {
 }
 
 type replayState struct {
+	lane    string
 	prefix  [noncePrefixSize]byte
 	highest uint64
 	seen    uint64
 	element *list.Element
+	// skipped counts records jumped over when a higher counter arrived, and
+	// late those that arrived below the highest and were still inside the
+	// window. A skipped record that later arrives late was reordered in
+	// transit; one that never does was lost. The difference is what a relay
+	// that reorders or drops messages looks like from here, and nothing
+	// above this layer can tell the two apart: smux only sees a byte stream
+	// that stopped making sense.
+	skipped uint64
+	late    uint64
 }
 
+// ReorderStats is the record reordering seen on one lane, summed over every
+// sender in it. Lost is not known exactly - a gap may still be filled - but
+// Skipped minus Late is the number of records the window is still missing.
+type ReorderStats struct {
+	Skipped uint64
+	Late    uint64
+}
+
+// replayCache holds one window per (lane, sender prefix), bounded by an LRU
+// over all of them.
 type replayCache struct {
-	mu      sync.Mutex
-	senders map[[noncePrefixSize]byte]*replayState
-	lru     list.List
+	mu    sync.Mutex
+	lanes map[string]map[[noncePrefixSize]byte]*replayState
+	lru   list.List
 }
 
-// KeySet owns one directional sender and shared receive replay state.
+// KeySet owns one sender per lane and the shared receive replay state.
 // It is safe for concurrent use and should be reused across data, control,
 // peer, and reconnect muxconn instances for one process role.
 type KeySet struct {
-	send    sealState
-	receive cipher.AEAD
-	replay  replayCache
+	sendAEAD cipher.AEAD
+	lanesMu  sync.RWMutex
+	lanes    map[string]*sealState // keyed by AAD; each numbers its own records
+	receive  cipher.AEAD
+	replay   replayCache
 }
 
 // NewKeySet derives directional v2 keys from a 32-byte PSK and selects them by role.
@@ -164,15 +194,34 @@ func newKeySetForRole(clientKey, serverKey [chacha20poly1305.KeySize]byte, role 
 	if err != nil {
 		return nil, fmt.Errorf("create receive AEAD: %w", err)
 	}
-	keys := &KeySet{
-		send:    sealState{aead: sendAEAD},
-		receive: receiveAEAD,
-		replay:  replayCache{senders: make(map[[noncePrefixSize]byte]*replayState, maxReplaySenders)},
+	return &KeySet{
+		sendAEAD: sendAEAD,
+		lanes:    make(map[string]*sealState, 3),
+		receive:  receiveAEAD,
+		replay:   replayCache{lanes: make(map[string]map[[noncePrefixSize]byte]*replayState, 3)},
+	}, nil
+}
+
+// laneState returns the sender for aad, seeding a fresh random prefix the
+// first time a lane is used. A map index by string(aad) does not allocate.
+func (k *KeySet) laneState(aad []byte) (*sealState, error) {
+	k.lanesMu.RLock()
+	state := k.lanes[string(aad)]
+	k.lanesMu.RUnlock()
+	if state != nil {
+		return state, nil
 	}
-	if _, err := rand.Read(keys.send.prefix[:]); err != nil {
+	k.lanesMu.Lock()
+	defer k.lanesMu.Unlock()
+	if existing := k.lanes[string(aad)]; existing != nil {
+		return existing, nil
+	}
+	state = &sealState{aead: k.sendAEAD}
+	if _, err := rand.Read(state.prefix[:]); err != nil {
 		return nil, fmt.Errorf("seed sender nonce prefix: %w", err)
 	}
-	return keys, nil
+	k.lanes[string(aad)] = state
+	return state, nil
 }
 
 // Seal allocates and seals one v2 record with aad.
@@ -183,22 +232,31 @@ func (k *KeySet) Seal(plaintext, aad []byte) ([]byte, error) {
 // SealInto appends one v2 record to dst. The record layout is:
 // magic "OLC2" | counter uint64 big-endian | sender prefix [16]byte | ciphertext | tag.
 func (k *KeySet) SealInto(dst, plaintext, aad []byte) ([]byte, error) {
-	counter, err := k.send.nextCounter()
+	state, err := k.laneState(aad)
+	if err != nil {
+		return nil, err
+	}
+	return sealWith(state, dst, plaintext, aad)
+}
+
+// sealWith appends one record numbered and prefixed by state to dst.
+func sealWith(state *sealState, dst, plaintext, aad []byte) ([]byte, error) {
+	counter, err := state.nextCounter()
 	if err != nil {
 		return nil, err
 	}
 	base := len(dst)
-	recordLen := recordHeaderSize + len(plaintext) + k.send.aead.Overhead()
+	recordLen := recordHeaderSize + len(plaintext) + state.aead.Overhead()
 	out := appendSpace(dst, recordLen)
 	header := out[base : base+recordHeaderSize]
 	copy(header, recordMagic)
 	binary.BigEndian.PutUint64(header[len(recordMagic):], counter)
-	copy(header[len(recordMagic)+8:], k.send.prefix[:])
+	copy(header[len(recordMagic)+8:], state.prefix[:])
 
 	nonce := acquireNonce()
-	copy(nonce[:noncePrefixSize], k.send.prefix[:])
+	copy(nonce[:noncePrefixSize], state.prefix[:])
 	binary.BigEndian.PutUint64(nonce[noncePrefixSize:], counter)
-	sealed := k.send.aead.Seal(out[:base+recordHeaderSize], nonce[:], plaintext, aad)
+	sealed := state.aead.Seal(out[:base+recordHeaderSize], nonce[:], plaintext, aad)
 	noncePool.Put(nonce)
 	return sealed, nil
 }
@@ -228,7 +286,8 @@ func (k *KeySet) Open(record, aad []byte) ([]byte, error) {
 }
 
 // OpenInto appends authenticated plaintext to dst, then records the counter in
-// the shared replay window. Failed authentication never mutates replay state.
+// the replay window of the record's lane and sender. Failed authentication
+// never mutates replay state.
 func (k *KeySet) OpenInto(dst, record, aad []byte) ([]byte, error) {
 	if len(record) < WireOverhead {
 		return nil, fmt.Errorf("open record: %w: got %d", ErrRecordTooShort, len(record))
@@ -251,22 +310,23 @@ func (k *KeySet) OpenInto(dst, record, aad []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open record: %w", ErrAuthentication)
 	}
-	if err := k.replay.accept(prefix, counter); err != nil {
+	if err := k.replay.accept(aad, prefix, counter); err != nil {
 		return nil, fmt.Errorf("open record: %w", err)
 	}
 	return plaintext, nil
 }
 
-func (r *replayCache) accept(prefix [noncePrefixSize]byte, counter uint64) error {
+func (r *replayCache) accept(aad []byte, prefix [noncePrefixSize]byte, counter uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	state := r.senders[prefix]
+	state := r.lanes[string(aad)][prefix]
 	if state == nil {
-		r.insert(prefix, counter)
+		r.insert(aad, prefix, counter)
 		return nil
 	}
 	if counter > state.highest {
 		shift := counter - state.highest
+		state.skipped += shift - 1
 		if shift >= replayWindowSize {
 			state.seen = 1
 		} else {
@@ -285,20 +345,38 @@ func (r *replayCache) accept(prefix [noncePrefixSize]byte, counter uint64) error
 		return ErrReplayDuplicate
 	}
 	state.seen |= mask
+	state.late++
 	r.lru.MoveToFront(state.element)
 	return nil
 }
 
-func (r *replayCache) insert(prefix [noncePrefixSize]byte, counter uint64) {
-	if len(r.senders) >= maxReplaySenders {
+// ReorderStats reports the reordering seen on the lane aad names.
+func (k *KeySet) ReorderStats(aad []byte) ReorderStats {
+	k.replay.mu.Lock()
+	defer k.replay.mu.Unlock()
+	var stats ReorderStats
+	for _, state := range k.replay.lanes[string(aad)] {
+		stats.Skipped += state.skipped
+		stats.Late += state.late
+	}
+	return stats
+}
+
+func (r *replayCache) insert(aad []byte, prefix [noncePrefixSize]byte, counter uint64) {
+	if r.lru.Len() >= maxReplaySenders {
 		oldest := r.lru.Back()
-		state, ok := oldest.Value.(*replayState)
-		if ok {
-			delete(r.senders, state.prefix)
+		if state, ok := oldest.Value.(*replayState); ok {
+			delete(r.lanes[state.lane], state.prefix)
 		}
 		r.lru.Remove(oldest)
 	}
-	state := &replayState{prefix: prefix, highest: counter, seen: 1}
+	lane := string(aad)
+	senders := r.lanes[lane]
+	if senders == nil {
+		senders = make(map[[noncePrefixSize]byte]*replayState)
+		r.lanes[lane] = senders
+	}
+	state := &replayState{lane: lane, prefix: prefix, highest: counter, seen: 1}
 	state.element = r.lru.PushFront(state)
-	r.senders[prefix] = state
+	senders[prefix] = state
 }

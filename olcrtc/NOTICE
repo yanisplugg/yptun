@@ -1,0 +1,61 @@
+olcRTC
+Copyright 2026 olcRTC contributors
+
+This product includes software developed as part of the olcRTC project
+(https://github.com/ghostlane-project/olcrtc), licensed under the Apache License,
+Version 2.0. See LICENSE.
+
+## Provenance
+
+This project is derived from:
+
+    https://github.com/openlibrecommunity/olcrtc
+
+The original project is copyright (C) 2026 zarazaex and was published under the
+WTFPL, version 2, whose text is preserved verbatim in docs/upstream-license-wtfpl.txt. The
+WTFPL places no condition on redistribution and explicitly permits distributing
+modified copies under other terms, which is what this fork does: the combined
+work, including the parts derived from upstream, is offered under the Apache
+License 2.0.
+
+The original copyright notice is retained above and in docs/upstream-license-wtfpl.txt as a
+matter of attribution. Upstream is archived and no longer developed. Individual
+authorship is recorded in this repository's commit history, which includes the
+upstream history it was forked from.
+
+Modifications and additional work in this fork:
+
+    Copyright 2026 Roman Podpriatov and the olcRTC contributors
+
+## Third-party components
+
+This project depends on the following, each under its own licence. The
+authoritative list is go.mod; the licences are distributed with the modules.
+
+Apache License 2.0:
+  github.com/livekit/protocol
+  github.com/owenewans/owenlivekit
+  github.com/magefile/mage
+  google.golang.org/genproto
+
+MIT:
+  github.com/pion/webrtc, github.com/pion/ice, github.com/pion/interceptor,
+  github.com/pion/logging, github.com/pion/rtcp, github.com/pion/rtp,
+  github.com/pion/transport
+  github.com/xtaci/kcp-go, github.com/xtaci/smux
+  gopkg.in/yaml.v3
+
+BSD 3-Clause:
+  github.com/google/uuid
+  github.com/gorilla/websocket
+  github.com/wlynxg/anet
+  github.com/zarazaex69/gr
+  golang.org/x/crypto, golang.org/x/mobile, golang.org/x/net, golang.org/x/sys
+
+Other permissive terms:
+  codeberg.org/rape4me/kc  - an ISC-style grant with no attribution clause
+  github.com/zarazaex69/j  - "ZARAZAEX ANY DO License", a bespoke permissive
+                             grant that allows relicensing and requires no
+                             attribution
+
+No dependency of this project is under a copyleft licence.

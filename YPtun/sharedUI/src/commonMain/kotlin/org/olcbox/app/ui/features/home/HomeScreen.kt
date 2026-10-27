@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.features.home
 
+import org.olcbox.app.ui.features.home.components.VkLinkPromptDialog
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -77,12 +80,16 @@ import kotlinx.coroutines.launch
 import kotlin.time.TimeSource
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.CustomGroup
+import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.ui.features.home.components.folderMemberKey
 import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.i18n.LocalStrings
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
 import org.olcbox.app.ui.features.home.components.FreeServersSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
+import org.olcbox.app.ui.features.home.components.ListViewSheet
+import org.olcbox.app.ui.features.home.components.SessionSheet
+import org.olcbox.app.ui.features.home.components.PingSettingsSheet
 import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
 import org.olcbox.app.ui.features.home.components.RelayStatus
@@ -107,6 +114,11 @@ fun HomeScreen(
     onSplitTunnelingClick: () -> Unit = {},
     onOpenLocationSettings: (String?) -> Unit,
     onAddLocation: () -> Unit,
+    // «Создать вручную»: a new location that starts on the picked engine (AmneziaWG/WG = Standard + wireguard).
+    onAddLocationOfType: (engine: EngineType, wireguard: Boolean) -> Unit = { _, _ -> onAddLocation() },
+    // The «Добавить» field: import exactly this text (subscription URLs, share links, JSON).
+    onImportTextRequested: (text: String, onImported: () -> Unit, onError: (String) -> Unit) -> Unit =
+        { text, onImported, onError -> viewModel.onImportFullConfig(text, onImported, onError) },
     confirmBeforeDelete: Boolean = true,
     /** How many locations to probe in parallel during a ping pass (the ping-speed knob). */
     pingParallelism: Int = AppBehaviorSettings.DEFAULT_PING_PARALLELISM,
@@ -151,9 +163,18 @@ fun HomeScreen(
     // Extra content under the start button (e.g. the desktop proxy/tunnel mode switch).
     extraConnectContent: (@Composable () -> Unit)? = null,
     // Desktop only: shows an exit button in the top bar.
-    onExitClick: (() -> Unit)? = null
+    onExitClick: (() -> Unit)? = null,
+    // The app behaviour settings, for the ⋮ menu's «Вид списка» and «Настройки пинга» sheets
+    // (null hides both: the platform keeps those switches in its own settings).
+    appBehavior: AppBehaviorSettings? = null,
+    onAppBehaviorChanged: (AppBehaviorSettings) -> Unit = {},
+    // Share a subscription (QR / link) from its sheet; null hides «Поделиться» there.
+    onShareSubscriptionRequested: ((url: String) -> Unit)? = null
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
+    var isListViewSheetOpen by remember { mutableStateOf(false) }
+    var isSessionSheetOpen by remember { mutableStateOf(false) }
+    var isPingSettingsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
     // Folder dialogs: create / rename (a small name dialog), "choose folder" target sheet, delete confirm.
@@ -263,7 +284,21 @@ fun HomeScreen(
     selectedIds.retainAll(locations.map { it.storageId }.toSet())
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
-    val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
+    val needsVkLink = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading &&
+        state.selectedLocation?.config?.needsVkLink() == true
+    val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading && !needsVkLink
+    var vkPromptOpen by remember { mutableStateOf(false) }
+    if (vkPromptOpen) {
+        VkLinkPromptDialog(
+            onDismiss = { vkPromptOpen = false },
+            onConfirm = { link ->
+                vkPromptOpen = false
+                state.selectedLocation?.storageId?.let { id ->
+                    locationViewModel.setLocationVkLink(id, link) { viewModel.loadCurrentConfig { onToggleClick() } }
+                }
+            }
+        )
+    }
 
     val primaryActionLabel = when {
         requiresSetup -> s.labelSetup
@@ -425,6 +460,13 @@ fun HomeScreen(
                 onDeleteDuplicates = { requestDelete(PendingDelete.Duplicates) },
                 onDeleteAllSubscriptions = { requestDelete(PendingDelete.AllSubscriptions) },
                 onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) },
+                onListViewClick = if (appBehavior != null) {
+                    { isListViewSheetOpen = true }
+                } else null,
+                onPingSettingsClick = if (appBehavior != null) {
+                    { isPingSettingsSheetOpen = true }
+                } else null,
+                onCreateGroupClick = { folderDialog = FolderDialog.Create(emptyList()) },
                 onExitClick = onExitClick
             )
         },
@@ -488,7 +530,9 @@ fun HomeScreen(
                         label = primaryActionLabel,
                         enabled = true,
                         onClick = {
-                            if (requiresSetup) {
+                            if (needsVkLink) {
+                                vkPromptOpen = true
+                            } else if (requiresSetup) {
                                 isAddSheetOpen = true
                             } else {
                                 onToggleClick()
@@ -502,7 +546,7 @@ fun HomeScreen(
                                 .offset(x = 100.dp)
                                 .size(56.dp)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                 .clickable(enabled = !autoRunning) { autoConnectFastest() },
                             contentAlignment = Alignment.Center
                         ) {
@@ -526,6 +570,18 @@ fun HomeScreen(
                 }
             }
 
+            if (state.isVpnConnected && appBehavior?.hideSessionButton != true) {
+                item(key = "session-chip") {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.FilledTonalButton(onClick = { isSessionSheetOpen = true }) {
+                            Icon(Icons.Rounded.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(s.sessionTitle)
+                        }
+                    }
+                }
+            }
+
             extraConnectContent?.let { extra ->
                 item(key = "extra-connect-content") { extra() }
             }
@@ -542,7 +598,7 @@ fun HomeScreen(
                 item(key = "selection-bar") {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh
                     ) {
                         Row(
@@ -590,6 +646,7 @@ fun HomeScreen(
             }
 
             locationSelectorContent(
+                onShareSubscription = onShareSubscriptionRequested,
                 selectionMode = selectionMode,
                 selectedIds = selectedIds,
                 onToggleSelect = { toggleSelected(it) },
@@ -790,10 +847,29 @@ fun HomeScreen(
             )
         }
 
+        if (isSessionSheetOpen) {
+            SessionSheet(proxy = { viewModel.tunnelProxy() }, onDismiss = { isSessionSheetOpen = false })
+        }
+
+        if (isListViewSheetOpen && appBehavior != null) {
+            ListViewSheet(
+                settings = appBehavior,
+                onChanged = onAppBehaviorChanged,
+                onDismiss = { isListViewSheetOpen = false }
+            )
+        }
+
+        if (isPingSettingsSheetOpen && appBehavior != null) {
+            PingSettingsSheet(
+                settings = appBehavior,
+                onChanged = onAppBehaviorChanged,
+                onDismiss = { isPingSettingsSheetOpen = false }
+            )
+        }
+
         if (isAddSheetOpen) {
             AddConfigurationSheet(
                 canScanQr = canScanQr,
-                hasSubscriptions = hasSubscriptions,
                 onDismiss = {
                     isAddSheetOpen = false
                 },
@@ -801,9 +877,10 @@ fun HomeScreen(
                     isAddSheetOpen = false
                     onScanQrRequested()
                 },
-                onPasteLinkClick = {
+                onImportText = { text ->
                     isAddSheetOpen = false
-                    onImportFromClipboardRequested(
+                    onImportTextRequested(
+                        text,
                         {
                             scope.launch {
                                 snackbarHostState.showSnackbar(s.importedFromClipboard)
@@ -820,30 +897,24 @@ fun HomeScreen(
                     isAddSheetOpen = false
                     onImportFileRequested()
                 },
-                onUpdateSubscriptionsClick = {
-                    isAddSheetOpen = false
-                    refreshSubscriptions()
-                },
-                onAddCustomLocationClick = {
-                    isAddSheetOpen = false
-                    onAddLocation()
-                },
-                onCreateGroupClick = {
-                    isAddSheetOpen = false
-                    folderDialog = FolderDialog.Create(emptyList())
-                },
-                onFreeServersClick = {
+                onStartFreeServers = { limit ->
                     isAddSheetOpen = false
                     viewModel.loadFreeServers(
                         parallelism = pingParallelism,
-                        limit = freeServersLimit,
+                        limit = limit,
                         onError = { message ->
                             scope.launch {
                                 snackbarHostState.showSnackbar(message)
                             }
                         }
                     )
-                }
+                },
+                onCreateManual = { engine, wireguard ->
+                    isAddSheetOpen = false
+                    onAddLocationOfType(engine, wireguard)
+                },
+                freeServersSettings = appBehavior,
+                onFreeServersSettingsChanged = onAppBehaviorChanged
             )
         }
 
@@ -851,27 +922,34 @@ fun HomeScreen(
             AlertDialog(
                 onDismissRequest = {},
                 properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = false),
-                // Stop the search but keep what it has found so far (a pass over a long list takes hours).
+                // The two everyday actions on the right: fold the search into the strip under the list, or
+                // stop it and keep what it has found so far (a pass over a long list takes hours).
                 confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.stopFreeServersSearch {
-                            scope.launch {
-                                val result = snackbarHostState.showSnackbar(
-                                    s.freeServersNothingYet,
-                                    actionLabel = s.freeServersContinue
-                                )
-                                if (result == SnackbarResult.ActionPerformed) {
-                                    viewModel.loadFreeServers(
-                                        parallelism = pingParallelism,
-                                        limit = freeServersLimit,
-                                        resume = true,
-                                        onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+                    Row {
+                        // Closes the dialog; the strip under the toolbar keeps the progress and the result is saved silently.
+                        TextButton(onClick = { viewModel.sendFreeServersToBackground() }) {
+                            Text(s.freeServersToBackground)
+                        }
+                        TextButton(onClick = {
+                            viewModel.stopFreeServersSearch {
+                                scope.launch {
+                                    val result = snackbarHostState.showSnackbar(
+                                        s.freeServersNothingYet,
+                                        actionLabel = s.freeServersContinue
                                     )
+                                    if (result == SnackbarResult.ActionPerformed) {
+                                        viewModel.loadFreeServers(
+                                            parallelism = pingParallelism,
+                                            limit = freeServersLimit,
+                                            resume = true,
+                                            onError = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+                                        )
+                                    }
                                 }
                             }
+                        }) {
+                            Text(s.freeServersStopKeep)
                         }
-                    }) {
-                        Text(s.freeServersStopKeep)
                     }
                 },
                 dismissButton = {
@@ -880,10 +958,6 @@ fun HomeScreen(
                             if (state.freeServersPaused) viewModel.resumeFreeServersPaused() else viewModel.pauseFreeServersSearch()
                         }) {
                             Text(if (state.freeServersPaused) s.pingResume else s.pingPause)
-                        }
-                        // Closes the dialog; the strip under the toolbar keeps the progress and the result is saved silently.
-                        TextButton(onClick = { viewModel.sendFreeServersToBackground() }) {
-                            Text(s.freeServersToBackground)
                         }
                         TextButton(onClick = { viewModel.cancelFreeServersLoad() }) {
                             Text(s.cancel)
@@ -909,11 +983,6 @@ fun HomeScreen(
                                 Text(
                                     s.freeServersWaitNotice,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    s.freeServersSourceNotice,
-                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -1290,7 +1359,7 @@ private fun SubscriptionsRefreshRow(text: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
