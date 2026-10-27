@@ -1211,14 +1211,17 @@ data class LocationConfig(
             }
         }
 
+        /** The transport a name stands for, whatever the provider supports. */
+        private fun canonicalTransport(value: String): String = when (value.trim().lowercase()) {
+            TRANSPORT_DATACHANNEL, "data", "dc" -> TRANSPORT_DATACHANNEL
+            TRANSPORT_VP8CHANNEL, "vp8", "video_vp8", "video-vp8" -> TRANSPORT_VP8CHANNEL
+            TRANSPORT_SEICHANNEL, "sei", "sei_channel", "sei-channel", "h264_sei" -> TRANSPORT_SEICHANNEL
+            TRANSPORT_VIDEOCHANNEL, "video", "video_channel", "video-channel" -> TRANSPORT_VIDEOCHANNEL
+            else -> DEFAULT_TRANSPORT
+        }
+
         fun normalizeTransport(value: String, provider: String = DEFAULT_BYPASS_PROVIDER): String {
-            val normalized = when (value.trim().lowercase()) {
-                TRANSPORT_DATACHANNEL, "data", "dc" -> TRANSPORT_DATACHANNEL
-                TRANSPORT_VP8CHANNEL, "vp8", "video_vp8", "video-vp8" -> TRANSPORT_VP8CHANNEL
-                TRANSPORT_SEICHANNEL, "sei", "sei_channel", "sei-channel", "h264_sei" -> TRANSPORT_SEICHANNEL
-                TRANSPORT_VIDEOCHANNEL, "video", "video_channel", "video-channel" -> TRANSPORT_VIDEOCHANNEL
-                else -> DEFAULT_TRANSPORT
-            }
+            val normalized = canonicalTransport(value)
             val supported = supportedTransportsForProvider(provider)
             return normalized.takeIf { it in supported }
                 ?: supported.firstOrNull()
@@ -1238,7 +1241,8 @@ data class LocationConfig(
         }
 
         fun transportDisplayName(transport: String): String {
-            return when (normalizeTransport(transport)) {
+            // Not normalizeTransport(): without a provider it falls back to MTS Link, which only has VP8.
+            return when (canonicalTransport(transport)) {
                 TRANSPORT_DATACHANNEL -> "DataChannel"
                 TRANSPORT_VP8CHANNEL -> "VP8"
                 TRANSPORT_SEICHANNEL -> "SEI"
