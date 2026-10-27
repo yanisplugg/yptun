@@ -262,11 +262,16 @@ class DesktopVpnManager private constructor(
         val behavior = org.olcbox.app.vpn.desktop.JvmVpnSettings.loadAppBehavior()
         val profile = config.proxy
         val hasProxy = profile != null
+        // Trust Tunnel's profile carries a placeholder server/port; the real endpoint lives inside the tt:// blob.
+        val ttEndpoint = profile?.takeIf { it.type == ProxyProfile.TYPE_TRUSTTUNNEL }
+            ?.let { org.olcbox.app.data.importer.TrustTunnelParser.endpoints(it.ttConfig).firstOrNull() }
+        val server = ttEndpoint?.first ?: profile?.server
+        val serverPort = ttEndpoint?.second ?: profile?.serverPort
         when (behavior.pingMode) {
             org.olcbox.app.data.model.AppBehaviorSettings.PING_TCP ->
-                if (hasProxy) return tcpPing(profile?.server, profile?.serverPort)
+                if (hasProxy) return tcpPing(server, serverPort)
             org.olcbox.app.data.model.AppBehaviorSettings.PING_ICMP ->
-                if (hasProxy) return icmpPing(profile?.server)
+                if (hasProxy) return icmpPing(server)
             org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_GET ->
                 if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "GET")
             org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_HEAD ->
@@ -284,6 +289,9 @@ class DesktopVpnManager private constructor(
             proxyType == ProxyProfile.TYPE_HYSTERIA2 ->
                 if (isActive && isConnected.value) tunnelPing()
                 else icmpPing(profile?.server.orEmpty())
+            // Trust Tunnel: through the live tunnel when up, else TCP to the endpoint decoded from the tt:// link.
+            proxyType == ProxyProfile.TYPE_TRUSTTUNNEL ->
+                if (isActive && isConnected.value) tunnelPing() else tcpPing(server, serverPort)
             config.engine == EngineType.Standard || config.engine == EngineType.Chain ->
                 tcpPing(profile?.server, profile?.serverPort)
             else -> OlcRtcConnectionChecker.ping(
@@ -454,6 +462,10 @@ class DesktopVpnManager private constructor(
                 }.getOrDefault(-1L)
                 return@withContext if (ms >= 0) ms else null
             }
+            // Trust Tunnel isn't xray-serviceable either: raise a throwaway SOCKS-only client and fetch through it.
+            if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
+                return@withContext trustTunnelUrlTest(profile, url, method)
+            }
             if (profile.type == ProxyProfile.TYPE_HYSTERIA2) {
                 addLog("Proxy $method ping: Hysteria2 not supported (use Auto/ICMP)")
                 return@withContext null
@@ -493,6 +505,48 @@ class DesktopVpnManager private constructor(
             }
             if (ms >= 0) ms else null
         }
+
+    private suspend fun trustTunnelUrlTest(profile: ProxyProfile, url: String, method: String): Long? {
+        val port = (20_000..60_000).random()
+        val dirName = "trusttunnel-ping-$port"
+        val client = org.olcbox.app.vpn.desktop.DesktopTrustTunnel { }
+        try {
+            client.start(profile.ttConfig, port, dirName)
+            val deadline = System.currentTimeMillis() + pingTimeoutMs + 5_000
+            while (System.currentTimeMillis() < deadline && client.isRunning() &&
+                runCatching { Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) } }.isFailure
+            ) {
+                kotlinx.coroutines.delay(100)
+            }
+            if (!client.isRunning()) {
+                addLog("Proxy $method ping: Trust Tunnel client exited")
+                return null
+            }
+            val configJson = org.olcbox.app.vpn.xray.XrayConfig.build(
+                profile = ProxyProfile(tag = "trusttunnel", type = "socks", server = "127.0.0.1", serverPort = port),
+                listenPort = (20_000..60_000).random(),
+                listenHost = "127.0.0.1",
+                logLevel = "none",
+                blockQuic = false,
+            )
+            val ms = runCatching {
+                org.olcbox.app.vpn.desktop.YpTunCore.xrayMeasureDelay(configJson, url, method, pingTimeoutMs.toInt())
+            }.getOrElse {
+                addLog("Proxy $method ping (Trust Tunnel) error: ${it.message}")
+                -1L
+            }
+            if (ms < 0) addLog("Proxy $method ping: no response via Trust Tunnel for $url")
+            return if (ms >= 0) ms else null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            addLog("Proxy $method ping (Trust Tunnel) failed: ${e.message}")
+            return null
+        } finally {
+            client.stop()
+            org.olcbox.app.vpn.desktop.DesktopTrustTunnel.deleteWorkDir(dirName)
+        }
+    }
 
     /**
      * IPv4 addresses of the engines' upstream servers for [location] — routed around the Windows

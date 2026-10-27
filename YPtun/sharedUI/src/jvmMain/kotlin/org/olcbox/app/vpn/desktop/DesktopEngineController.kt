@@ -643,6 +643,10 @@ internal class DesktopEngineController(
                 // vless tunnel carries UDP, so DNS is fast stateless packets instead of one long-lived
                 // DoH/TCP connection that periodically froze for 5-6s and blocked all resolution.
                 remoteDnsOverHttps = false,
+                // Trust Tunnel's SOCKS listener doesn't carry UDP-ASSOCIATE DNS ("Failed to send UDP ...
+                // -> 8.8.8.8:53: handler returned -1" in its log → every lookup stalls → page loads crawl).
+                // Resolve over TCP (SOCKS CONNECT) like Android does for local UDP tunnels.
+                preferTcpRemoteDns = isTrustTunnel && secondProfile == null,
                 // Let the exit server resolve destination domains instead of forcing a client-side
                 // re-resolve per connection (which made every web connection wait on the single, flaky
                 // DoH-over-proxy channel → 30s stalls). No routing profile here = no geoip rules need a

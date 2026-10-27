@@ -32,11 +32,11 @@ internal class DesktopTrustTunnel(
      * Starts the client with a SOCKS5 listener on `127.0.0.1:[socksPort]`. Throws if the deep link
      * cannot be decoded or the client fails to launch.
      */
-    suspend fun start(deepLink: String, socksPort: Int) = withContext(Dispatchers.IO) {
+    suspend fun start(deepLink: String, socksPort: Int, dirName: String = "trusttunnel") = withContext(Dispatchers.IO) {
         stop()
 
         val clientBinary = DesktopNativeAssets.resolveTrustTunnelClientBinary()
-        val workDir = workDir()
+        val workDir = workDir(dirName)
         val configFile = workDir.resolve("client.toml")
         Files.writeString(configFile, composeConfig(endpointTable(deepLink), socksPort))
 
@@ -101,8 +101,13 @@ internal class DesktopTrustTunnel(
          */
         private val decodeCache = ConcurrentHashMap<String, String>()
 
-        private fun workDir(): Path =
-            DesktopPaths.appDataDir().resolve("trusttunnel").also { Files.createDirectories(it) }
+        private fun workDir(dirName: String = "trusttunnel"): Path =
+            DesktopPaths.appDataDir().resolve(dirName).also { Files.createDirectories(it) }
+
+        /** Removes a throwaway client's work dir (ping probes). */
+        fun deleteWorkDir(dirName: String) {
+            runCatching { workDir(dirName).toFile().deleteRecursively() }
+        }
 
         /**
          * The `[endpoint]` table (header included) behind a `tt://` link, via `setup_wizard` in
