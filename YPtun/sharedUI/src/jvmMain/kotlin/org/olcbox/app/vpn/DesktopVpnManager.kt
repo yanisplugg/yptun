@@ -512,6 +512,9 @@ class DesktopVpnManager private constructor(
                 }
                 awgEndpointHost(profile)?.let { add(it) }
             }
+            // snolc runs as its own subprocess (no protect() here): its carrier dials the exit node directly,
+            // so that host stays outside the TUN or the tunnel would carry its own transport.
+            config.snolc?.host?.takeIf { it.isNotBlank() }?.let { add(it) }
             // WARP on the client side: awgproxy dials Cloudflare from this process (no VpnService.protect on a PC),
             // so that endpoint must stay outside the TUN or the tunnel would carry its own handshake.
             if (config.warpEnabled && config.warpMode == org.olcbox.app.data.model.WarpMode.Client) {

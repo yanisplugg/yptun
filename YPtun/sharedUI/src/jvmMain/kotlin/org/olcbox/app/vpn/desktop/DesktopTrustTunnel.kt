@@ -65,6 +65,8 @@ internal class DesktopTrustTunnel(
         // Top-level keys must precede any [table]. Kill switch off: our TUN owns routing, and on
         // desktop the client's kill switch would install firewall rules that need root.
         appendLine("loglevel = \"info\"")
+        // Required since 1.1.x: without it the client aborts with "Unexpected VPN mode:" before listening.
+        appendLine("vpn_mode = \"general\"")
         appendLine("killswitch_enabled = false")
         appendLine()
         appendLine(endpointToml.trim())
