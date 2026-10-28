@@ -18,6 +18,14 @@ var protectFD func(fd int) bool
 // SetProtectFD installs the platform socket protector. Pass nil to remove it.
 func SetProtectFD(protect func(fd int) bool) { protectFD = protect }
 
+// ProtectRaw protects the socket behind rc with the installed protector, if any. It is meant for a
+// net.Dialer / net.ListenConfig Control hook, i.e. it runs before connect()/bind().
+func ProtectRaw(rc syscall.RawConn) {
+	if protect := protectFD; protect != nil {
+		_ = rc.Control(func(fd uintptr) { protect(int(fd)) })
+	}
+}
+
 // DialUDPProtected dials udp to addr, protecting the socket first when a protector is installed.
 // The protector must run BEFORE connect(), which is exactly what Dialer.Control gives us.
 func DialUDPProtected(addr *net.UDPAddr) (*net.UDPConn, error) {
