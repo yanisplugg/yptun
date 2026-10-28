@@ -932,7 +932,7 @@ class LocationsRepositoryImplTest {
     fun multiRoomLinkRoundTripsAllRooms() = runTest {
         val key1 = "a".repeat(64)
         val key2 = "b".repeat(64)
-        val link = "olcrtc://mtslink?vp8channel<vp8-fps=30&vp8-batch=8>@room1#$key1" +
+        val link = "olcrtc://mtslink?vp8channel<vp8-fps=30&vp8-batch=8>@room1#$key1%cl" +
             "!mtslink?vp8channel@room2#$key2\$Мультикомната"
 
         val source = FakeLocationsDataSource()
