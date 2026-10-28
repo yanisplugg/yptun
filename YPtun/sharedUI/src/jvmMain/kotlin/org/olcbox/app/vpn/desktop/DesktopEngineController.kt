@@ -163,6 +163,8 @@ internal class DesktopEngineController(
         openFlux.stop()
         snolc.stop()
         csqtt.stop()
+        roomPool?.stop()
+        roomPool = null
         YpTunCore.stopAll()
         // [start] is the only other place these are reset, and the olcRTC (Stealth) path never calls
         // it — it runs the olcrtc subprocess instead. So a stale tunHandledInCore=true, left by the
@@ -176,9 +178,9 @@ internal class DesktopEngineController(
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
-        EngineType.Stealth -> YpTunCore.rtcRunning()
+        EngineType.Stealth -> olcrtcRunning()
         EngineType.Standard -> proxyCoreRunning()
-        EngineType.Chain -> YpTunCore.rtcRunning() && proxyCoreRunning()
+        EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         EngineType.VkTurn -> (YpTunCore.ftRunning() || YpTunCore.wdttRunning() || csqtt.isRunning()) && proxyCoreRunning()
         // MasterDNS raises its own local forwarder; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> YpTunCore.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
@@ -224,19 +226,65 @@ internal class DesktopEngineController(
         YpTunCore.rtcSetSocksListenHost(listenHost)
         applyTelemostCookies(config)
         YpTunCore.rtcApplyTransportOptions(config)
-        log("Starting olcRTC provider=${config.bypassProvider}, transport=${config.transport}, room=${config.id}")
+        startOlcrtcSocks(config, listenHost, listenPort, socksUsername, socksPassword, deviceId)
+        log("olcRTC ready on $listenHost:$listenPort")
+    }
+
+    /** The multi-room balancer in front of the olcRTC rooms, or null for the single-room core. */
+    private var roomPool: DesktopRoomPool? = null
+
+    /** True while the olcRTC SOCKS is up: any multi-room room, or the single-room core. */
+    private fun olcrtcRunning(): Boolean =
+        if (roomPool != null) YpTunCore.rtcRoomsRunning() > 0 else YpTunCore.rtcRunning()
+
+    /**
+     * Brings up the olcRTC SOCKS on [port]: MULTI-ROOM (round-robin balancer over the main room + each
+     * extra) when [config] asks for it, otherwise the single-room core. Shared by Stealth and Chain. On a
+     * multi-room failure it cleans up and falls back to single-room so the user is never left offline.
+     * Rooms share the bridge credentials (loopback-only, password-protected).
+     */
+    private suspend fun startOlcrtcSocks(
+        config: LocationConfig,
+        host: String,
+        port: Int,
+        socksUsername: String,
+        socksPassword: String,
+        deviceId: String,
+    ) {
+        if (config.usesMultiRoom()) {
+            val specs = config.multiRoomSpecs().map {
+                DesktopRoomPool.RoomSpec(
+                    carrier = it.provider.ifBlank { config.bypassProvider },
+                    transport = it.transport.ifBlank { config.transport },
+                    room = it.room,
+                    clientId = deviceId,
+                    keyHex = it.key,
+                )
+            }
+            log("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer on $host:$port")
+            val pool = DesktopRoomPool(log)
+            roomPool = pool
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                pool.start(specs, host, port, socksUsername, socksPassword)
+            }
+            if (ok) return
+            log("Multi-room failed to start — falling back to single room")
+            runCatching { pool.stop() }
+            roomPool = null
+        } else {
+            log("Starting olcRTC provider=${config.bypassProvider}, transport=${config.transport}, room=${config.id}")
+        }
         YpTunCore.rtcStart(
             carrier = config.bypassProvider,
             transport = config.transport,
             roomId = config.id,
             clientId = deviceId,
             keyHex = config.key,
-            socksPort = listenPort,
+            socksPort = port,
             socksUser = socksUsername,
             socksPass = socksPassword,
         )
         YpTunCore.rtcWaitReady(MOBILE_READY_TIMEOUT_MS)
-        log("olcRTC ready on $listenHost:$listenPort")
     }
 
     private fun applyTelemostCookies(config: LocationConfig) {
@@ -403,18 +451,7 @@ internal class DesktopEngineController(
         if (chained) {
             applyTelemostCookies(config)
             YpTunCore.rtcApplyTransportOptions(config)
-            log("Starting olcRTC (chain) provider=${config.bypassProvider}, room=${config.id}")
-            YpTunCore.rtcStart(
-                carrier = config.bypassProvider,
-                transport = config.transport,
-                roomId = config.id,
-                clientId = deviceId,
-                keyHex = config.key,
-                socksPort = chainPort,
-                socksUser = socksUsername,
-                socksPass = socksPassword,
-            )
-            YpTunCore.rtcWaitReady(MOBILE_READY_TIMEOUT_MS)
+            startOlcrtcSocks(config, "127.0.0.1", chainPort, socksUsername, socksPassword, deviceId)
             log("olcRTC chain ready on 127.0.0.1:$chainPort")
         }
 

@@ -839,8 +839,10 @@ class DesktopVpnManager private constructor(
 
             // Non-Stealth engines (sing-box/xray/AmneziaWG/Hysteria2/VK-TURN/Chain) run in-process
             // via the yptuncore library — the desktop port of the Android engine stack. Stealth
-            // keeps the proven olcrtc subprocess (incl. the privileged Linux TUN path).
-            val useEngineController = location.engine != EngineType.Stealth && engineController.isSupported
+            // keeps the proven olcrtc subprocess (incl. the privileged Linux TUN path), except multi-room.
+            // Multi-room Stealth also goes in-process: the room balancer lives in the yptuncore path.
+            val useEngineController =
+                (location.engine != EngineType.Stealth || location.usesMultiRoom()) && engineController.isSupported
 
             // Resolved ONCE per connect: this does DNS lookups and, for VK-TURN, an ASN→CIDR fetch.
             // It used to be computed twice on the Windows-TUN + external-bridge path (in-core TUN
