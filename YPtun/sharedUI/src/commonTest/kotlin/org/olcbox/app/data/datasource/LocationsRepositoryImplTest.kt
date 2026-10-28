@@ -929,6 +929,30 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun multiRoomLinkRoundTripsAllRooms() = runTest {
+        val key1 = "a".repeat(64)
+        val key2 = "b".repeat(64)
+        val link = "olcrtc://mtslink?vp8channel<vp8-fps=30&vp8-batch=8>@room1#$key1" +
+            "!mtslink?vp8channel@room2#$key2\$Мультикомната"
+
+        val source = FakeLocationsDataSource()
+        LocationsRepositoryImpl(source).importText(link)
+        val config = assertNotNull(source.stored).locations.single().location
+        assertEquals("Мультикомната", config.name)
+        assertEquals("room1", config.id)
+        assertTrue(config.usesMultiRoom())
+        assertEquals(listOf("room2"), config.extraRooms.map { it.room })
+        assertEquals(key2, config.extraRooms.single().key)
+
+        // Copying the link back (universal links off) keeps every room.
+        val shared = ConfigShareService.olcRtcUri(config)
+        assertTrue("@room1#$key1!" in shared && "@room2#$key2" in shared, shared)
+        val again = FakeLocationsDataSource()
+        LocationsRepositoryImpl(again).importText(shared)
+        assertEquals(config.extraRooms, assertNotNull(again.stored).locations.single().location.extraRooms)
+    }
+
+    @Test
     fun subscriptionSharingListsDistinctUrls() {
         val first = LocationEntry.from(
             "first",
