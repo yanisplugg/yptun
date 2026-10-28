@@ -1563,6 +1563,7 @@ internal class DesktopEngineController(
             trustTunnel.stop()
             throw IllegalStateException("Trust Tunnel SOCKS port $port did not open")
         }
+        if (!trustTunnel.awaitTunnelReady(port)) log("Trust Tunnel: endpoint session not confirmed, continuing")
         val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
             "\"server_port\":$port,\"version\":\"5\"}"
         return ProxyProfile(

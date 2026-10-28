@@ -49,6 +49,38 @@ internal class DesktopTrustTunnel(
         pumpLog(started)
     }
 
+    /**
+     * Waits until the client has actually opened its tunnel session to the endpoint. The SOCKS port
+     * (and the "Successfully connected" log line) only mean the local listener is up; the HTTP/2
+     * session is established lazily on the first request and that first CONNECT stalls for ~6 s.
+     * Done here, before the TUN exists, so the stall isn't paid by the first DNS lookups and the
+     * first ping. Best-effort: false just means we gave up waiting.
+     */
+    suspend fun awaitTunnelReady(socksPort: Int, timeoutMs: Long = WARMUP_TIMEOUT_MS): Boolean =
+        withContext(Dispatchers.IO) {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (isRunning() && System.currentTimeMillis() < deadline) {
+                if (runCatching { probeConnect(socksPort) }.getOrDefault(false)) return@withContext true
+                kotlinx.coroutines.delay(300)
+            }
+            false
+        }
+
+    /** SOCKS5 CONNECT to a public resolver through the local listener; true on a success reply. */
+    private fun probeConnect(socksPort: Int): Boolean =
+        java.net.Socket().use { s ->
+            s.connect(java.net.InetSocketAddress("127.0.0.1", socksPort), 1_000)
+            s.soTimeout = WARMUP_ATTEMPT_MS
+            val out = s.getOutputStream()
+            val inp = s.getInputStream()
+            out.write(byteArrayOf(5, 1, 0)); out.flush()
+            if (inp.readNBytes(2).let { it.size < 2 || it[1].toInt() != 0 }) return false
+            // 1.1.1.1:443
+            out.write(byteArrayOf(5, 1, 0, 1, 1, 1, 1, 1, 0x01, 0xBB.toByte())); out.flush()
+            val reply = inp.readNBytes(10)
+            reply.size >= 2 && reply[1].toInt() == 0
+        }
+
     fun stop() {
         val running = process ?: return
         process = null
@@ -91,6 +123,8 @@ internal class DesktopTrustTunnel(
 
     companion object {
         private const val WIZARD_TIMEOUT_MS = 15_000L
+        private const val WARMUP_TIMEOUT_MS = 15_000L
+        private const val WARMUP_ATTEMPT_MS = 8_000
         private const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         private const val PROCESS_KILL_TIMEOUT_MS = 1_000L
 
