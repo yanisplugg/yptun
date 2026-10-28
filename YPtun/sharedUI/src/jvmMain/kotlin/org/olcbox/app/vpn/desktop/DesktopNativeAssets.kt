@@ -175,27 +175,37 @@ internal object DesktopNativeAssets {
         }
     }
 
+    // Parallel callers (per-location pings) must not copy over each other's running .exe.
+    private val resolveLock = Any()
+
     private fun resolveBinary(
         fileName: String,
         resourceName: String,
         candidates: List<Path>
-    ): Path {
+    ): Path = synchronized(resolveLock) {
         val target = DesktopPaths.appDataDir().resolve("bin").resolve(fileName)
         Files.createDirectories(target.parent)
 
-        val resource = javaClass.classLoader.getResourceAsStream(resourceName)
-        if (resource != null) {
-            resource.use {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
+        // Windows refuses to replace an .exe that is already running (another ping/connection holds it);
+        // that copy is the same bundled file, so the existing one is good to use.
+        fun copyOrKeep(source: () -> java.io.InputStream) {
+            try {
+                source().use { Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING) }
+            } catch (e: java.io.IOException) {
+                if (!Files.isRegularFile(target)) throw e
             }
             makeExecutable(target)
-            return target
         }
 
-        candidates.firstOrNull { it.exists() }?.let {
-            Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
-            makeExecutable(target)
-            return target
+        val resource = javaClass.classLoader.getResourceAsStream(resourceName)
+        if (resource != null) {
+            copyOrKeep { resource }
+            return@synchronized target
+        }
+
+        candidates.firstOrNull { it.exists() }?.let { candidate ->
+            copyOrKeep { Files.newInputStream(candidate) }
+            return@synchronized target
         }
 
         error("Bundled native binary is missing: $resourceName")

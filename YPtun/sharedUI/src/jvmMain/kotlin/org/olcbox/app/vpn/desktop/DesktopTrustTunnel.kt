@@ -149,6 +149,8 @@ internal class DesktopTrustTunnel(
          * short-circuit). The rest of the wizard's document is discarded: it defaults to a TUN
          * listener, which would make the client create an interface and demand root.
          */
+        // Synchronized: parallel pings share one wizard-settings.toml, which each decode deletes first.
+        @Synchronized
         fun endpointTable(deepLink: String): String = decodeCache.getOrPut(deepLink) {
             val wizard = DesktopNativeAssets.resolveTrustTunnelWizardBinary()
             val workDir = workDir()
