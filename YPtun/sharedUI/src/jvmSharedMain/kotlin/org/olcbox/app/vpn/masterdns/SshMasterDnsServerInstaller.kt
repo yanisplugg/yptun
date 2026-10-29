@@ -118,7 +118,18 @@ internal fun buildInstallScript(options: MasterDnsInstallOptions): String {
         if [ -n "${'$'}holder" ]; then
           unit=${'$'}(ps -o unit= -p "${'$'}holder" 2>/dev/null | tr -d ' ')
           name=${'$'}(ps -o comm= -p "${'$'}holder" 2>/dev/null)
-          if [ "$freePort" = 1 ] && [ -n "${'$'}unit" ] && [ "${'$'}unit" != "-" ]; then
+          # On Ubuntu UDP 53 is systemd-resolved's local stub. Stopping the whole service would leave
+          # /etc/resolv.conf pointing at 127.0.0.53 and the VPS itself without DNS, so drop only the stub.
+          if [ "$freePort" = 1 ] && [ "${'$'}unit" = "systemd-resolved.service" ]; then
+            echo "UDP-порт $udp занят локальным DNS systemd-resolved — отключаю только его слушатель на 53, DNS самого сервера продолжит работать"
+            mkdir -p /etc/systemd/resolved.conf.d
+            printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/masterdns.conf
+            if grep -q '^nameserver 127\.0\.0\.53' /etc/resolv.conf 2>/dev/null; then
+              ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+            fi
+            systemctl restart systemd-resolved
+            sleep 1
+          elif [ "$freePort" = 1 ] && [ -n "${'$'}unit" ] && [ "${'$'}unit" != "-" ]; then
             echo "UDP-порт $udp занят (${'$'}name, ${'$'}unit) — останавливаю и отключаю ${'$'}unit"
             systemctl disable --now "${'$'}unit" || true
             sleep 1
@@ -184,6 +195,9 @@ internal fun buildInstallScript(options: MasterDnsInstallOptions): String {
           exit 1
         fi
         echo "Служба masterdns-server слушает UDP-порт $udp"
+        if command -v getent >/dev/null 2>&1 && ! getent hosts github.com >/dev/null 2>&1; then
+          echo "Внимание: на самом сервере не резолвятся имена (проверь /etc/resolv.conf) — туннель это не затрагивает"
+        fi
         echo "MASTERDNS_KEY=${'$'}(cat /etc/masterdns/encrypt_key.txt)"
     """.trimIndent()
 }
