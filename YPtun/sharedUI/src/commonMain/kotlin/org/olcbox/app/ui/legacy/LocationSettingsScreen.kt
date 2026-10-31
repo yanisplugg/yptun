@@ -402,6 +402,9 @@ fun LocationSettingsScreen(
                         onSelected = viewModel::onCoreChanged
                     )
                 }
+                if (!viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
+                    item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
                 if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
                     item {

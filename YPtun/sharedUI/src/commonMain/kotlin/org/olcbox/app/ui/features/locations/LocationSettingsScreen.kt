@@ -465,6 +465,9 @@ fun LocationSettingsScreen(
                 // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
+                if (!viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
+                    item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
                 if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
                     item {

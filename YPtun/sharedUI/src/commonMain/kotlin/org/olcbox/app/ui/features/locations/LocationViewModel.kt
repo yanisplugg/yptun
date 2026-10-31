@@ -878,6 +878,14 @@ class LocationViewModel(
         }
     }
 
+    /** Manual VLESS form: applies [edit] to the main proxy (a fresh VLESS profile when there is none). */
+    fun editVless(edit: (ProxyProfile) -> ProxyProfile) {
+        val profile = edit(editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_VLESS } ?: ProxyProfile())
+        editingConfig = editingConfig.copy(proxy = profile)
+        editingProxyLink = ShareLinkComposer.compose(profile).orEmpty() // display-only, like the pasted link
+        proxyError = null
+    }
+
     /** Parses a pasted proxy share link or raw sing-box outbound into [editingConfig].proxy. */
     fun onProxyLinkChanged(value: String) {
         editingProxyLink = value
