@@ -10,7 +10,7 @@ import org.olcbox.app.data.model.VkTurnConfig
  * ```
  *
  * `host` is the server, `peer` its DTLS port (46000 by default), `hashes` the VK call hashes joined by
- * `+`. Older links are `csqtt://<password>@host:port`. Maps onto a VK-TURN location whose core is
+ * `+`. csqtt 2.5.0 wraps that query in AES-GCM (`csqtt://<base64url>`, see [CsqttLinkCipher]). Older links are `csqtt://<password>@host:port`. Maps onto a VK-TURN location whose core is
  * [VkTurnConfig.CORE_CSQTT]. An optional `#<name>` fragment (percent-encoded) names the location.
  */
 object CsqttUriParser {
@@ -36,6 +36,8 @@ object CsqttUriParser {
         if (rest.substringBefore('?').trimEnd('/').equals("connect", ignoreCase = true) && query.isNotBlank()) {
             return parseV2(query)?.copy(name = name)
         }
+        // csqtt 2.5.0: the whole `connect?v=2&…` query is AES-GCM'd and base64'd into the link body.
+        if ('@' !in rest) CsqttLinkCipher.decrypt(rest)?.let { return parse(SCHEME + it)?.copy(name = name) }
         return parseLegacy(rest)?.copy(name = name)
     }
 
