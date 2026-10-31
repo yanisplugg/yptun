@@ -279,7 +279,10 @@ fun HomeScreen(
             onCancel = { locationViewModel.cancelPings() }
         )
     }
+    // Global core = sing-box: xhttp/raw-Xray servers can't run there, so they're hidden (not deleted).
+    val hideXrayOnly = appBehavior?.globalProxyCore == org.olcbox.app.data.model.ProxyCore.SingBox
     val locations = locationViewModel.locations.toList()
+        .filterNot { hideXrayOnly && it.config?.requiresXray() == true }
     // Drop selected ids that no longer exist (e.g. after a delete) so the count stays accurate.
     selectedIds.retainAll(locations.map { it.storageId }.toSet())
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
