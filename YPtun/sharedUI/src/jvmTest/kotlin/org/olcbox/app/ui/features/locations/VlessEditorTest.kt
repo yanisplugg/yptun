@@ -45,4 +45,24 @@ class VlessEditorTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test
+    fun vlessEngineIsAStandardLocationWithAnEmptyVlessSlot() {
+        Dispatchers.setMain(StandardTestDispatcher())
+        try {
+            val vm = LocationViewModel(LocationsRepositoryImpl(Source()))
+            vm.startEditing(null)
+            assertFalse(vm.isVlessEngine)
+            vm.onVlessEngineSelected()
+            assertTrue(vm.isVlessEngine)
+            assertEquals(EngineType.Standard, vm.editingConfig.engine)
+            vm.onProxyLinkChanged("vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls&type=tcp#V")
+            assertTrue(vm.editingConfig.proxy!!.isComplete())
+            vm.onEngineChanged(EngineType.Standard) // back to plain Standard keeps the proxy, drops the VLESS mode
+            assertFalse(vm.isVlessEngine)
+            assertTrue(vm.editingConfig.proxy!!.isComplete())
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
 }

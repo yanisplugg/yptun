@@ -662,6 +662,8 @@ class LocationViewModel(
         editingMasterDns = editingConfig.masterDns ?: MasterDnsConfig()
         editingOpenFlux = editingConfig.openFlux ?: OpenFluxConfig()
         editingSnolc = editingConfig.snolc ?: SnolcConfig()
+        isVlessEngine = editingConfig.engine == EngineType.Standard &&
+            editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_VLESS && it.isManuallyEditableVless() }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -833,6 +835,7 @@ class LocationViewModel(
     }
 
     fun onEngineChanged(engine: EngineType) {
+        isVlessEngine = false
         if (isWireguardEngine) {
             // Leaving AmneziaWG/WG: hand back the proxy it replaced (nothing for a location that was always WG).
             editingConfig = editingConfig.copy(proxy = wgStashedProxy)
@@ -926,6 +929,21 @@ class LocationViewModel(
     private var wgStashedProxy: ProxyProfile? = null
     private var wgStashedLink: String = ""
     private var awgBackup: List<Pair<String, String>> = emptyList()
+
+    /** The «VLESS» entry of the type picker: a Standard location whose main proxy is a hand-made VLESS. */
+    var isVlessEngine by mutableStateOf(false)
+        private set
+
+    fun onVlessEngineSelected() {
+        if (isVlessEngine) return
+        onEngineChanged(EngineType.Standard)
+        if (editingConfig.proxy?.type != ProxyProfile.TYPE_VLESS) {
+            editingConfig = editingConfig.copy(proxy = null)
+            editingProxyLink = ""
+            proxyError = null
+        }
+        isVlessEngine = true
+    }
 
     /** Picks the AmneziaWG/WG engine: an empty AmneziaWG template to fill in or paste over. */
     fun onWireguardEngineSelected() {

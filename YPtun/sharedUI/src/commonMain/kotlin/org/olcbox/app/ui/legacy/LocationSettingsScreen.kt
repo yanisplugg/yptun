@@ -345,9 +345,11 @@ fun LocationSettingsScreen(
                 EngineSelector(
                     selected = config.engine,
                     wireguard = viewModel.isWireguardEngine,
+                    vless = viewModel.isVlessEngine,
                     enabled = !isSaving,
                     onSelected = viewModel::onEngineChanged,
-                    onWireguard = viewModel::onWireguardEngineSelected
+                    onWireguard = viewModel::onWireguardEngineSelected,
+                    onVless = viewModel::onVlessEngineSelected
                 )
             }
 
@@ -402,7 +404,20 @@ fun LocationSettingsScreen(
                         onSelected = viewModel::onCoreChanged
                     )
                 }
-                if (!viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
+                if (!viewModel.isWireguardEngine && viewModel.isVlessEngine && (viewModel.editingId == null || allowConfigEditing)) {
+                    item {
+                        ProxyField(
+                            title = "VLESS",
+                            subtitle = "Ссылка vless:// или конфиг",
+                            link = viewModel.editingProxyLink,
+                            currentProxy = config.proxy,
+                            error = viewModel.proxyError,
+                            enabled = !isSaving,
+                            onChange = viewModel::onProxyLinkChanged
+                        )
+                    }
+                }
+                if (allowConfigEditing && !viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
                     item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
                 }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
@@ -869,9 +884,11 @@ private fun SectionTitle(
 private fun EngineSelector(
     selected: EngineType,
     wireguard: Boolean,
+    vless: Boolean,
     enabled: Boolean,
     onSelected: (EngineType) -> Unit,
-    onWireguard: () -> Unit
+    onWireguard: () -> Unit,
+    onVless: () -> Unit
 ) {
     // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
     // "iPadOS" on an iPad, which a check for "iOS" would miss.
@@ -893,7 +910,7 @@ private fun EngineSelector(
     ) {
         SectionTitle(
             title = LocalStrings.current.engineSection,
-            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE else engineSubtitle(selected)
+            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE else if (vless) VLESS_ENGINE_SUBTITLE else engineSubtitle(selected)
         )
 
         // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
@@ -909,8 +926,8 @@ private fun EngineSelector(
         ) {
             // AmneziaWG/WG sits right after Standard: it IS a Standard location (see LocationViewModel.isWireguardEngine).
             val cells = options.flatMap { engine ->
-                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && wireguard)) { onSelected(engine) }
-                if (engine == EngineType.Standard) listOf(cell, EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)) else listOf(cell)
+                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && (wireguard || vless))) { onSelected(engine) }
+                if (engine == EngineType.Standard) listOf(cell, EngineCellSpec("VLESS", vless, onVless), EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)) else listOf(cell)
             }
             cells.chunked(2).forEachIndexed { rowIndex, rowOptions ->
                 if (rowIndex > 0) HorizontalDivider(color = outline)
@@ -940,6 +957,7 @@ private fun EngineSelector(
 }
 
 private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
+private const val VLESS_ENGINE_SUBTITLE = "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную"
 private const val WIREGUARD_NEEDS_EDITING = "Загрузите файл конфигурации или включите в настройках «Разрешить редактирование конфигураций», чтобы ввести ключи и параметры вручную"
 private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
 
