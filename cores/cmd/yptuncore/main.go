@@ -428,6 +428,29 @@ func YpRtcStop() { rtcSet("stop", coreapi.RtcStop()) }
 //export YpRtcRunning
 func YpRtcRunning() C.int { return cbool(coreapi.RtcRunning()) }
 
+// YpRtcStartRoom raises one multi-room instance (OS-assigned loopback port) and returns its handle, or -1.
+//
+//export YpRtcStartRoom
+func YpRtcStartRoom(carrier, transport, roomID, clientID, keyHex *C.char, socksPort C.int, socksUser, socksPass *C.char, readyTimeoutMs C.int) C.longlong {
+	return C.longlong(coreapi.RtcStartRoom(gs(carrier), gs(transport), gs(roomID), gs(clientID), gs(keyHex),
+		int(socksPort), gs(socksUser), gs(socksPass), int(readyTimeoutMs)))
+}
+
+//export YpRtcStopRoom
+func YpRtcStopRoom(handle C.longlong) { coreapi.RtcStopRoom(int(handle)) }
+
+//export YpRtcStopAllRooms
+func YpRtcStopAllRooms() { coreapi.RtcStopAllRooms() }
+
+//export YpRtcRoomsRunning
+func YpRtcRoomsRunning() C.int { return C.int(coreapi.RtcRoomsRunning()) }
+
+//export YpRtcRoomHealthy
+func YpRtcRoomHealthy(handle C.longlong) C.int { return cbool(coreapi.RtcRoomHealthy(int(handle))) }
+
+//export YpRtcRoomPort
+func YpRtcRoomPort(handle C.longlong) C.int { return C.int(coreapi.RtcRoomPort(int(handle))) }
+
 // YpRtcCheck returns ms or -1 (error text goes to the log bus).
 //
 //export YpRtcCheck

@@ -209,6 +209,11 @@ fun OlcboxAppContent(
                             else locationViewModel.onEngineChanged(engine)
                             onNavigate(AppScreen.LocationSettings(null))
                         },
+                        onAddVlessLocation = {
+                            locationViewModel.startEditing(null)
+                            locationViewModel.onVlessEngineSelected()
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
                         onImportTextRequested = onImportTextRequested
                             ?: { text: String, onImported: () -> Unit, onError: (String) -> Unit ->
                                 homeViewModel.onImportFullConfig(text, onImported, onError)

@@ -291,7 +291,7 @@ fun AppSettingsSheet(
     val searchStrings = LocalStrings.current
     var searchQuery by remember { mutableStateOf("") }
     val searchEntries = remember(searchStrings, appBehavior.experimentalUnlocked) {
-        SettingsSearch.index(searchStrings, appBehavior.experimentalUnlocked)
+        SettingsSearch.index(searchStrings, appBehavior.experimentalUnlocked, desktop = true)
     }
     var autoBypassPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var russianBypassPresetEnabled by remember { mutableStateOf(false) }

@@ -274,6 +274,7 @@ fun LocationSettingsScreen(
         EnginePickerSheet(
             selected = config.engine,
             wireguard = viewModel.isWireguardEngine,
+            vless = viewModel.isVlessEngine,
             onDismiss = { showEnginePicker = false },
             onSelected = { engine ->
                 showEnginePicker = false
@@ -282,6 +283,10 @@ fun LocationSettingsScreen(
             onWireguard = {
                 showEnginePicker = false
                 viewModel.onWireguardEngineSelected()
+            },
+            onVless = {
+                showEnginePicker = false
+                viewModel.onVlessEngineSelected()
             }
         )
     }
@@ -405,7 +410,7 @@ fun LocationSettingsScreen(
                     SettingsCard {
                         SettingsCardRow(
                             title = s.engineTypeTitle,
-                            value = engineDisplayName(config.engine, viewModel.isWireguardEngine),
+                            value = engineDisplayName(config.engine, viewModel.isWireguardEngine, viewModel.isVlessEngine),
                             enabled = !isSaving,
                             onClick = { showEnginePicker = true }
                         )
@@ -465,6 +470,22 @@ fun LocationSettingsScreen(
                 // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
+                if (!viewModel.isWireguardEngine && viewModel.isVlessEngine && (viewModel.editingId == null || allowConfigEditing)) {
+                    item {
+                        ProxyField(
+                            title = "VLESS",
+                            subtitle = "Ссылка vless:// или конфиг",
+                            link = viewModel.editingProxyLink,
+                            currentProxy = config.proxy,
+                            error = viewModel.proxyError,
+                            enabled = !isSaving,
+                            onChange = viewModel::onProxyLinkChanged
+                        )
+                    }
+                }
+                if (allowConfigEditing && !viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
+                    item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
                 if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
                     item {
@@ -3928,10 +3949,11 @@ private fun coreLabel(core: ProxyCore): String = when (core) {
 
 /** The «Тип» row's value and the picker's names: what the traffic goes through, not the engine's code name. */
 @Composable
-private fun engineDisplayName(engine: EngineType, wireguard: Boolean): String {
+private fun engineDisplayName(engine: EngineType, wireguard: Boolean, vless: Boolean): String {
     val s = LocalStrings.current
     return when {
         wireguard -> "AmneziaWG / WireGuard"
+        vless -> "VLESS"
         engine == EngineType.Standard -> s.engineStandardName
         engine == EngineType.Chain -> s.engineChainName
         engine == EngineType.Stealth -> s.engineStealthName
@@ -3948,9 +3970,11 @@ private fun engineDisplayName(engine: EngineType, wireguard: Boolean): String {
 private fun EnginePickerSheet(
     selected: EngineType,
     wireguard: Boolean,
+    vless: Boolean,
     onDismiss: () -> Unit,
     onSelected: (EngineType) -> Unit,
-    onWireguard: () -> Unit
+    onWireguard: () -> Unit,
+    onVless: () -> Unit
 ) {
     val s = LocalStrings.current
     // OpenFlux and Snolc have no iOS engine. The build platform, not UIDevice.systemName — that one reads
@@ -3990,7 +4014,9 @@ private fun EnginePickerSheet(
             Text(s.engineTypeTitle, style = MaterialTheme.typography.headlineSmall)
             SettingsCaption(s.engineGroupProxy)
             SettingsCard {
-                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard) { onSelected(EngineType.Standard) }
+                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard && !vless) { onSelected(EngineType.Standard) }
+                SettingsCardDivider()
+                option("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", vless) { onVless() }
                 SettingsCardDivider()
                 option(s.engineChainName, s.engineChainDesc, selected == EngineType.Chain) { onSelected(EngineType.Chain) }
                 SettingsCardDivider()

@@ -84,6 +84,20 @@ class ShareLinkParserTest {
     }
 
     @Test
+    fun parsesHysteria2PortHoppingInAuthority() {
+        val p = ShareLinkParser.parse("hy2://pw@d.com:443,5000-6000/?insecure=1#D")!!
+        assertEquals("d.com", p.server)
+        assertEquals(443, p.serverPort)
+        assertEquals("443,5000-6000", p.hy2Ports)
+        assertTrue(p.allowInsecure)
+
+        val range = ShareLinkParser.parse("hysteria2://pw@d.com:20000-30000?sni=x.com")!!
+        assertEquals("d.com", range.server)
+        assertEquals(20000, range.serverPort)
+        assertEquals("20000-30000", range.hy2Ports)
+    }
+
+    @Test
     fun rawOutboundProfileIsComplete() {
         val raw = """{"type":"hysteria2","server":"h.example.com","server_port":443,"password":"x"}"""
         val p = ProxyProfile(tag = "raw", rawOutbound = raw)

@@ -32,11 +32,11 @@ internal class DesktopTrustTunnel(
      * Starts the client with a SOCKS5 listener on `127.0.0.1:[socksPort]`. Throws if the deep link
      * cannot be decoded or the client fails to launch.
      */
-    suspend fun start(deepLink: String, socksPort: Int) = withContext(Dispatchers.IO) {
+    suspend fun start(deepLink: String, socksPort: Int, dirName: String = "trusttunnel") = withContext(Dispatchers.IO) {
         stop()
 
         val clientBinary = DesktopNativeAssets.resolveTrustTunnelClientBinary()
-        val workDir = workDir()
+        val workDir = workDir(dirName)
         val configFile = workDir.resolve("client.toml")
         Files.writeString(configFile, composeConfig(endpointTable(deepLink), socksPort))
 
@@ -48,6 +48,38 @@ internal class DesktopTrustTunnel(
         process = started
         pumpLog(started)
     }
+
+    /**
+     * Waits until the client has actually opened its tunnel session to the endpoint. The SOCKS port
+     * (and the "Successfully connected" log line) only mean the local listener is up; the HTTP/2
+     * session is established lazily on the first request and that first CONNECT stalls for ~6 s.
+     * Done here, before the TUN exists, so the stall isn't paid by the first DNS lookups and the
+     * first ping. Best-effort: false just means we gave up waiting.
+     */
+    suspend fun awaitTunnelReady(socksPort: Int, timeoutMs: Long = WARMUP_TIMEOUT_MS): Boolean =
+        withContext(Dispatchers.IO) {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (isRunning() && System.currentTimeMillis() < deadline) {
+                if (runCatching { probeConnect(socksPort) }.getOrDefault(false)) return@withContext true
+                kotlinx.coroutines.delay(300)
+            }
+            false
+        }
+
+    /** SOCKS5 CONNECT to a public resolver through the local listener; true on a success reply. */
+    private fun probeConnect(socksPort: Int): Boolean =
+        java.net.Socket().use { s ->
+            s.connect(java.net.InetSocketAddress("127.0.0.1", socksPort), 1_000)
+            s.soTimeout = WARMUP_ATTEMPT_MS
+            val out = s.getOutputStream()
+            val inp = s.getInputStream()
+            out.write(byteArrayOf(5, 1, 0)); out.flush()
+            if (inp.readNBytes(2).let { it.size < 2 || it[1].toInt() != 0 }) return false
+            // 1.1.1.1:443
+            out.write(byteArrayOf(5, 1, 0, 1, 1, 1, 1, 1, 0x01, 0xBB.toByte())); out.flush()
+            val reply = inp.readNBytes(10)
+            reply.size >= 2 && reply[1].toInt() == 0
+        }
 
     fun stop() {
         val running = process ?: return
@@ -65,6 +97,8 @@ internal class DesktopTrustTunnel(
         // Top-level keys must precede any [table]. Kill switch off: our TUN owns routing, and on
         // desktop the client's kill switch would install firewall rules that need root.
         appendLine("loglevel = \"info\"")
+        // Required since 1.1.x: without it the client aborts with "Unexpected VPN mode:" before listening.
+        appendLine("vpn_mode = \"general\"")
         appendLine("killswitch_enabled = false")
         appendLine()
         appendLine(endpointToml.trim())
@@ -89,6 +123,8 @@ internal class DesktopTrustTunnel(
 
     companion object {
         private const val WIZARD_TIMEOUT_MS = 15_000L
+        private const val WARMUP_TIMEOUT_MS = 15_000L
+        private const val WARMUP_ATTEMPT_MS = 8_000
         private const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         private const val PROCESS_KILL_TIMEOUT_MS = 1_000L
 
@@ -99,8 +135,13 @@ internal class DesktopTrustTunnel(
          */
         private val decodeCache = ConcurrentHashMap<String, String>()
 
-        private fun workDir(): Path =
-            DesktopPaths.appDataDir().resolve("trusttunnel").also { Files.createDirectories(it) }
+        private fun workDir(dirName: String = "trusttunnel"): Path =
+            DesktopPaths.appDataDir().resolve(dirName).also { Files.createDirectories(it) }
+
+        /** Removes a throwaway client's work dir (ping probes). */
+        fun deleteWorkDir(dirName: String) {
+            runCatching { workDir(dirName).toFile().deleteRecursively() }
+        }
 
         /**
          * The `[endpoint]` table (header included) behind a `tt://` link, via `setup_wizard` in
@@ -108,6 +149,8 @@ internal class DesktopTrustTunnel(
          * short-circuit). The rest of the wizard's document is discarded: it defaults to a TUN
          * listener, which would make the client create an interface and demand root.
          */
+        // Synchronized: parallel pings share one wizard-settings.toml, which each decode deletes first.
+        @Synchronized
         fun endpointTable(deepLink: String): String = decodeCache.getOrPut(deepLink) {
             val wizard = DesktopNativeAssets.resolveTrustTunnelWizardBinary()
             val workDir = workDir()

@@ -80,6 +80,7 @@ fun AddConfigurationSheet(
     onImportFileClick: () -> Unit,
     onStartFreeServers: (limit: Int) -> Unit,
     onCreateManual: (engine: EngineType, wireguard: Boolean) -> Unit,
+    onCreateVless: () -> Unit = {},
     // The free-servers options (how many, which source); null starts the search with the saved ones.
     freeServersSettings: AppBehaviorSettings? = null,
     onFreeServersSettingsChanged: (AppBehaviorSettings) -> Unit = {}
@@ -123,7 +124,8 @@ fun AddConfigurationSheet(
                     }
                     AddPage.Manual -> ManualTypePage(
                         onBack = { page = AddPage.Main },
-                        onPick = onCreateManual
+                        onPick = onCreateManual,
+                        onPickVless = onCreateVless
                     )
                 }
             }
@@ -332,7 +334,8 @@ private fun FreeServersStartPage(
 @Composable
 private fun ManualTypePage(
     onBack: () -> Unit,
-    onPick: (EngineType, Boolean) -> Unit
+    onPick: (EngineType, Boolean) -> Unit,
+    onPickVless: () -> Unit
 ) {
     val s = LocalStrings.current
     // OpenFlux and Snolc have no iOS engine (same rule as the engine picker in the location screen).
@@ -360,6 +363,8 @@ private fun ManualTypePage(
 
     SettingsCaption(s.manualOwnServer)
     SettingsCard {
+        SettingsCardRow("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickVless() }
+        SettingsCardDivider()
         SettingsCardRow("AmneziaWG / WireGuard", s.engineWireguardDesc, icon = Icons.Outlined.Shield) { onPick(EngineType.Standard, true) }
         if (!ios) {
             SettingsCardDivider()

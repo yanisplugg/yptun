@@ -3755,6 +3755,36 @@ class OlcboxVpnService : VpnService() {
         trustTunnelProcess = null
     }
 
+    /**
+     * The client's SOCKS port opens (and it logs "connected") before the HTTP/2 session exists; that is
+     * made lazily by the first request, which stalls ~6 s. Pay it here, before traffic and pings start.
+     * Best-effort: false = gave up waiting.
+     */
+    private suspend fun awaitTrustTunnelSession(port: Int, process: Process, timeoutMs: Long = 15_000L): Boolean =
+        withContext(Dispatchers.IO) {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (process.isAlive && System.currentTimeMillis() < deadline) {
+                val ok = runCatching {
+                    Socket().use { s ->
+                        s.connect(InetSocketAddress("127.0.0.1", port), 1_000)
+                        s.soTimeout = 8_000
+                        val out = s.getOutputStream()
+                        val inp = s.getInputStream()
+                        out.write(byteArrayOf(5, 1, 0)); out.flush()
+                        val method = inp.readNBytes(2)
+                        if (method.size < 2 || method[1].toInt() != 0) return@use false
+                        // CONNECT 1.1.1.1:443
+                        out.write(byteArrayOf(5, 1, 0, 1, 1, 1, 1, 1, 0x01, 0xBB.toByte())); out.flush()
+                        val reply = inp.readNBytes(10)
+                        reply.size >= 2 && reply[1].toInt() == 0
+                    }
+                }.getOrDefault(false)
+                if (ok) return@withContext true
+                delay(300)
+            }
+            false
+        }
+
     private suspend fun prepareTrustTunnelProxy(profile: ProxyProfile): ProxyProfile {
         if (profile.type != ProxyProfile.TYPE_TRUSTTUNNEL) return profile
         stopTrustTunnelProcess()
@@ -3772,6 +3802,7 @@ class OlcboxVpnService : VpnService() {
             val exit = if (process.isAlive) "still starting" else "exited with ${process.exitValue()}"
             throw IllegalStateException("Trust Tunnel SOCKS port $port did not open ($exit)")
         }
+        if (!awaitTrustTunnelSession(port, process)) addLog("Trust Tunnel: endpoint session not confirmed, continuing")
         val raw = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
             "\"server_port\":$port,\"version\":\"5\"}"
         return ProxyProfile(

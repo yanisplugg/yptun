@@ -106,6 +106,24 @@ internal interface YpTunCoreLib : Library {
         socksPass: String,
     ): Pointer?
 
+    fun YpRtcStartRoom(
+        carrier: String,
+        transport: String,
+        roomId: String,
+        clientId: String,
+        keyHex: String,
+        socksPort: Int,
+        socksUser: String,
+        socksPass: String,
+        readyTimeoutMs: Int,
+    ): Long
+
+    fun YpRtcStopRoom(handle: Long)
+    fun YpRtcStopAllRooms()
+    fun YpRtcRoomsRunning(): Int
+    fun YpRtcRoomHealthy(handle: Long): Int
+    fun YpRtcRoomPort(handle: Long): Int
+
     fun YpRtcWaitReady(timeoutMs: Int): Pointer?
     fun YpRtcStop()
     fun YpRtcRunning(): Int
@@ -389,6 +407,24 @@ internal object YpTunCore {
         "olcRTC start failed"
     )
 
+    /** One multi-room instance on an OS-assigned loopback port; returns its handle, or -1 on failure (see the log). */
+    fun rtcStartRoom(
+        carrier: String,
+        transport: String,
+        roomId: String,
+        clientId: String,
+        keyHex: String,
+        socksUser: String,
+        socksPass: String,
+        readyTimeoutMs: Int,
+    ): Long = lib().YpRtcStartRoom(carrier, transport, roomId, clientId, keyHex, 0, socksUser, socksPass, readyTimeoutMs)
+
+    fun rtcStopRoom(handle: Long) = libOrNull?.YpRtcStopRoom(handle) ?: Unit
+    fun rtcStopAllRooms() = libOrNull?.YpRtcStopAllRooms() ?: Unit
+    fun rtcRoomsRunning(): Int = libOrNull?.YpRtcRoomsRunning() ?: 0
+    fun rtcRoomHealthy(handle: Long): Boolean = libOrNull?.YpRtcRoomHealthy(handle) == 1
+    fun rtcRoomPort(handle: Long): Int = libOrNull?.YpRtcRoomPort(handle) ?: 0
+
     fun rtcWaitReady(timeoutMs: Int) = check(lib().YpRtcWaitReady(timeoutMs), "olcRTC not ready")
     fun rtcStop() = libOrNull?.YpRtcStop() ?: Unit
     fun rtcRunning(): Boolean = libOrNull?.YpRtcRunning() == 1
@@ -412,5 +448,6 @@ internal object YpTunCore {
         runCatching { masterDnsStop() }
         runCatching { awgStop() }
         runCatching { rtcStop() }
+        runCatching { rtcStopAllRooms() }
     }
 }

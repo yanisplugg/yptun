@@ -111,4 +111,17 @@ class CsqttUriParserTest {
         val vk = VkTurnConfig(core = VkTurnConfig.CORE_CSQTT, csqttPeer = "h", csqttPort = 46000, csqttPassword = "p", vkLink = "aaa")
         assertEquals("Ams ter", CsqttUriParser.parse(CsqttUriParser.compose(vk, "Ams ter"))!!.name)
     }
+
+    @Test
+    fun parsesTheEncryptedCsqtt25Link() {
+        val link = CsqttUriParser.parse(
+            "csqtt://iitgKpTQ2GayAklkGYsgdXkcXxGJ7_0RoL0yyMNXLQIbfge3SJQ21_IgLVnthuji1tDjb59PZiIyEuio0cj7is_JC8nmvNnEjv_xn_mD86YMLOrl6bS7oHt9Re6aRig7#%D0%A2"
+        )!!
+        assertEquals("1.2.3.4", link.host)
+        assertEquals(46000, link.port)
+        assertEquals("testpass", link.password)
+        assertEquals("aaa\nbbb", link.hashes)
+        assertEquals("Т", link.name)
+        assertNull(CsqttUriParser.parse("csqtt://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+    }
 }

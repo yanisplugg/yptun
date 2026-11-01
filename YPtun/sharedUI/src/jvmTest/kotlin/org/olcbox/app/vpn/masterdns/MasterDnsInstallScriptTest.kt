@@ -20,4 +20,14 @@ class MasterDnsInstallScriptTest {
         assertContains(s, "systemctl restart masterdns-server")
         assertContains(s, "sport = :5300")
     }
+
+    @Test
+    fun freeingPort53KeepsSystemdResolvedRunning() {
+        val s = buildInstallScript(MasterDnsInstallOptions(host = "h", domain = "v.x", udpPort = 53, freePort = true))
+        assertContains(s, "DNSStubListener=no")
+        assertContains(s, "systemctl restart systemd-resolved")
+        assertFalse(s.contains("disable --now systemd-resolved"))
+        // `YPTUN_DUMP_MASTERDNS_SCRIPT=<file>` writes the exact script, to rehearse it on a VPS.
+        System.getenv("YPTUN_DUMP_MASTERDNS_SCRIPT")?.takeIf { it.isNotBlank() }?.let { java.io.File(it).writeText(s) }
+    }
 }

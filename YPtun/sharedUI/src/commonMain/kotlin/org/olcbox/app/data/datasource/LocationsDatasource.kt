@@ -48,6 +48,7 @@ import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.LocationBundleV4
@@ -2815,8 +2816,27 @@ class LocationsRepositoryImpl(
         )
     }
 
+    /**
+     * `olcrtc://` link, optionally with several rooms: `provider?transport@room#key!provider?transport@room#key$Name`.
+     * The first segment is the main room, the rest become the multi-room [LocationConfig.extraRooms]; the
+     * `$Name` suffix (or `%client`) belongs to the whole link and is read off the first segment.
+     */
     private fun parseOlcRtcUri(line: String): ParsedOlcRtcUri? {
         val payload = line.removePrefix(OLCRTC_URI_PREFIX)
+        val nameStart = payload.indexOf('$').takeIf { it >= 0 } ?: payload.length
+        val segments = payload.substring(0, nameStart).split('!')
+        if (segments.size == 1) return parseOlcRtcSegment(payload)
+
+        val main = parseOlcRtcSegment(segments.first() + payload.substring(nameStart)) ?: return null
+        val extras = segments.drop(1)
+            .mapNotNull { parseOlcRtcSegment(it)?.location }
+            .map { ExtraRoom(provider = it.bypassProvider, transport = it.transport, room = it.id, key = it.key) }
+            .take(LocationConfig.MAX_EXTRA_ROOMS)
+        if (extras.isEmpty()) return main
+        return main.copy(location = main.location.copy(multiRoomEnabled = true, extraRooms = extras).normalized())
+    }
+
+    private fun parseOlcRtcSegment(payload: String): ParsedOlcRtcUri? {
 
         val transportMarker = payload.indexOf('?')
         val roomMarker = payload.indexOf('@', startIndex = transportMarker + 1)
