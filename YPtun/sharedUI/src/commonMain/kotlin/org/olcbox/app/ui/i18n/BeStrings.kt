@@ -277,6 +277,7 @@ object BeStrings : Strings {
     override val routingPresets = "Гатовыя прасэты"
     override val routingPresetChina = "Кітай напрамую"
     override val routingPresetChinaDesc = "Сайты і IP Кітая — напрамую, астатняе праз проксі"
+    override val routingProfileDnsHint = "DNS профілю (пуста — як у наладах трафіку)"
     override val routingProfileImportLink = "Імпартаваць спасылку happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "Новы профіль"

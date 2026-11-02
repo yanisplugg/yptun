@@ -309,6 +309,8 @@ object XrayConfig {
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
     ): String {
+        // The routing profile may carry its own DNS (e.g. the China preset); see withProfileDns.
+        val traffic = traffic.withProfileDns(routingProfile)
         // Cascade over an xhttp/splithttp MAIN: Xray's splithttp transport can be NEITHER a
         // sockopt.dialerProxy sub-dialer NOR a proxySettings target, so the 2nd-proxy exit can't reach
         // its server "through" the main (→ "failed to find an available destination > EOF" = the user's

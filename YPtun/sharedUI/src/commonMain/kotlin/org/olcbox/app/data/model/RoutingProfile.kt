@@ -112,6 +112,32 @@ data class RoutingProfile(
         )
     }
 
+    /**
+     * The through-the-proxy resolver this profile asks for, as an address the config builders take
+     * (`1.1.1.1`, `https://…/dns-query`, `tls://…`), or null to keep the app's own setting. Happ puts a
+     * DoH resolver in the `*dnsdomain` field and a plain one in `*dnsip`; both are understood.
+     */
+    fun remoteDnsAddress(): String? = dnsAddress(remoteDnsType, remoteDnsDomain, remoteDnsIp)
+
+    /** The resolver for direct (not proxied) lookups this profile asks for, or null to keep the app's setting. */
+    fun domesticDnsAddress(): String? = dnsAddress(domesticDnsType, domesticDnsDomain, domesticDnsIp)
+
+    /** A copy whose remote resolver is [address] (blank = defer to the app). An unchanged value is left as stored. */
+    fun withRemoteDns(address: String): RoutingProfile {
+        val a = address.trim()
+        if (a == remoteDnsAddress().orEmpty()) return this
+        return if (a.startsWith("https://", ignoreCase = true)) copy(remoteDnsType = "DoH", remoteDnsDomain = a, remoteDnsIp = "")
+        else copy(remoteDnsType = "", remoteDnsDomain = "", remoteDnsIp = a)
+    }
+
+    /** A copy whose direct resolver is [address] (blank = defer to the app). An unchanged value is left as stored. */
+    fun withDomesticDns(address: String): RoutingProfile {
+        val a = address.trim()
+        if (a == domesticDnsAddress().orEmpty()) return this
+        return if (a.startsWith("https://", ignoreCase = true)) copy(domesticDnsType = "DoH", domesticDnsDomain = a, domesticDnsIp = "")
+        else copy(domesticDnsType = "", domesticDnsDomain = "", domesticDnsIp = a)
+    }
+
     fun displayName(): String = name.ifBlank { "Routing profile" }
 
     /** Total number of selectors across every bucket (for a one-line summary in the UI). */
@@ -142,6 +168,18 @@ data class RoutingProfile(
          * everything else through the proxy. Uses `geoip:ru` (reliable country data in any geoip.dat)
          * and `domain:ru` (no geo file needed); add `geosite:ru` manually if your geosite.dat has it.
          */
+        private fun dnsAddress(type: String, domain: String, ip: String): String? {
+            val d = domain.trim()
+            val i = ip.trim()
+            return when {
+                type.equals("DoH", ignoreCase = true) && d.isNotEmpty() ->
+                    if ("://" in d) d else "https://$d/dns-query"
+                i.isNotEmpty() -> i
+                d.isNotEmpty() -> d
+                else -> null
+            }
+        }
+
         fun russiaDirect(): RoutingProfile = RoutingProfile(
             name = "Россия напрямую",
             directSites = listOf("domain:ru"),
@@ -180,6 +218,13 @@ data class RoutingProfile(
                 "geoip:cn",
                 "223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "114.114.114.114/32",
             ),
+            // Names resolved for proxied traffic go out through the VPN to Cloudflare; everything direct
+            // (and the proxy server's own hostname) uses AliDNS, which answers Chinese names correctly
+            // and is not poisoned. Read by [TrafficSettings.withProfileDns]; other profiles leave these blank.
+            remoteDnsType = "DoU",
+            remoteDnsIp = "1.1.1.1",
+            domesticDnsType = "DoU",
+            domesticDnsIp = "223.5.5.5",
             domainStrategy = "IPIfNonMatch",
             globalProxy = true,
             routeOrder = "block-direct-proxy",

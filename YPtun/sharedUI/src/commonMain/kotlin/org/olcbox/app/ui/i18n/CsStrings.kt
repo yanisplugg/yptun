@@ -284,6 +284,7 @@ object CsStrings : Strings {
     override val routingPresets = "Hotové předvolby"
     override val routingPresetChina = "Čína přímo"
     override val routingPresetChinaDesc = "Čínské weby a IP přímo, vše ostatní přes proxy"
+    override val routingProfileDnsHint = "DNS profilu (prázdné — podle nastavení provozu)"
     override val routingProfileImportLink = "Importovat odkaz happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "Nový profil"

@@ -390,6 +390,8 @@ private fun RoutingProfileEditor(
     var singboxDomainStrategy by remember { mutableStateOf(profile.singboxDomainStrategy) }
     var singboxSniff by remember { mutableStateOf(profile.singboxSniff) }
     var singboxResolve by remember { mutableStateOf(profile.singboxResolve) }
+    var remoteDns by remember { mutableStateOf(profile.remoteDnsAddress().orEmpty()) }
+    var directDns by remember { mutableStateOf(profile.domesticDnsAddress().orEmpty()) }
 
     fun assemble(): RoutingProfile = profile.copy(
         name = name.trim(),
@@ -411,7 +413,7 @@ private fun RoutingProfileEditor(
         singboxDomainStrategy = singboxDomainStrategy,
         singboxSniff = singboxSniff,
         singboxResolve = singboxResolve,
-    )
+    ).withRemoteDns(remoteDns).withDomesticDns(directDns)
 
     Column(
         modifier = Modifier
@@ -466,6 +468,24 @@ private fun RoutingProfileEditor(
                 DropdownMenuItem(text = { Text(st) }, onClick = { domainStrategy = st; dismiss() })
             }
         }
+
+        SectionLabel(s.routingProfileDnsHint)
+        OutlinedTextField(
+            value = remoteDns,
+            onValueChange = { remoteDns = it },
+            label = { Text(s.remoteDnsLabel) },
+            placeholder = { Text("1.1.1.1") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = directDns,
+            onValueChange = { directDns = it },
+            label = { Text(s.directDnsLabel) },
+            placeholder = { Text("223.5.5.5") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         BucketField(s.routingProxySites, s.routingSelectorsHint, proxySites) { proxySites = it }
         BucketField(s.routingProxyIp, s.routingIpSelectorsHint, proxyIp) { proxyIp = it }

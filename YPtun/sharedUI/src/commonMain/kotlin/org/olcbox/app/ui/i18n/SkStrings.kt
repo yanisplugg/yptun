@@ -284,6 +284,7 @@ object SkStrings : Strings {
     override val routingPresets = "Hotové predvoľby"
     override val routingPresetChina = "Čína priamo"
     override val routingPresetChinaDesc = "Čínske weby a IP priamo, všetko ostatné cez proxy"
+    override val routingProfileDnsHint = "DNS profilu (prázdne — podľa nastavení prevádzky)"
     override val routingProfileImportLink = "Importovať odkaz happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "Nový profil"

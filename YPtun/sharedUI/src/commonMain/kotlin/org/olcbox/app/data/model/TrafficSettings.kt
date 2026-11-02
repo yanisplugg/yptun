@@ -61,6 +61,19 @@ data class TrafficSettings(
         mtu = mtu.coerceIn(1280, 9000),
     )
 
+    /**
+     * These settings with the DNS the active routing [profile] asks for laid over them: its remote
+     * resolver replaces [remoteDns], its domestic one replaces [directDns]. A profile that sets neither
+     * (every profile but a preset like «China direct») returns this unchanged. Applied when the core
+     * config is built, so the user's saved settings are never rewritten and switching profile switches DNS.
+     */
+    fun withProfileDns(profile: RoutingProfile?): TrafficSettings {
+        val remote = profile?.remoteDnsAddress()
+        val direct = profile?.domesticDnsAddress()
+        if (remote == null && direct == null) return this
+        return copy(remoteDns = remote ?: remoteDns, directDns = direct ?: directDns)
+    }
+
     /** Xray DNS queryStrategy mapped from [domainStrategy]. */
     fun xrayQueryStrategy(): String = when (domainStrategy) {
         // prefer_ipv4 is treated like ipv4_only on Xray (the user's intent on an IPv4-only ISP is "no
