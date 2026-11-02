@@ -304,6 +304,28 @@ internal fun RoutingProfilesContent(
             title = { Text(s.routingProfileAdd) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Ready-made profiles; hidden once added (it is in the list, and re-adding would reset edits).
+                    if (state.profiles.none { it.id == RoutingProfile.PRESET_CN_DIRECT_ID }) {
+                        Text(
+                            s.routingPresets,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                onSaveProfile(RoutingProfile.chinaDirect(s.routingPresetChina))
+                                showAddDialog = false
+                                importError = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(s.routingPresetChina) }
+                        Text(
+                            s.routingPresetChinaDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
                     OutlinedTextField(
                         value = link,
                         onValueChange = { link = it; importError = null },

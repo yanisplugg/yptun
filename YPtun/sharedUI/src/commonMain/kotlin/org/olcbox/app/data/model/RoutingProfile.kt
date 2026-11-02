@@ -151,6 +151,41 @@ data class RoutingProfile(
             id = DEFAULT_RU_DIRECT_ID,
         )
 
+        /** Stable id of the "China direct" preset, so adding it twice replaces rather than duplicates it. */
+        const val PRESET_CN_DIRECT_ID = "preset-cn-direct"
+
+        /**
+         * Preset: Chinese sites and IPs go direct, everything else through the proxy.
+         *
+         * Only categories present in the default runetfreedom `geosite.dat` (and in SagerNet's sing-box
+         * rule-sets) are used: `cn`, `geolocation-cn`, `geoip:cn` — an unknown category would make Xray
+         * refuse the whole config / sing-box fail its rule-set fetch. `IPIfNonMatch` resolves a domain
+         * no list knows and sends it direct when it lands on a Chinese IP. The plain `domain:` / CIDR
+         * entries are the fallback that still works when the geo files could not be downloaded
+         * ([withoutGeoSelectors] keeps them): the biggest Chinese services and domestic DNS resolvers.
+         */
+        fun chinaDirect(name: String = "China direct"): RoutingProfile = RoutingProfile(
+            name = name,
+            directSites = listOf(
+                "geosite:cn", "geosite:geolocation-cn", "domain:cn",
+                "domain:qq.com", "domain:wechat.com", "domain:baidu.com", "domain:bdstatic.com",
+                "domain:taobao.com", "domain:tmall.com", "domain:alipay.com", "domain:alicdn.com",
+                "domain:aliyun.com", "domain:aliyuncs.com", "domain:jd.com", "domain:bilibili.com",
+                "domain:hdslb.com", "domain:douyin.com", "domain:bytedance.com", "domain:zhihu.com",
+                "domain:weibo.com", "domain:163.com", "domain:126.net", "domain:xiaohongshu.com",
+                "domain:meituan.com", "domain:pinduoduo.com", "domain:huawei.com", "domain:xiaomi.com",
+                "domain:mi.com", "domain:iqiyi.com", "domain:youku.com", "domain:sohu.com",
+            ),
+            directIp = listOf(
+                "geoip:cn",
+                "223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "114.114.114.114/32",
+            ),
+            domainStrategy = "IPIfNonMatch",
+            globalProxy = true,
+            routeOrder = "block-direct-proxy",
+            id = PRESET_CN_DIRECT_ID,
+        )
+
         /**
          * Default geo `.dat` sources (v2ray format) for xray-core. The runetfreedom releases track the
          * Russian blocklists the user routes around; both are overridable in [RoutingProfilesState].
