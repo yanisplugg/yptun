@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
@@ -14,7 +14,7 @@ use yamux::Mode;
 use crate::config::YamuxConfig;
 use crate::wire::{
     HEADER_LENGTH, MAX_OPEN_BODY, MAX_POLICY_FAMILY, MAX_REASON, OpenRequest, OpenResponse,
-    StreamKind, WireError, encode_open, encode_open_response, encode_policy, parse_header,
+    OpenStatus, StreamKind, WireError, encode_open, encode_open_response, encode_policy, parse_header,
     parse_open, parse_open_response, parse_policy,
 };
 
@@ -76,11 +76,29 @@ pub struct MuxStream<T> {
 pub type OpenFlowFuture<T> =
     Pin<Box<dyn Future<Output = Result<(OpenResponse, MuxStream<T>), MuxError>>>>;
 
+/// Live user streams of one session, shared between the session and the engine (see [`MuxSession::slots`]).
+#[derive(Clone, Default)]
+pub struct UserStreamSlots(Rc<Cell<usize>>);
+
+impl UserStreamSlots {
+    fn get(&self) -> usize {
+        self.0.get()
+    }
+
+    fn take(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+
+    pub fn release(&self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
+}
+
 pub struct MuxSession<T> {
     connection: Rc<RefCell<Connection<T>>>,
     role: Mode,
     policy_open: bool,
-    user_streams: usize,
+    user_streams: UserStreamSlots,
     max_user_streams: usize,
     marker: std::marker::PhantomData<T>,
 }
@@ -112,7 +130,7 @@ where
             })),
             role,
             policy_open: false,
-            user_streams: 0,
+            user_streams: UserStreamSlots::default(),
             max_user_streams: config.max_streams_per_session - 1,
             marker: std::marker::PhantomData,
         }
@@ -156,12 +174,12 @@ where
         let mut stream = match self.open_stream().await {
             Ok(stream) => stream,
             Err(error) => {
-                self.user_streams -= 1;
+                self.user_streams.release();
                 return Err(error);
             }
         };
         if let Err(error) = self.drive_operation(write_open(&mut stream, request)).await {
-            self.user_streams -= 1;
+            self.user_streams.release();
             return Err(error);
         }
         Ok(stream)
@@ -192,7 +210,7 @@ where
         let stream = match self.queue_stream() {
             Ok(stream) => stream,
             Err(error) => {
-                self.user_streams -= 1;
+                self.user_streams.release();
                 return Err(error);
             }
         };
@@ -212,22 +230,36 @@ where
         if self.role != Mode::Server || !self.policy_open {
             return Err(MuxError::PolicyRequired);
         }
-        self.reserve_user_stream()?;
-        let mut stream = match self.accept_stream().await {
-            Ok(stream) => stream,
-            Err(error) => {
-                self.user_streams -= 1;
-                return Err(error);
+        // A slot is taken only once a flow has actually arrived. Reserving it BEFORE waiting (as this
+        // used to) made the always-pending acceptor hold one slot, so the 64th live flow made the next
+        // accept fail with `StreamLimit` - which the engine treats as a session error, dropping the whole
+        // tunnel and every connection in it. A full session now refuses just the new flow.
+        loop {
+            let mut stream = self.accept_stream().await?;
+            let request = self.drive_operation(read_open(&mut stream)).await?;
+            if self.user_streams.get() < self.max_user_streams {
+                self.user_streams.take();
+                return Ok((request, stream));
             }
-        };
-        let request = match self.drive_operation(read_open(&mut stream)).await {
-            Ok(request) => request,
-            Err(error) => {
-                self.user_streams -= 1;
-                return Err(error);
-            }
-        };
-        Ok((request, stream))
+            let refusal = OpenResponse {
+                status: OpenStatus::ResourceLimit,
+                reason: "stream limit".to_owned(),
+            };
+            self.drive_operation(write_open_response(&mut stream, &refusal))
+                .await?;
+        }
+    }
+
+    /// Whether another user flow may be opened (client side: check before taking a flow off an adapter).
+    pub fn has_free_user_stream(&self) -> bool {
+        self.user_streams.get() < self.max_user_streams
+    }
+
+    /// A handle that frees user-stream slots without owning the session. The server's session is moved
+    /// into the pending-accept future for almost its whole life, so closed flows must be released
+    /// through this handle - releasing via `&mut MuxSession` silently did nothing while it was away.
+    pub fn slots(&self) -> UserStreamSlots {
+        self.user_streams.clone()
     }
 
     pub async fn respond_flow(
@@ -243,7 +275,7 @@ where
     }
 
     pub fn release_flow(&mut self) {
-        self.user_streams = self.user_streams.saturating_sub(1);
+        self.user_streams.release();
     }
 
     pub async fn close(&mut self) -> Result<(), MuxError> {
@@ -342,10 +374,10 @@ where
     }
 
     fn reserve_user_stream(&mut self) -> Result<(), MuxError> {
-        if self.user_streams >= self.max_user_streams {
+        if self.user_streams.get() >= self.max_user_streams {
             return Err(MuxError::StreamLimit);
         }
-        self.user_streams += 1;
+        self.user_streams.take();
         Ok(())
     }
 }
