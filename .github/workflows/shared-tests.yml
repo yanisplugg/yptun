@@ -1,5 +1,5 @@
-# Shared (commonTest) unit tests on the iOS simulator target: the parsers, the subscription importer
-# and the panel link families exactly as the iPhone build compiles them. Runs on every push to the
+# Shared (commonTest) unit tests: the parsers, the subscription importer and the panel link families
+# the iPhone build shares. Run on the JVM target, like main (several tests use JVM-only APIs). Runs on every push to the
 # iOS branch that touches the shared code, and by hand.
 name: Shared tests (iOS)
 
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -33,12 +33,6 @@ jobs:
         with:
           packages: ""
 
-      - name: Cache Kotlin/Native toolchain (~/.konan)
-        uses: actions/cache@v4
-        with:
-          path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('YPtun/gradle/libs.versions.toml') }}
-
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -47,9 +41,9 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-tests-${{ runner.os }}-${{ hashFiles('YPtun/**/*.gradle.kts', 'YPtun/gradle/libs.versions.toml') }}
 
-      - name: commonTest on iosSimulatorArm64
+      - name: commonTest on the JVM
         working-directory: YPtun
-        run: ./gradlew :sharedUI:iosSimulatorArm64Test --continue --no-configuration-cache
+        run: ./gradlew :sharedUI:jvmTest --continue --no-configuration-cache
 
       - uses: actions/upload-artifact@v4
         if: always()

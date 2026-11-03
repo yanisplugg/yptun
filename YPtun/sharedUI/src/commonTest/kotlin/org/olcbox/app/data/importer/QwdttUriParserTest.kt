@@ -145,7 +145,7 @@ class QwdttUriParserTest {
     @Test
     fun rejectsNonQwdtt() {
         assertNull(QwdttUriParser.parseLine("vless://whatever"))
-        assertNull(QwdttUriParser.parseLine("freeturn://vk?tcp<mode=udp>@1.2.3.4:56000#key$name"))
+        assertNull(QwdttUriParser.parseLine("freeturn://vk?tcp<mode=udp>@1.2.3.4:56000#key\$name"))
         assertTrue(QwdttUriParser.parseJson("""{"outbounds": []}""").isEmpty())
     }
 }

@@ -8,9 +8,11 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.identity.DeviceIdentityProvider
+import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
+import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.share.ConfigShareService
 import org.olcbox.app.data.share.YptunInboundCodec
 import kotlin.test.Test
