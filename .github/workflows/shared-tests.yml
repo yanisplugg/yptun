@@ -43,7 +43,20 @@ jobs:
 
       - name: commonTest on the JVM
         working-directory: YPtun
-        run: ./gradlew :sharedUI:jvmTest --continue --no-configuration-cache
+        run: |
+          # Full assertion messages in the log (the HTML report is only in the artifact).
+          cat > "$RUNNER_TEMP/testlog.init.gradle" <<'GRADLE'
+          allprojects {
+              tasks.withType(Test).configureEach {
+                  testLogging {
+                      events "failed"
+                      exceptionFormat "full"
+                      showStackTraces false
+                  }
+              }
+          }
+          GRADLE
+          ./gradlew :sharedUI:jvmTest --continue --no-configuration-cache --init-script "$RUNNER_TEMP/testlog.init.gradle"
 
       - uses: actions/upload-artifact@v4
         if: always()
