@@ -103,6 +103,13 @@ func (s *Sender) Send(data []byte) error {
 	return ErrAckTimeout
 }
 
+// Seq is the counter this sender draws message numbers from. A window that
+// shares the sender's acknowledgement space draws from the same one, so an
+// inbound ack belongs to exactly one of them.
+//
+// ai-generated: this accessor.
+func (s *Sender) Seq() *atomic.Uint32 { return &s.seq }
+
 // Resolve records an inbound ack for one fragment.
 func (s *Sender) Resolve(seq, crc uint32, fragIdx uint16) {
 	s.acks.Mark(seq, crc, int(fragIdx))

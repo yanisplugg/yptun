@@ -17,7 +17,7 @@ if [ ! -t 0 ]; then
         exit 1
     fi
     tmp=$(mktemp -t olcrtc-install.XXXXXX)
-    curl -fsSL https://raw.githubusercontent.com/openlibrecommunity/olcrtc/master/install.sh -o "$tmp"
+    curl -fsSL https://raw.githubusercontent.com/ghostlane-project/olcrtc/proofkit/install.sh -o "$tmp"
     chmod +x "$tmp"
     exec bash "$tmp" "$@" < /dev/tty
 fi
@@ -26,8 +26,8 @@ echo "t.me/openlibrecommunity"
 
 RUN_ID=$(tr -dc 'a-z0-9' </dev/urandom | head -c 8)
 IMAGE_NAME="docker.io/library/golang:1.26-alpine3.22"
-REPO_URL="https://github.com/openlibrecommunity/olcrtc.git"
-BRANCH="master"
+REPO_URL="https://github.com/ghostlane-project/olcrtc.git"
+BRANCH="proofkit"
 NO_CACHE=0
 
 while [[ $# -gt 0 ]]; do
@@ -49,6 +49,7 @@ done
 echo "=== OlcRTC Install ==="
 echo ""
 echo "[*] Using branch: $BRANCH"
+echo "[*] ProofKit fork: multi-key, per-key stats, UDP relay"
 echo ""
 
 install_pkg() {
@@ -184,7 +185,7 @@ if [ "$PROVIDER" = "jitsi" ]; then
     JITSI_HOSTS=()
     while IFS= read -r host; do
         [ -n "$host" ] && JITSI_HOSTS+=("$host")
-    done < <(curl -fsSL "https://raw.githubusercontent.com/openlibrecommunity/olcrtc/$BRANCH/docs/jitsi.instances.yaml" 2>/dev/null | sed -n 's/^  - //p')
+    done < <(curl -fsSL "https://raw.githubusercontent.com/openlibrecommunity/olcrtc/master/docs/jitsi.instances.yaml" 2>/dev/null | sed -n 's/^  - //p')
 
     if [ ${#JITSI_HOSTS[@]} -eq 0 ]; then
         echo "[!] Error pull docs/jitsi.instances.yaml, enter manualy."

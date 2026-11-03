@@ -2,7 +2,6 @@ package goolom
 
 import (
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -12,10 +11,11 @@ import (
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
-	api, err := newWebRTCAPI(s.resolver)
+	api, err := newWebRTCAPI(s.resolver, s.dtlsProfile)
 	if err != nil {
 		return err
 	}
@@ -39,10 +39,11 @@ func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
 }
 
 // newWebRTCAPI builds a pion API with IPv4-only ICE and default interceptors.
-func newWebRTCAPI(resolver *net.Resolver) (*webrtc.API, error) {
+func newWebRTCAPI(resolver protect.Lookup, dtlsProfile engine.DTLSProfile) (*webrtc.API, error) {
 	settingEngine := webrtc.SettingEngine{}
 	apply, err := engine.NewPionSettings(engine.PionSettingsOptions{
 		Resolver:         resolver,
+		DTLSProfile:      dtlsProfile,
 		LoggerFactory:    logger.NewPionLoggerFactory(),
 		IPv4Only:         true,
 		ProxyDialer:      true,
@@ -51,14 +52,18 @@ func newWebRTCAPI(resolver *net.Resolver) (*webrtc.API, error) {
 	if err != nil {
 		return nil, err //nolint:wrapcheck // shared builder already adds protected-net context
 	}
-	apply(&settingEngine)
+	if apply != nil {
+		apply(&settingEngine)
+	}
 
 	mediaEngine := &webrtc.MediaEngine{}
 	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
 		return nil, fmt.Errorf("register default codecs: %w", err)
 	}
 	interceptorRegistry := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
+	if err := webrtc.RegisterDefaultInterceptorsWithOptions(
+		mediaEngine, interceptorRegistry, engine.DefaultInterceptorOptions()...,
+	); err != nil {
 		return nil, fmt.Errorf("register default interceptors: %w", err)
 	}
 	return webrtc.NewAPI(

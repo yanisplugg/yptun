@@ -89,7 +89,11 @@ func (d *goDecoder) PushSample(sample []byte) error {
 	gray := frame.Grayscale()
 	// Blocking here is deliberate. Every frame carries a fragment the peer is
 	// waiting to have acknowledged, so dropping one costs a full retransmit
-	// round; back-pressure onto the RTP reader is the cheaper of the two.
+	// round; back-pressure onto the decode goroutine and its queue of encoded
+	// frames is the cheaper of the two. It must not reach the RTP reader,
+	// which stamps transport-cc arrival times (see readDecoderInput).
+	//
+	// ai-generated: the last sentence and the decode goroutine.
 	select {
 	case d.frames <- gray:
 	case <-d.closeCh:

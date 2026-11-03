@@ -3,13 +3,12 @@ package session
 
 import (
 	"errors"
-	"net"
 
 	enginebuiltin "github.com/openlibrecommunity/olcrtc/internal/engine/builtin"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/datachannel"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/seichannel"
-	"github.com/openlibrecommunity/olcrtc/internal/transport/videochannel"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 )
 
@@ -53,6 +52,8 @@ var (
 	ErrTransportRequired    = errors.New(
 		"transport required (set transport to datachannel, videochannel, seichannel or vp8channel)")
 	ErrKeyRequired         = errors.New("key required (set crypto.key)")
+	ErrKeysServerOnly      = errors.New("crypto.keys is a server setting (set crypto.key for cnc)")
+	ErrUDPMaxFlowsInvalid  = errors.New("invalid udp max flows (set udp.max_flows to 0 or a positive number)")
 	ErrDNSServerRequired   = errors.New("dns server required (set net.dns)")
 	ErrVideoWidthRequired  = errors.New("video width required for videochannel (set video.width)")
 	ErrVideoHeightRequired = errors.New("video height required for videochannel (set video.height)")
@@ -136,12 +137,14 @@ type Config struct {
 	RoomID                string
 	ChannelID             string
 	KeyHex                string
+	KeysHex               []string
 	SOCKSHost             string
 	SOCKSPort             int
 	SOCKSUser             string
 	SOCKSPass             string
 	DNSServer             string
-	Resolver              *net.Resolver
+	DTLSProfile           string
+	Resolver              protect.Lookup
 	SOCKSProxyAddr        string
 	SOCKSProxyPort        int
 	SOCKSProxyUser        string
@@ -157,13 +160,36 @@ type Config struct {
 	TrafficMinDelay       string
 	TrafficMaxDelay       string
 	Amount                int
+	// StatsListen is the server's loopback /stats address; empty disables it.
+	StatsListen string
+	// UDPDisabled turns the SOCKS5 UDP relay off; UDPMaxFlows caps its flows
+	// (0 means the default).
+	UDPDisabled bool
+	UDPMaxFlows int
+	// EndOnEmptyRoom ends a client run when a reconnect handshake finds the
+	// room empty, so a supervisor walking a room list moves on instead of
+	// waiting in a room whose server has gone. Not read from YAML: whoever
+	// runs the list sets it.
+	//
+	// ai-generated: the field (the port of olcrtc#39).
+	EndOnEmptyRoom bool
+	// DirectRules names the destinations a client dials directly instead of
+	// through the tunnel, one rule per line (see internal/route); empty
+	// tunnels everything.
+	DirectRules string
+	// UnsafeAllowPrivateTargets lifts a server's egress policy, so a CONNECT
+	// or a UDP flow may reach loopback and private targets. Not read from
+	// YAML: a test sets it for its loopback echo server.
+	//
+	// ai-generated: the field (egress hardening).
+	UnsafeAllowPrivateTargets bool
 }
 
 // RegisterDefaults registers built-in providers and transports.
 func RegisterDefaults() {
 	enginebuiltin.RegisterDefaults()
 	transport.Register("datachannel", datachannel.New)
-	transport.Register("videochannel", videochannel.New)
+	registerVideoTransport()
 	transport.Register("seichannel", seichannel.New)
 	transport.Register("vp8channel", vp8channel.New)
 }

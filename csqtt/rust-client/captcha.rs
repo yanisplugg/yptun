@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::profiles::{Profile, SavedProfile};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -193,12 +190,12 @@ impl CaptchaSolver {
     ) -> Result<String> {
         match self.mode.as_ref() {
             "wv" => {
-                crate::log_error!("[STREAM {stream_id}] [КАПЧА] WBV: режим из настроек Android");
+                crate::log_info!("[STREAM {stream_id}] [КАПЧА] WBV: режим из настроек Android");
                 self.webview(stream_id, captcha, "selected", Duration::from_secs(120))
                     .await
             }
             "rjs" => {
-                crate::log_error!("[STREAM {stream_id}] [КАПЧА] RJS: Rust v2 выбран в настройках");
+                crate::log_info!("[STREAM {stream_id}] [КАПЧА] RJS: Rust v2 выбран в настройках");
                 match self
                     .solve_attempts(client, profile, saved_profile, captcha, 2)
                     .await
@@ -228,13 +225,13 @@ impl CaptchaSolver {
         stream_id: usize,
         captcha: &VkCaptchaError,
     ) -> Result<String> {
-        crate::log_error!("[STREAM {stream_id}] [КАПЧА] AUTO: старт цепочки");
+        crate::log_info!("[STREAM {stream_id}] [КАПЧА] AUTO: старт цепочки");
         match self
             .solve_attempts(client, profile, saved_profile, captcha, 2)
             .await
         {
             Ok(token) => {
-                crate::log_error!("[STREAM {stream_id}] [КАПЧА] AUTO: Rust v2 решил капчу");
+                crate::log_info!("[STREAM {stream_id}] [КАПЧА] AUTO: Rust v2 решил капчу");
                 return Ok(token);
             }
             Err(error) => {
@@ -245,7 +242,7 @@ impl CaptchaSolver {
             }
         };
         for attempt in 1..=2 {
-            crate::log_error!(
+            crate::log_info!(
                 "[STREAM {stream_id}] [КАПЧА] AUTO: WBV Auto попытка {attempt}/2 (timeout 10s)"
             );
             match self
@@ -253,7 +250,7 @@ impl CaptchaSolver {
                 .await
             {
                 Ok(token) => {
-                    crate::log_error!("[STREAM {stream_id}] [КАПЧА] AUTO: WBV Auto решил капчу");
+                    crate::log_info!("[STREAM {stream_id}] [КАПЧА] AUTO: WBV Auto решил капчу");
                     return Ok(token);
                 }
                 Err(error) => {
@@ -268,13 +265,13 @@ impl CaptchaSolver {
                 _ = tokio::time::sleep(Duration::from_millis(delay)) => {}
             }
         }
-        crate::log_error!("[STREAM {stream_id}] [КАПЧА] AUTO: финальная Rust v2 попытка после WBV");
+        crate::log_info!("[STREAM {stream_id}] [КАПЧА] AUTO: финальная Rust v2 попытка после WBV");
         let last_error = match self
             .solve_attempts(client, profile, saved_profile, captcha, 1)
             .await
         {
             Ok(token) => {
-                crate::log_error!(
+                crate::log_info!(
                     "[STREAM {stream_id}] [КАПЧА] AUTO: финальная Rust v2 решила капчу"
                 );
                 return Ok(token);
@@ -306,19 +303,22 @@ impl CaptchaSolver {
         if captcha.redirect_uri.is_empty() || captcha.session_token.is_empty() {
             bail!("webview captcha data is incomplete");
         }
-        let mut receiver = self.result_rx.lock().await;
-        while receiver.try_recv().is_ok() {}
-        crate::log_output!(
-            "CAPTCHA_SOLVE|{mode}|{}|{}",
-            captcha.redirect_uri,
-            captcha.session_token
-        );
-        let result = tokio::select! {
-            _ = self.cancel.cancelled() => bail!("webview captcha cancelled"),
-            result = tokio::time::timeout(timeout, receiver.recv()) => {
-                result
-                    .map_err(|_| anyhow!("webview captcha timed out"))?
-                    .ok_or_else(|| anyhow!("webview captcha result channel closed"))?
+        validated_captcha_url(&captcha.redirect_uri)?;
+        let result = {
+            let mut receiver = self.result_rx.lock().await;
+            while receiver.try_recv().is_ok() {}
+            crate::log_output!(
+                "CAPTCHA_SOLVE|{mode}|{}|{}",
+                captcha.redirect_uri,
+                captcha.session_token
+            );
+            tokio::select! {
+                _ = self.cancel.cancelled() => bail!("webview captcha cancelled"),
+                result = tokio::time::timeout(timeout, receiver.recv()) => {
+                    result
+                        .map_err(|_| anyhow!("webview captcha timed out"))?
+                        .ok_or_else(|| anyhow!("webview captcha result channel closed"))?
+                }
             }
         };
         let result = result.trim();
@@ -332,7 +332,7 @@ impl CaptchaSolver {
         if lower.starts_with("error:") {
             bail!("webview captcha failed: {result}");
         }
-        crate::log_error!("[STREAM {stream_id}] [КАПЧА] WBV: {mode} solve succeeded");
+        crate::log_info!("[STREAM {stream_id}] [КАПЧА] WBV: {mode} solve succeeded");
         Ok(result.to_owned())
     }
 
@@ -347,7 +347,7 @@ impl CaptchaSolver {
         if captcha.session_token.is_empty() {
             bail!("no session_token in redirect_uri");
         }
-        crate::log_error!(
+        crate::log_info!(
             "[КАПЧА] Решаю VK Smart Captcha автоматически (v2, попыток={attempts})..."
         );
         let session = CaptchaSession {
@@ -364,12 +364,9 @@ impl CaptchaSolver {
                     crate::log_error!("[КАПЧА] v2 попытка {attempt} ошибка: {error}");
                     if error.downcast_ref::<RateLimit>().is_some() {
                         crate::log_error!(
-                            "[КАПЧА] Превышен лимит сессии капчи. Ожидаю 5 секунд..."
+                            "[КАПЧА] Превышен лимит сессии капчи (ERROR_LIMIT). Пауза 60 секунд..."
                         );
-                        tokio::select! {
-                            _ = self.cancel.cancelled() => bail!("captcha cancelled"),
-                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                        }
+                        return Err(error);
                     } else {
                         let delay = 1500 + rand::rng().random_range(0..1200);
                         tokio::select! {
@@ -430,10 +427,8 @@ struct CaptchaCheck {
 
 impl CaptchaSession<'_> {
     async fn solve_once(&self, captcha: &VkCaptchaError) -> Result<String> {
-        crate::log_error!("[КАПЧА] solveOnce URL: {}", captcha.redirect_uri);
-        if std::env::var_os("ONLY_PRINT_URL").is_some() {
-            bail!("ONLY_PRINT_URL active, skipping solve");
-        }
+        crate::log_info!("[КАПЧА] solveOnce");
+        validated_captcha_url(&captcha.redirect_uri)?;
         let html = self.fetch_html(&captcha.redirect_uri).await?;
         let mut page = parse_page(&html)?;
         if !page.script_url.starts_with("http://") && !page.script_url.starts_with("https://") {
@@ -441,15 +436,15 @@ impl CaptchaSession<'_> {
                 page.script_url = base
                     .join(&page.script_url)
                     .map(|url| url.to_string())
-                    .unwrap_or_else(|_| format!("https://id.vk.com{}", page.script_url));
+                    .unwrap_or_else(|_| format!("https://id.vk.ru{}", page.script_url));
             } else {
-                page.script_url = format!("https://id.vk.com{}", page.script_url);
+                page.script_url = format!("https://id.vk.ru{}", page.script_url);
             }
         }
         if page.pow_input.is_empty() {
             bail!("failed to find PoW settings");
         }
-        crate::log_error!("[КАПЧА] v2 solving pow difficulty={}", page.pow_difficulty);
+        crate::log_info!("[КАПЧА] v2 solving pow difficulty={}", page.pow_difficulty);
         let input = page.pow_input.clone();
         let difficulty = page.pow_difficulty;
         let cancel = self.cancel.clone();
@@ -457,7 +452,7 @@ impl CaptchaSession<'_> {
             solve_pow(&input, difficulty, &cancel)
         })
         .await?;
-        crate::log_error!("[КАПЧА] v2 pow solved");
+        crate::log_info!("[КАПЧА] v2 pow solved");
         let base = base_values(&captcha.session_token);
         self.request("captchaNotRobot.settings", &base)
             .await
@@ -473,14 +468,14 @@ impl CaptchaSession<'_> {
         {
             let latest = &captures[1];
             if latest != SCRIPT_VERSION {
-                crate::log_error!(
+                crate::log_info!(
                     "[КАПЧА] v2 script version drift: known={SCRIPT_VERSION} latest={latest}"
                 );
             }
         }
         let debug_info = if page.debug_info.is_empty() {
             let value = Uuid::new_v4().to_string();
-            crate::log_error!(
+            crate::log_info!(
                 "[КАПЧА] debug_info UUID не найден в HTML, сгенерирован fallback: {value}"
             );
             value
@@ -497,7 +492,7 @@ impl CaptchaSession<'_> {
                         .map(|(_, value)| value.into_owned())
                 })
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "vk.com".to_owned());
+                .unwrap_or_else(|| "vk.ru".to_owned());
             match self
                 .request(
                     "captchaNotRobot.initSession",
@@ -530,7 +525,7 @@ impl CaptchaSession<'_> {
             }
         }
         loop {
-            crate::log_error!("[КАПЧА] v2 solving show_type={show_type}");
+            crate::log_info!("[КАПЧА] v2 solving show_type={show_type}");
             let solved = match show_type.as_str() {
                 "slider" => {
                     self.solve_slider(
@@ -560,7 +555,7 @@ impl CaptchaSession<'_> {
                         && show_type != "slider"
                         && !slider_settings.is_empty() =>
                 {
-                    crate::log_error!("[КАПЧА] v2 checkbox returned BOT, trying slider");
+                    crate::log_info!("[КАПЧА] v2 checkbox returned BOT, trying slider");
                     show_type = "slider".to_owned();
                 }
                 Err(error) => {
@@ -604,8 +599,8 @@ impl CaptchaSession<'_> {
                 &endpoint,
                 Some(values),
                 &[
-                    ("origin", "https://id.vk.com"),
-                    ("referer", "https://id.vk.com/"),
+                    ("origin", "https://id.vk.ru"),
+                    ("referer", "https://id.vk.ru/"),
                     ("priority", "u=1, i"),
                 ],
             )
@@ -658,11 +653,11 @@ impl CaptchaSession<'_> {
         headers.insert("sec-fetch-dest", header::HeaderValue::from_static("empty"));
         headers.insert(
             header::ORIGIN,
-            header::HeaderValue::from_static("https://vk.com"),
+            header::HeaderValue::from_static("https://vk.ru"),
         );
         headers.insert(
             header::REFERER,
-            header::HeaderValue::from_static("https://vk.com/"),
+            header::HeaderValue::from_static("https://vk.ru/"),
         );
         for (name, value) in extra {
             insert_header(&mut headers, name, value)?;
@@ -692,7 +687,7 @@ impl CaptchaSession<'_> {
                 "captchaNotRobot.check",
                 &[
                     ("session_token", session_token),
-                    ("domain", "vk.com"),
+                    ("domain", "vk.ru"),
                     ("adFp", ""),
                     ("accelerometer", "[]"),
                     ("gyroscope", "[]"),
@@ -722,9 +717,9 @@ impl CaptchaSession<'_> {
             bail!("captcha check status missing: {response}");
         }
         if check.show_type.is_empty() {
-            crate::log_error!("[КАПЧА] v2 check status={}", check.status);
+            crate::log_info!("[КАПЧА] v2 check status={}", check.status);
         } else {
-            crate::log_error!(
+            crate::log_info!(
                 "[КАПЧА] v2 check status={} show_type={}",
                 check.status,
                 check.show_type
@@ -749,7 +744,7 @@ impl CaptchaSession<'_> {
             "captchaNotRobot.componentDone",
             &[
                 ("session_token", session_token),
-                ("domain", "vk.com"),
+                ("domain", "vk.ru"),
                 ("adFp", ""),
                 ("browser_fp", browser_fp),
                 ("device", device),
@@ -804,6 +799,32 @@ impl CaptchaSession<'_> {
     }
 }
 
+const ALLOWED_CAPTCHA_DOMAINS: [&str; 2] = ["vk.ru", "vk.com"];
+
+fn validated_captcha_url(raw: &str) -> Result<Url> {
+    let url = Url::parse(raw).context("captcha redirect_uri is not a valid URL")?;
+    if url.scheme() != "https" {
+        bail!("captcha redirect_uri must use https");
+    }
+    if url.port().is_some() {
+        bail!("captcha redirect_uri must use the default https port");
+    }
+    let host = url.host_str().unwrap_or_default();
+    if !is_allowed_captcha_host(host) {
+        bail!("captcha redirect_uri host is not allowed");
+    }
+    Ok(url)
+}
+
+fn is_allowed_captcha_host(host: &str) -> bool {
+    ALLOWED_CAPTCHA_DOMAINS.iter().any(|domain| {
+        host == *domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
+}
+
 fn parse_page(html: &str) -> Result<CaptchaPage> {
     let init: Option<CaptchaInit> = match extract_window_init(html) {
         Ok(raw) => Some(serde_json::from_str(&raw).context("captcha init json parse")?),
@@ -821,7 +842,7 @@ fn parse_page(html: &str) -> Result<CaptchaPage> {
         .as_ref()
         .and_then(|regex| regex.captures(html))
         .map(|captures| captures[1].to_owned())
-        .unwrap_or_else(|| "https://id.vk.com/js/api/oauth.js".to_owned());
+        .unwrap_or_else(|| "https://id.vk.ru/js/api/oauth.js".to_owned());
     let mut pow_input = POW_INPUT
         .as_ref()
         .and_then(|regex| regex.captures(html))
@@ -913,13 +934,9 @@ fn extract_window_init(html: &str) -> Result<String> {
     bail!("unbalanced braces in captcha init json")
 }
 
-// Difficulty comes from server HTML; a hostile value would otherwise build a
-// multi-megabyte target string before burning the full nonce range.
 const MAX_POW_DIFFICULTY: usize = 8;
 
 fn hash_meets_target(digest: &[u8], difficulty: usize) -> bool {
-    // Hex target is `difficulty` leading '0' chars == that many leading
-    // zero bits (high nibble first), checked without per-nonce allocation.
     let full_bytes = difficulty / 2;
     if digest[..full_bytes].iter().any(|byte| *byte != 0) {
         return false;
@@ -954,7 +971,7 @@ fn solve_pow(input: &str, difficulty: usize, cancel: &CancellationToken) -> Resu
 fn base_values(session_token: &str) -> Vec<(&str, &str)> {
     vec![
         ("session_token", session_token),
-        ("domain", "vk.com"),
+        ("domain", "vk.ru"),
         ("adFp", ""),
         ("access_token", ""),
     ]
@@ -1080,7 +1097,7 @@ mod tests {
             "error_code": 14,
             "captcha_sid": 123,
             "captcha_ts": 99,
-            "redirect_uri": "https://id.vk.com/captcha?session_token=abc"
+            "redirect_uri": "https://id.vk.ru/captcha?session_token=abc"
         }))
         .unwrap();
         assert_eq!(error.captcha_sid, "123");
@@ -1124,5 +1141,16 @@ mod tests {
     #[test]
     fn invalid_balanced_window_init_is_not_silently_ignored() {
         assert!(parse_page(r#"<script>window.init={"data":]};</script>"#).is_err());
+    }
+
+    #[test]
+    fn captcha_url_must_be_https_and_on_vk_domains() {
+        assert!(validated_captcha_url("https://id.vk.ru/captcha?session_token=a").is_ok());
+        assert!(validated_captcha_url("https://vk.com/captcha?session_token=a").is_ok());
+        assert!(validated_captcha_url("http://id.vk.ru/captcha").is_err());
+        assert!(validated_captcha_url("https://evilvk.ru/captcha").is_err());
+        assert!(validated_captcha_url("https://vk.ru.evil.example/captcha").is_err());
+        assert!(validated_captcha_url("https://id.vk.ru:8443/captcha").is_err());
+        assert!(validated_captcha_url("not a url").is_err());
     }
 }

@@ -307,7 +307,9 @@ fn poll_instance(instance: u64, _wake: SnolWakeHandle) -> u32 {
                 Poll::Ready(Ok((upload, download))) if upload.finished && download.finished => {
                     finished.push(*handle);
                 }
-                Poll::Ready(Err(_)) => return abi::STATUS_IO,
+                // оборванный поток закрываем и забываем: раньше он оставался в таблице и каждый проход возвращал
+                // STATUS_IO, из-за чего движок крутил цикл на 100% ЦП и писал ошибку в лог сотни раз в секунду
+                Poll::Ready(Err(_)) => finished.push(*handle),
                 Poll::Ready(Ok(_)) | Poll::Pending => {}
             }
         }
@@ -320,7 +322,9 @@ fn poll_instance(instance: u64, _wake: SnolWakeHandle) -> u32 {
                 Poll::Ready(Ok((upload, download))) if upload.finished && download.finished => {
                     finished.push(*handle);
                 }
-                Poll::Ready(Err(_)) => return abi::STATUS_IO,
+                // оборванный поток закрываем и забываем: раньше он оставался в таблице и каждый проход возвращал
+                // STATUS_IO, из-за чего движок крутил цикл на 100% ЦП и писал ошибку в лог сотни раз в секунду
+                Poll::Ready(Err(_)) => finished.push(*handle),
                 Poll::Ready(Ok(_)) | Poll::Pending => {}
             }
         }

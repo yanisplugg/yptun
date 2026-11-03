@@ -2,6 +2,7 @@ package transport
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -91,5 +92,80 @@ func TestShaperJitterStaysInRange(t *testing.T) {
 		if delay < time.Millisecond || delay >= 3*time.Millisecond {
 			t.Fatalf("nextDelay() = %v, want [1ms, 3ms)", delay)
 		}
+	}
+}
+
+// A send the callback holds - an engine waiting on one destination's leg -
+// holds no other send: the shaper paces when sends start, and a send that
+// has started is the transport's.
+//
+// ai-generated: this test (olcrtc#49).
+func TestShaperDoesNotHoldASendBehindAnother(t *testing.T) {
+	shaper := NewShaper(TrafficConfig{MaxPayloadSize: 4096, MinDelay: time.Millisecond}, Features{})
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	held := make(chan error, 1)
+	go func() {
+		held <- shaper.Send(func([]byte) error {
+			close(entered)
+			<-release
+
+			return nil
+		}, []byte("held"))
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first send never started")
+	}
+
+	next := make(chan error, 1)
+	go func() { next <- shaper.Send(func([]byte) error { return nil }, []byte("next")) }()
+
+	select {
+	case err := <-next:
+		if err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a send waited behind one its callback holds")
+	}
+
+	close(release)
+
+	if err := <-held; err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+}
+
+// Sends that arrive together still start at least the pacing delay apart:
+// the delay is taken one caller at a time.
+//
+// ai-generated: this test (olcrtc#49).
+func TestShaperSpacesSendsThatArriveTogether(t *testing.T) {
+	const delay = 20 * time.Millisecond
+
+	shaper := NewShaper(TrafficConfig{MinDelay: delay}, Features{})
+	start, started := make(chan struct{}), make(chan time.Time, 2)
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			<-start
+			_ = shaper.Send(func([]byte) error {
+				started <- time.Now()
+
+				return nil
+			}, []byte("x"))
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	first, second := <-started, <-started
+	if gap := second.Sub(first).Abs(); gap < delay {
+		t.Fatalf("two sends that arrived together started %v apart, want at least %v", gap, delay)
 	}
 }

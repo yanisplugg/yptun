@@ -336,6 +336,13 @@ private fun IosApp(
                         }
                     })
                 },
+                onImportTextRequested = { text, onImported, onError ->
+                    dependencies.homeViewModel.onImportFullConfig(
+                        rawText = text,
+                        onComplete = { reloadLocationsAfterImport(onImported) },
+                        onError = onError
+                    )
+                },
                 onImportFromClipboardRequested = { onImported, onError ->
                     dependencies.homeViewModel.onPasteFromClipboard(
                         onComplete = {
@@ -367,7 +374,7 @@ private fun IosApp(
                 },
                 onShareLocationRequested = { config: LocationConfig ->
                     // Share our universal yptun:// link (carries the whole inbound incl. proxy + toggles).
-                    platformBridge.shareText("Location", org.olcbox.app.data.share.YptunInboundCodec.compose(config))
+                    platformBridge.shareText("Location", ConfigShareService.shareLink(config, appBehavior.shareUniversalLink))
                 },
                 onSaveLogsRequested = { onSaved, onError ->
                     dependencies.homeViewModel.onSaveLogsToFile(

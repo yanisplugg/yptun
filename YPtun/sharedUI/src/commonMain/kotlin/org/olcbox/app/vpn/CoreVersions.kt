@@ -10,7 +10,7 @@ object CoreVersions {
     /** snolc/Cargo.toml. */
     const val SNOLC = "0.0.4"
     /** csqtt/rust-client/Cargo.toml + the upstream commit it was vendored at (csqtt/UPSTREAM.txt). */
-    const val CSQTT = "2.1.9 (71712b0)"
+    const val CSQTT = "2.5.0 (fd936ef)"
     /** Android: sharedUI/libs/trusttunnel-client-android-*.aar. */
     const val TRUSTTUNNEL_ANDROID = "1.1.11"
     /** Desktop: `trustTunnelVersion` in desktopApp/build.gradle.kts. */

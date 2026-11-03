@@ -1,11 +1,15 @@
 package vp8channel
 
 import (
+	"strings"
+	"time"
+
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/transport/common"
 )
 
 // reorderWindow bounds how many out-of-order RTP packets the reorder buffer
@@ -14,6 +18,27 @@ import (
 // sequence is treated as genuinely lost and we advance, so a truly dropped
 // packet cannot stall delivery indefinitely.
 const reorderWindow = 256
+
+// reorderHold bounds how long a gap may hold back the packets behind it.
+// The count bound alone is reached in a fraction of a second at full rate,
+// but a stream down to keepalives and probes - an idle peer, or one whose
+// lane is waiting out a dark path - brings a dozen packets a second, and one
+// lost packet held control and data behind it for twenty seconds, long
+// enough for the sender to count the path dark (issue #12).
+//
+// It has to outlast a repair, not just reordering: on every provider but
+// Jitsi the engine registers pion's default interceptors, whose generator
+// asks for a lost packet every 100 ms, so a repaired packet lands a NACK
+// interval plus a round trip late. A gap given up sooner than that throws
+// the repair away and loses the frame anyway: modelled at 1000 packets a
+// second in frames of 17, with 95% of losses repaired, a 100 ms hold put
+// frames through 93.9% of the time against 99.2% for the count bound at 1%
+// loss and a 40 ms round trip, and 89.4% against 98.3% at 2%. Three hundred
+// covers the generator's interval and a round trip of 100 ms with room to
+// spare, and still ends the twenty-second holds it was added for.
+//
+// ai-generated: the time bound.
+const reorderHold = 300 * time.Millisecond
 
 // Reordered RTP packets normally carry an MTU-sized payload. Larger buffers
 // are not retained after delivery so one malformed packet cannot pin a large
@@ -47,6 +72,9 @@ type reorderBuffer struct {
 	free    []*rtp.Packet
 	nextSeq uint16
 	started bool
+	// gapSince is when the packets now held started waiting on a gap, zero
+	// while none waits (ai-generated: issue #12).
+	gapSince time.Time
 }
 
 func newReorderBuffer() *reorderBuffer {
@@ -72,12 +100,21 @@ func (b *reorderBuffer) push(pkt *rtp.Packet, deliver func(*rtp.Packet)) {
 	}
 	b.pkts[pkt.SequenceNumber] = b.clone(pkt)
 
-	// Holding a full window behind a hole means the head sequence is
-	// genuinely lost: skip forward to the oldest buffered packet.
-	if len(b.pkts) > reorderWindow {
+	// Holding a full window behind a hole, or holding anything behind it for
+	// longer than reorderHold, means the head sequence is genuinely lost:
+	// skip forward to the oldest buffered packet.
+	now := time.Now()
+	if len(b.pkts) > reorderWindow || (!b.gapSince.IsZero() && now.Sub(b.gapSince) > reorderHold) {
 		b.skipToOldest()
+		b.gapSince = time.Time{}
 	}
 	b.drain(deliver)
+	switch {
+	case len(b.pkts) == 0:
+		b.gapSince = time.Time{}
+	case b.gapSince.IsZero():
+		b.gapSince = now
+	}
 }
 
 // drain pops contiguous packets starting at nextSeq.
@@ -196,7 +233,11 @@ func (s *vp8FrameState) processRTPPacket(pkt *rtp.Packet) []byte {
 }
 
 func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-	if track.Codec().MimeType != webrtc.MimeTypeVP8 {
+	// The carrier's own codec is read. On VP8 that includes RED: a VK Calls
+	// SFU forwards camera video wrapped in RFC 2198 RED even when the
+	// publisher sent no redundancy, and the primary block is the VP8 packet
+	// this transport assembles.
+	if !p.carrier.accepts(track.Codec().MimeType) {
 		go p.drainTrack(track)
 		return
 	}
@@ -216,8 +257,13 @@ func (p *streamTransport) drainTrack(track *webrtc.TrackRemote) {
 	}
 }
 
+// mimeTypeRED is the RFC 2198 wrapper a track can arrive in; see
+// common.REDPrimary.
+const mimeTypeRED = "video/red"
+
 func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
-	var state vp8FrameState
+	red := strings.EqualFold(track.Codec().MimeType, mimeTypeRED)
+	state := p.carrier.assembler()
 	reorder := newReorderBuffer()
 	buf := make([]byte, rtpBufSize)
 	var rtpCount, frameCount int
@@ -234,6 +280,14 @@ func (p *streamTransport) readVP8Track(track *webrtc.TrackRemote) {
 		pkt := &rtp.Packet{}
 		if pkt.Unmarshal(buf[:n]) != nil {
 			continue
+		}
+		if red {
+			payloadType, data, unwrapErr := common.REDPrimary(pkt.Payload)
+			if unwrapErr != nil {
+				continue
+			}
+			pkt.PayloadType = payloadType
+			pkt.Payload = data
 		}
 
 		// Restore sequence order before assembly so SFU reordering is not

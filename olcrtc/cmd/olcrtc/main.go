@@ -2,7 +2,8 @@
 //
 // Usage: olcrtc <config.yaml>
 //
-// All runtime settings come from the YAML file. There are no other CLI flags.
+// All runtime settings come from the YAML file. The one flag is -version,
+// which prints the version the binary was built from (docs/versioning.md).
 package main
 
 import (
@@ -50,6 +51,11 @@ type loadedConfig struct {
 	failover failoverConfig
 	dataDir  string
 	debug    bool
+	// reload re-reads the config file for the current failover profiles, so
+	// the supervisor picks up rooms added while a session was live.
+	//
+	// ai-generated: the reload hook (this field and loadProfiles).
+	reload func() ([]supervisor.Profile, error)
 }
 
 type failoverConfig struct {
@@ -84,6 +90,10 @@ func runWithArgs(args []string) error {
 
 	if len(args) != 1 || args[0] == "-h" || args[0] == "--help" || args[0] == "-help" {
 		return ErrConfigPathRequired
+	}
+
+	if isVersionFlag(args[0]) {
+		return writeVersion(versionOut)
 	}
 
 	cfg, err := loadConfig(args[0])
@@ -126,7 +136,40 @@ func loadConfig(path string) (loadedConfig, error) {
 		failover: failover,
 		dataDir:  resolveDataDir(path, file.Data),
 		debug:    file.Debug,
+		reload:   func() ([]supervisor.Profile, error) { return loadProfiles(path) },
 	}, nil
+}
+
+// loadProfiles re-reads the config file and returns the failover profiles it
+// holds now, applied and validated. An invalid profile is skipped rather than
+// failing the reload, so one bad entry cannot stall the list.
+func loadProfiles(path string) ([]supervisor.Profile, error) {
+	file, err := configpkg.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	base := configpkg.Apply(file)
+
+	profiles := make([]supervisor.Profile, 0, len(file.Profiles))
+	for i, profile := range file.Profiles {
+		name := profile.Name
+		if name == "" {
+			name = fmt.Sprintf("profile-%d", i+1)
+		}
+
+		scfg := session.ApplyDefaults(configpkg.ApplyProfile(base, profile))
+		scfg.EndOnEmptyRoom = true
+		if err := session.Validate(scfg); err != nil {
+			logger.Warnf("skipping invalid failover profile %q on reload: %v", name, err)
+
+			continue
+		}
+
+		profiles = append(profiles, supervisor.Profile{Name: name, Config: scfg})
+	}
+
+	return profiles, nil
 }
 
 func parseFailoverConfig(f configpkg.Failover) (failoverConfig, error) {
@@ -146,6 +189,9 @@ func parseFailoverConfig(f configpkg.Failover) (failoverConfig, error) {
 
 func runWithConfig(cfg loadedConfig) error {
 	configureLogging(cfg.debug)
+	// ai-generated: the first line of every run names the build, so a log says
+	// which engine wrote it.
+	logger.Infof("olcrtc %s", buildVersion())
 
 	scfg := session.ApplyDefaults(cfg.scfg)
 
@@ -159,17 +205,24 @@ func runWithConfig(cfg loadedConfig) error {
 
 	if len(cfg.profiles) > 0 {
 		profiles := prepareProfiles(cfg.profiles)
-		return runFailoverSessionMode(cfg.dataDir, profiles, cfg.failover)
+		return runFailoverSessionMode(cfg.dataDir, profiles, cfg.failover, cfg.reload)
 	}
 
 	return runSessionMode(cfg.dataDir, scfg)
 }
 
+// prepareProfiles applies the session defaults and tells each client that it
+// is one room of several: a room whose server has gone ends the run so the
+// supervisor advances, rather than being retried for as long as olcrtc runs.
+// A single-profile config never comes through here.
+//
+// ai-generated: EndOnEmptyRoom and this comment (the port of olcrtc#39).
 func prepareProfiles(profiles []supervisor.Profile) []supervisor.Profile {
 	out := make([]supervisor.Profile, 0, len(profiles))
 
 	for _, profile := range profiles {
 		profile.Config = session.ApplyDefaults(profile.Config)
+		profile.Config.EndOnEmptyRoom = true
 		out = append(out, profile)
 	}
 
@@ -190,7 +243,12 @@ func runSessionMode(dataDir string, scfg session.Config) error {
 	})
 }
 
-func runFailoverSessionMode(dataDir string, profiles []supervisor.Profile, failover failoverConfig) error {
+func runFailoverSessionMode(
+	dataDir string,
+	profiles []supervisor.Profile,
+	failover failoverConfig,
+	reload func() ([]supervisor.Profile, error),
+) error {
 	for _, profile := range profiles {
 		if err := session.Validate(profile.Config); err != nil {
 			return fmt.Errorf("validate profile %q: %w", profile.Name, err)
@@ -204,6 +262,7 @@ func runFailoverSessionMode(dataDir string, profiles []supervisor.Profile, failo
 	return runManaged(func(ctx context.Context) error {
 		return supervisor.Run(ctx, supervisor.Config{
 			Profiles:   profiles,
+			Reload:     reload,
 			RetryDelay: failover.retryDelay,
 			MaxCycles:  failover.maxCycles,
 			OnProfileStart: func(profile supervisor.Profile, cycle int) {

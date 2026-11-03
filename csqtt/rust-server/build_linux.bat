@@ -1,6 +1,3 @@
-@REM SPDX-FileCopyrightText: 2026 amurcanov
-@REM SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 @echo off
 setlocal EnableDelayedExpansion
 
@@ -55,7 +52,10 @@ if not defined RUN_TESTS (
 set "CARGO_FEATURES="
 if defined DIAGNOSTICS set "CARGO_FEATURES=--features diagnostics"
 
-cd /d "%SERVER_DIR%"
+set "PY3_SHIM_DIR=%TEMP%\csqtt-py3-shim"
+if not exist "%PY3_SHIM_DIR%" mkdir "%PY3_SHIM_DIR%" >nul 2>nul
+>"%PY3_SHIM_DIR%\python3.cmd" echo @exit /b 1
+set "PATH=%PY3_SHIM_DIR%;!PATH!"
 
 where cargo >nul 2>nul
 if errorlevel 1 (
@@ -99,6 +99,8 @@ if errorlevel 1 goto fail
 rustup target add armv7-unknown-linux-musleabihf
 if errorlevel 1 goto fail
 
+cd /d "%SERVER_DIR%"
+
 if "%RUN_TESTS%"=="1" (
     echo Running Linux pre-build checks...
     call :setup_test_zig_wrappers
@@ -126,7 +128,7 @@ if not exist "%VARIANT_RUNNER%" (
     echo Error: parallel variant runner not found: %VARIANT_RUNNER%
     goto fail
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%VARIANT_RUNNER%" -BuildScript "%BUILD_SCRIPT%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%VARIANT_RUNNER%" -ServerDir "%SERVER_DIR:~0,-1%" -ProjectRoot "%PROJECT_ROOT:~0,-1%" -AssetsDir "%ASSETS_DIR%" -CargoFeatures "!CARGO_FEATURES!"
 if errorlevel 1 goto fail
 
 echo Verifying Linux server assets...

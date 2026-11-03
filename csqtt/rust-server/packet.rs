@@ -1,31 +1,23 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use bytes::BytesMut;
-use crossbeam_queue::ArrayQueue;
 use std::{
     mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
 };
 
-pub const PACKET_CAPACITY: usize = 1600;
-pub const UDP_TX_SLOTS: usize = 4096;
-pub const TUN_TX_SLOTS: usize = 1024;
-pub const TUN_MTU: u16 = 1300;
-pub const PACKET_POOL_RETAINED_MAX: usize = 256;
+pub const PACKET_CAPACITY: usize = 2048;
+pub const UDP_TX_SLOTS: usize = 1024;
+pub const TUN_TX_SLOTS: usize = 512;
+pub const TUN_MTU: u16 = 1500;
+pub const PACKET_POOL_RETAINED_MAX: usize = 1536;
 
 pub const fn packet_pool_size() -> usize {
     UDP_TX_SLOTS + TUN_TX_SLOTS
 }
 
 pub struct PacketPool {
-    queue: ArrayQueue<BytesMut>,
-    allocated: AtomicUsize,
-    retained: AtomicUsize,
+    free: Vec<BytesMut>,
+    allocated: usize,
+    capacity: usize,
     retained_limit: usize,
 }
 
@@ -37,61 +29,48 @@ pub struct PacketPoolSnapshot {
 }
 
 impl PacketPool {
-    pub fn new(buffers: usize) -> Arc<Self> {
+    pub fn new(buffers: usize) -> Self {
         let capacity = buffers.max(1);
-        Arc::new(Self {
-            queue: ArrayQueue::new(capacity),
-            allocated: AtomicUsize::new(0),
-            retained: AtomicUsize::new(0),
-            retained_limit: capacity.min(PACKET_POOL_RETAINED_MAX),
-        })
+        let retained_limit = capacity.min(PACKET_POOL_RETAINED_MAX);
+        Self {
+            free: Vec::with_capacity(retained_limit),
+            allocated: 0,
+            capacity,
+            retained_limit,
+        }
     }
 
-    pub fn try_acquire(self: &Arc<Self>) -> Option<PacketBuf> {
-        let storage = if let Some(storage) = self.queue.pop() {
-            self.retained.fetch_sub(1, Ordering::AcqRel);
+    pub fn try_acquire(&mut self) -> Option<PacketBuf> {
+        let storage = if let Some(storage) = self.free.pop() {
             storage
         } else {
-            self.allocated
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |allocated| {
-                    (allocated < self.queue.capacity()).then_some(allocated + 1)
-                })
-                .ok()?;
+            if self.allocated >= self.capacity {
+                return None;
+            }
+            self.allocated += 1;
             BytesMut::zeroed(PACKET_CAPACITY)
         };
-        Some(PacketBuf {
-            storage,
-            len: 0,
-            pool: self.clone(),
-        })
+        Some(PacketBuf { storage, len: 0 })
     }
 
     pub fn snapshot(&self) -> PacketPoolSnapshot {
         PacketPoolSnapshot {
-            capacity: self.queue.capacity(),
-            allocated: self.allocated.load(Ordering::Acquire),
-            retained: self.retained.load(Ordering::Acquire),
+            capacity: self.capacity,
+            allocated: self.allocated,
+            retained: self.free.len(),
         }
     }
 
-    fn release(&self, storage: BytesMut) {
+    pub fn recycle(&mut self, mut packet: PacketBuf) {
+        let storage = mem::take(&mut packet.storage);
         if storage.len() != PACKET_CAPACITY {
-            self.allocated.fetch_sub(1, Ordering::AcqRel);
+            self.allocated = self.allocated.saturating_sub(1);
             return;
         }
-        if self
-            .retained
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |retained| {
-                (retained < self.retained_limit).then_some(retained + 1)
-            })
-            .is_err()
-        {
-            self.allocated.fetch_sub(1, Ordering::AcqRel);
-            return;
-        }
-        if self.queue.push(storage).is_err() {
-            self.retained.fetch_sub(1, Ordering::AcqRel);
-            self.allocated.fetch_sub(1, Ordering::AcqRel);
+        if self.free.len() < self.retained_limit {
+            self.free.push(storage);
+        } else {
+            self.allocated = self.allocated.saturating_sub(1);
         }
     }
 }
@@ -99,7 +78,6 @@ impl PacketPool {
 pub struct PacketBuf {
     storage: BytesMut,
     len: usize,
-    pool: Arc<PacketPool>,
 }
 
 impl PacketBuf {
@@ -140,12 +118,6 @@ impl PacketBuf {
     #[inline(always)]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         self.storage.as_mut_ptr()
-    }
-}
-
-impl Drop for PacketBuf {
-    fn drop(&mut self) {
-        self.pool.release(mem::take(&mut self.storage));
     }
 }
 
@@ -213,7 +185,31 @@ pub fn extract_dst_ipv4(packet: &[u8]) -> Option<[u8; 4]> {
     if packet.len() < 20 || packet[0] >> 4 != 4 {
         return None;
     }
+    let ihl = (packet[0] & 0x0f) as usize * 4;
+    if ihl < 20 || packet.len() < ihl {
+        return None;
+    }
+    let total_len = u16::from_be_bytes([packet[2], packet[3]]) as usize;
+    if total_len < ihl {
+        return None;
+    }
     Some([packet[16], packet[17], packet[18], packet[19]])
+}
+
+pub const TUN_SUBNET_V6_PREFIX: [u8; 15] =
+    [0xfd, 0x66, 0x00, 0x67, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+#[inline(always)]
+pub fn extract_dst_ipv6_slot(packet: &[u8]) -> Option<usize> {
+    if packet.len() < 40 || packet[0] >> 4 != 6 {
+        return None;
+    }
+    let dst = &packet[24..40];
+    if dst[..15] == TUN_SUBNET_V6_PREFIX {
+        Some(dst[15] as usize)
+    } else {
+        None
+    }
 }
 
 pub fn socket_addr_to_storage(
@@ -287,14 +283,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tun_mtu_is_the_shared_safe_default() {
+        assert_eq!(TUN_MTU, 1500);
+        assert!(PACKET_CAPACITY >= TUN_MTU as usize);
+    }
+
+    #[test]
     fn packet_pool_is_bounded_and_recovers_buffers() {
-        let pool = PacketPool::new(2);
+        let mut pool = PacketPool::new(2);
         let first = pool.try_acquire().expect("first packet");
         let second = pool.try_acquire().expect("second packet");
         assert!(pool.try_acquire().is_none());
         assert_eq!(pool.snapshot().allocated, 2);
-        drop(first);
-        drop(second);
+        pool.recycle(first);
+        pool.recycle(second);
         let snapshot = pool.snapshot();
         assert_eq!(snapshot.capacity, 2);
         assert_eq!(snapshot.allocated, 2);
@@ -304,13 +306,33 @@ mod tests {
     #[test]
     fn packet_pool_discards_excess_idle_storage() {
         let capacity = PACKET_POOL_RETAINED_MAX + 8;
-        let pool = PacketPool::new(capacity);
+        let mut pool = PacketPool::new(capacity);
         let packets = (0..capacity)
             .map(|_| pool.try_acquire().expect("packet pool capacity"))
             .collect::<Vec<_>>();
-        drop(packets);
+        for packet in packets {
+            pool.recycle(packet);
+        }
         let snapshot = pool.snapshot();
         assert_eq!(snapshot.retained, PACKET_POOL_RETAINED_MAX);
         assert_eq!(snapshot.allocated, PACKET_POOL_RETAINED_MAX);
+    }
+
+    #[test]
+    fn ipv6_dst_slot_extraction() {
+        let mut pkt = [0u8; 40];
+        pkt[0] = 0x60;
+        pkt[24..39].copy_from_slice(&TUN_SUBNET_V6_PREFIX);
+        pkt[39] = 42;
+        assert_eq!(extract_dst_ipv6_slot(&pkt), Some(42));
+
+        pkt[39] = 2;
+        assert_eq!(extract_dst_ipv6_slot(&pkt), Some(2));
+
+        pkt[24] = 0xfe;
+        assert_eq!(extract_dst_ipv6_slot(&pkt), None);
+
+        pkt[0] = 0x45;
+        assert_eq!(extract_dst_ipv6_slot(&pkt), None);
     }
 }

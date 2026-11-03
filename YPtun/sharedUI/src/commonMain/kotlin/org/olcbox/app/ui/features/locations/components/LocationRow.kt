@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.features.locations.components
 
+import org.olcbox.app.data.importer.displayServer
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -157,7 +158,7 @@ fun LocationRow(
 ) {
     val bgColor by animateColorAsState(
         targetValue = if (isSelected) {
-            MaterialTheme.colorScheme.surfaceContainerHigh
+            MaterialTheme.colorScheme.primaryContainer
         } else {
             MaterialTheme.colorScheme.surfaceContainer
         },
@@ -167,11 +168,11 @@ fun LocationRow(
         targetValue = if (isSelected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.outlineVariant
+            Color.Transparent
         },
         label = "locationRowBorder"
     )
-    val borderWidth = if (isSelected) 2.dp else 1.dp
+    val borderWidth = if (isSelected) 1.5.dp else 1.dp
     val textColor = MaterialTheme.colorScheme.onSurface
 
     val metadata = location.metadata
@@ -187,9 +188,9 @@ fun LocationRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(bgColor)
-            .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
+            .border(borderWidth, borderColor, RoundedCornerShape(24.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {
@@ -387,18 +388,18 @@ private fun locationSubtitle(location: LocationItem): String {
     val engineParts = when (config?.engine) {
         EngineType.Standard -> listOfNotNull(
             protocolLabel(config.proxy?.type),
-            config.proxy?.server
+            config.proxy?.displayServer
         )
 
         EngineType.Chain -> listOfNotNull(
             "Chain",
             protocolLabel(config.proxy?.type),
-            config.proxy?.server
+            config.proxy?.displayServer
         )
 
         EngineType.VkTurn -> listOfNotNull(
             "VK-TURN",
-            config.proxy?.server
+            config.proxy?.displayServer
         )
 
         EngineType.MasterDns -> listOfNotNull(
@@ -490,7 +491,7 @@ fun LocationGridCell(
 ) {
     val bgColor by animateColorAsState(
         targetValue = if (isSelected) {
-            MaterialTheme.colorScheme.surfaceContainerHigh
+            MaterialTheme.colorScheme.primaryContainer
         } else {
             MaterialTheme.colorScheme.surfaceContainer
         },
@@ -500,11 +501,11 @@ fun LocationGridCell(
         targetValue = if (isSelected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.outlineVariant
+            Color.Transparent
         },
         label = "gridCellBorder"
     )
-    val borderWidth = if (isSelected) 2.dp else 1.dp
+    val borderWidth = if (isSelected) 1.5.dp else 1.dp
     val textColor = MaterialTheme.colorScheme.onSurface
 
     val metadata = location.metadata
@@ -518,9 +519,9 @@ fun LocationGridCell(
     Column(
         modifier = modifier
             .heightIn(min = 96.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(bgColor)
-            .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
+            .border(borderWidth, borderColor, RoundedCornerShape(24.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = {
@@ -745,7 +746,7 @@ private fun ShimmeringPingSkeleton() {
         modifier = Modifier
             .width(42.dp)
             .height(18.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(9.dp))
             .background(brush)
     )
 }

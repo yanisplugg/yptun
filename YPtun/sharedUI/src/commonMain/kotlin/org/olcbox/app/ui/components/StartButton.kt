@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Pause
@@ -58,12 +57,18 @@ fun StartButton(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    // Rounded-square container with a centered round action button (v2rayTun style).
+    val ringColor by animateColorAsState(
+        targetValue = if (isActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        label = "ringColor"
+    )
+
+    // A round ring with the round action button in its middle; the ring takes a tint of the accent
+    // while connected.
     Box(
         modifier = modifier
             .size(132.dp)
-            .clip(RoundedCornerShape(30.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clip(CircleShape)
+            .background(ringColor)
             .clickable(enabled = enabled) { onClick() },
         contentAlignment = Alignment.Center
     ) {

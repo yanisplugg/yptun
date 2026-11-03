@@ -35,8 +35,8 @@ fun RelayStatus(
     val containerColor by animateColorAsState(
         targetValue = when {
             isActive -> MaterialTheme.colorScheme.primaryContainer
-            requiresSetup -> MaterialTheme.colorScheme.surfaceContainerLow
-            else -> MaterialTheme.colorScheme.surfaceContainerLow
+            requiresSetup -> MaterialTheme.colorScheme.surfaceContainer
+            else -> MaterialTheme.colorScheme.surfaceContainer
         },
         label = "relayStatusContainer"
     )
@@ -71,7 +71,7 @@ fun RelayStatus(
 
     Surface(
         modifier = modifier.width(272.dp),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
     ) {
         Row(

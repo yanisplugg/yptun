@@ -3,7 +3,6 @@ package tunnelcore
 
 import (
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/xtaci/smux"
@@ -21,6 +20,11 @@ const (
 	ConnectAckHostUnreachable byte = 0x04
 )
 
+// UDPRecordAAD binds a sealed datagram to the UDP relay so a record lifted
+// from the lossy lane can never be replayed into the byte stream, or the
+// other way round.
+const UDPRecordAAD = "olcrtc/udp/v1"
+
 // SetupKeySet creates shared directional tunnel keys and adds the role to errors.
 func SetupKeySet(keyHex string, role crypto.Role) (*crypto.KeySet, error) {
 	keys, err := runtime.SetupKeySet(keyHex, role)
@@ -31,7 +35,7 @@ func SetupKeySet(keyHex string, role crypto.Role) (*crypto.KeySet, error) {
 }
 
 // Resolver returns the supplied resolver or a protected resolver for dnsServer.
-func Resolver(resolver *net.Resolver, dnsServer string) *net.Resolver {
+func Resolver(resolver protect.Lookup, dnsServer string) protect.Lookup {
 	if resolver != nil {
 		return resolver
 	}

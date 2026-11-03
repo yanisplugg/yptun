@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>olcRTC</title>
+  <rect width="512" height="512" rx="104" fill="#07080d"/>
+  <g stroke="#2c2f45" stroke-width="22" stroke-linecap="round">
+    <line x1="68" y1="295" x2="372" y2="103"/>
+    <line x1="138" y1="408" x2="442" y2="216"/>
+  </g>
+  <g transform="translate(139 329) rotate(-32.28)"><rect x="-25.0" y="-25.0" width="50.0" height="50.0" rx="12.0" fill="#2e3266"/></g>
+  <g transform="translate(223 276) rotate(-32.28)"><rect x="-32.0" y="-32.0" width="64.0" height="64.0" rx="15.4" fill="#4a52a8"/></g>
+  <g transform="translate(331 208) rotate(-32.28)"><rect x="-43.0" y="-43.0" width="86.0" height="86.0" rx="20.6" fill="#b5f23d"/><path d="M -13.8 -18.9 L 20.6 0 L -13.8 18.9 Z" fill="#07080d" stroke="#07080d" stroke-width="5.2" stroke-linejoin="round"/></g>
+</svg>

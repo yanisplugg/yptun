@@ -6,13 +6,13 @@
 pub mod auth;
 pub mod captcha;
 pub mod captcha_slider;
-pub mod client_perf;
 pub mod cpu_task;
+pub mod direct_relay;
 pub mod dispatcher;
 pub mod dns;
+#[path = "../shared/dtls.rs"]
+pub mod dtls;
 pub mod events;
-#[path = "../shared/flow_frame.rs"]
-pub mod flow_frame;
 pub mod logging;
 pub mod namegen;
 pub mod obfs;
@@ -20,19 +20,19 @@ pub mod packet;
 pub mod profiles;
 pub mod protocol;
 pub mod repair;
-#[path = "../shared/selective_fec.rs"]
-pub mod selective_fec;
 pub mod session;
+pub mod sni;
+#[path = "../shared/spsc_ring.rs"]
+pub mod spsc_ring;
+pub mod srtp_mode;
 pub mod stats;
-#[path = "../shared/striped_scheduler.rs"]
-pub mod striped_scheduler;
 pub mod stun_codec;
 pub mod tun;
 pub mod turn;
 pub mod turn_core;
 pub mod turn_endpoint;
+pub mod turn_ip_pool;
 pub mod turn_stream;
-pub mod udp_batch;
 pub mod vk_js_calls;
 #[path = "../shared/wire_protocol.rs"]
 pub mod wire_protocol;
@@ -46,7 +46,7 @@ use std::{
     os::raw::c_char,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
@@ -70,8 +70,10 @@ struct FfiOptions {
     password: String,
     #[serde(default = "default_workers")]
     workers: usize,
-    #[serde(default = "default_device_id")]
-    device_id: String,
+    #[serde(default = "default_srtp_mode")]
+    srtp_mode: String,
+    #[serde(default)]
+    custom_turn_ips: String,
     #[serde(default = "default_obfs")]
     obfs: String,
     #[serde(default)]
@@ -98,7 +100,7 @@ struct FfiOptions {
 
 fn default_listen() -> String { "127.0.0.1:0".to_string() }
 fn default_workers() -> usize { 18 }
-fn default_device_id() -> String { "ios".to_string() }
+fn default_srtp_mode() -> String { "auto".to_string() }
 fn default_obfs() -> String { "audio".to_string() }
 fn default_fingerprint() -> String { "safari".to_string() }
 fn default_vk_auth_mode() -> String { "vkcalls".to_string() }
@@ -114,7 +116,7 @@ static STATE: Mutex<Option<CsqttState>> = Mutex::new(None);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn csqtt_ffi_version() -> *const c_char {
-    static VERSION: &[u8] = b"2.1.9\0";
+    static VERSION: &[u8] = b"2.5.0\0";
     VERSION.as_ptr().cast()
 }
 
@@ -150,7 +152,6 @@ pub extern "C" fn csqtt_ffi_start(
     }
 
     crate::logging::set_ffi_log_callback(on_log);
-    crate::protocol::reset_negotiated_wire_version();
 
     let cancel = CancellationToken::new();
     let cancel_worker = cancel.clone();
@@ -272,7 +273,9 @@ async fn run_inprocess(
     } else {
         turn_endpoint::TurnTransportMode::Udp
     };
+    let srtp_mode = srtp_mode::SrtpMode::parse(&opts.srtp_mode)?;
     let wrap_key = wrap::derive_wrap_key(&opts.password)?;
+    let client_wrap_key = wrap_key;
     let session_profile = profiles::random_profile(&opts.fingerprint);
 
     let hashes: Vec<_> = worker::parse_hashes(&opts.vk_hashes)
@@ -285,7 +288,7 @@ async fn run_inprocess(
 
     // Clamp workers on iOS Network Extension to 9..18 to guarantee Jetsam headroom
     let workers = opts.workers.clamp(worker::WORKERS_PER_GROUP, 18);
-    let groups = workers / worker::WORKERS_PER_GROUP;
+    let groups = workers.div_ceil(worker::WORKERS_PER_GROUP);
 
     let captcha = captcha::CaptchaSolver::new(&opts.captcha_mode, cancel.clone());
     let events = events::Events::new(false);
@@ -312,30 +315,46 @@ async fn run_inprocess(
     let pool = packet::PacketPool::new(pool_size);
     let stats = Arc::new(stats::Stats::default());
 
-    let (dispatcher, local_port) = dispatcher::Dispatcher::start(
+    let (dispatcher, local_port) = dispatcher::Dispatcher::start_with_domain_routing(
         &opts.listen,
         None,
         pool.clone(),
         stats.clone(),
         cancel.clone(),
+        dispatcher::DomainRoutingConfig::default(),
+        workers,
     )
     .await?;
+
+    let raw_turn_ips = if !opts.custom_turn_ips.is_empty() {
+        opts.custom_turn_ips.as_str()
+    } else {
+        opts.turn_host.as_str()
+    };
+    let turn_ip_pool = Arc::new(turn_ip_pool::TurnIpPool::new(
+        turn_ip_pool::parse_custom_turn_ips(raw_turn_ips),
+        workers,
+    ));
+    let scale_notify = Arc::new(tokio::sync::Notify::new());
 
     let local_port: Arc<str> = Arc::from(local_port);
     let params = Arc::new(worker::RuntimeParams {
         peer,
         turn_host: (!opts.turn_host.is_empty()).then(|| Arc::from(opts.turn_host.as_str())),
         turn_port: (!opts.turn_port.is_empty()).then(|| Arc::from(opts.turn_port.as_str())),
+        turn_ip_pool,
         turn_transport,
+        srtp_mode,
         hashes: hashes.into(),
         wrap_key,
+        client_wrap_key,
         mode,
         generation: opts.generation,
         salt: Arc::from(opts.salt.as_str()),
         local_port: local_port.clone(),
-        device_id: Arc::from(opts.device_id.as_str()),
         password: Arc::from(opts.password.as_str()),
-        workers,
+        workers: Arc::new(AtomicUsize::new(workers)),
+        configured_workers: workers,
     });
 
     let paused = Arc::new(worker::PauseGate::new());
@@ -383,9 +402,11 @@ async fn run_inprocess(
         repair,
         shutdown: Arc::new(session::ShutdownCoordinator::new()),
         cancel: cancel.clone(),
+        scale_notify,
     });
+    let _ = groups;
 
-    let groups_future = worker::run_groups(groups, context);
+    let groups_future = worker::run_groups(context);
     tokio::pin!(groups_future);
 
     tokio::select! {

@@ -601,7 +601,7 @@ func RtcSetLivenessOptions(intervalMs, timeoutMs, failures int) error {
 
 // RtcStart — an empty transport keeps whatever RtcSetTransport installed.
 func RtcStart(carrier, transport, roomID, clientID, keyHex string, socksPort int, socksUser, socksPass string) error {
-	rtcRuntime.SetLogWriter(tagWriter{"olcrtc"})
+	mobile.SetLogWriter(tagWriter{"olcrtc"})
 	rtcRuntime.SetDeviceID(clientID)
 	if err := errors.Join(
 		rtcRuntime.SetProvider(carrier),
@@ -635,6 +635,27 @@ func RtcCheck(carrier, transport, roomID, clientID, keyHex string, socksPort, ti
 	}
 	return int64(ms)
 }
+
+// Multi-room: independent olcRTC rooms (handle-based, see olcrtc/mobile/mobile_rooms.go) that the
+// caller fans connections across. Separate from the single rtcRuntime above.
+
+// RtcStartRoom raises one room on an OS-assigned loopback port (socksPort <= 0) and returns its handle,
+// or -1 (the error goes to the log bus). Blocks until the room's SOCKS5 listener is ready.
+func RtcStartRoom(carrier, transport, roomID, clientID, keyHex string, socksPort int, socksUser, socksPass string, readyTimeoutMs int) int {
+	mobile.SetLogWriter(tagWriter{"olcrtc"})
+	h, err := mobile.StartRoom(carrier, transport, roomID, clientID, keyHex, socksPort, socksUser, socksPass, readyTimeoutMs)
+	if err != nil {
+		PushLog("olcrtc", "start room failed: "+err.Error())
+		return -1
+	}
+	return h
+}
+
+func RtcStopRoom(handle int)          { mobile.StopRoom(handle) }
+func RtcStopAllRooms()                { mobile.StopAllRooms() }
+func RtcRoomsRunning() int            { return mobile.RoomsRunning() }
+func RtcRoomHealthy(handle int) bool { return mobile.RoomHealthy(handle) }
+func RtcRoomPort(handle int) int      { return mobile.RoomPort(handle) }
 
 // RtcPing returns ms or -1.
 func RtcPing(carrier, transport, roomID, clientID, keyHex string, socksPort, timeoutMs int, pingURL string, vp8FPS, vp8Batch int) int64 {

@@ -16,12 +16,25 @@
 
 ## Compatibility matrix
 
-| Transport | telemost | wbstream | jitsi |
-|-----------|:--------:|:--------:|:-----:|
-| datachannel | - | ~ | + |
-| vp8channel | + | + | + |
-| seichannel | - | + | + |
-| videochannel | + | + | + |
+| Transport | telemost | wbstream | jitsi | salutejazz | vkcalls | mtslink |
+|-----------|:--------:|:--------:|:-----:|:----------:|:-------:|:-------:|
+| datachannel | - | ~ | + | + | - | - |
+| vp8channel | + | + | + | - | + | + |
+| seichannel | - | + | + | - | - | - |
+| videochannel | + | + | + | - | - | - |
+
+`mtslink` carries vp8channel alone, and not as VP8: MTS Link's SFU relays no
+data between guests and forwards VP9 and H264 only, so the transport dresses
+its frames as VP9 there (each opens with a real VP9 keyframe, which is what
+the SFU forwards from) - 15 Mbit/s down and 16 up at the release gate.
+
+
+`salutejazz` carries bytes on the room's data channels only: it exchanges no
+video tracks, so the three video transports refuse it. `vkcalls` is the
+mirror case: VK's SFU bridges no arbitrary data channel, so bytes ride its
+single published video layer - vp8channel, at the release gate's measured
+13-19 Mbit/s both ways; the SFU wraps forwarded video in RED (RFC 2198),
+which the transport unwraps on arrival.
 
 **Legend:**
 - `+` - works (passes E2E tests)
@@ -32,7 +45,7 @@
 
 **WBStream:** all transports except datachannel work. DataChannel does not work in the normal guest flow without being granted moderator - WB Stream issues tokens with `canPublishData=false`, and DC does not route data. To use `datachannel` over `wbstream`, set `auth.token` to an account/moderator token (`canPublishData=true`); see `auth.token` in the optional fields below.
 
-**Jitsi:** datachannel passes stably - it is implemented on top of the colibri-ws bridge channel and sends bytes via an `EndpointMessage{raw}` broadcast. It fits self-hosted and public Jitsi Meet instances without authentication (`https://meet.jit.si/...` etc.; instances in docs/jitsi.instances.yaml). Check in a browser which of the servers is reachable in your network. Video transports (vp8channel, seichannel, videochannel) expose a sendable VideoTrack through the pion PeerConnection after the Jingle session-accept, and the RTP keepalive drives the Jicofo steps (LastN, ReceiverVideoConstraints, source-add) needed to route video, so all four transports pass the E2E matrix.
+**Jitsi:** datachannel passes stably - it is implemented on top of the colibri-ws bridge channel and sends bytes via an `EndpointMessage{raw}` broadcast. Small frames written close together leave as one message, at most one small message per 5 ms: the bridge queues at most 50 messages per sender and drops the oldest when its forwarding falls behind, so a burst of new connections sent as one message per frame used to lose connect acks. It fits self-hosted and public Jitsi Meet instances without authentication (`https://meet.jit.si/...` etc.; instances in docs/jitsi.instances.yaml). Check in a browser which of the servers is reachable in your network. Video transports (vp8channel, seichannel, videochannel) expose a sendable VideoTrack through the pion PeerConnection after the Jingle session-accept, and the RTP keepalive drives the Jicofo steps (LastN, ReceiverVideoConstraints, source-add) needed to route video, so all four transports pass the E2E matrix.
 
 **Jitsi + seichannel - a separate caveat.** SEI NAL units ride along inside the H.264 video stream, and Jicofo on self-hosted instances (for example `meet.egovm.ru`) can cut or delay upstream video when there is formally no receiver in the room - for us this looks like a `seichannel ack timeout` while the PeerConnection is formally alive. The periodic RTP keepalive keeps the receiver present, so the E2E matrix now expects it to pass, but on a heavily loaded self-hosted instance `datachannel` or `vp8channel` is still the safer pick.
 
@@ -49,7 +62,7 @@ Speed in descending order: `datachannel` > `vp8channel` > `seichannel` > `videoc
 | YAML field | What to enter |
 |-----------|-------------|
 | `mode` | `srv` on the server, `cnc` on the client, `gen` to generate a Room ID |
-| `auth.provider` | `telemost`, `wbstream`, `jitsi` or `none` |
+| `auth.provider` | `telemost`, `wbstream`, `jitsi`, `salutejazz` or `none` |
 | `net.transport` | `datachannel`, `vp8channel`, `seichannel` or `videochannel` |
 | `room.id` | Room ID |
 | `crypto.key` or `crypto.key_file` | Encryption key, hex 64 chars. Generate: `openssl rand -hex 32` |
@@ -103,7 +116,9 @@ Use the same traffic settings on both sides.
 ## mode: gen
 
 `gen` is kept for providers that can create rooms through an API.
-Currently the built-in providers do not support room auto-creation through `olcrtc`.
+
+`salutejazz` supports it: `-mode gen` creates a room with one anonymous call and
+prints it as `<code>:<password>`, which is what `room.id` takes.
 
 For `telemost` and `wbstream`, create a room through the service site and paste
 its ID into `room.id`. For `jitsi`, specify the room URL.

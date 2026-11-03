@@ -27,7 +27,8 @@ actual fun AppTheme(
         val isDark by isDarkState
         MaterialTheme(
             colorScheme = if (isDark) OlcboxDarkColorScheme else OlcboxLightColorScheme,
-            typography = typography
+            typography = typography,
+            shapes = AppShapes
         ) {
             ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
         }

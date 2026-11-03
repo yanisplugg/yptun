@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	runtimecfg "github.com/openlibrecommunity/olcrtc/internal/runtime"
 )
 
 func TestKCPConnReadWriteDeadlinesAndClose(t *testing.T) {
@@ -162,4 +164,50 @@ func TestPacketBufferPoolClassesAndDropsOversized(t *testing.T) {
 		t.Fatal("oversized packet retained a pool owner")
 	}
 	oversized.release()
+}
+
+// Two KCP sessions run per transport, so 4096 segments each way is more than
+// an iOS packet tunnel extension is allowed in total.
+func TestKcpWindowShrinksForAConstrainedHost(t *testing.T) {
+	t.Cleanup(func() { runtimecfg.ResetBufferProfileForTest() })
+
+	if rcv := kcpRcvWindow(); rcv != kcpRcvWnd {
+		t.Fatalf("server receive window = %d, want %d", rcv, kcpRcvWnd)
+	}
+
+	if snd := kcpSendWindow(false); snd != kcpSndWnd {
+		t.Fatalf("server send window = %d, want %d", snd, kcpSndWnd)
+	}
+
+	runtimecfg.UseConstrainedBuffers()
+	rcv := kcpRcvWindow()
+	if rcv != kcpConstrainedRcvWnd {
+		t.Fatalf("constrained receive window = %d, want %d", rcv, kcpConstrainedRcvWnd)
+	}
+	if snd := kcpSendWindow(false); snd != kcpConstrainedSndWnd {
+		t.Fatalf("constrained send window = %d, want %d", snd, kcpConstrainedSndWnd)
+	}
+	const segment = kcpMTU
+	if got := rcv * segment; got > 2*1024*1024 {
+		t.Fatalf("constrained receive window is %d bytes per direction, too much for a 50 MB process", got)
+	}
+}
+
+// A paced writer turns the send window into standing queue, so it follows the
+// ceiling; an unpaced one keeps whatever its profile allows (olcrtc#26).
+// ai-generated: the whole test.
+func TestKcpSendWindowFollowsThePacedCeiling(t *testing.T) {
+	t.Cleanup(func() { runtimecfg.ResetBufferProfileForTest() })
+
+	if snd := kcpSendWindow(true); snd != kcpPacedSndWnd {
+		t.Fatalf("paced send window = %d, want %d", snd, kcpPacedSndWnd)
+	}
+	if kcpSendWindow(true) >= kcpSendWindow(false) {
+		t.Fatalf("paced window %d is not smaller than the unpaced %d", kcpSendWindow(true), kcpSendWindow(false))
+	}
+
+	runtimecfg.UseConstrainedBuffers()
+	if snd := kcpSendWindow(true); snd > kcpConstrainedSndWnd {
+		t.Fatalf("paced window on a constrained host = %d, above its profile's %d", snd, kcpConstrainedSndWnd)
+	}
 }

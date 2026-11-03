@@ -88,6 +88,14 @@ object XrayRouting {
         // never reach xray's `ip` array (which would reject the whole config).
         val i = ips.map { it.trim() }
             .filter { it.isNotEmpty() && !org.olcbox.app.data.model.Asn.isSelector(it) }
+            .let { explicit ->
+                // Telegram clients dial their data centres by IP (no domain in a SOCKS5 CONNECT), so
+                // geosite:telegram alone never matches them — see SingBoxRouting.parse.
+                val implied = "geoip:telegram"
+                if (s.any { it.equals("geosite:telegram", ignoreCase = true) } &&
+                    explicit.none { it.equals(implied, ignoreCase = true) }
+                ) explicit + implied else explicit
+            }
         return buildList {
             if (s.isNotEmpty()) add(buildJsonObject {
                 put("type", "field")

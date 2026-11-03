@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/samplebuilder"
@@ -36,9 +38,15 @@ const (
 	maxSendAttempts      = 20
 	sampleBuilderMaxLate = 128
 	// maxRemoteDecoders caps how many remote tracks get a decoder. Every
-	// participant in a shared room publishes one, and each decoder costs two
-	// goroutines plus a queue of full grayscale planes.
+	// participant in a shared room publishes one, and each decoder costs
+	// three goroutines, a queue of encoded frames and a queue of full
+	// grayscale planes.
 	maxRemoteDecoders = 8
+	// sampleQueueDepth bounds the encoded frames a track's reader hands its
+	// decoder, a second at the default 30 fps. See readDecoderInput.
+	//
+	// ai-generated: this constant.
+	sampleQueueDepth = 32
 	// writerBatchSize is how many frames the writer emits per tick. The
 	// visual encoder renders one frame per tick, so the ack budget is sized
 	// against a batch of one.
@@ -429,35 +437,76 @@ func (p *streamTransport) popDecoderFrames(decoder *goDecoder) {
 	}
 }
 
-func (p *streamTransport) readDecoderInput(track *webrtc.TrackRemote, decoder *goDecoder, codec codecSpec) {
-	sb := samplebuilder.New(sampleBuilderMaxLate, codec.depacketizer(), track.Codec().ClockRate)
+// rtpSource is what readDecoderInput reads a remote track through.
+//
+// ai-generated: this interface.
+type rtpSource interface {
+	ReadRTP() (*rtp.Packet, interceptor.Attributes, error)
+}
+
+// readDecoderInput reads a remote track, builds its frames and queues them
+// for decodeSamples without ever waiting on the decoder. pion stamps a
+// packet's transport-cc arrival time when the packet is read, so a reader
+// that decoded inline, 15-30 ms a 1080p frame, reported what arrived meanwhile
+// as late. JVB read the delay as congestion, cut its estimate of the
+// receiver's downlink to about 1.2 Mbit/s, below what the stream costs idle,
+// and stopped forwarding it (ForwardedSources: []), so the handshake never
+// finished (olcrtc#14). A frame that finds the queue full is dropped: a second
+// of backlog is a decoder that cannot keep up, and the peer resends what goes
+// unacknowledged.
+//
+// ai-generated: the whole function (the decode moved to decodeSamples).
+func (p *streamTransport) readDecoderInput(
+	track rtpSource, clockRate uint32, decoder *goDecoder, samples chan<- []byte, codec codecSpec,
+) {
+	defer close(samples)
+	sb := samplebuilder.New(sampleBuilderMaxLate, codec.depacketizer(), clockRate)
 	for {
 		select {
 		case <-p.closeCh:
+			return
+		case <-decoder.closeCh:
 			return
 		default:
 		}
 
 		packet, _, err := track.ReadRTP()
 		if err != nil {
-			sb.Flush()
 			return
 		}
 
 		sb.Push(packet)
 		for sample := sb.Pop(); sample != nil; sample = sb.Pop() {
-			if err := decoder.PushSample(sample.Data); err != nil {
-				if !p.closed.Load() {
-					logger.Warnf("videochannel decoder push error: %v", err)
-				}
-				return
+			select {
+			case samples <- sample.Data:
+			default:
+				logger.Debugf("videochannel: %d frames wait for the decoder, dropping one", len(samples))
 			}
 		}
 	}
 }
 
-func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-	codec, ok := codecSpecForMime(track.Codec().MimeType)
+// decodeSamples decodes the frames readDecoderInput queues, in order, until
+// the reader stops or the decoder closes; the reader stops once it has.
+//
+// ai-generated: the whole function (was inline in readDecoderInput).
+func (p *streamTransport) decodeSamples(decoder *goDecoder, samples <-chan []byte) {
+	for sample := range samples {
+		if err := decoder.PushSample(sample); err != nil {
+			if !p.closed.Load() {
+				logger.Warnf("videochannel decoder push error: %v", err)
+			}
+			return
+		}
+	}
+}
+
+func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+	var codecs []webrtc.RTPCodecParameters
+	if receiver != nil {
+		codecs = receiver.GetParameters().Codecs
+	}
+	source, codec, ok := remoteSource(track, codecs)
 	if !ok {
 		logger.Warnf("videochannel unsupported remote codec: %s", track.Codec().MimeType)
 		return
@@ -478,8 +527,10 @@ func (p *streamTransport) handleRemoteTrack(track *webrtc.TrackRemote, _ *webrtc
 	p.decoders[decoder] = struct{}{}
 	p.decoderMu.Unlock()
 
+	samples := make(chan []byte, sampleQueueDepth)
 	go p.popDecoderFrames(decoder)
-	go p.readDecoderInput(track, decoder, codec)
+	go p.decodeSamples(decoder, samples)
+	go p.readDecoderInput(source, track.Codec().ClockRate, decoder, samples, codec)
 }
 
 func (p *streamTransport) handleFrame(frame []byte) {

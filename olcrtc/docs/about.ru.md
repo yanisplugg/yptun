@@ -13,7 +13,7 @@
 
 # olcRTC - общее описание
 
-`olcRTC` (OpenLibreCommunity RTC) - зашифрованный TCP-over-WebRTC туннель. Он маскирует трафик под обычное участие в WebRTC/SFU-сервисе: Jitsi Meet, Yandex Telemost или WbStream.
+`olcRTC` (OpenLibreCommunity RTC) - зашифрованный TCP-over-WebRTC туннель. Он маскирует трафик под обычное участие в WebRTC/SFU-сервисе: Jitsi Meet, Yandex Telemost, WbStream или Sber SaluteJazz.
 
 Проект: [github.com/openlibrecommunity/olcrtc](https://github.com/openlibrecommunity/olcrtc)  
 Лицензия: WTFPL  
@@ -77,6 +77,9 @@ olcrtc client.yaml
 | `jitsi` | `jitsi` | URL комнаты Jitsi, инстансы в docs/jitsi.instances.yaml, без отдельной регистрации |
 | `telemost` | `goolom` | credentials через Yandex Telemost API, с отдельной регистрацией |
 | `wbstream` | `livekit` | credentials через WbBStream API, с отдельной регистрацией |
+| `salutejazz` | `salutejazz` | ссылка на комнату `<code>:<password>`; вход анонимным гостем, без регистрации; комната - один анонимный вызов создания; только data-каналы, и каждый байт идёт через TURN-ретранслятор Сбера |
+| `vkcalls` | `vkcalls` | ссылка на вход в VK Calls `https://vk.ru/call/join/<id>`; вход анонимным гостем, без регистрации; только видеотреки — SFU не мостит произвольные data-каналы |
+| `mtslink` | `mtslink` | ссылка на вход в постоянную встречу MTS Link, `https://my.mts-link.ru/j/<owner>/<event>`; вход гостем, без регистрации; только видеотреки, причём SFU пересылает VP9 и H264, но не VP8, поэтому `vp8channel` едет по нему одетым в VP9 |
 | `none` | задаётся в `engine.name` | прямой engine-режим с `engine.url` и `engine.token`, с отдельной регистрацией |
 
 Во всех Go-конфигах, логах, флагах и тестах используется одно имя: `Provider` в Go и `auth.provider` в YAML.
@@ -90,6 +93,9 @@ olcrtc client.yaml
 | `livekit` | `internal/engine/livekit` | data packets/video tracks/LiveKit SDK |
 | `goolom` | `internal/engine/goolom` | Telemost/Goolom signaling, publisher/subscriber PeerConnection |
 | `jitsi` | `internal/engine/jitsi` | Jitsi MUC/Jingle/colibri-ws, datachannel/best-effort video |
+| `salutejazz` | `internal/engine/salutejazz` | JSON-коннектор Сбера (LiveKit-as-JSON поверх pion), данные через publisher PeerConnection |
+| `vkcalls` | `internal/engine/vkcalls` | SERVER-топология VK Calls: сигнальный WebSocket, один собранный PeerConnection с браузерной формой answer, медиа через единственный видеослой |
+| `mtslink` | `internal/engine/mtslink` | SFU MTS Link: один обмен SDP по HTTP, один PeerConnection - публикуемый трек VP9 и девять приёмных слотов, которые SFU заполняет издателями комнаты; отвечает на запросы ключевого кадра от SFU |
 
 `internal/engine/builtin` связывает `auth.provider` с нужным engine. Отдельного пакета `internal/provider` в текущем проекте нет.
 
@@ -99,7 +105,7 @@ olcrtc client.yaml
 
 | Transport | Как передаёт данные | Основной сценарий |
 |---|---|---|
-| `datachannel` | нативный byte/data path engine | самый простой и быстрый путь, стабильно с Jitsi |
+| `datachannel` | нативный byte/data path engine | самый простой и быстрый путь, стабильно с Jitsi; единственный, который несёт SaluteJazz |
 | `vp8channel` | KCP поверх VP8-like video frames | основной video-path для WB Stream и Telemost |
 | `seichannel` | payload в H264 SEI NAL units, ACK/retry | fallback для WB Stream / Jitsi|
 | `videochannel` | QR/tile кадры с кодированием VP8 на чистом Go, ACK/retry | экспериментальный визуальный транспорт |
@@ -140,6 +146,8 @@ CONTROL_PING <-> CONTROL_PONG
 Если control pong не приходит несколько раз подряд, runtime пересобирает smux-сессию или отдаёт управление failover supervisor.
 
 Общий формат видеокадров OLVC для `seichannel` и `videochannel` имеет версию 5. Он содержит роль отправителя, binding сессии, данные ACK для каждого фрагмента, контрольную сумму фрагмента и CRC всего сообщения. Фрагмент, не прошедший свою контрольную сумму, не подтверждается и переспрашивается, а не теряется вместе с сообщением. Старые кадры отклоняются по magic или версии, поэтому старые сборки видеотранспортов несовместимы.
+
+В рамках версии 5 отправитель может держать несколько сообщений в полёте. Hello объявляет эту возможность, фрагмент потока несёт идентификатор потока и floor отправителя рядом с полями фрагментации, а получатель отдаёт сообщения в том порядке, в котором их поставили в очередь. Пир, чей hello ничего не объявляет, получает по одному сообщению за раз - это всё, что умеет собрать сборка без этой возможности, поэтому старые и новые пиры по-прежнему совместимы.
 
 ## YAML
 
@@ -331,6 +339,7 @@ E2E_PROVIDERS=wbstream E2E_TRANSPORTS=vp8channel mage e2e
 | SOCKS5 не слушает | `mode: cnc`, `socks.host`, `socks.port`, логи клиента |
 | Jitsi не соединяется без второго участника | сервер и клиент должны быть в одной комнате |
 | WB Stream + datachannel не работает | в guest flow нет `canPublishData`; используй `vp8channel`, `seichannel` или `videochannel` |
+| SaluteJazz + видео-транспорт не работает | Сбер пускает гостя только в data-каналы комнаты, никогда в медиадорожку; используй `datachannel` |
 | `seichannel ack timeout` | провайдер режет/не маршрутизирует video path; смени transport/provider |
 
 ## Ссылки

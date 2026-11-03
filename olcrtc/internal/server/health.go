@@ -24,9 +24,12 @@ func (s *Server) startControlLoop(ctx context.Context, session *smux.Session, st
 			logger.Infof("server reconnect reason=liveness - reinstalling smux session")
 			tunnelcore.ResetPeer(s.ln)
 			s.reinstallSession(ctx, session)
-			if s.ln != nil {
-				s.ln.Reconnect("liveness")
-			}
+			s.reconnectLink("liveness")
+		},
+		Progress: func() uint64 {
+			s.sessMu.RLock()
+			defer s.sessMu.RUnlock()
+			return s.conn.PayloadBytes()
 		},
 	}
 	s.wg.Add(1)

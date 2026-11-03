@@ -3,7 +3,6 @@ package session
 import (
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/seichannel"
-	"github.com/openlibrecommunity/olcrtc/internal/transport/videochannel"
 	"github.com/openlibrecommunity/olcrtc/internal/transport/vp8channel"
 )
 
@@ -13,16 +12,7 @@ import (
 func buildTransportOptions(cfg Config) transport.Options {
 	switch cfg.Transport {
 	case transportVideo:
-		return videochannel.Options{
-			Width:      cfg.Video.Width,
-			Height:     cfg.Video.Height,
-			FPS:        cfg.Video.FPS,
-			QRSize:     cfg.Video.QRSize,
-			QRRecovery: cfg.Video.QRRecovery,
-			Codec:      cfg.Video.Codec,
-			TileModule: cfg.Video.TileModule,
-			TileRS:     cfg.Video.TileRS,
-		}
+		return videoTransportOptions(cfg)
 	case transportVP8:
 		return vp8channel.Options{
 			FPS:       cfg.VP8.FPS,

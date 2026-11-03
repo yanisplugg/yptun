@@ -64,13 +64,9 @@ func (s *Session) reconnect(ctx context.Context) error {
 
 	logger.Infof("jitsi: rejoin %s/%s (non-blocking) ...", s.host, s.room)
 	joinCtx, joinCancel := context.WithTimeout(ctx, reconnectJoinTimeout)
-	jSess, err := j.JoinMUC(joinCtx, j.Config{
-		Host:       s.host,
-		Room:       s.room,
-		Nick:       s.name,
-		Debug:      logger.IsVerbose(),
-		HTTPClient: s.httpClient,
-	})
+	// ai-generated: through joinMUC like Connect, since a session that needed
+	// the config.js fallback to connect needs it to rejoin as well.
+	jSess, err := s.joinMUC(joinCtx)
 	joinCancel()
 	if err != nil {
 		logger.Warnf("jitsi: rejoin failed: %v - full reconnect", err)
@@ -135,16 +131,11 @@ func (s *Session) reconnectFull(ctx context.Context) error {
 	logger.Infof("jitsi: full reconnect %s/%s as %s ...", s.host, s.room, s.name)
 
 	joinCtx, joinCancel := context.WithTimeout(ctx, reconnectJoinTimeout)
-	jSess, err := j.JoinMUC(joinCtx, j.Config{
-		Host:       s.host,
-		Room:       s.room,
-		Nick:       s.name,
-		Debug:      logger.IsVerbose(),
-		HTTPClient: s.httpClient,
-	})
+	// ai-generated: through joinMUC, see reconnect.
+	jSess, err := s.joinMUC(joinCtx)
 	joinCancel()
 	if err != nil {
-		return fmt.Errorf("jitsi join: %w", err)
+		return err
 	}
 	bctx, bcancel := context.WithTimeout(ctx, fullReconnectTimeout)
 	_, err = jSess.Conn.WaitJingle(bctx)
@@ -205,11 +196,26 @@ func (s *Session) finishReconnect(jSess *j.Session, mode string) {
 	logger.Infof("jitsi: reconnected %s/%s (%s); colibri-ws=%s", s.host, s.room, mode, jSess.ColibriWS)
 }
 
+// drainSendQueue empties every queue in place. In place matters: a sender
+// blocked on a full queue holds that very channel, and only room in it (or
+// the session ending) lets the sender go.
 func (s *Session) drainSendQueue() {
+	drain(s.sendQueue)
+	s.peerQueueMu.Lock()
+	queues := make([]*peerQueue, 0, len(s.peerQueues))
+	for _, pq := range s.peerQueues {
+		queues = append(queues, pq)
+	}
+	s.peerQueueMu.Unlock()
+	for _, pq := range queues {
+		drain(pq.ch)
+	}
+}
+
+func drain(ch <-chan []byte) {
 	for {
 		select {
-		case <-s.sendQueue:
-		case <-s.peerSendQueue:
+		case <-ch:
 		default:
 			return
 		}

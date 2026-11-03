@@ -98,7 +98,8 @@ actual fun AppTheme(
 
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = typography
+            typography = typography,
+            shapes = AppShapes
         ) {
             ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
         }

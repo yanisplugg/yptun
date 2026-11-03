@@ -148,7 +148,13 @@ class HomeScreenViewModel(
     }
 
     suspend fun performPingFor(config: LocationConfig): Long? {
-        return vpnManager.ping(config)
+        // Tunnel-only engines are probed through the LIVE tunnel, so for any location other than the
+        // connected one that measures the wrong tunnel (a bogus 0–2 ms) — keep the neutral dash (null).
+        val tunnelOnly = config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns ||
+            config.engine == EngineType.OpenFlux || config.engine == EngineType.Snolc
+        val isActive = config.normalized() == _state.value.configData
+        if (tunnelOnly && !isActive) return null
+        return vpnManager.ping(config, isActive)
     }
 
     /** Budget for one location's whole ping (see [VpnManager.pingBudgetMs]). */
@@ -361,6 +367,8 @@ class HomeScreenViewModel(
     fun onClearLogs() {
         vpnManager.clearLogs()
     }
+    /** The live tunnel's SOCKS endpoint (null when not connected); «Сессия» goes out through it. */
+    fun tunnelProxy() = vpnManager.subscriptionFetchProxy()
 
     fun onPasteFromClipboard(
         onComplete: () -> Unit = {},

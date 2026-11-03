@@ -1,13 +1,10 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::Engine;
 use hkdf::Hkdf;
 use rand::{RngCore, rngs::OsRng};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
@@ -15,29 +12,51 @@ use std::{
     sync::{Arc, Condvar, LazyLock, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use x25519_dalek::{PublicKey, StaticSecret};
+use subtle::ConstantTimeEq;
 
-pub const MAX_PASSWORDS: usize = 20;
 pub const PASSWORD_LEN: usize = 16;
-pub const PASS_CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+pub const PASS_CHARS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 pub const DEFAULT_AUTO_RESTART_INTERVAL_HOURS: u8 = 0;
 static DATABASE_SAVE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ClientDevice {
-    pub device_id: String,
-    pub ip: String,
-    pub priv_key: String,
-    pub pub_key: String,
-    pub up_bytes: i64,
-    pub down_bytes: i64,
+pub struct ClientGroup {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub routing_rule_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub admin_uuid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sub_uuid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vk_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vk_hashes: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoutingRule {
+    pub id: String,
+    pub name: String,
+    pub is_whitelist: bool,
+    pub packages: Vec<String>,
+    pub template_domains: bool,
+    pub direct_domains: Vec<String>,
+    pub domains_is_whitelist: bool,
+    pub ip_is_whitelist: bool,
+    pub ips: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PasswordEntry {
-    pub device_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ip: String,
     pub expires_at: i64,
     pub down_bytes: i64,
     pub up_bytes: i64,
@@ -51,9 +70,19 @@ pub struct PasswordEntry {
     pub name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub vk_hashes: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vk_token_enabled: bool,
     pub dtls_port: u16,
     pub wg_port: u16,
     pub local_port: u16,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub group_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub routing_rule_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sub_uuid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<u32>,
 }
 
 pub const DEFAULT_LOCAL_PROXY_PORT: u16 = 45000;
@@ -185,43 +214,51 @@ impl<'de> serde::Deserialize<'de> for LocalProxyState {
 #[serde(default)]
 pub struct Database {
     pub main_password: String,
-    #[serde(default)]
-    pub main_device_id: String,
     pub dns: String,
-    /// `None` is the pre-setting database format and deliberately means the
-    /// default disabled interval. `Some(0)` explicitly disables restarts.
+    #[serde(default)]
+    pub dns_provider: String,
     #[serde(default)]
     pub auto_restart_interval_hours: Option<u8>,
     pub main_up_bytes: i64,
     pub main_down_bytes: i64,
     pub admin_id: String,
     pub bot_token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vk_access_token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vk_hashes: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub main_sub_uuid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub main_vk_hashes: String,
+    #[serde(default)]
+    pub main_vk_token_enabled: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub main_routing_rule_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_workers: Option<u32>,
+    #[serde(default, alias = "slots")]
     pub passwords: BTreeMap<String, PasswordEntry>,
-    pub devices: BTreeMap<String, ClientDevice>,
     pub web_sessions: BTreeMap<String, i64>,
     pub logging_active: Option<bool>,
     #[serde(default)]
     pub local_proxy: LocalProxyState,
+    #[serde(default)]
+    pub groups: BTreeMap<String, ClientGroup>,
+    #[serde(default)]
+    pub routing_rules: BTreeMap<String, RoutingRule>,
 }
 
-/// Absolute traffic counters captured while the in-memory database lock is
-/// held.  They are intentionally absolute rather than deltas: several
-/// pending flushes may be coalesced without losing a counter increment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TrafficCounters {
     pub up_bytes: i64,
     pub down_bytes: i64,
 }
 
-/// The small, high-frequency portion of the database that changes while
-/// sessions transfer traffic.  Keeping it separate from a full `Database`
-/// snapshot prevents the five-second traffic flush from cloning and rewriting
-/// credentials, keys, profiles, and devices that did not change.
 #[derive(Debug, Default)]
 pub struct TrafficSnapshot {
     pub main: Option<TrafficCounters>,
     pub passwords: BTreeMap<String, TrafficCounters>,
-    pub devices: BTreeMap<String, TrafficCounters>,
 }
 
 impl TrafficSnapshot {
@@ -230,11 +267,10 @@ impl TrafficSnapshot {
             self.main = newer.main;
         }
         self.passwords.append(&mut newer.passwords);
-        self.devices.append(&mut newer.devices);
     }
 
     fn is_empty(&self) -> bool {
-        self.main.is_none() && self.passwords.is_empty() && self.devices.is_empty()
+        self.main.is_none() && self.passwords.is_empty()
     }
 }
 
@@ -248,16 +284,92 @@ impl Database {
         self.auto_restart_interval_hours = Some(hours);
     }
 
-    pub fn repair_stale_password_bindings(&mut self) -> bool {
-        let mut changed = false;
-        let devices = &self.devices;
-        for entry in self.passwords.values_mut() {
-            if !entry.device_id.is_empty() && !devices.contains_key(&entry.device_id) {
-                entry.device_id.clear();
-                changed = true;
+    pub fn repair_stale_password_bindings(&mut self) -> Vec<String> {
+        let mut repairs = Vec::new();
+        if self.main_password.trim().is_empty() {
+            self.main_password = random_password();
+            repairs.push("main_password regenerated".to_owned());
+        }
+        if self.main_sub_uuid.trim().is_empty() {
+            self.main_sub_uuid = random_uuid_v4();
+            repairs.push("main_sub_uuid regenerated".to_owned());
+        }
+        let mut old_keys: Vec<String> = self.passwords.keys().cloned().collect();
+        old_keys.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        for key in old_keys {
+            let tag = secret_tag(&key);
+            let needs_new_key = key.trim().is_empty();
+            let mut entry = self.passwords.remove(&key).unwrap();
+            let new_key = if needs_new_key {
+                let mut candidate = random_password();
+                while secret_eq(&candidate, &self.main_password)
+                    || self.passwords.contains_key(&candidate)
+                {
+                    candidate = random_password();
+                }
+                repairs.push(format!("password tag={tag} rekeyed"));
+                candidate
+            } else {
+                key.clone()
+            };
+            if entry.ip.is_empty()
+                && let Some(next_ip) = get_next_ip(self)
+            {
+                entry.ip = next_ip;
+                repairs.push(format!("password tag={tag} ip assigned"));
+            }
+            if entry.sub_uuid.trim().is_empty() {
+                entry.sub_uuid = random_uuid_v4();
+                repairs.push(format!("password tag={tag} sub_uuid regenerated"));
+            }
+            self.passwords.insert(new_key, entry);
+        }
+        repairs
+    }
+
+    pub fn resolve_routing_rule<'a>(&'a self, password: &str) -> Option<&'a RoutingRule> {
+        if secret_eq(password, &self.main_password)
+            && !self.main_routing_rule_id.is_empty()
+            && let Some(rule) = self.routing_rules.get(&self.main_routing_rule_id)
+        {
+            return Some(rule);
+        }
+        if let Some(entry) = self.passwords.get(password) {
+            if !entry.routing_rule_id.is_empty()
+                && let Some(rule) = self.routing_rules.get(&entry.routing_rule_id)
+            {
+                return Some(rule);
+            }
+            if !entry.group_id.is_empty()
+                && let Some(group) = self.groups.get(&entry.group_id)
+                && !group.routing_rule_id.is_empty()
+                && let Some(rule) = self.routing_rules.get(&group.routing_rule_id)
+            {
+                return Some(rule);
             }
         }
-        changed
+        None
+    }
+
+    pub fn resolve_worker_limit(&self, password: &str) -> Option<u32> {
+        if secret_eq(password, &self.main_password) {
+            return self.main_workers.filter(|&w| (3..=100).contains(&w));
+        }
+        if let Some(entry) = self.passwords.get(password) {
+            if let Some(w) = entry.workers
+                && (3..=100).contains(&w)
+            {
+                return Some(w);
+            }
+            if !entry.group_id.is_empty()
+                && let Some(group) = self.groups.get(&entry.group_id)
+                && let Some(w) = group.workers
+                && (3..=100).contains(&w)
+            {
+                return Some(w);
+            }
+        }
+        None
     }
 }
 
@@ -281,7 +393,7 @@ struct DatabasePersistenceState {
 
 #[derive(Debug)]
 enum PersistenceUpdate {
-    Snapshot(Database),
+    Snapshot(Box<Database>),
     Traffic(TrafficSnapshot),
 }
 
@@ -302,12 +414,9 @@ impl PersistenceQueue {
 
     fn submit_snapshot(&mut self, snapshot: Database) -> (u64, bool) {
         let revision = self.next_revision();
-        // A snapshot is captured under App.db and therefore already includes
-        // all preceding in-memory changes.  Superseding queued work preserves
-        // the latest state while bounding memory during a slow disk write.
         self.pending.clear();
         self.pending
-            .push_back((revision, PersistenceUpdate::Snapshot(snapshot)));
+            .push_back((revision, PersistenceUpdate::Snapshot(Box::new(snapshot))));
         let start_worker = !self.worker_running;
         self.worker_running = true;
         (revision, start_worker)
@@ -315,9 +424,6 @@ impl PersistenceQueue {
 
     fn submit_traffic(&mut self, traffic: TrafficSnapshot) -> (u64, bool) {
         let revision = self.next_revision();
-        // Traffic updates contain absolute counters.  Merge adjacent updates
-        // per entity so a busy server retains one bounded pending operation
-        // instead of a growing queue of five-second flushes.
         if let Some((pending_revision, PersistenceUpdate::Traffic(pending))) =
             self.pending.back_mut()
         {
@@ -375,9 +481,6 @@ impl DatabasePersistence {
         revision
     }
 
-    /// Queue only the counters changed by a traffic flush.  This preserves
-    /// ordering with structural snapshots while avoiding a full `Database`
-    /// clone on the dataplane's five-second persistence path.
     pub fn submit_traffic(&self, traffic: TrafficSnapshot) -> u64 {
         if traffic.is_empty() {
             return 0;
@@ -487,10 +590,26 @@ pub fn refresh_cached_now() -> u64 {
 }
 
 pub fn random_password() -> String {
-    let mut data = [0u8; PASSWORD_LEN];
-    OsRng.fill_bytes(&mut data);
-    data.iter()
-        .map(|v| PASS_CHARS[*v as usize % PASS_CHARS.len()] as char)
+    let mut out = String::with_capacity(PASSWORD_LEN);
+    let mut byte = [0u8; 1];
+    while out.len() < PASSWORD_LEN {
+        OsRng.fill_bytes(&mut byte);
+        let value = usize::from(byte[0]);
+        if value < 256 - 256 % PASS_CHARS.len() {
+            out.push(PASS_CHARS[value % PASS_CHARS.len()] as char);
+        }
+    }
+    out
+}
+
+pub fn secret_eq(left: &str, right: &str) -> bool {
+    bool::from(left.as_bytes().ct_eq(right.as_bytes()))
+}
+
+pub fn secret_tag(secret: &str) -> String {
+    Sha256::digest(secret.as_bytes())[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
@@ -498,6 +617,91 @@ pub fn random_token(size: usize) -> String {
     let mut data = vec![0u8; size];
     OsRng.fill_bytes(&mut data);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
+}
+
+pub fn random_uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
+pub fn generate_unique_client_name<I, S>(existing_names: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let set: std::collections::HashSet<String> = existing_names
+        .into_iter()
+        .map(|s| s.as_ref().trim().to_lowercase())
+        .collect();
+    for _ in 0..1000 {
+        let mut b = [0u8; 2];
+        OsRng.fill_bytes(&mut b);
+        let num = 100 + (u16::from_le_bytes(b) % 900);
+        let candidate = format!("Клиент{num}");
+        if !set.contains(&candidate.to_lowercase()) {
+            return candidate;
+        }
+    }
+    let mut b = [0u8; 4];
+    OsRng.fill_bytes(&mut b);
+    let num = 1000 + (u32::from_le_bytes(b) % 900000);
+    format!("Клиент{num}")
+}
+
+pub fn is_client_name_taken<I, S>(existing_names: I, new_name: &str) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let norm = new_name.trim().to_lowercase();
+    if norm.is_empty() {
+        return false;
+    }
+    existing_names
+        .into_iter()
+        .any(|s| s.as_ref().trim().to_lowercase() == norm)
+}
+
+pub fn existing_client_names_in_scope(
+    db: &Database,
+    group_id: &str,
+    exclude_password: Option<&str>,
+) -> Vec<String> {
+    let gid = group_id.trim();
+    db.passwords
+        .iter()
+        .filter_map(|(pass, entry)| {
+            if Some(pass.as_str()) == exclude_password {
+                return None;
+            }
+            if entry.group_id.trim() == gid {
+                Some(entry.name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 pub fn derive_wrap_key(password: &str) -> Result<[u8; 32]> {
@@ -515,13 +719,15 @@ pub fn is_expired(entry: &PasswordEntry) -> bool {
     entry.expires_at != 0 && now() > entry.expires_at
 }
 
+pub const OWNER_TUNNEL_IP: &str = "10.66.67.2";
+
 pub fn get_next_ip(db: &Database) -> Option<String> {
     let mut buf = String::with_capacity(16);
-    for i in 2..=250u8 {
+    for i in 3..=250u8 {
         buf.clear();
         use std::fmt::Write;
         let _ = write!(buf, "10.66.67.{i}");
-        let is_used = db.devices.values().any(|d| d.ip == buf);
+        let is_used = db.passwords.values().any(|d| d.ip == buf);
         if !is_used {
             return Some(buf);
         }
@@ -529,36 +735,17 @@ pub fn get_next_ip(db: &Database) -> Option<String> {
     None
 }
 
-pub fn resolve_session_ip(
-    db: &Database,
-    session_password: &str,
-    device_id: &str,
-) -> Option<String> {
-    if !device_id.is_empty()
-        && let Some(device) = db.devices.get(device_id)
-    {
-        return Some(device.ip.clone());
+pub fn resolve_session_ip(db: &Database, session_password: &str) -> Option<String> {
+    if secret_eq(session_password, &db.main_password) {
+        return Some(OWNER_TUNNEL_IP.to_owned());
     }
-    if session_password != db.main_password
-        && let Some(entry) = db.passwords.get(session_password)
-        && !entry.device_id.is_empty()
-    {
-        return db.devices.get(&entry.device_id).map(|d| d.ip.clone());
-    }
-    None
-}
-
-pub fn generate_key_pair() -> (String, String) {
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    bytes[0] &= 248;
-    bytes[31] = (bytes[31] & 127) | 64;
-    let private = StaticSecret::from(bytes);
-    let public = PublicKey::from(&private);
-    (
-        STANDARD.encode(private.to_bytes()),
-        STANDARD.encode(public.as_bytes()),
-    )
+    db.passwords.get(session_password).and_then(|entry| {
+        if !entry.ip.is_empty() {
+            Some(entry.ip.clone())
+        } else {
+            None
+        }
+    })
 }
 
 const DATABASE_FILE: &str = "csqtt.db";
@@ -578,7 +765,7 @@ CREATE TABLE IF NOT EXISTS counters (
 );
 CREATE TABLE IF NOT EXISTS passwords (
     password       TEXT PRIMARY KEY,
-    device_id      TEXT    NOT NULL DEFAULT '',
+    ip             TEXT    NOT NULL DEFAULT '',
     expires_at     INTEGER NOT NULL DEFAULT 0,
     down_bytes     INTEGER NOT NULL DEFAULT 0,
     up_bytes       INTEGER NOT NULL DEFAULT 0,
@@ -587,17 +774,14 @@ CREATE TABLE IF NOT EXISTS passwords (
     is_deactivated INTEGER NOT NULL DEFAULT 0,
     name           TEXT    NOT NULL DEFAULT '',
     vk_hashes      TEXT    NOT NULL DEFAULT '',
+    vk_token_enabled INTEGER NOT NULL DEFAULT 0,
     dtls_port      INTEGER NOT NULL DEFAULT 0,
     wg_port        INTEGER NOT NULL DEFAULT 0,
-    local_port     INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS devices (
-    device_id          TEXT PRIMARY KEY,
-    ip                 TEXT    NOT NULL,
-    priv_key           TEXT    NOT NULL,
-    pub_key            TEXT    NOT NULL,
-    up_bytes           INTEGER NOT NULL DEFAULT 0,
-    down_bytes         INTEGER NOT NULL DEFAULT 0
+    local_port     INTEGER NOT NULL DEFAULT 0,
+    group_id       TEXT    NOT NULL DEFAULT '',
+    routing_rule_id TEXT   NOT NULL DEFAULT '',
+    sub_uuid       TEXT    NOT NULL DEFAULT '',
+    workers        INTEGER
 );
 CREATE TABLE IF NOT EXISTS local_proxy_profiles (
     id         TEXT PRIMARY KEY,
@@ -610,6 +794,27 @@ CREATE TABLE IF NOT EXISTS local_proxy_profiles (
 CREATE TABLE IF NOT EXISTS local_proxy_state (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     active_profile_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS client_groups (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    routing_rule_id TEXT NOT NULL DEFAULT '',
+    admin_uuid      TEXT NOT NULL DEFAULT '',
+    sub_uuid        TEXT NOT NULL DEFAULT '',
+    workers         INTEGER,
+    vk_token        TEXT,
+    vk_hashes       TEXT
+);
+CREATE TABLE IF NOT EXISTS routing_rules (
+    id                   TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    is_whitelist         INTEGER NOT NULL DEFAULT 0,
+    packages_json        TEXT NOT NULL DEFAULT '[]',
+    template_domains     INTEGER NOT NULL DEFAULT 0,
+    direct_domains       TEXT NOT NULL DEFAULT '[]',
+    domains_is_whitelist INTEGER NOT NULL DEFAULT 0,
+    ip_is_whitelist      INTEGER NOT NULL DEFAULT 0,
+    ips_json             TEXT NOT NULL DEFAULT '[]'
 );
 ";
 
@@ -631,7 +836,149 @@ fn open_database_connection(config_dir: &Path) -> Result<Connection> {
     connection
         .execute_batch(DATABASE_SCHEMA)
         .with_context(|| format!("schema {}", path.display()))?;
+    ensure_password_columns(&connection)?;
+    ensure_routing_rule_columns(&connection)?;
+    ensure_client_group_columns(&connection)?;
     Ok(connection)
+}
+
+fn ensure_client_group_columns(connection: &Connection) -> Result<()> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(client_groups)")
+        .context("prepare client_groups schema check")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("read client_groups schema")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("collect client_groups schema")?;
+    if !columns.iter().any(|column| column == "admin_uuid") {
+        connection
+            .execute(
+                "ALTER TABLE client_groups ADD COLUMN admin_uuid TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .context("add admin_uuid column")?;
+    }
+    if !columns.iter().any(|column| column == "sub_uuid") {
+        connection
+            .execute(
+                "ALTER TABLE client_groups ADD COLUMN sub_uuid TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .context("add sub_uuid column")?;
+    }
+    if !columns.iter().any(|column| column == "workers") {
+        connection
+            .execute("ALTER TABLE client_groups ADD COLUMN workers INTEGER", [])
+            .context("add workers column")?;
+    }
+    if !columns.iter().any(|column| column == "vk_token") {
+        connection
+            .execute("ALTER TABLE client_groups ADD COLUMN vk_token TEXT", [])
+            .context("add vk_token column")?;
+    }
+    if !columns.iter().any(|column| column == "vk_hashes") {
+        connection
+            .execute("ALTER TABLE client_groups ADD COLUMN vk_hashes TEXT", [])
+            .context("add vk_hashes column")?;
+    }
+    Ok(())
+}
+
+fn ensure_routing_rule_columns(connection: &Connection) -> Result<()> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(routing_rules)")
+        .context("prepare routing_rules schema check")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("read routing_rules schema")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("collect routing_rules schema")?;
+    if !columns
+        .iter()
+        .any(|column| column == "domains_is_whitelist")
+    {
+        connection
+            .execute(
+                "ALTER TABLE routing_rules ADD COLUMN domains_is_whitelist INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("add domains_is_whitelist column")?;
+    }
+    if !columns.iter().any(|column| column == "ip_is_whitelist") {
+        connection
+            .execute(
+                "ALTER TABLE routing_rules ADD COLUMN ip_is_whitelist INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("add ip_is_whitelist column")?;
+    }
+    if !columns.iter().any(|column| column == "ips_json") {
+        connection
+            .execute(
+                "ALTER TABLE routing_rules ADD COLUMN ips_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .context("add ips_json column")?;
+    }
+    Ok(())
+}
+
+fn ensure_password_columns(connection: &Connection) -> Result<()> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(passwords)")
+        .context("prepare password schema check")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .context("read password schema")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("collect password schema")?;
+    if !columns.iter().any(|column| column == "ip") {
+        connection
+            .execute(
+                "ALTER TABLE passwords ADD COLUMN ip TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .context("add ip column")?;
+    }
+    if !columns.iter().any(|column| column == "vk_token_enabled") {
+        connection
+            .execute(
+                "ALTER TABLE passwords ADD COLUMN vk_token_enabled INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .context("add vk_token_enabled column")?;
+    }
+    if !columns.iter().any(|column| column == "group_id") {
+        connection
+            .execute(
+                "ALTER TABLE passwords ADD COLUMN group_id TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .context("add group_id column")?;
+    }
+    if !columns.iter().any(|column| column == "routing_rule_id") {
+        connection
+            .execute(
+                "ALTER TABLE passwords ADD COLUMN routing_rule_id TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .context("add routing_rule_id column")?;
+    }
+    if !columns.iter().any(|column| column == "sub_uuid") {
+        connection
+            .execute(
+                "ALTER TABLE passwords ADD COLUMN sub_uuid TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .context("add sub_uuid column")?;
+    }
+    if !columns.iter().any(|column| column == "workers") {
+        connection
+            .execute("ALTER TABLE passwords ADD COLUMN workers INTEGER", [])
+            .context("add workers column")?;
+    }
+    Ok(())
 }
 
 fn existing_row_keys(transaction: &rusqlite::Transaction<'_>, select: &str) -> Result<Vec<String>> {
@@ -652,14 +999,23 @@ fn write_database_snapshot(connection: &mut Connection, db: &Database) -> Result
     let auto_restart_interval_hours = db.auto_restart_interval_hours().to_string();
     for (key, value) in [
         ("main_password", db.main_password.as_str()),
-        ("main_device_id", db.main_device_id.as_str()),
+        ("main_sub_uuid", db.main_sub_uuid.as_str()),
+        ("main_vk_hashes", db.main_vk_hashes.as_str()),
+        (
+            "main_vk_token_enabled",
+            if db.main_vk_token_enabled { "1" } else { "0" },
+        ),
         ("dns", db.dns.as_str()),
+        ("dns_provider", db.dns_provider.as_str()),
         (
             "auto_restart_interval_hours",
             auto_restart_interval_hours.as_str(),
         ),
         ("admin_id", db.admin_id.as_str()),
         ("bot_token", db.bot_token.as_str()),
+        ("vk_access_token", db.vk_access_token.as_str()),
+        ("vk_hashes", db.vk_hashes.as_str()),
+        ("main_routing_rule_id", db.main_routing_rule_id.as_str()),
     ] {
         transaction
             .execute(
@@ -668,6 +1024,19 @@ fn write_database_snapshot(connection: &mut Connection, db: &Database) -> Result
                 rusqlite::params![key, value],
             )
             .context("write meta")?;
+    }
+    if let Some(w) = db.main_workers {
+        transaction
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('main_workers', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![w.to_string()],
+            )
+            .context("write main_workers")?;
+    } else {
+        transaction
+            .execute("DELETE FROM meta WHERE key = 'main_workers'", [])
+            .context("clear main_workers")?;
     }
     if let Some(active) = db.logging_active {
         transaction
@@ -698,19 +1067,107 @@ fn write_database_snapshot(connection: &mut Connection, db: &Database) -> Result
                     "DELETE FROM passwords WHERE password = ?1",
                     rusqlite::params![password],
                 )
-                .with_context(|| format!("remove password {password}"))?;
+                .with_context(|| format!("remove password {}", secret_tag(&password)))?;
+        }
+    }
+    for group_id in existing_row_keys(&transaction, "SELECT id FROM client_groups")? {
+        if !db.groups.contains_key(&group_id) {
+            transaction
+                .execute(
+                    "DELETE FROM client_groups WHERE id = ?1",
+                    rusqlite::params![group_id],
+                )
+                .with_context(|| format!("remove group {group_id}"))?;
+        }
+    }
+    {
+        let mut insert = transaction
+            .prepare(
+                "INSERT INTO client_groups (id, name, routing_rule_id, admin_uuid, sub_uuid, workers, vk_token, vk_hashes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    routing_rule_id = excluded.routing_rule_id,
+                    admin_uuid = excluded.admin_uuid,
+                    sub_uuid = excluded.sub_uuid,
+                    workers = excluded.workers,
+                    vk_token = excluded.vk_token,
+                    vk_hashes = excluded.vk_hashes",
+            )
+            .context("prepare client_groups insert")?;
+        for group in db.groups.values() {
+            insert
+                .execute(rusqlite::params![
+                    group.id,
+                    group.name,
+                    group.routing_rule_id,
+                    group.admin_uuid,
+                    group.sub_uuid,
+                    group.workers.map(|w| w as i64),
+                    group.vk_token.as_deref(),
+                    group.vk_hashes.as_deref(),
+                ])
+                .with_context(|| format!("write group {}", group.id))?;
+        }
+    }
+    for rule_id in existing_row_keys(&transaction, "SELECT id FROM routing_rules")? {
+        if !db.routing_rules.contains_key(&rule_id) {
+            transaction
+                .execute(
+                    "DELETE FROM routing_rules WHERE id = ?1",
+                    rusqlite::params![rule_id],
+                )
+                .with_context(|| format!("remove routing rule {rule_id}"))?;
+        }
+    }
+    {
+        let mut insert = transaction
+            .prepare(
+                "INSERT INTO routing_rules (
+                    id, name, is_whitelist, packages_json, template_domains, direct_domains,
+                    domains_is_whitelist, ip_is_whitelist, ips_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    is_whitelist = excluded.is_whitelist,
+                    packages_json = excluded.packages_json,
+                    template_domains = excluded.template_domains,
+                    direct_domains = excluded.direct_domains,
+                    domains_is_whitelist = excluded.domains_is_whitelist,
+                    ip_is_whitelist = excluded.ip_is_whitelist,
+                    ips_json = excluded.ips_json",
+            )
+            .context("prepare routing_rules insert")?;
+        for rule in db.routing_rules.values() {
+            let pkgs = serde_json::to_string(&rule.packages).unwrap_or_else(|_| "[]".to_string());
+            let domains =
+                serde_json::to_string(&rule.direct_domains).unwrap_or_else(|_| "[]".to_string());
+            let ips = serde_json::to_string(&rule.ips).unwrap_or_else(|_| "[]".to_string());
+            insert
+                .execute(rusqlite::params![
+                    rule.id,
+                    rule.name,
+                    i64::from(rule.is_whitelist),
+                    pkgs,
+                    i64::from(rule.template_domains),
+                    domains,
+                    i64::from(rule.domains_is_whitelist),
+                    i64::from(rule.ip_is_whitelist),
+                    ips,
+                ])
+                .with_context(|| format!("write routing rule {}", rule.id))?;
         }
     }
     {
         let mut insert = transaction
             .prepare(
                 "INSERT INTO passwords (
-                    password, device_id, expires_at, down_bytes, up_bytes,
-                    vk_hash, ports, is_deactivated, name, vk_hashes,
-                    dtls_port, wg_port, local_port
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                    password, ip, expires_at, down_bytes, up_bytes,
+                    vk_hash, ports, is_deactivated, name, vk_hashes, vk_token_enabled,
+                    dtls_port, wg_port, local_port, group_id, routing_rule_id, sub_uuid, workers
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
                 ON CONFLICT(password) DO UPDATE SET
-                    device_id = excluded.device_id,
+                    ip = excluded.ip,
                     expires_at = excluded.expires_at,
                     down_bytes = excluded.down_bytes,
                     up_bytes = excluded.up_bytes,
@@ -719,16 +1176,21 @@ fn write_database_snapshot(connection: &mut Connection, db: &Database) -> Result
                     is_deactivated = excluded.is_deactivated,
                     name = excluded.name,
                     vk_hashes = excluded.vk_hashes,
+                    vk_token_enabled = excluded.vk_token_enabled,
                     dtls_port = excluded.dtls_port,
                     wg_port = excluded.wg_port,
-                    local_port = excluded.local_port",
+                    local_port = excluded.local_port,
+                    group_id = excluded.group_id,
+                    routing_rule_id = excluded.routing_rule_id,
+                    sub_uuid = excluded.sub_uuid,
+                    workers = excluded.workers",
             )
             .context("prepare passwords insert")?;
         for (password, entry) in &db.passwords {
             insert
                 .execute(rusqlite::params![
                     password,
-                    entry.device_id,
+                    entry.ip,
                     entry.expires_at,
                     entry.down_bytes,
                     entry.up_bytes,
@@ -737,48 +1199,16 @@ fn write_database_snapshot(connection: &mut Connection, db: &Database) -> Result
                     i64::from(entry.is_deactivated),
                     entry.name,
                     entry.vk_hashes,
+                    i64::from(entry.vk_token_enabled),
                     entry.dtls_port,
                     entry.wg_port,
                     entry.local_port,
+                    entry.group_id,
+                    entry.routing_rule_id,
+                    entry.sub_uuid,
+                    entry.workers.map(|w| w as i64),
                 ])
-                .with_context(|| format!("write password {}", password))?;
-        }
-    }
-    for device_id in existing_row_keys(&transaction, "SELECT device_id FROM devices")? {
-        if !db.devices.contains_key(&device_id) {
-            transaction
-                .execute(
-                    "DELETE FROM devices WHERE device_id = ?1",
-                    rusqlite::params![device_id],
-                )
-                .with_context(|| format!("remove device {device_id}"))?;
-        }
-    }
-    {
-        let mut insert = transaction
-            .prepare(
-                "INSERT INTO devices (
-                    device_id, ip, priv_key, pub_key, up_bytes, down_bytes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                ON CONFLICT(device_id) DO UPDATE SET
-                    ip = excluded.ip,
-                    priv_key = excluded.priv_key,
-                    pub_key = excluded.pub_key,
-                    up_bytes = excluded.up_bytes,
-                    down_bytes = excluded.down_bytes",
-            )
-            .context("prepare devices insert")?;
-        for device in db.devices.values() {
-            insert
-                .execute(rusqlite::params![
-                    device.device_id,
-                    device.ip,
-                    device.priv_key,
-                    device.pub_key,
-                    device.up_bytes,
-                    device.down_bytes,
-                ])
-                .with_context(|| format!("write device {}", device.device_id))?;
+                .with_context(|| format!("write password {}", secret_tag(password)))?;
         }
     }
     for profile_id in existing_row_keys(&transaction, "SELECT id FROM local_proxy_profiles")? {
@@ -848,8 +1278,11 @@ fn read_database_snapshot(config_dir: &Path) -> Result<Database> {
             let value: String = row.get(1).context("read meta value")?;
             match key.as_str() {
                 "main_password" => db.main_password = value,
-                "main_device_id" => db.main_device_id = value,
+                "main_sub_uuid" => db.main_sub_uuid = value,
+                "main_vk_hashes" => db.main_vk_hashes = value,
+                "main_vk_token_enabled" => db.main_vk_token_enabled = value == "1",
                 "dns" => db.dns = value,
+                "dns_provider" => db.dns_provider = value,
                 "auto_restart_interval_hours" => {
                     if let Ok(hours) = value.parse::<u8>() {
                         db.auto_restart_interval_hours = Some(hours);
@@ -857,6 +1290,15 @@ fn read_database_snapshot(config_dir: &Path) -> Result<Database> {
                 }
                 "admin_id" => db.admin_id = value,
                 "bot_token" => db.bot_token = value,
+                "vk_access_token" => db.vk_access_token = value,
+                "vk_hashes" => db.vk_hashes = value,
+                "main_routing_rule_id" => db.main_routing_rule_id = value,
+                "main_workers" => {
+                    db.main_workers = value
+                        .parse::<u32>()
+                        .ok()
+                        .and_then(|w| (3..=100).contains(&w).then_some(w));
+                }
                 "logging_active" => db.logging_active = Some(value == "1"),
                 _ => {}
             }
@@ -873,17 +1315,24 @@ fn read_database_snapshot(config_dir: &Path) -> Result<Database> {
     {
         let mut select = connection
             .prepare(
-                "SELECT password, device_id, expires_at, down_bytes, up_bytes,
-                        vk_hash, ports, is_deactivated, name, vk_hashes,
-                        dtls_port, wg_port, local_port
+                "SELECT password, ip, expires_at, down_bytes, up_bytes,
+                        vk_hash, ports, is_deactivated, name, vk_hashes, vk_token_enabled,
+                        dtls_port, wg_port, local_port, group_id, routing_rule_id, sub_uuid, workers
                  FROM passwords",
             )
             .context("prepare passwords select")?;
         let mut rows = select.query([]).context("read passwords")?;
         while let Some(row) = rows.next()? {
             let password: String = row.get(0).context("read password key")?;
+            let ip: String = row.get(1).unwrap_or_default();
+            let sub_uuid: String = row.get(16).unwrap_or_default();
+            let workers: Option<u32> = row
+                .get::<_, Option<i64>>(17)
+                .ok()
+                .flatten()
+                .and_then(|w| (3..=100).contains(&w).then_some(w as u32));
             let entry = PasswordEntry {
-                device_id: row.get(1).context("read password device_id")?,
+                ip,
                 expires_at: row.get(2).context("read password expires_at")?,
                 down_bytes: row.get(3).context("read password down_bytes")?,
                 up_bytes: row.get(4).context("read password up_bytes")?,
@@ -895,28 +1344,117 @@ fn read_database_snapshot(config_dir: &Path) -> Result<Database> {
                     != 0,
                 name: row.get(8).context("read password name")?,
                 vk_hashes: row.get(9).context("read password vk_hashes")?,
-                dtls_port: row.get(10).context("read password dtls_port")?,
-                wg_port: row.get(11).context("read password wg_port")?,
-                local_port: row.get(12).context("read password local_port")?,
+                vk_token_enabled: row
+                    .get::<_, i64>(10)
+                    .context("read password vk_token_enabled")?
+                    != 0,
+                dtls_port: row.get(11).context("read password dtls_port")?,
+                wg_port: row.get(12).context("read password wg_port")?,
+                local_port: row.get(13).context("read password local_port")?,
+                group_id: row.get(14).unwrap_or_default(),
+                routing_rule_id: row.get(15).unwrap_or_default(),
+                sub_uuid,
+                workers,
             };
             db.passwords.insert(password, entry);
+        }
+        let mut names_by_group: std::collections::HashMap<
+            String,
+            std::collections::HashSet<String>,
+        > = std::collections::HashMap::new();
+        for (pass, entry) in db.passwords.iter_mut() {
+            if pass == &db.main_password {
+                if entry.name.trim().is_empty() || entry.name == "Главный пароль" {
+                    entry.name = "Владелец".to_string();
+                }
+                continue;
+            }
+            let group_key = entry.group_id.trim().to_string();
+            let group_names = names_by_group.entry(group_key).or_default();
+            let trimmed = entry.name.trim();
+            if trimmed.is_empty() || group_names.contains(&trimmed.to_lowercase()) {
+                let new_name = generate_unique_client_name(group_names.iter().map(|s| s.as_str()));
+                group_names.insert(new_name.to_lowercase());
+                entry.name = new_name;
+            } else {
+                group_names.insert(trimmed.to_lowercase());
+                entry.name = trimmed.to_string();
+            }
         }
     }
     {
         let mut select = connection
-            .prepare("SELECT device_id, ip, priv_key, pub_key, up_bytes, down_bytes FROM devices")
-            .context("prepare devices select")?;
-        let mut rows = select.query([]).context("read devices")?;
+            .prepare("SELECT id, name, routing_rule_id, admin_uuid, sub_uuid, workers, vk_token, vk_hashes FROM client_groups")
+            .context("prepare client_groups select")?;
+        let mut rows = select.query([]).context("read client_groups")?;
         while let Some(row) = rows.next()? {
-            let device = ClientDevice {
-                device_id: row.get(0).context("read device_id")?,
-                ip: row.get(1).context("read device ip")?,
-                priv_key: row.get(2).context("read device priv_key")?,
-                pub_key: row.get(3).context("read device pub_key")?,
-                up_bytes: row.get(4).context("read device up_bytes")?,
-                down_bytes: row.get(5).context("read device down_bytes")?,
-            };
-            db.devices.insert(device.device_id.clone(), device);
+            let id: String = row.get(0).context("read group id")?;
+            let name: String = row.get(1).context("read group name")?;
+            let routing_rule_id: String = row.get(2).unwrap_or_default();
+            let admin_uuid: String = row.get(3).unwrap_or_default();
+            let mut sub_uuid: String = row.get(4).unwrap_or_default();
+            if sub_uuid.trim().is_empty() {
+                sub_uuid = random_uuid_v4();
+            }
+            let workers: Option<u32> = row
+                .get::<_, Option<i64>>(5)
+                .ok()
+                .flatten()
+                .and_then(|w| (3..=100).contains(&w).then_some(w as u32));
+            let vk_token: Option<String> = row.get(6).ok().flatten();
+            let vk_hashes: Option<String> = row.get(7).ok().flatten();
+            db.groups.insert(
+                id.clone(),
+                ClientGroup {
+                    id,
+                    name,
+                    routing_rule_id,
+                    admin_uuid,
+                    sub_uuid,
+                    workers,
+                    vk_token,
+                    vk_hashes,
+                },
+            );
+        }
+    }
+    {
+        let mut select = connection
+            .prepare(
+                "SELECT id, name, is_whitelist, packages_json, template_domains, direct_domains,
+                        domains_is_whitelist, ip_is_whitelist, ips_json
+                 FROM routing_rules",
+            )
+            .context("prepare routing_rules select")?;
+        let mut rows = select.query([]).context("read routing_rules")?;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0).context("read rule id")?;
+            let name: String = row.get(1).context("read rule name")?;
+            let is_whitelist: bool = row.get::<_, i64>(2).context("read rule is_whitelist")? != 0;
+            let pkgs_str: String = row.get(3).unwrap_or_default();
+            let template_domains: bool = row.get::<_, i64>(4).unwrap_or(0) != 0;
+            let domains_str: String = row.get(5).unwrap_or_default();
+            let domains_is_whitelist: bool = row.get::<_, i64>(6).unwrap_or(0) != 0;
+            let ip_is_whitelist: bool = row.get::<_, i64>(7).unwrap_or(0) != 0;
+            let ips_str: String = row.get(8).unwrap_or_default();
+            let packages: Vec<String> = serde_json::from_str(&pkgs_str).unwrap_or_default();
+            let direct_domains: Vec<String> =
+                serde_json::from_str(&domains_str).unwrap_or_default();
+            let ips: Vec<String> = serde_json::from_str(&ips_str).unwrap_or_default();
+            db.routing_rules.insert(
+                id.clone(),
+                RoutingRule {
+                    id,
+                    name,
+                    is_whitelist,
+                    packages,
+                    template_domains,
+                    direct_domains,
+                    domains_is_whitelist,
+                    ip_is_whitelist,
+                    ips,
+                },
+            );
         }
     }
     {
@@ -1014,12 +1552,29 @@ pub fn load_database(config_dir: &Path) -> Result<Database> {
 }
 
 fn repair_loaded_database(config_dir: &Path, db: &mut Database) -> Result<()> {
-    if !db.repair_stale_password_bindings() {
+    let repairs = db.repair_stale_password_bindings();
+    if repairs.is_empty() {
         return Ok(());
     }
     let mut connection = open_database_connection(config_dir)?;
     write_database_snapshot(&mut connection, db)?;
-    eprintln!("[DB] Repaired stale password and device bindings in {DATABASE_FILE}");
+    const LOG_LIMIT: usize = 16;
+    let shown = repairs
+        .iter()
+        .take(LOG_LIMIT)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("; ");
+    let hidden = repairs.len().saturating_sub(LOG_LIMIT);
+    let suffix = if hidden > 0 {
+        format!(" (+{hidden} more)")
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "[DB] WARN repaired {} stale password binding change(s) in {DATABASE_FILE}: {shown}{suffix}",
+        repairs.len()
+    );
     Ok(())
 }
 
@@ -1030,8 +1585,10 @@ fn import_legacy_database_rows(connection: &mut Connection, legacy: &Database) -
 
     for (key, value) in [
         ("main_password", legacy.main_password.as_str()),
-        ("main_device_id", legacy.main_device_id.as_str()),
         ("dns", legacy.dns.as_str()),
+        ("vk_access_token", legacy.vk_access_token.as_str()),
+        ("vk_hashes", legacy.vk_hashes.as_str()),
+        ("main_routing_rule_id", legacy.main_routing_rule_id.as_str()),
     ] {
         transaction
             .execute(
@@ -1065,10 +1622,10 @@ fn import_legacy_database_rows(connection: &mut Connection, legacy: &Database) -
         let mut insert = transaction
             .prepare(
                 "INSERT INTO passwords (
-                    password, device_id, expires_at, down_bytes, up_bytes,
-                    vk_hash, ports, is_deactivated, name, vk_hashes,
+                    password, ip, expires_at, down_bytes, up_bytes,
+                    vk_hash, ports, is_deactivated, name, vk_hashes, vk_token_enabled,
                     dtls_port, wg_port, local_port
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                 ON CONFLICT(password) DO NOTHING",
             )
             .context("prepare legacy passwords import")?;
@@ -1076,7 +1633,7 @@ fn import_legacy_database_rows(connection: &mut Connection, legacy: &Database) -
             insert
                 .execute(rusqlite::params![
                     password,
-                    entry.device_id,
+                    entry.ip,
                     entry.expires_at,
                     entry.down_bytes,
                     entry.up_bytes,
@@ -1085,33 +1642,12 @@ fn import_legacy_database_rows(connection: &mut Connection, legacy: &Database) -
                     i64::from(entry.is_deactivated),
                     entry.name,
                     entry.vk_hashes,
+                    i64::from(entry.vk_token_enabled),
                     entry.dtls_port,
                     entry.wg_port,
                     entry.local_port,
                 ])
-                .with_context(|| format!("merge legacy password {password}"))?;
-        }
-    }
-    {
-        let mut insert = transaction
-            .prepare(
-                "INSERT INTO devices (
-                    device_id, ip, priv_key, pub_key, up_bytes, down_bytes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                ON CONFLICT(device_id) DO NOTHING",
-            )
-            .context("prepare legacy devices import")?;
-        for device in legacy.devices.values() {
-            insert
-                .execute(rusqlite::params![
-                    device.device_id,
-                    device.ip,
-                    device.priv_key,
-                    device.pub_key,
-                    device.up_bytes,
-                    device.down_bytes,
-                ])
-                .with_context(|| format!("merge legacy device {}", device.device_id))?;
+                .with_context(|| format!("merge legacy password {}", secret_tag(password)))?;
         }
     }
     {
@@ -1160,49 +1696,35 @@ fn verify_legacy_database_rows(sqlite: &Database, legacy: &Database) -> Result<(
     {
         bail!("legacy main password conflicts with existing SQLite state");
     }
-    if !legacy.main_device_id.is_empty()
-        && !sqlite.main_device_id.is_empty()
-        && sqlite.main_device_id != legacy.main_device_id
-    {
-        bail!("legacy main device conflicts with existing SQLite state");
-    }
     for (password, legacy_entry) in &legacy.passwords {
         let Some(sqlite_entry) = sqlite.passwords.get(password) else {
-            bail!("legacy password {password} is missing after import");
+            bail!(
+                "legacy password {} is missing after import",
+                secret_tag(password)
+            );
         };
         if !legacy_password_matches(sqlite_entry, legacy_entry) {
-            bail!("legacy password {password} conflicts with existing SQLite state");
-        }
-    }
-    for (device_id, legacy_device) in &legacy.devices {
-        let Some(sqlite_device) = sqlite.devices.get(device_id) else {
-            bail!("legacy device {device_id} is missing after import");
-        };
-        if !legacy_device_matches(sqlite_device, legacy_device) {
-            bail!("legacy device {device_id} conflicts with existing SQLite state");
+            bail!(
+                "legacy password {} conflicts with existing SQLite state",
+                secret_tag(password)
+            );
         }
     }
     Ok(())
 }
 
 fn legacy_password_matches(sqlite: &PasswordEntry, legacy: &PasswordEntry) -> bool {
-    sqlite.device_id == legacy.device_id
+    sqlite.ip == legacy.ip
         && sqlite.expires_at == legacy.expires_at
         && sqlite.vk_hash == legacy.vk_hash
         && sqlite.ports == legacy.ports
         && sqlite.is_deactivated == legacy.is_deactivated
-        && sqlite.name == legacy.name
+        && (sqlite.name == legacy.name || legacy.name.trim().is_empty())
         && sqlite.vk_hashes == legacy.vk_hashes
+        && sqlite.vk_token_enabled == legacy.vk_token_enabled
         && sqlite.dtls_port == legacy.dtls_port
         && sqlite.wg_port == legacy.wg_port
         && sqlite.local_port == legacy.local_port
-}
-
-fn legacy_device_matches(sqlite: &ClientDevice, legacy: &ClientDevice) -> bool {
-    sqlite.device_id == legacy.device_id
-        && sqlite.ip == legacy.ip
-        && sqlite.priv_key == legacy.priv_key
-        && sqlite.pub_key == legacy.pub_key
 }
 
 fn persist_database_update(
@@ -1253,23 +1775,12 @@ fn write_traffic(connection: &mut Connection, traffic: &TrafficSnapshot) -> Resu
             .context("write main traffic counters")?;
     }
     for (password, counters) in &traffic.passwords {
-        // A client can be removed after its session was closed.  A missing row
-        // is therefore an expected no-op, not a reason to resurrect a deleted
-        // credential with incomplete data.
         transaction
             .execute(
                 "UPDATE passwords SET up_bytes = ?2, down_bytes = ?3 WHERE password = ?1",
                 rusqlite::params![password, counters.up_bytes, counters.down_bytes],
             )
-            .with_context(|| format!("write traffic for password {password}"))?;
-    }
-    for (device_id, counters) in &traffic.devices {
-        transaction
-            .execute(
-                "UPDATE devices SET up_bytes = ?2, down_bytes = ?3 WHERE device_id = ?1",
-                rusqlite::params![device_id, counters.up_bytes, counters.down_bytes],
-            )
-            .with_context(|| format!("write traffic for device {device_id}"))?;
+            .with_context(|| format!("write traffic for password {}", secret_tag(password)))?;
     }
     transaction
         .commit()
@@ -1280,8 +1791,8 @@ fn write_traffic(connection: &mut Connection, traffic: &TrafficSnapshot) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientDevice, Database, DatabasePersistence, PasswordEntry, PersistenceQueue,
-        PersistenceUpdate, TrafficCounters, TrafficSnapshot, load_database, save_database,
+        Database, DatabasePersistence, PasswordEntry, PersistenceQueue, PersistenceUpdate,
+        TrafficCounters, TrafficSnapshot, load_database, save_database,
     };
 
     #[test]
@@ -1293,6 +1804,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("csqtt-dns-test-{unique}"));
         let database = Database {
             dns: "9.9.9.9,149.112.112.112".to_owned(),
+            dns_provider: "custom".to_owned(),
             ..Database::default()
         };
 
@@ -1300,6 +1812,34 @@ mod tests {
         let restored = load_database(&directory).expect("load database");
 
         assert_eq!(restored.dns, database.dns);
+        assert_eq!(restored.dns_provider, database.dns_provider);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn vk_token_settings_and_access_flag_survive_database_restart() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("csqtt-vk-token-test-{unique}"));
+        let mut database = Database {
+            vk_access_token: "vk1.shared-token".to_owned(),
+            ..Database::default()
+        };
+        database.passwords.insert(
+            "client-password1".to_owned(),
+            PasswordEntry {
+                vk_token_enabled: true,
+                ..PasswordEntry::default()
+            },
+        );
+
+        save_database(&directory, &database).expect("save database");
+        let restored = load_database(&directory).expect("load database");
+
+        assert_eq!(restored.vk_access_token, "vk1.shared-token");
+        assert!(restored.passwords["client-password1"].vk_token_enabled);
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -1342,38 +1882,29 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("csqtt-json-import-test-{unique}"));
         std::fs::create_dir_all(&directory).unwrap();
         let mut legacy = Database {
-            main_password: "legacy-main".to_owned(),
-            main_device_id: "legacy-device".to_owned(),
+            main_password: "legacy-main-pass".to_owned(),
             dns: "9.9.9.9".to_owned(),
             main_up_bytes: 11,
             main_down_bytes: 12,
             ..Database::default()
         };
         legacy.passwords.insert(
-            "legacy-client".to_owned(),
+            "legacy-client-pw".to_owned(),
             PasswordEntry {
-                device_id: "legacy-device".to_owned(),
+                ip: "10.66.67.3".to_owned(),
                 up_bytes: 13,
                 down_bytes: 14,
                 ..PasswordEntry::default()
-            },
-        );
-        legacy.devices.insert(
-            "legacy-device".to_owned(),
-            ClientDevice {
-                device_id: "legacy-device".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                ..ClientDevice::default()
             },
         );
         let legacy_path = directory.join(super::LEGACY_DATABASE_FILE);
         std::fs::write(&legacy_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let restored = load_database(&directory).unwrap();
-        assert_eq!(restored.main_password, "legacy-main");
+        assert_eq!(restored.main_password, "legacy-main-pass");
         assert_eq!(restored.main_up_bytes, 11);
-        assert!(restored.passwords.contains_key("legacy-client"));
-        assert!(restored.devices.contains_key("legacy-device"));
+        assert!(restored.passwords.contains_key("legacy-client-pw"));
+        assert_eq!(restored.passwords["legacy-client-pw"].ip, "10.66.67.3");
         assert!(directory.join(super::DATABASE_FILE).exists());
         assert!(!legacy_path.exists());
         assert!(
@@ -1385,7 +1916,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_json_import_preserves_passwords_devices_and_bindings() {
+    fn legacy_json_import_preserves_passwords_and_ip() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1394,17 +1925,16 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
 
         let mut legacy = Database {
-            main_password: "old-main-password".to_owned(),
-            main_device_id: "owner-device".to_owned(),
+            main_password: "old-main-pass-16".to_owned(),
             dns: "77.88.8.8,77.88.8.1".to_owned(),
             main_up_bytes: 900,
             main_down_bytes: 1_800,
             ..Database::default()
         };
         legacy.passwords.insert(
-            "client-password-1".to_owned(),
+            "client-pass-16-1".to_owned(),
             PasswordEntry {
-                device_id: "device-1".to_owned(),
+                ip: "10.66.67.3".to_owned(),
                 expires_at: 1_900_000_000,
                 name: "first legacy user".to_owned(),
                 vk_hashes: "hash-a\nhash-b".to_owned(),
@@ -1417,9 +1947,9 @@ mod tests {
             },
         );
         legacy.passwords.insert(
-            "client-password-2".to_owned(),
+            "client-pass-16-2".to_owned(),
             PasswordEntry {
-                device_id: "device-2".to_owned(),
+                ip: "10.66.67.4".to_owned(),
                 is_deactivated: true,
                 name: "disabled legacy user".to_owned(),
                 up_bytes: 33,
@@ -1427,43 +1957,20 @@ mod tests {
                 ..PasswordEntry::default()
             },
         );
-        legacy.devices.insert(
-            "device-1".to_owned(),
-            ClientDevice {
-                device_id: "device-1".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                priv_key: "priv-1".to_owned(),
-                pub_key: "pub-1".to_owned(),
-                up_bytes: 55,
-                down_bytes: 66,
-            },
-        );
-        legacy.devices.insert(
-            "device-2".to_owned(),
-            ClientDevice {
-                device_id: "device-2".to_owned(),
-                ip: "10.66.67.3".to_owned(),
-                priv_key: "priv-2".to_owned(),
-                pub_key: "pub-2".to_owned(),
-                up_bytes: 88,
-                down_bytes: 99,
-            },
-        );
 
         let legacy_path = directory.join(super::LEGACY_DATABASE_FILE);
         std::fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
 
         let restored = load_database(&directory).unwrap();
-        assert_eq!(restored.main_password, "old-main-password");
-        assert_eq!(restored.main_device_id, "owner-device");
+        assert_eq!(restored.main_password, "old-main-pass-16");
         assert_eq!(restored.dns, "77.88.8.8,77.88.8.1");
         assert_eq!(
             (restored.main_up_bytes, restored.main_down_bytes),
             (900, 1_800)
         );
 
-        let first = restored.passwords.get("client-password-1").unwrap();
-        assert_eq!(first.device_id, "device-1");
+        let first = restored.passwords.get("client-pass-16-1").unwrap();
+        assert_eq!(first.ip, "10.66.67.3");
         assert_eq!(first.name, "first legacy user");
         assert_eq!(first.vk_hashes, "hash-a\nhash-b");
         assert_eq!(
@@ -1471,78 +1978,47 @@ mod tests {
             (46000, 51820, 1080)
         );
 
-        let second = restored.passwords.get("client-password-2").unwrap();
+        let second = restored.passwords.get("client-pass-16-2").unwrap();
         assert!(second.is_deactivated);
-        assert_eq!(second.device_id, "device-2");
+        assert_eq!(second.ip, "10.66.67.4");
 
-        let device = restored.devices.get("device-1").unwrap();
-        assert_eq!(device.ip, "10.66.67.2");
         assert!(directory.join(super::DATABASE_FILE).exists());
         assert!(!legacy_path.exists());
 
         let reloaded = load_database(&directory).unwrap();
         assert_eq!(reloaded.passwords.len(), 2);
-        assert_eq!(reloaded.devices.len(), 2);
         let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
-    fn load_repairs_stale_password_and_device_bindings() {
+    fn load_repairs_stale_passwords_and_assigns_ip() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let directory = std::env::temp_dir().join(format!("csqtt-binding-repair-{unique}"));
         let mut database = Database {
-            main_password: "main-password".to_owned(),
-            main_device_id: "owner-device".to_owned(),
+            main_password: "short".to_owned(),
             ..Database::default()
         };
         database.passwords.insert(
-            "orphaned".to_owned(),
+            "old8pass".to_owned(),
             PasswordEntry {
-                device_id: "missing-device".to_owned(),
+                ip: "".to_owned(),
                 ..PasswordEntry::default()
-            },
-        );
-        database.passwords.insert(
-            "one-sided".to_owned(),
-            PasswordEntry {
-                device_id: "device-1".to_owned(),
-                ..PasswordEntry::default()
-            },
-        );
-        database.devices.insert(
-            "device-1".to_owned(),
-            ClientDevice {
-                device_id: "device-1".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                ..ClientDevice::default()
-            },
-        );
-        database.devices.insert(
-            "stale-device".to_owned(),
-            ClientDevice {
-                device_id: "stale-device".to_owned(),
-                ip: "10.66.67.3".to_owned(),
-                ..ClientDevice::default()
-            },
-        );
-        database.devices.insert(
-            "owner-device".to_owned(),
-            ClientDevice {
-                device_id: "owner-device".to_owned(),
-                ip: "10.66.67.4".to_owned(),
-                ..ClientDevice::default()
             },
         );
         save_database(&directory, &database).unwrap();
 
         let restored = load_database(&directory).unwrap();
-        assert!(restored.passwords["orphaned"].device_id.is_empty());
+        assert_eq!(restored.main_password, "short");
+        assert!(restored.passwords.contains_key("old8pass"));
+        let entry = &restored.passwords["old8pass"];
+        assert_eq!(entry.ip, "10.66.67.3");
 
         let reloaded = load_database(&directory).unwrap();
-        assert!(reloaded.passwords["orphaned"].device_id.is_empty());
+        assert_eq!(reloaded.main_password, restored.main_password);
+        assert_eq!(reloaded.passwords["old8pass"].ip, "10.66.67.3");
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -1554,77 +2030,51 @@ mod tests {
             .as_nanos();
         let directory = std::env::temp_dir().join(format!("csqtt-json-merge-test-{unique}"));
         let mut sqlite = Database {
-            main_password: "sqlite-main".to_owned(),
+            main_password: "sqlite-main-16ch".to_owned(),
             main_up_bytes: 50,
             ..Database::default()
         };
         sqlite.passwords.insert(
-            "sqlite-client".to_owned(),
+            "sqlite-client-16".to_owned(),
             PasswordEntry {
                 name: "current".to_owned(),
-                device_id: "sqlite-device".to_owned(),
-                ..PasswordEntry::default()
-            },
-        );
-        sqlite.devices.insert(
-            "sqlite-device".to_owned(),
-            ClientDevice {
-                device_id: "sqlite-device".to_owned(),
                 ip: "10.66.67.10".to_owned(),
-                ..ClientDevice::default()
+                ..PasswordEntry::default()
             },
         );
         save_database(&directory, &sqlite).unwrap();
 
         let mut legacy = Database {
-            main_password: "sqlite-main".to_owned(),
+            main_password: "sqlite-main-16ch".to_owned(),
             main_up_bytes: 10,
             ..Database::default()
         };
         legacy.passwords.insert(
-            "legacy-client".to_owned(),
+            "legacy-client-16".to_owned(),
             PasswordEntry {
                 name: "imported".to_owned(),
-                device_id: "legacy-device".to_owned(),
-                ..PasswordEntry::default()
-            },
-        );
-        legacy.devices.insert(
-            "legacy-device".to_owned(),
-            ClientDevice {
-                device_id: "legacy-device".to_owned(),
                 ip: "10.66.67.11".to_owned(),
-                ..ClientDevice::default()
+                ..PasswordEntry::default()
             },
         );
         legacy.passwords.insert(
-            "sqlite-client".to_owned(),
+            "sqlite-client-16".to_owned(),
             PasswordEntry {
                 name: "current".to_owned(),
-                device_id: "sqlite-device".to_owned(),
-                up_bytes: 1,
-                ..PasswordEntry::default()
-            },
-        );
-        legacy.devices.insert(
-            "sqlite-device".to_owned(),
-            ClientDevice {
-                device_id: "sqlite-device".to_owned(),
                 ip: "10.66.67.10".to_owned(),
                 up_bytes: 1,
-                ..ClientDevice::default()
+                ..PasswordEntry::default()
             },
         );
         let legacy_path = directory.join(super::LEGACY_DATABASE_FILE);
         std::fs::write(&legacy_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let restored = load_database(&directory).unwrap();
-        assert_eq!(restored.main_password, "sqlite-main");
+        assert_eq!(restored.main_password, "sqlite-main-16ch");
         assert_eq!(restored.main_up_bytes, 50);
         assert_eq!(restored.passwords.len(), 1);
-        assert_eq!(restored.devices.len(), 1);
-        assert_eq!(restored.passwords["sqlite-client"].name, "current");
-        assert_eq!(restored.devices["sqlite-device"].ip, "10.66.67.10");
+        assert_eq!(restored.passwords["sqlite-client-16"].name, "current");
+        assert_eq!(restored.passwords["sqlite-client-16"].ip, "10.66.67.10");
         assert!(legacy_path.exists());
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1638,27 +2088,19 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("csqtt-json-password-conflict-{unique}"));
         let mut sqlite = Database::default();
         sqlite.passwords.insert(
-            "shared-password".to_owned(),
+            "shared-password-".to_owned(),
             PasswordEntry {
-                device_id: "sqlite-device".to_owned(),
+                ip: "10.66.67.3".to_owned(),
                 ..PasswordEntry::default()
-            },
-        );
-        sqlite.devices.insert(
-            "sqlite-device".to_owned(),
-            ClientDevice {
-                device_id: "sqlite-device".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                ..ClientDevice::default()
             },
         );
         save_database(&directory, &sqlite).unwrap();
 
         let mut legacy = Database::default();
         legacy.passwords.insert(
-            "shared-password".to_owned(),
+            "shared-password-".to_owned(),
             PasswordEntry {
-                device_id: "legacy-device".to_owned(),
+                ip: "10.66.67.4".to_owned(),
                 ..PasswordEntry::default()
             },
         );
@@ -1666,50 +2108,7 @@ mod tests {
         std::fs::write(&legacy_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
         let restored = load_database(&directory).unwrap();
-        assert_eq!(
-            restored.passwords["shared-password"].device_id,
-            "sqlite-device"
-        );
-        assert!(legacy_path.exists());
-        let _ = std::fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn existing_sqlite_ignores_conflicting_legacy_device() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("csqtt-json-device-conflict-{unique}"));
-        let mut sqlite = Database::default();
-        sqlite.devices.insert(
-            "shared-device".to_owned(),
-            ClientDevice {
-                device_id: "shared-device".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                priv_key: "sqlite-private".to_owned(),
-                pub_key: "sqlite-public".to_owned(),
-                ..ClientDevice::default()
-            },
-        );
-        save_database(&directory, &sqlite).unwrap();
-
-        let mut legacy = Database::default();
-        legacy.devices.insert(
-            "shared-device".to_owned(),
-            ClientDevice {
-                device_id: "shared-device".to_owned(),
-                ip: "10.66.67.2".to_owned(),
-                priv_key: "legacy-private".to_owned(),
-                pub_key: "sqlite-public".to_owned(),
-                ..ClientDevice::default()
-            },
-        );
-        let legacy_path = directory.join(super::LEGACY_DATABASE_FILE);
-        std::fs::write(&legacy_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
-
-        let restored = load_database(&directory).unwrap();
-        assert_eq!(restored.devices["shared-device"].priv_key, "sqlite-private");
+        assert_eq!(restored.passwords["shared-password-"].ip, "10.66.67.3");
         assert!(legacy_path.exists());
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1728,7 +2127,7 @@ mod tests {
         let (first_revision, start_first) = queue.submit_traffic(first);
         assert!(start_first);
         let mut second = TrafficSnapshot::default();
-        second.devices.insert(
+        second.passwords.insert(
             "second".to_owned(),
             TrafficCounters {
                 up_bytes: 3,
@@ -1744,7 +2143,7 @@ mod tests {
         };
         assert_eq!(pending_revision, second_revision);
         assert_eq!(pending.passwords["first"].up_bytes, 1);
-        assert_eq!(pending.devices["second"].down_bytes, 4);
+        assert_eq!(pending.passwords["second"].down_bytes, 4);
 
         queue.complete(second_revision, true);
         queue.complete(first_revision, false);
@@ -1802,21 +2201,12 @@ mod tests {
             ..Database::default()
         };
         database.passwords.insert(
-            "client".to_owned(),
+            "client-password1".to_owned(),
             PasswordEntry {
-                device_id: "device".to_owned(),
+                ip: "10.66.67.3".to_owned(),
                 up_bytes: 3,
                 down_bytes: 4,
                 ..PasswordEntry::default()
-            },
-        );
-        database.devices.insert(
-            "device".to_owned(),
-            ClientDevice {
-                device_id: "device".to_owned(),
-                up_bytes: 5,
-                down_bytes: 6,
-                ..ClientDevice::default()
             },
         );
         save_database(&directory, &database).unwrap();
@@ -1830,17 +2220,10 @@ mod tests {
             ..TrafficSnapshot::default()
         };
         traffic.passwords.insert(
-            "client".to_owned(),
+            "client-password1".to_owned(),
             TrafficCounters {
                 up_bytes: 103,
                 down_bytes: 104,
-            },
-        );
-        traffic.devices.insert(
-            "device".to_owned(),
-            TrafficCounters {
-                up_bytes: 105,
-                down_bytes: 106,
             },
         );
         let revision = persistence.submit_traffic(traffic);
@@ -1851,10 +2234,8 @@ mod tests {
             (restored.main_up_bytes, restored.main_down_bytes),
             (101, 102)
         );
-        let password = restored.passwords.get("client").unwrap();
+        let password = restored.passwords.get("client-password1").unwrap();
         assert_eq!((password.up_bytes, password.down_bytes), (103, 104));
-        let device = restored.devices.get("device").unwrap();
-        assert_eq!((device.up_bytes, device.down_bytes), (105, 106));
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -1890,6 +2271,226 @@ mod tests {
         persistence.wait(final_revision).await.unwrap();
         let restored = load_database(&directory).unwrap();
         assert_eq!(restored.main_up_bytes, 4096);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn client_group_vk_settings_persist_across_restarts() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("csqtt-group-vk-test-{unique}"));
+        let persistence = DatabasePersistence::new(directory.clone()).unwrap();
+        let mut db = Database::default();
+        let group_id = "group-123".to_string();
+        db.groups.insert(
+            group_id.clone(),
+            super::ClientGroup {
+                id: group_id.clone(),
+                name: "Test Group".to_string(),
+                admin_uuid: "admin-uuid-456".to_string(),
+                sub_uuid: "sub-uuid-789".to_string(),
+                workers: Some(99),
+                vk_token: Some("vk1.a.group_custom_token".to_string()),
+                vk_hashes: Some("group_hash_1,group_hash_2".to_string()),
+                routing_rule_id: String::new(),
+            },
+        );
+        let revision = persistence.submit(db);
+        persistence.wait(revision).await.unwrap();
+
+        let restored = load_database(&directory).unwrap();
+        let restored_group = restored.groups.get(&group_id).expect("group should exist");
+        assert_eq!(restored_group.name, "Test Group");
+        assert_eq!(restored_group.admin_uuid, "admin-uuid-456");
+        assert_eq!(restored_group.workers, Some(99));
+        assert_eq!(
+            restored_group.vk_token.as_deref(),
+            Some("vk1.a.group_custom_token")
+        );
+        assert_eq!(
+            restored_group.vk_hashes.as_deref(),
+            Some("group_hash_1,group_hash_2")
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn test_client_name_uniqueness_and_scope_isolation() {
+        let mut db = Database::default();
+        db.passwords.insert(
+            "pass-root".to_string(),
+            PasswordEntry {
+                name: "Клиент100".to_string(),
+                group_id: "".to_string(),
+                ..PasswordEntry::default()
+            },
+        );
+        db.passwords.insert(
+            "pass-g1".to_string(),
+            PasswordEntry {
+                name: "Клиент100".to_string(),
+                group_id: "group-1".to_string(),
+                ..PasswordEntry::default()
+            },
+        );
+        db.passwords.insert(
+            "pass-g2".to_string(),
+            PasswordEntry {
+                name: "Клиент100".to_string(),
+                group_id: "group-2".to_string(),
+                ..PasswordEntry::default()
+            },
+        );
+
+        let root_names = super::existing_client_names_in_scope(&db, "", None);
+        assert!(super::is_client_name_taken(&root_names, "Клиент100"));
+        assert!(super::is_client_name_taken(&root_names, "клиент100"));
+        assert!(!super::is_client_name_taken(&root_names, "Клиент101"));
+
+        let g1_names = super::existing_client_names_in_scope(&db, "group-1", None);
+        assert!(super::is_client_name_taken(&g1_names, "Клиент100"));
+        let g1_names_excl = super::existing_client_names_in_scope(&db, "group-1", Some("pass-g1"));
+        assert!(!super::is_client_name_taken(&g1_names_excl, "Клиент100"));
+
+        let gen_name = super::generate_unique_client_name(&root_names);
+        assert!(gen_name.starts_with("Клиент"));
+        assert_ne!(gen_name, "Клиент100");
+    }
+
+    #[test]
+    fn test_random_password_format_and_entropy() {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        for _ in 0..100 {
+            let pass = super::random_password();
+            assert_eq!(pass.len(), super::PASSWORD_LEN);
+            assert!(pass.chars().all(|c| super::PASS_CHARS.contains(&(c as u8))));
+            seen.insert(pass);
+        }
+        assert_eq!(seen.len(), 100);
+    }
+
+    #[test]
+    fn repair_migrates_passwords_and_assigns_ip() {
+        let mut db = super::Database {
+            main_password: "".to_string(),
+            ..super::Database::default()
+        };
+        db.passwords
+            .insert("legacy-slot-pw".to_owned(), super::PasswordEntry::default());
+        db.passwords
+            .insert("".to_owned(), super::PasswordEntry::default());
+
+        assert!(!db.repair_stale_password_bindings().is_empty());
+        assert_eq!(db.main_password.len(), super::PASSWORD_LEN);
+        assert!(db.main_password.chars().all(|c| c.is_ascii_alphanumeric()));
+        let main_sub_uuid = db.main_sub_uuid.clone();
+        assert!(!main_sub_uuid.is_empty());
+
+        let legacy_entry = db.passwords.get("legacy-slot-pw").unwrap();
+        assert_eq!(legacy_entry.ip, "10.66.67.3");
+        assert!(!legacy_entry.sub_uuid.is_empty());
+
+        let (_, slot_entry) = db
+            .passwords
+            .iter()
+            .find(|(k, _)| {
+                k.len() == super::PASSWORD_LEN && *k != &db.main_password && *k != "legacy-slot-pw"
+            })
+            .unwrap();
+        assert_eq!(slot_entry.ip, "10.66.67.4");
+        assert!(!slot_entry.sub_uuid.is_empty());
+
+        assert!(db.repair_stale_password_bindings().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_password_and_ip_database_persistence() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("csqtt-pass-ip-test-{unique}"));
+        let persistence = super::DatabasePersistence::new(directory.clone()).unwrap();
+        let mut db = super::Database {
+            main_password: "owner12345678901".to_string(),
+            ..super::Database::default()
+        };
+        db.passwords.insert(
+            "slot123456789012".to_string(),
+            super::PasswordEntry {
+                name: "Клиент555".to_string(),
+                ip: "10.66.67.55".to_string(),
+                ..super::PasswordEntry::default()
+            },
+        );
+        let revision = persistence.submit(db);
+        persistence.wait(revision).await.unwrap();
+
+        let restored = super::load_database(&directory).unwrap();
+        assert_eq!(restored.main_password, "owner12345678901");
+        let slot = restored
+            .passwords
+            .get("slot123456789012")
+            .expect("slot must exist");
+        assert_eq!(slot.ip, "10.66.67.55");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn test_legacy_slot_migration_sets_vladilets() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("csqtt-vladilets-test-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+
+        let conn = rusqlite::Connection::open(directory.join("csqtt.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE passwords (
+                 password TEXT PRIMARY KEY,
+                 ip TEXT NOT NULL DEFAULT '',
+                 expires_at INTEGER NOT NULL DEFAULT 0,
+                 down_bytes INTEGER NOT NULL DEFAULT 0,
+                 up_bytes INTEGER NOT NULL DEFAULT 0,
+                 vk_hash TEXT NOT NULL DEFAULT '',
+                 ports TEXT NOT NULL DEFAULT '',
+                 is_deactivated INTEGER NOT NULL DEFAULT 0,
+                 name TEXT NOT NULL DEFAULT '',
+                 vk_hashes TEXT NOT NULL DEFAULT '',
+                 vk_token_enabled INTEGER NOT NULL DEFAULT 0,
+                 dtls_port INTEGER NOT NULL DEFAULT 0,
+                 wg_port INTEGER NOT NULL DEFAULT 0,
+                 local_port INTEGER NOT NULL DEFAULT 0,
+                 group_id TEXT NOT NULL DEFAULT '',
+                 routing_rule_id TEXT NOT NULL DEFAULT '',
+                 sub_uuid TEXT NOT NULL DEFAULT '',
+                 workers INTEGER DEFAULT NULL
+             );
+             INSERT INTO meta (key, value) VALUES ('main_password', 'main123456789012');
+             INSERT INTO passwords (password, name) VALUES ('main123456789012', 'Главный пароль');
+             INSERT INTO passwords (password, name) VALUES ('client1234567890', 'Клиент');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let db = super::load_database(&directory).unwrap();
+        let owner = db
+            .passwords
+            .get("main123456789012")
+            .expect("owner slot exists");
+        assert_eq!(owner.name, "Владелец");
+
+        let participant = db
+            .passwords
+            .get("client1234567890")
+            .expect("participant slot exists");
+        assert_eq!(participant.ip, "10.66.67.3");
         let _ = std::fs::remove_dir_all(directory);
     }
 }

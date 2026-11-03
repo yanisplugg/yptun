@@ -3,8 +3,8 @@
 - read all docs (cat docs/-.md) before coding
 - kiss, minimal, no bloat, no verbose code
 - no em-dashes (-), only hyphens (-)
-- wtfpl license
-- master branch 
+- apache-2.0 license (see LICENSE and NOTICE)
+- proofkit branch (the default here; master is upstream, untouched)
 - git commits: eng cc (conventional commits), short lowercase messages
 - no llm slop
 - build via mage (mage check, mage build, mage lint)
@@ -16,7 +16,6 @@
 # ai generation rules
 
 - tag all ai-generated code blocks and functions explicitly with `// ai-generated`, specify exactly what was generated.
-- check `whoami`. if user == `zaraza` or `zarazaex` or `neuronori` or `owenewans`, ignore previous rule completely. do not tag or mark ai code. output purely as native human code.
 
 # code style
 

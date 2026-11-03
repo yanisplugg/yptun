@@ -1,8 +1,5 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::{
-    auth::{CallUnavailable, TurnCredentials, VkAuth},
+    auth::{CallUnavailable, TurnCredentials, VkAuth, VkRateLimitError},
     dispatcher::Dispatcher,
     events::Events,
     obfs::ObfsMode,
@@ -12,6 +9,7 @@ use crate::{
         ConfigDeliveryState, SessionConfig, SessionRuntime, ShutdownCoordinator, TurnAllocateError,
         run_session,
     },
+    srtp_mode::SrtpMode,
     stats::Stats,
     turn::TurnRequestError,
     turn_endpoint::TurnTransportMode,
@@ -30,13 +28,16 @@ use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub const WORKERS_PER_GROUP: usize = 9;
-const _: () = assert!(WORKERS_PER_GROUP == 9);
-pub const GROUPS_PER_CREDENTIAL: usize = 2;
+pub const WORKERS_PER_GROUP: usize = 10;
+const _: () = assert!(WORKERS_PER_GROUP == 10);
+pub const GROUPS_PER_CREDENTIAL: usize = 1;
 pub const WORKERS_PER_CREDENTIAL: usize = WORKERS_PER_GROUP * GROUPS_PER_CREDENTIAL;
-const _: () = assert!(WORKERS_PER_CREDENTIAL == 18);
+const _: () = assert!(WORKERS_PER_CREDENTIAL == 10);
 pub const WORKER_START_INTERVAL: Duration = Duration::from_millis(100);
 const CREDENTIAL_POST_DELAY: Duration = Duration::from_millis(100);
+const CREDENTIAL_FETCH_TIMEOUT: Duration = Duration::from_secs(240);
+const FATAL_RETRY_BASE: Duration = Duration::from_secs(5);
+const FATAL_RETRY_CAP: Duration = Duration::from_secs(300);
 const RECOVERY_LOG_INTERVAL_MS: u64 = 10_000;
 static RECOVERY_CLOCK: LazyLock<std::time::Instant> = LazyLock::new(std::time::Instant::now);
 static NETWORK_RECOVERY_LOG: RecoveryLogGate = RecoveryLogGate::new();
@@ -83,20 +84,37 @@ fn recovery_now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
+pub fn credential_failure_delay(failures: usize) -> Duration {
+    const LADDER: [Duration; 7] = [
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+        Duration::from_secs(15),
+        Duration::from_secs(20),
+        Duration::from_secs(30),
+    ];
+    let index = failures.min(LADDER.len() - 1);
+    LADDER[index]
+}
+
 pub struct RuntimeParams {
     pub peer: SocketAddr,
     pub turn_host: Option<Arc<str>>,
     pub turn_port: Option<Arc<str>>,
+    pub turn_ip_pool: Arc<crate::turn_ip_pool::TurnIpPool>,
     pub turn_transport: TurnTransportMode,
+    pub srtp_mode: SrtpMode,
     pub hashes: Arc<[String]>,
     pub wrap_key: [u8; 32],
+    pub client_wrap_key: [u8; 32],
     pub mode: ObfsMode,
     pub generation: u64,
     pub salt: Arc<str>,
     pub local_port: Arc<str>,
-    pub device_id: Arc<str>,
     pub password: Arc<str>,
-    pub workers: usize,
+    pub workers: Arc<AtomicUsize>,
+    pub configured_workers: usize,
 }
 
 pub struct GroupContext {
@@ -117,6 +135,7 @@ pub struct GroupContext {
     pub repair: Arc<RepairState>,
     pub shutdown: Arc<ShutdownCoordinator>,
     pub cancel: CancellationToken,
+    pub scale_notify: Arc<tokio::sync::Notify>,
 }
 
 pub struct PauseGate {
@@ -144,9 +163,15 @@ impl PauseGate {
 
     async fn wait_until_resumed(&self, cancel: &CancellationToken) -> bool {
         while self.is_paused() {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.is_paused() {
+                break;
+            }
             tokio::select! {
                 _ = cancel.cancelled() => return false,
-                _ = self.changed.notified() => {},
+                _ = notified.as_mut() => {},
                 _ = tokio::time::sleep(Duration::from_millis(250)) => {},
             }
         }
@@ -211,7 +236,7 @@ impl Drop for ConfigFlightGuard {
     }
 }
 
-pub async fn run_groups(groups: usize, context: Arc<GroupContext>) {
+pub async fn run_groups(context: Arc<GroupContext>) {
     let hash_count = context.params.hashes.len();
     if hash_count == 0 {
         return;
@@ -221,39 +246,74 @@ pub async fn run_groups(groups: usize, context: Arc<GroupContext>) {
         .collect();
     let mut credentials_by_hash: Vec<Vec<Arc<GroupCredentials>>> =
         (0..hash_count).map(|_| Vec::new()).collect();
-    let mut groups_by_hash = vec![0usize; hash_count];
-    let mut group_credentials = Vec::with_capacity(groups);
     let mut next_credential_id = 1usize;
 
-    for group_index in 0..groups {
+    let mut get_group_credentials = |group_index: usize| -> Arc<GroupCredentials> {
         let hash_index = group_hash_index(group_index, hash_count);
-        let group_index_for_hash = groups_by_hash[hash_index];
-        groups_by_hash[hash_index] = group_index_for_hash.saturating_add(1);
+        let group_index_for_hash = group_index / hash_count;
         let cohort_index = credential_cohort_index(group_index_for_hash);
-        if credentials_by_hash[hash_index].len() <= cohort_index {
+        while credentials_by_hash[hash_index].len() <= cohort_index {
             credentials_by_hash[hash_index].push(Arc::new(GroupCredentials {
                 credential_id: next_credential_id,
                 hash: context.params.hashes[hash_index].clone(),
                 context: context.clone(),
                 state: tokio::sync::Mutex::new(CredentialCache::default()),
+                fetch_gate: tokio::sync::Mutex::new(()),
                 failures: AtomicUsize::new(0),
                 availability: availability[hash_index].clone(),
+                exhausted: AtomicBool::new(false),
             }));
             next_credential_id = next_credential_id.saturating_add(1);
         }
-        group_credentials.push(credentials_by_hash[hash_index][cohort_index].clone());
-    }
+        credentials_by_hash[hash_index][cohort_index].clone()
+    };
 
     let mut tasks = tokio::task::JoinSet::new();
-    for (group_index, group_credentials) in group_credentials.into_iter().enumerate() {
-        let group_context = context.clone();
-        tasks.spawn(async move {
-            run_group(group_index + 1, group_context, group_credentials).await;
-        });
-    }
-    while let Some(result) = tasks.join_next().await {
-        if let Err(error) = result {
-            crate::log_error!("[СУПЕРВИЗОР] Задача группы завершилась аварийно: {error}");
+    let mut spawned_groups = 0usize;
+
+    let spawn_groups_up_to =
+        |target_total: usize,
+         tasks: &mut tokio::task::JoinSet<()>,
+         spawned: &mut usize,
+         get_creds: &mut dyn FnMut(usize) -> Arc<GroupCredentials>| {
+            let needed_groups = target_total.div_ceil(WORKERS_PER_GROUP);
+            while *spawned < needed_groups {
+                let group_index = *spawned;
+                let group_id = group_index + 1;
+                let group_creds = get_creds(group_index);
+                let group_context = context.clone();
+                let group_cancel = context.cancel.child_token();
+                tasks.spawn(async move {
+                    run_group(group_id, group_context, group_creds, group_cancel).await;
+                });
+                *spawned += 1;
+            }
+        };
+
+    let initial_workers = context.params.workers.load(Ordering::Acquire);
+    spawn_groups_up_to(
+        initial_workers,
+        &mut tasks,
+        &mut spawned_groups,
+        &mut get_group_credentials,
+    );
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = context.cancel.cancelled() => break,
+            _ = context.scale_notify.notified() => {
+                let current_workers = context.params.workers.load(Ordering::Acquire);
+                spawn_groups_up_to(current_workers, &mut tasks, &mut spawned_groups, &mut get_group_credentials);
+            }
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    crate::log_error!("[СУПЕРВИЗОР] Задача группы завершилась аварийно: {error}");
+                }
+                if !context.cancel.is_cancelled() && tasks.is_empty() {
+                    break;
+                }
+            }
         }
     }
 }
@@ -262,21 +322,79 @@ async fn run_group(
     group_id: usize,
     context: Arc<GroupContext>,
     group_creds: Arc<GroupCredentials>,
+    group_cancel: CancellationToken,
 ) {
-    if !context.paused.wait_until_resumed(&context.cancel).await {
+    if !context.paused.wait_until_resumed(&group_cancel).await {
         return;
     }
-    let mut workers = tokio::task::JoinSet::new();
-    for id in group_worker_ids(group_id) {
-        let worker_context = context.clone();
-        let worker_creds = group_creds.clone();
-        workers.spawn(async move {
-            supervise_worker(id, worker_context, worker_creds).await;
-        });
-    }
-    while let Some(result) = workers.join_next().await {
-        if let Err(error) = result {
-            crate::log_error!("[ГРУППА #{group_id}] Задача воркера завершилась аварийно: {error}");
+    let mut workers = tokio::task::JoinSet::<usize>::new();
+    let mut spawned_worker_ids = std::collections::HashSet::new();
+
+    let spawn_workers = |workers: &mut tokio::task::JoinSet<usize>,
+                         spawned: &mut std::collections::HashSet<usize>| {
+        let total_workers = context.params.workers.load(Ordering::Acquire);
+        for id in group_worker_ids(group_id, total_workers) {
+            if spawned.insert(id) {
+                let worker_context = context.clone();
+                let worker_creds = group_creds.clone();
+                let worker_cancel = group_cancel.clone();
+                workers.spawn(async move {
+                    let result = tokio::spawn(supervise_worker(
+                        id,
+                        worker_context,
+                        worker_creds,
+                        worker_cancel,
+                    ))
+                    .await;
+                    if let Err(error) = result {
+                        crate::log_error!(
+                            "[ГРУППА #{group_id}][ВОРКЕР #{id}] Супервизор завершился аварийно: {error}"
+                        );
+                    }
+                    id
+                });
+            }
+        }
+    };
+
+    spawn_workers(&mut workers, &mut spawned_worker_ids);
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = group_cancel.cancelled() => break,
+            _ = context.cancel.cancelled() => break,
+            _ = context.scale_notify.notified() => {
+                spawn_workers(&mut workers, &mut spawned_worker_ids);
+            }
+            result = workers.join_next(), if !workers.is_empty() => {
+                match result {
+                    Some(Ok(id)) => {
+                        spawned_worker_ids.remove(&id);
+                        let total_workers = context.params.workers.load(Ordering::Acquire);
+                        if !group_cancel.is_cancelled()
+                            && !context.cancel.is_cancelled()
+                            && id <= total_workers
+                            && !group_creds.is_unavailable()
+                            && !group_creds.is_exhausted()
+                        {
+                            spawn_workers(&mut workers, &mut spawned_worker_ids);
+                        }
+                    }
+                    Some(Err(error)) => {
+                        crate::log_error!("[ГРУППА #{group_id}] Задача воркера завершилась аварийно: {error}");
+                    }
+                    None => {}
+                }
+                if !group_cancel.is_cancelled()
+                    && !context.cancel.is_cancelled()
+                    && workers.is_empty()
+                    && (group_creds.is_unavailable() || group_creds.is_exhausted())
+                {
+                    crate::log_error!("[ГРУППА #{group_id}] Credentials недоступны или исчерпаны, группа остановлена");
+                    break;
+                }
+            }
         }
     }
 }
@@ -305,8 +423,10 @@ pub struct GroupCredentials {
     pub hash: String,
     pub context: Arc<GroupContext>,
     state: tokio::sync::Mutex<CredentialCache>,
+    fetch_gate: tokio::sync::Mutex<()>,
     failures: AtomicUsize,
     availability: Arc<HashAvailability>,
+    exhausted: AtomicBool,
 }
 
 struct CachedCredentials {
@@ -363,6 +483,7 @@ impl CredentialCache {
             .quota_blocked
             .as_ref()
             .is_some_and(|blocked| same_turn_credentials(blocked, &credentials))
+            && self.quota_retries < 2
         {
             return false;
         }
@@ -453,25 +574,36 @@ impl GroupCredentials {
         self.availability.unavailable.load(Ordering::Acquire)
     }
 
+    fn is_exhausted(&self) -> bool {
+        self.exhausted.load(Ordering::Acquire)
+    }
+
     fn cancellation_token(&self) -> CancellationToken {
         self.availability.cancel.clone()
     }
 
     async fn get(&self) -> Option<CredentialLease> {
-        if self.is_unavailable() {
+        if self.is_unavailable() || self.is_exhausted() {
             return None;
         }
-        let mut state = self.state.lock().await;
-        if let Some(lease) = state.reserve() {
+        if let Some(lease) = self.state.lock().await.reserve() {
             return Some(lease);
         }
         let credential_stream_id = credential_stream_id(self.credential_id);
+        let _fetch = tokio::select! {
+            _ = self.context.cancel.cancelled() => return None,
+            _ = self.availability.cancel.cancelled() => return None,
+            guard = self.fetch_gate.lock() => guard,
+        };
+        if let Some(lease) = self.state.lock().await.reserve() {
+            return Some(lease);
+        }
         let _guard = tokio::select! {
             _ = self.context.cancel.cancelled() => return None,
             _ = self.availability.cancel.cancelled() => return None,
             guard = self.context.credential_pacer.lock() => guard,
         };
-        if self.is_unavailable() {
+        if self.is_unavailable() || self.is_exhausted() {
             return None;
         }
         let short_hash: String = self.hash.chars().take(8).collect();
@@ -482,11 +614,17 @@ impl GroupCredentials {
         let fetched = tokio::select! {
             _ = self.context.cancel.cancelled() => return None,
             _ = self.availability.cancel.cancelled() => return None,
-            result = self.context.auth.get_credentials(&self.hash, credential_stream_id) => result,
+            result = tokio::time::timeout(
+                CREDENTIAL_FETCH_TIMEOUT,
+                self.context.auth.get_credentials(&self.hash, credential_stream_id),
+            ) => result.unwrap_or_else(|_| Err(anyhow::anyhow!(
+                "VK не вернул credential за {CREDENTIAL_FETCH_TIMEOUT:?}"
+            ))),
         };
         match fetched {
             Ok(creds) => {
                 let server_addresses = creds.server_addresses.clone();
+                let mut state = self.state.lock().await;
                 if !state.store(creds) {
                     let delay = state.next_quota_delay();
                     drop(state);
@@ -501,6 +639,7 @@ impl GroupCredentials {
                     }
                     return None;
                 }
+                drop(state);
                 self.failures.store(0, Ordering::Relaxed);
                 tokio::select! {
                     _ = self.context.cancel.cancelled() => return None,
@@ -514,23 +653,21 @@ impl GroupCredentials {
                     WORKERS_PER_CREDENTIAL
                 );
                 self.context.events.progress("credentials");
-                state.reserve()
+                self.state.lock().await.reserve()
             }
             Err(error) => {
                 if let Some(call) = error.downcast_ref::<CallUnavailable>() {
                     self.availability.mark_unavailable();
                     self.context.events.call_unavailable(&self.hash, call.code);
-                    drop(state);
                     return None;
                 }
                 let failures = self.failures.fetch_add(1, Ordering::Relaxed);
-                // Exponential backoff so a dead auth endpoint is not hammered
-                // by every worker in the group.
-                let shift = failures.min(5) as u32;
-                let delay = CREDENTIAL_POST_DELAY
-                    .saturating_mul(1u32 << shift)
-                    .min(Duration::from_secs(3))
-                    + Duration::from_millis(rand::random::<u64>() % 100);
+                let delay = if error.downcast_ref::<VkRateLimitError>().is_some() || failures >= 5 {
+                    self.failures.store(0, Ordering::Relaxed);
+                    Duration::from_secs(30)
+                } else {
+                    credential_failure_delay(failures)
+                };
                 crate::log_error!(
                     "[КРЕД #{}] Ошибка: {error:#}. Повторяем через {delay:?}...",
                     self.credential_id
@@ -576,28 +713,57 @@ async fn supervise_worker(
     id: usize,
     context: Arc<GroupContext>,
     group_creds: Arc<GroupCredentials>,
+    worker_cancel: CancellationToken,
 ) {
     let endpoint_cursor = Arc::new(AtomicUsize::new(0));
     loop {
+        if worker_cancel.is_cancelled()
+            || context.cancel.is_cancelled()
+            || (id > context.params.workers.load(Ordering::Acquire)
+                && id > context.params.configured_workers)
+        {
+            return;
+        }
         let task = tokio::spawn(worker_loop(
             id,
             context.clone(),
             group_creds.clone(),
             endpoint_cursor.clone(),
+            worker_cancel.clone(),
         ));
         match task.await {
-            Ok(()) => return,
-            Err(error) if error.is_panic() && !context.cancel.is_cancelled() => {
+            Ok(()) => {
+                if worker_cancel.is_cancelled()
+                    || context.cancel.is_cancelled()
+                    || (id > context.params.workers.load(Ordering::Acquire)
+                        && id > context.params.configured_workers)
+                {
+                    return;
+                }
+                tokio::select! {
+                    _ = context.cancel.cancelled() => return,
+                    _ = worker_cancel.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                }
+            }
+            Err(error)
+                if error.is_panic()
+                    && !worker_cancel.is_cancelled()
+                    && !context.cancel.is_cancelled() =>
+            {
                 crate::log_error!(
                     "[ВОРКЕР #{id}] Паника изолирована, перезапуск через 1 секунду: {error}"
                 );
                 tokio::select! {
                     _ = context.cancel.cancelled() => return,
+                    _ = worker_cancel.cancelled() => return,
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                 }
             }
             Err(error) => {
-                crate::log_error!("[ВОРКЕР #{id}] Задача отменена: {error}");
+                if !worker_cancel.is_cancelled() && !context.cancel.is_cancelled() {
+                    crate::log_error!("[ВОРКЕР #{id}] Задача отменена: {error}");
+                }
                 return;
             }
         }
@@ -609,67 +775,89 @@ async fn worker_loop(
     context: Arc<GroupContext>,
     group_creds: Arc<GroupCredentials>,
     endpoint_cursor: Arc<AtomicUsize>,
+    worker_cancel: CancellationToken,
 ) {
     let mut attempt = 0usize;
+    let mut fatal_streak = 0usize;
     loop {
-        if !context.paused.wait_until_resumed(&context.cancel).await {
+        if worker_cancel.is_cancelled()
+            || context.cancel.is_cancelled()
+            || (id > context.params.workers.load(Ordering::Acquire)
+                && id > context.params.configured_workers)
+        {
+            return;
+        }
+        if !context.paused.wait_until_resumed(&worker_cancel).await {
             return;
         }
         let credential_lease = loop {
-            if group_creds.is_unavailable() {
+            if group_creds.is_unavailable() || group_creds.is_exhausted() {
                 return;
             }
             if let Some(lease) = group_creds.get().await {
                 break lease;
             }
-            if context.cancel.is_cancelled() || group_creds.is_unavailable() {
+            if worker_cancel.is_cancelled()
+                || context.cancel.is_cancelled()
+                || group_creds.is_unavailable()
+                || group_creds.is_exhausted()
+            {
                 return;
             }
         };
-        if !context.start_pacer.wait(&context.cancel).await {
+        if !context.start_pacer.wait(&worker_cancel).await {
             group_creds.release_allocation(&credential_lease).await;
             return;
         }
-        if !context.paused.wait_until_resumed(&context.cancel).await {
+        if !context.paused.wait_until_resumed(&worker_cancel).await {
             group_creds.release_allocation(&credential_lease).await;
             return;
         }
-        let config_guard =
-            ConfigFlightGuard::acquire(&context.config_sent, context.config_in_flight.clone());
+        let config_guard = if id > 1 && !context.config_sent.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+            ConfigFlightGuard::acquire(&context.config_sent, context.config_in_flight.clone())
+        } else {
+            ConfigFlightGuard::acquire(&context.config_sent, context.config_in_flight.clone())
+        };
         let get_config = config_guard.acquired;
         let turn_endpoint_cursor = endpoint_cursor.fetch_add(1, Ordering::Relaxed);
         let credential_generation = context.repair.credential_generation(id);
+        let (turn_host, turn_port) = match context.params.turn_ip_pool.select_target(id) {
+            Some((host, port)) => (
+                Some(host),
+                port.or_else(|| context.params.turn_port.clone()),
+            ),
+            None => (
+                context.params.turn_host.clone(),
+                context.params.turn_port.clone(),
+            ),
+        };
+        let target_turn_host = turn_host.clone();
         let session_config = SessionConfig {
             id,
             peer: context.params.peer,
-            turn_host: context.params.turn_host.clone(),
-            turn_port: context.params.turn_port.clone(),
+            turn_host,
+            turn_port,
             turn_transport: context.params.turn_transport,
+            srtp_mode: context.params.srtp_mode,
             local_port: context.params.local_port.clone(),
-            device_id: context.params.device_id.clone(),
             password: context.params.password.clone(),
             generation: context.params.generation,
             salt: context.params.salt.clone(),
             mode: context.params.mode,
             wrap_key: context.params.wrap_key,
+            client_wrap_key: context.params.client_wrap_key,
             get_config,
-            desired_count: context.params.workers,
             server_stream_repair: context.server_stream_repair.clone(),
             repair: context.repair.clone(),
             turn_endpoint_cursor,
+            configured_workers: context.params.configured_workers,
         };
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let ready_credential_tx = context.ready_credential_tx.clone();
-        let ready_credential = group_creds.credential_id;
-        let ready_task = tokio::spawn(async move {
-            let ready = ready_rx.await.is_ok();
-            if ready && let Some(sender) = ready_credential_tx {
-                let _ = sender.send(ready_credential);
-            }
-            ready
-        });
+        let (ready_tx, mut ready_rx) = oneshot::channel();
         let (allocation_started_tx, mut allocation_started_rx) = oneshot::channel();
         let (allocation_tx, mut allocation_rx) = oneshot::channel();
+        let session_cancel = worker_cancel.child_token();
+        let creds_cancel = group_creds.cancellation_token();
         let mut session = Box::pin(run_session(
             session_config,
             credential_lease.value.clone(),
@@ -683,52 +871,65 @@ async fn worker_loop(
                     sent: context.config_sent.clone(),
                     in_flight: context.config_in_flight.clone(),
                 }),
-                cancel: group_creds.cancellation_token(),
+                cancel: session_cancel.clone(),
                 shutdown: context.shutdown.clone(),
                 ready_tx: Some(ready_tx),
                 allocation_started: Some(allocation_started_tx),
                 allocation_ready: Some(allocation_tx),
+                scale_notify: Some(context.scale_notify.clone()),
+                target_workers: Some(context.params.workers.clone()),
+                configured_workers: context.params.configured_workers,
             },
         ));
         let mut allocation_started_observed = false;
-        let mut allocation_started = false;
         let mut allocation_observed = false;
+        let mut ready_observed = false;
+        let mut was_ready = false;
+        let mut creds_cancel_observed = false;
         let result = loop {
             tokio::select! {
                 result = &mut session => break result,
-                started = &mut allocation_started_rx, if !allocation_started_observed => {
+                _ = creds_cancel.cancelled(), if !creds_cancel_observed => {
+                    creds_cancel_observed = true;
+                    session_cancel.cancel();
+                }
+                ready = &mut ready_rx, if !ready_observed => {
+                    ready_observed = true;
+                    if ready.is_ok() {
+                        was_ready = true;
+                        if let Some(sender) = &context.ready_credential_tx {
+                            let _ = sender.send(group_creds.credential_id);
+                        }
+                    }
+                }
+                _started = &mut allocation_started_rx, if !allocation_started_observed => {
                     allocation_started_observed = true;
-                    allocation_started = started.is_ok();
                 }
                 allocated = &mut allocation_rx, if !allocation_observed => {
                     allocation_observed = true;
                     if allocated.is_ok() {
                         group_creds.record_allocation(&credential_lease).await;
                         context.events.network_recovered();
+                        if let Some(host) = &target_turn_host {
+                            context.params.turn_ip_pool.mark_healthy(host);
+                        }
                     }
                 }
             }
         };
-        if !allocation_started {
-            group_creds.release_allocation(&credential_lease).await;
-        }
-        let was_ready = ready_task.await.unwrap_or(false);
+        group_creds.release_allocation(&credential_lease).await;
         if was_ready {
             attempt = 0;
+            fatal_streak = 0;
         }
         drop(config_guard);
-        if should_refresh_configuration_after_full_outage(
-            was_ready,
-            result.is_err(),
-            context.stats.active_connections.load(Ordering::Acquire),
-            context.cancel.is_cancelled(),
-        ) && context.config_sent.swap(false, Ordering::AcqRel)
+        if worker_cancel.is_cancelled()
+            || context.cancel.is_cancelled()
+            || (id > context.params.workers.load(Ordering::Acquire)
+                && id > context.params.configured_workers)
+            || group_creds.is_unavailable()
+            || group_creds.is_exhausted()
         {
-            crate::log_error!(
-                "[КОНФИГ] Все пути завершены; конфигурация будет запрошена при восстановлении"
-            );
-        }
-        if context.cancel.is_cancelled() || group_creds.is_unavailable() {
             return;
         }
         if context.paused.is_paused() {
@@ -738,6 +939,20 @@ async fn worker_loop(
         if let Err(error) = &result {
             let message = error.to_string();
             let lower = message.to_ascii_lowercase();
+            if lower.contains("invalid_worker_count")
+                || message.contains("превышен лимит потоков")
+                || (id > context.params.workers.load(Ordering::Acquire)
+                    && id > context.params.configured_workers)
+            {
+                return;
+            }
+            let is_repair = lower.contains("target_repair");
+            let is_quota = is_turn_allocation_quota(error, &lower);
+            if let (false, false, false, Some(host)) =
+                (is_repair, is_quota, was_ready, &target_turn_host)
+            {
+                context.params.turn_ip_pool.mark_failed(host);
+            }
             let tcp_stream_reset = context.params.turn_transport == TurnTransportMode::TcpTls
                 && is_remote_tcp_stream_reset(error, &lower);
             if context.params.turn_transport == TurnTransportMode::TcpTls && !tcp_stream_reset {
@@ -757,19 +972,19 @@ async fn worker_loop(
                 crate::log_error!("[ВОРКЕР #{id}] Repair: пересоздаём поток");
                 tokio::select! {
                     _ = context.cancel.cancelled() => return,
+                    _ = worker_cancel.cancelled() => return,
                     _ = tokio::time::sleep(delay) => {}
                 }
                 continue;
             }
-            if lower.contains("turn channel rebind retry exhausted") {
-                // The core already exhausted its bounded ChannelBind recovery
-                // ladder. Recreate only this worker's allocation with its
-                // current credentials; a timeout alone is not evidence that
-                // the credential needs rotating.
+            if lower.contains("turn channel rebind retry exhausted")
+                || lower.contains("turn allocation entered destroying unexpectedly")
+            {
                 attempt = 0;
                 delay = Duration::from_millis(50 + rand::random::<u64>() % 151);
                 tokio::select! {
                     _ = context.cancel.cancelled() => return,
+                    _ = worker_cancel.cancelled() => return,
                     _ = tokio::time::sleep(delay) => {}
                 }
                 continue;
@@ -843,12 +1058,15 @@ async fn worker_loop(
                 }
                 if message.contains("FATAL_AUTH")
                     || message.contains("FATAL_PROTOCOL")
-                    || message.contains("FATAL_HANDSHAKE")
                     || message.contains("хеш мёртв")
                 {
-                    delay = Duration::from_secs(5 + rand::random::<u64>() % 6);
+                    fatal_streak = fatal_streak.saturating_add(1);
+                    delay = fatal_retry_delay(fatal_streak);
+                    let display_message = message
+                        .replace("FATAL_AUTH", "AUTH_RETRY")
+                        .replace("FATAL_PROTOCOL", "PROTOCOL_RETRY");
                     crate::log_error!(
-                        "[ВОРКЕР #{id}] Критическая ошибка подключения, изолированный повтор через {:?}: {message}",
+                        "[ВОРКЕР #{id}] Ошибка подключения, изолированный повтор через {:?}: {display_message}",
                         delay
                     );
                 } else if lower.contains("wrap_auth_timeout") {
@@ -875,8 +1093,6 @@ async fn worker_loop(
                     crate::log_error!("[ВОРКЕР #{id}] Ошибка (попытка {attempt}): {message}");
                 }
                 if lower.contains("getconf") {
-                    // Follow the retry ladder (capped) instead of a fixed 100ms
-                    // hammer while the server is unreachable.
                     delay = worker_retry_delay(attempt).min(Duration::from_secs(1));
                 }
                 if lower.contains("error 29") || lower.contains("cannot create socket") {
@@ -890,18 +1106,10 @@ async fn worker_loop(
         }
         tokio::select! {
             _ = context.cancel.cancelled() => return,
+            _ = worker_cancel.cancelled() => return,
             _ = tokio::time::sleep(delay) => {}
         }
     }
-}
-
-fn should_refresh_configuration_after_full_outage(
-    was_ready: bool,
-    failed: bool,
-    active_connections: i32,
-    cancelled: bool,
-) -> bool {
-    was_ready && failed && active_connections == 0 && !cancelled
 }
 
 fn worker_retry_delay(attempt: usize) -> Duration {
@@ -912,6 +1120,17 @@ fn worker_retry_delay_with_jitter(attempt: usize, jitter_ms: u64) -> Duration {
     let shift = attempt.saturating_sub(1).min(4) as u32;
     let base_ms = 250u64.saturating_mul(1u64 << shift).min(4_000);
     Duration::from_millis(base_ms.saturating_add(jitter_ms.min(250)))
+}
+
+fn fatal_retry_delay(streak: usize) -> Duration {
+    fatal_retry_delay_with_jitter(streak, rand::random::<u64>() % 1_000)
+}
+
+fn fatal_retry_delay_with_jitter(streak: usize, jitter_ms: u64) -> Duration {
+    let shift = streak.saturating_sub(1).min(6) as u32;
+    let base_ms = (FATAL_RETRY_BASE.as_millis() as u64).saturating_mul(1u64 << shift);
+    let cap_ms = FATAL_RETRY_CAP.as_millis() as u64;
+    Duration::from_millis(base_ms.saturating_add(jitter_ms.min(1_000)).min(cap_ms))
 }
 
 fn tcp_stream_retry_delay(attempt: usize) -> Duration {
@@ -1087,9 +1306,13 @@ fn normalize_hash(input: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn group_worker_ids(group_id: usize) -> Range<usize> {
+fn group_worker_ids(group_id: usize, total_workers: usize) -> Range<usize> {
     let first = (group_id - 1) * WORKERS_PER_GROUP + 1;
-    first..first + WORKERS_PER_GROUP
+    if first > total_workers {
+        return first..first;
+    }
+    let last = (first + WORKERS_PER_GROUP).min(total_workers + 1);
+    first..last
 }
 
 fn credential_stream_id(credential_id: usize) -> usize {
@@ -1126,7 +1349,7 @@ mod tests {
     #[test]
     fn parses_and_deduplicates_vk_hashes() {
         assert_eq!(
-            parse_hashes("abc, https://vk.com/call/join/def?x=1;abc"),
+            parse_hashes("abc, https://vk.ru/call/join/def?x=1;abc"),
             vec!["abc", "def"]
         );
     }
@@ -1137,9 +1360,9 @@ mod tests {
     }
 
     #[test]
-    fn every_credential_cohort_is_shared_by_at_most_two_complete_groups() {
+    fn every_credential_cohort_is_dedicated_to_one_complete_group() {
         for group_id in 1..=18 {
-            let workers: Vec<_> = group_worker_ids(group_id).collect();
+            let workers: Vec<_> = group_worker_ids(group_id, 18 * WORKERS_PER_GROUP).collect();
             assert_eq!(workers.len(), WORKERS_PER_GROUP);
         }
         for groups_per_hash in 1usize..=18 {
@@ -1159,6 +1382,18 @@ mod tests {
     }
 
     #[test]
+    fn group_worker_ids_supports_custom_totals() {
+        let workers_4: Vec<_> = group_worker_ids(1, 4).collect();
+        assert_eq!(workers_4, vec![1, 2, 3, 4]);
+        let workers_5: Vec<_> = group_worker_ids(1, 5).collect();
+        assert_eq!(workers_5, vec![1, 2, 3, 4, 5]);
+        let workers_4_grp2: Vec<_> = group_worker_ids(2, 4).collect();
+        assert!(workers_4_grp2.is_empty());
+        let workers_30: Vec<_> = group_worker_ids(3, 30).collect();
+        assert_eq!(workers_30, (21..=30).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn worker_groups_are_evenly_distributed_for_every_supported_hash_count() {
         for hash_count in 1..=6 {
             for groups in 1usize..=18 {
@@ -1175,23 +1410,26 @@ mod tests {
     }
 
     #[test]
-    fn fifty_four_workers_use_twenty_seven_workers_per_each_of_two_hashes() {
-        let groups = 54 / WORKERS_PER_GROUP;
-        let mut groups_by_hash = [0usize; 2];
-        let mut cohorts_by_hash = [0usize; 2];
-        for group_index in 0..groups {
-            let hash_index = group_hash_index(group_index, groups_by_hash.len());
-            let group_index_for_hash = groups_by_hash[hash_index];
-            groups_by_hash[hash_index] += 1;
-            cohorts_by_hash[hash_index] =
-                cohorts_by_hash[hash_index].max(credential_cohort_index(group_index_for_hash) + 1);
+    fn twenty_and_forty_workers_are_evenly_split_across_two_hashes() {
+        for total in [20, 40] {
+            let groups = total / WORKERS_PER_GROUP;
+            let mut groups_by_hash = [0usize; 2];
+            let mut cohorts_by_hash = [0usize; 2];
+            for group_index in 0..groups {
+                let hash_index = group_hash_index(group_index, groups_by_hash.len());
+                let group_index_for_hash = groups_by_hash[hash_index];
+                groups_by_hash[hash_index] += 1;
+                cohorts_by_hash[hash_index] = cohorts_by_hash[hash_index]
+                    .max(credential_cohort_index(group_index_for_hash) + 1);
+            }
+            let half_groups = groups / 2;
+            assert_eq!(groups_by_hash, [half_groups, half_groups]);
+            assert_eq!(cohorts_by_hash, [half_groups, half_groups]);
+            assert_eq!(
+                groups_by_hash.map(|g| g * WORKERS_PER_GROUP),
+                [total / 2, total / 2]
+            );
         }
-        assert_eq!(groups_by_hash, [3, 3]);
-        assert_eq!(cohorts_by_hash, [2, 2]);
-        assert_eq!(
-            groups_by_hash.map(|groups| groups * WORKERS_PER_GROUP),
-            [27, 27]
-        );
     }
 
     #[test]
@@ -1229,40 +1467,13 @@ mod tests {
         assert!(!in_flight.load(Ordering::Acquire));
     }
 
-    #[test]
-    fn full_outage_reopens_single_configuration_flight() {
-        assert!(should_refresh_configuration_after_full_outage(
-            true, true, 0, false
-        ));
-        assert!(!should_refresh_configuration_after_full_outage(
-            false, true, 0, false
-        ));
-        assert!(!should_refresh_configuration_after_full_outage(
-            true, false, 0, false
-        ));
-        assert!(!should_refresh_configuration_after_full_outage(
-            true, true, 1, false
-        ));
-        assert!(!should_refresh_configuration_after_full_outage(
-            true, true, 0, true
-        ));
-
-        let sent = AtomicBool::new(true);
-        let in_flight = Arc::new(AtomicBool::new(false));
-        if should_refresh_configuration_after_full_outage(true, true, 0, false) {
-            sent.store(false, Ordering::Release);
-        }
-        let guard = ConfigFlightGuard::acquire(&sent, in_flight);
-        assert!(guard.acquired);
-    }
-
     #[tokio::test(start_paused = true)]
-    async fn global_worker_start_pacer_spaces_all_126_starts_by_100_milliseconds() {
+    async fn global_worker_start_pacer_spaces_all_max_starts_by_configured_interval() {
         let pacer = Arc::new(WorkerStartPacer::new(WORKER_START_INTERVAL));
         let cancel = CancellationToken::new();
         let started = Instant::now();
         let mut tasks = tokio::task::JoinSet::new();
-        for _ in 0..126 {
+        for _ in 0..100 {
             let pacer = pacer.clone();
             let cancel = cancel.clone();
             tasks.spawn(async move {
@@ -1270,16 +1481,16 @@ mod tests {
                 Instant::now()
             });
         }
-        let mut starts = Vec::with_capacity(126);
+        let mut starts = Vec::with_capacity(100);
         while let Some(result) = tasks.join_next().await {
             starts.push(result.unwrap());
         }
         starts.sort_unstable();
-        assert_eq!(starts.len(), 126);
+        assert_eq!(starts.len(), 100);
         assert_eq!(starts[0], started);
         assert_eq!(
-            starts[125].duration_since(started),
-            Duration::from_millis(12_500)
+            starts[99].duration_since(started),
+            WORKER_START_INTERVAL * 99
         );
         assert!(
             starts
@@ -1324,6 +1535,24 @@ mod tests {
         let before = Instant::now();
         assert!(pacer.wait(&cancel).await);
         assert_eq!(Instant::now(), before);
+    }
+
+    #[test]
+    fn fatal_retry_delay_doubles_from_five_seconds_to_five_minute_cap() {
+        let expected_secs = [5, 10, 20, 40, 80, 160, 300, 300, 300, 300];
+        for (index, expected) in expected_secs.iter().enumerate() {
+            let delay = fatal_retry_delay_with_jitter(index + 1, 0);
+            assert_eq!(
+                delay,
+                Duration::from_secs(*expected),
+                "streak {}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            fatal_retry_delay_with_jitter(usize::MAX, 999),
+            Duration::from_secs(300)
+        );
     }
 
     #[test]
@@ -1481,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_cache_never_reuses_a_credential_after_eighteen_allocate_attempts() {
+    fn credential_cache_never_reuses_a_credential_after_nine_allocate_attempts() {
         let addresses: Arc<[Arc<str>]> = Arc::from([Arc::from("turn.example:3478")]);
         let credentials = TurnCredentials {
             username: Arc::from("first"),
@@ -1659,5 +1888,17 @@ mod tests {
         assert!(is_transport_timeout("operation timed out"));
         assert!(!is_transport_timeout("turn channelbind: stun error 438"));
         assert!(!is_transport_timeout("turn allocate: stun error 486"));
+    }
+
+    #[test]
+    fn credential_failure_ladder_matches_anti_flood_spec() {
+        assert_eq!(credential_failure_delay(0), Duration::from_secs(2));
+        assert_eq!(credential_failure_delay(1), Duration::from_secs(3));
+        assert_eq!(credential_failure_delay(2), Duration::from_secs(5));
+        assert_eq!(credential_failure_delay(3), Duration::from_secs(10));
+        assert_eq!(credential_failure_delay(4), Duration::from_secs(15));
+        assert_eq!(credential_failure_delay(5), Duration::from_secs(20));
+        assert_eq!(credential_failure_delay(6), Duration::from_secs(30));
+        assert_eq!(credential_failure_delay(100), Duration::from_secs(30));
     }
 }

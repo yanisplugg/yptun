@@ -481,15 +481,28 @@ class LocationsRepositoryImplTest {
             ),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_TELEMOST)
         )
+        // Эти сервисы пропускают не всё (docs/about.md ядра): SaluteJazz — только data-каналы,
+        // MTS Link — vp8channel (в виде VP9), VK Calls — только видеотреки.
+        assertEquals(
+            listOf(LocationConfig.TRANSPORT_DATACHANNEL),
+            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
+        )
+        assertEquals(
+            listOf(LocationConfig.TRANSPORT_VP8CHANNEL),
+            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_MTS_LINK)
+        )
         assertEquals(
             listOf(
-                LocationConfig.TRANSPORT_DATACHANNEL,
                 LocationConfig.TRANSPORT_VP8CHANNEL,
                 LocationConfig.TRANSPORT_SEICHANNEL,
                 LocationConfig.TRANSPORT_VIDEOCHANNEL
             ),
-            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
+            LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_VK_CALLS)
         )
+        // Старые имена из сохранённых локаций приводятся к именам ядра.
+        assertEquals(LocationConfig.PROVIDER_JAZZ, LocationConfig.normalizeProvider("jazz"))
+        assertEquals(LocationConfig.PROVIDER_MTS_LINK, LocationConfig.normalizeProvider("mtslink"))
+        assertEquals(LocationConfig.PROVIDER_VK_CALLS, LocationConfig.normalizeProvider("vkcalls"))
         assertEquals(
             listOf(
                 LocationConfig.TRANSPORT_VP8CHANNEL,
@@ -913,6 +926,30 @@ class LocationsRepositoryImplTest {
         assertNotNull(imported)
         assertEquals(48, imported.locations.single().location.vp8Fps)
         assertEquals(32, imported.locations.single().location.vp8Batch)
+    }
+
+    @Test
+    fun multiRoomLinkRoundTripsAllRooms() = runTest {
+        val key1 = "a".repeat(64)
+        val key2 = "b".repeat(64)
+        val link = "olcrtc://mtslink?vp8channel<vp8-fps=30&vp8-batch=8>@room1#$key1%cl" +
+            "!mtslink?vp8channel@room2#$key2\$Мультикомната"
+
+        val source = FakeLocationsDataSource()
+        LocationsRepositoryImpl(source).importText(link)
+        val config = assertNotNull(source.stored).locations.single().location
+        assertEquals("Мультикомната", config.name)
+        assertEquals("room1", config.id)
+        assertTrue(config.usesMultiRoom())
+        assertEquals(listOf("room2"), config.extraRooms.map { it.room })
+        assertEquals(key2, config.extraRooms.single().key)
+
+        // Copying the link back (universal links off) keeps every room.
+        val shared = ConfigShareService.olcRtcUri(config)
+        assertTrue("@room1#$key1!" in shared && "@room2#$key2" in shared, shared)
+        val again = FakeLocationsDataSource()
+        LocationsRepositoryImpl(again).importText(shared)
+        assertEquals(config.extraRooms, assertNotNull(again.stored).locations.single().location.extraRooms)
     }
 
     @Test

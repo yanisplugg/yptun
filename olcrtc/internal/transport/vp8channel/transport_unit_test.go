@@ -248,7 +248,7 @@ func TestEpochHeaderTokenAndOutboundCapacity(t *testing.T) {
 		t.Fatal("bindingToken/randomEpoch returned zero")
 	}
 
-	rt, err := startKCP(tr.data.out, nil, tr.epochHeader())
+	rt, err := startKCP(tr.data.out, nil, tr.epochHeader(), 0)
 	if err != nil {
 		t.Fatalf("startKCP: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestResetPeerRestartsKCPAndDrainsOutbound(t *testing.T) {
 		_ = tr.Close()
 	}()
 
-	rt, err := startKCP(tr.data.out, nil, tr.epochHeader())
+	rt, err := startKCP(tr.data.out, nil, tr.epochHeader(), 0)
 	if err != nil {
 		t.Fatalf("startKCP: %v", err)
 	}
@@ -727,6 +727,33 @@ func TestReorderBufferRestoresOrderAndSurvivesLoss(t *testing.T) {
 	}
 }
 
+// TestReorderBufferReleasesAGapThatOutlastsTheHold is part of issue #12: the
+// reorder buffer bounded a gap only by the 256 packets that piled up behind
+// it. At full rate that is a fraction of a second; on a stream down to
+// keepalives and probes, a dozen packets a second, one lost packet held
+// control and data for twenty seconds, which the sender reads as a dark path.
+// A gap still open after the hold is a lost packet.
+//
+// ai-generated: the whole test.
+func TestReorderBufferReleasesAGapThatOutlastsTheHold(t *testing.T) {
+	b := newReorderBuffer()
+	seq := func(n uint16) *rtp.Packet { return &rtp.Packet{Header: rtp.Header{SequenceNumber: n}} }
+	if got := pushedSeqs(b, seq(10)); len(got) != 1 {
+		t.Fatalf("first packet: delivered %v", got)
+	}
+	if got := pushedSeqs(b, seq(12)); got != nil {
+		t.Fatalf("delivered %v past a gap at once", got)
+	}
+	time.Sleep(reorderHold / 2)
+	if got := pushedSeqs(b, seq(13)); got != nil {
+		t.Fatalf("delivered %v half way through the hold, want the gap kept for a repair", got)
+	}
+	time.Sleep(reorderHold)
+	if got := pushedSeqs(b, seq(14)); len(got) != 3 || got[0] != 12 || got[2] != 14 {
+		t.Fatalf("after the hold: delivered %v, want [12 13 14] past the lost 11", got)
+	}
+}
+
 func TestReorderBufferReusesPacketStorage(t *testing.T) {
 	buffer := newReorderBuffer()
 	firstInput := &rtp.Packet{
@@ -829,5 +856,40 @@ func TestSeqLessWrapAround(t *testing.T) {
 		if got := seqLess(c.a, c.b); got != c.want {
 			t.Fatalf("seqLess(%d, %d) = %v, want %v", c.a, c.b, got, c.want)
 		}
+	}
+}
+
+// PeerSeen tells the client's handshake classifier whether anyone is in the
+// room at all: a well-formed frame with our binding token from a foreign
+// epoch, authenticated or not, and nothing before a plane restart.
+func TestPeerSeenFollowsForeignFrames(t *testing.T) {
+	tr := &streamTransport{
+		stream:       &fakeVideoStream{canSend: true},
+		data:         newKCPPlane(16, nil),
+		control:      newKCPPlane(16, nil),
+		closeCh:      make(chan struct{}),
+		writerDone:   make(chan struct{}),
+		bindingToken: bindingToken("client"),
+		localEpoch:   0x100,
+	}
+	defer func() { _ = tr.Close() }()
+	if tr.PeerSeen() {
+		t.Fatal("PeerSeen() = true before any frame")
+	}
+	tr.handleIncomingFrame(mkPeerFrame(bindingToken("other"), 0x200, nil))
+	if tr.PeerSeen() {
+		t.Fatal("PeerSeen() = true after a frame with another room's token")
+	}
+	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, tr.localEpoch, nil))
+	if tr.PeerSeen() {
+		t.Fatal("PeerSeen() = true after our own loopback")
+	}
+	tr.handleIncomingFrame(mkPeerFrame(tr.bindingToken, 0x200, nil))
+	if !tr.PeerSeen() {
+		t.Fatal("PeerSeen() = false after a foreign keepalive")
+	}
+	tr.restartPlanes()
+	if tr.PeerSeen() {
+		t.Fatal("PeerSeen() = true after the planes restarted")
 	}
 }

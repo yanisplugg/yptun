@@ -24,6 +24,28 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.AltRoute
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Language
+import org.olcbox.app.ui.components.SettingsCaption
+import org.olcbox.app.ui.components.SettingsCard
+import org.olcbox.app.ui.components.settingsHighlight
+import org.olcbox.app.ui.components.GlobalSettingsHighlight
+import org.olcbox.app.ui.components.SettingsSearch
+import org.olcbox.app.ui.components.SettingsSearchBar
+import org.olcbox.app.ui.components.SettingsSearchEntry
+import org.olcbox.app.ui.components.SettingsSearchResults
+import org.olcbox.app.ui.components.SettingsCardDivider
+import org.olcbox.app.ui.components.SettingsCardRow
+import org.olcbox.app.ui.components.SettingsCardToggle
+import org.olcbox.app.ui.components.SettingsChoiceChips
+import org.olcbox.app.ui.components.SettingsNote
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Science
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.RoutingRules
@@ -35,7 +57,6 @@ import org.olcbox.app.ui.i18n.Strings
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.TextStyle
 import org.olcbox.app.ui.theme.ThemeState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -43,7 +64,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
-import org.olcbox.app.ui.components.SupportProjectSection
 import org.olcbox.app.vpn.telegram.TelegramProxyState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -69,7 +89,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ContentPaste
@@ -84,8 +104,9 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.LightMode
-import org.olcbox.app.DonationInfo
+import org.olcbox.app.ui.components.SupportProjectSection
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
@@ -97,7 +118,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Icon
@@ -135,7 +155,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -184,7 +203,6 @@ fun AppSettingsSheet(
     updateSettings: AppUpdateSettings,
     updateStatusText: String?,
     updateDownloadProgress: Float?,
-    showUpdates: Boolean = true,
     subscriptions: List<SubscriptionShareItem>,
     enabled: Boolean,
     isConnectionActive: Boolean,
@@ -192,7 +210,6 @@ fun AppSettingsSheet(
     onCopyConfigClick: () -> Unit,
     onSaveLogsClick: () -> Unit,
     onShareLogsClick: () -> Unit,
-    onClearLogsClick: () -> Unit = {},
     onUpdateIntervalSelected: (Int) -> Unit,
     onCheckUpdatesClick: () -> Unit,
     onSubscriptionShareClick: (String) -> Unit,
@@ -206,15 +223,90 @@ fun AppSettingsSheet(
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
     onSecuredProxyChanged: (Boolean) -> Unit,
+    onUnsecuredPortSaved: (Int) -> Unit = {},
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
     onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
+    /** false on iOS: App Store builds update through the store/TestFlight, not in-app. */
+    showUpdates: Boolean = true,
+    onClearLogsClick: () -> Unit = {},
+    /** iOS Live Activity (lock screen / Dynamic Island) toggle; shown only on iOS. */
     liveActivityEnabled: Boolean = false,
     onLiveActivityChanged: (Boolean) -> Unit = {}
 ) {
+    if (appBehavior.legacyUi) {
+        org.olcbox.app.ui.activities.legacy.AppSettingsSheet(
+            initialRoute = org.olcbox.app.ui.activities.legacy.AppSettingsInitialRoute.valueOf(initialRoute.name),
+            selectedMode = selectedMode,
+            proxySettings = proxySettings,
+            splitTunnelSettings = splitTunnelSettings,
+            installedApps = installedApps,
+            logs = logs,
+            dynamicThemeEnabled = dynamicThemeEnabled,
+            lightThemeEnabled = lightThemeEnabled,
+            hwid = hwid,
+            routing = routing,
+            onRoutingChanged = onRoutingChanged,
+            routingProfilesState = routingProfilesState,
+            geoUpdateStatus = geoUpdateStatus,
+            onRoutingProfileSaved = onRoutingProfileSaved,
+            onRoutingProfileDeleted = onRoutingProfileDeleted,
+            onGlobalRoutingProfileChanged = onGlobalRoutingProfileChanged,
+            onRoutingProfileLinkImported = onRoutingProfileLinkImported,
+            onGeoSourcesChanged = onGeoSourcesChanged,
+            onUpdateGeoNow = onUpdateGeoNow,
+            trafficSettings = trafficSettings,
+            onTrafficChanged = onTrafficChanged,
+            appBehavior = appBehavior,
+            onAppBehaviorChanged = onAppBehaviorChanged,
+            telegramProxyState = telegramProxyState,
+            language = language,
+            onLanguageChanged = onLanguageChanged,
+            updateSettings = updateSettings,
+            updateStatusText = updateStatusText,
+            updateDownloadProgress = updateDownloadProgress,
+            subscriptions = subscriptions,
+            enabled = enabled,
+            isConnectionActive = isConnectionActive,
+            onDismiss = onDismiss,
+            onCopyConfigClick = onCopyConfigClick,
+            onSaveLogsClick = onSaveLogsClick,
+            onShareLogsClick = onShareLogsClick,
+            onUpdateIntervalSelected = onUpdateIntervalSelected,
+            onCheckUpdatesClick = onCheckUpdatesClick,
+            onSubscriptionShareClick = onSubscriptionShareClick,
+            onSubscriptionRefreshClick = onSubscriptionRefreshClick,
+            onDynamicThemeChanged = onDynamicThemeChanged,
+            onLightThemeChanged = onLightThemeChanged,
+            onAccentColorSelected = onAccentColorSelected,
+            onTextColorSelected = onTextColorSelected,
+            onBackgroundColorSelected = onBackgroundColorSelected,
+            onModeSelected = onModeSelected,
+            onProxySettingsSaved = onProxySettingsSaved,
+            onProxyPasswordRegenerated = onProxyPasswordRegenerated,
+            onSecuredProxyChanged = onSecuredProxyChanged,
+            onUnsecuredPortSaved = onUnsecuredPortSaved,
+            onSplitTunnelModeSelected = onSplitTunnelModeSelected,
+            onSplitTunnelAppToggled = onSplitTunnelAppToggled,
+            onSplitTunnelAppsSelected = onSplitTunnelAppsSelected,
+            showUpdates = showUpdates,
+            onClearLogsClick = onClearLogsClick,
+            liveActivityEnabled = liveActivityEnabled,
+            onLiveActivityChanged = onLiveActivityChanged
+        )
+        return
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var route by remember(initialRoute) { mutableStateOf(initialRoute.toRoute()) }
+    val searchStrings = LocalStrings.current
+    var searchQuery by remember { mutableStateOf("") }
+    val searchEntries = remember(searchStrings, appBehavior.experimentalUnlocked) {
+        SettingsSearch.index(searchStrings, appBehavior.experimentalUnlocked, desktop = true).filterNot { e ->
+            isIosPlatform() && (e.page in IOS_HIDDEN_SETTINGS_PAGES || e.title == searchStrings.telegramProxyTitle ||
+                (!showUpdates && e.page == "Updates"))
+        }
+    }
     var autoBypassPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var russianBypassPresetEnabled by remember { mutableStateOf(false) }
 
@@ -237,18 +329,23 @@ fun AppSettingsSheet(
             AppSettingsRoute.ConnectionMode,
             AppSettingsRoute.SocksProxy,
             AppSettingsRoute.SplitTunneling -> AppSettingsRoute.ConnectionSettings
+            AppSettingsRoute.UrlSchemes -> AppSettingsRoute.Advanced
+            AppSettingsRoute.Updates,
+            AppSettingsRoute.ApplicationLogs -> AppSettingsRoute.About
 
             else -> AppSettingsRoute.Hub
         }
     }
 
+    // Outside AnimatedContent: the Hub is disposed while a section is open, and its scroll position must outlive that.
+    val hubScroll = androidx.compose.foundation.rememberScrollState()
+
     ModalBottomSheet(
         onDismissRequest = { closeSheet() },
         sheetState = sheetState,
-        dragHandle = null
+        dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
-        Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-            AnimatedContent(
+        AnimatedContent(
             targetState = route,
             transitionSpec = {
                 fadeIn(
@@ -280,32 +377,52 @@ fun AppSettingsSheet(
         ) { currentRoute ->
             when (currentRoute) {
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
+                    scrollState = hubScroll,
+                    onAppBehaviorChanged = onAppBehaviorChanged,
+                    liveActivityEnabled = liveActivityEnabled,
+                    onLiveActivityChanged = onLiveActivityChanged,
+                    onClose = { closeSheet() },
                     selectedMode = selectedMode,
                     dynamicThemeEnabled = dynamicThemeEnabled,
                     lightThemeEnabled = lightThemeEnabled,
-                    updateSettings = updateSettings,
-                    showUpdates = showUpdates,
-                    subscriptionsCount = subscriptions.size,
+                    appBehavior = appBehavior,
+                    language = language,
                     enabled = enabled,
-                    hwid = hwid,
+                    onOpen = { route = it },
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { searchQuery = it },
+                    searchEntries = searchEntries,
+                    onSearchPick = { e ->
+                        val target = settingsRouteFor(e.page)
+                        if (target != null) {
+                            GlobalSettingsHighlight.target = if (e.row) e.title else null
+                            searchQuery = ""
+                            route = target
+                        }
+                    }
+                )
+
+                AppSettingsRoute.Language -> LanguageContent(
+                    language = language,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onLanguageChanged = onLanguageChanged
+                )
+
+                AppSettingsRoute.Appearance -> AppearanceContent(
+                    dynamicThemeEnabled = dynamicThemeEnabled,
+                    lightThemeEnabled = lightThemeEnabled,
                     onDynamicThemeChanged = onDynamicThemeChanged,
                     onLightThemeChanged = onLightThemeChanged,
                     onAccentColorSelected = onAccentColorSelected,
                     onTextColorSelected = onTextColorSelected,
                     onBackgroundColorSelected = onBackgroundColorSelected,
-                    onConnectionSettingsClick = { route = AppSettingsRoute.ConnectionSettings },
-                    onRoutingClick = { route = AppSettingsRoute.Routing },
-                    onRoutingProfilesClick = { route = AppSettingsRoute.RoutingProfiles },
-                    onTrafficClick = { route = AppSettingsRoute.Traffic },
-                    onApplicationClick = { route = AppSettingsRoute.Application },
-                    onPingClick = { route = AppSettingsRoute.Ping },
-                    onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes },
-                    onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
-                    onUpdatesClick = { route = AppSettingsRoute.Updates },
-                    onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
-                    experimentalUnlocked = appBehavior.experimentalUnlocked,
-                    onExperimentalClick = { route = AppSettingsRoute.Experimental },
-                    onClose = { closeSheet() }
+                    onBack = { route = AppSettingsRoute.Hub }
+                )
+
+                AppSettingsRoute.Privacy -> PrivacyContent(
+                    settings = appBehavior,
+                    onBack = { route = AppSettingsRoute.Hub },
+                    onChanged = onAppBehaviorChanged
                 )
 
                 AppSettingsRoute.Experimental -> ExperimentalContent(
@@ -337,24 +454,25 @@ fun AppSettingsSheet(
                     onTrafficChanged = onTrafficChanged
                 )
 
-                AppSettingsRoute.Application -> ApplicationBehaviorContent(
+                AppSettingsRoute.Advanced -> AdvancedSettingsContent(
                     settings = appBehavior,
-                    language = language,
                     onBack = { route = AppSettingsRoute.Hub },
                     onChanged = onAppBehaviorChanged,
-                    onLanguageChanged = onLanguageChanged,
-                    liveActivityEnabled = liveActivityEnabled,
-                    onLiveActivityChanged = onLiveActivityChanged
+                    onUrlSchemesClick = { route = AppSettingsRoute.UrlSchemes }
                 )
 
-                AppSettingsRoute.Ping -> PingSettingsContent(
-                    settings = appBehavior,
+                AppSettingsRoute.About -> AboutContent(
+                    showUpdates = showUpdates,
+                    hwid = hwid,
+                    updateSettings = updateSettings,
                     onBack = { route = AppSettingsRoute.Hub },
-                    onChanged = onAppBehaviorChanged
+                    onUpdatesClick = { route = AppSettingsRoute.Updates },
+                    onLogsClick = { route = AppSettingsRoute.ApplicationLogs },
+                    onCopyConfigClick = onCopyConfigClick
                 )
 
                 AppSettingsRoute.UrlSchemes -> UrlSchemesContent(
-                    onBack = { route = AppSettingsRoute.Hub }
+                    onBack = { route = AppSettingsRoute.Advanced }
                 )
 
                 AppSettingsRoute.ConnectionSettings -> ConnectionSettingsContent(
@@ -387,7 +505,8 @@ fun AppSettingsSheet(
                     onBack = { route = AppSettingsRoute.ConnectionSettings },
                     onProxySettingsSaved = onProxySettingsSaved,
                     onProxyPasswordRegenerated = onProxyPasswordRegenerated,
-                    onSecuredProxyChanged = onSecuredProxyChanged
+                    onSecuredProxyChanged = onSecuredProxyChanged,
+                    onUnsecuredPortSaved = onUnsecuredPortSaved
                 )
 
                 AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
@@ -416,32 +535,23 @@ fun AppSettingsSheet(
 
                 AppSettingsRoute.ApplicationLogs -> ApplicationLogsSettingsContent(
                     logs = logs,
-                    onBack = { route = AppSettingsRoute.Hub },
+                    onBack = { route = AppSettingsRoute.About },
                     onSaveClick = onSaveLogsClick,
                     onShareClick = onShareLogsClick,
                     onClearClick = onClearLogsClick
-                )
-
-                AppSettingsRoute.SubscriptionsSharing -> SubscriptionsSharingSettingsContent(
-                    subscriptions = subscriptions,
-                    onBack = { route = AppSettingsRoute.Hub },
-                    onCopyConfigClick = onCopyConfigClick,
-                    onShareClick = onSubscriptionShareClick,
-                    onRefreshClick = onSubscriptionRefreshClick
                 )
 
                 AppSettingsRoute.Updates -> UpdatesSettingsContent(
                     settings = updateSettings,
                     statusText = updateStatusText,
                     downloadProgress = updateDownloadProgress,
-                    onBack = { route = AppSettingsRoute.Hub },
+                    onBack = { route = AppSettingsRoute.About },
                     onIntervalSelected = onUpdateIntervalSelected,
                     onCheckUpdatesClick = onCheckUpdatesClick
                 )
             }
         }
     }
-}
 }
 
 enum class AppSettingsInitialRoute {
@@ -526,7 +636,7 @@ private fun ThemeColorSection(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val currentText = ThemeState.textColor
-                val isTextPreset = currentText == null || ThemeState.textPresets.contains(currentText)
+                val isTextPreset = ThemeState.textPresets.contains(currentText)
                 ThemeState.textPresets.forEach { color ->
                     val selected = currentText == color
                     ColorSwatch(
@@ -553,6 +663,17 @@ private fun ThemeColorSection(
         )
     }
 
+    if (showTextPicker) {
+        ColorPickerDialog(
+            initial = ThemeState.textColor ?: Color.White,
+            onDismiss = { showTextPicker = false },
+            onConfirm = {
+                onTextColorSelected(it)
+                showTextPicker = false
+            }
+        )
+    }
+
     if (showBackgroundPicker) {
         ColorPickerDialog(
             initial = ThemeState.background ?: ThemeState.backgroundPresets.first(),
@@ -560,17 +681,6 @@ private fun ThemeColorSection(
             onConfirm = {
                 onBackgroundColorSelected(it)
                 showBackgroundPicker = false
-            }
-        )
-    }
-
-    if (showTextPicker) {
-        ColorPickerDialog(
-            initial = ThemeState.textColor ?: Color(0xFFFFFFFF),
-            onDismiss = { showTextPicker = false },
-            onConfirm = {
-                onTextColorSelected(it)
-                showTextPicker = false
             }
         )
     }
@@ -627,7 +737,7 @@ private fun ColorPickerDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .size(56.dp)
-                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
                         .background(color)
                 )
                 OutlinedTextField(
@@ -686,303 +796,253 @@ private fun ColorSwatch(
     )
 }
 
+/**
+ * Settings hub: only the doors, grouped the way people look for them (connection → app → more), each
+ * with its current state as the subtitle. What changes the home screen itself (list look, ping, free
+ * servers) lives in the home screen's ⋮ menu, next to what it changes.
+ */
 @Composable
 private fun AppSettingsHubContent(
     selectedMode: AndroidConnectionMode,
     dynamicThemeEnabled: Boolean,
     lightThemeEnabled: Boolean,
-    updateSettings: AppUpdateSettings,
-    showUpdates: Boolean = true,
-    subscriptionsCount: Int,
+    appBehavior: AppBehaviorSettings,
+    language: AppLanguage,
     enabled: Boolean,
-    hwid: String,
-    onDynamicThemeChanged: (Boolean) -> Unit,
-    onLightThemeChanged: (Boolean) -> Unit,
-    onAccentColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
-    onTextColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
-    onBackgroundColorSelected: (androidx.compose.ui.graphics.Color?) -> Unit,
-    onConnectionSettingsClick: () -> Unit,
-    onRoutingClick: () -> Unit,
-    onRoutingProfilesClick: () -> Unit,
-    onTrafficClick: () -> Unit,
-    onApplicationClick: () -> Unit,
-    onPingClick: () -> Unit,
-    onUrlSchemesClick: () -> Unit,
-    onSubscriptionsSharingClick: () -> Unit,
-    onUpdatesClick: () -> Unit,
-    onApplicationLogsClick: () -> Unit,
-    experimentalUnlocked: Boolean = false,
-    onExperimentalClick: () -> Unit = {},
+    onOpen: (AppSettingsRoute) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    searchEntries: List<SettingsSearchEntry>,
+    onSearchPick: (SettingsSearchEntry) -> Unit,
+    scrollState: androidx.compose.foundation.ScrollState,
+    onAppBehaviorChanged: (AppBehaviorSettings) -> Unit = {},
+    liveActivityEnabled: Boolean = false,
+    onLiveActivityChanged: (Boolean) -> Unit = {},
     onClose: () -> Unit = {}
 ) {
     val s = LocalStrings.current
+    val clipboard = LocalClipboardManager.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = s.settings,
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f).padding(start = 2.dp, bottom = 4.dp)
+            )
+            // iOS: an explicit close button (a swipe-down on the sheet competes with the scroll).
+            if (isIosPlatform()) {
+                IconButton(onClick = onClose) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        SettingsSearchBar(searchQuery, onSearchQueryChange)
+        if (searchQuery.isNotBlank()) {
+            SettingsSearchResults(SettingsSearch.search(searchEntries, searchQuery), onSearchPick)
+        } else {
+        SettingsCaption(s.settingsSectionConnection)
+        SettingsCard {
+            SettingsCardRow(
+                title = s.connectionSettings,
+                subtitle = selectedMode.settingsSummary(),
+                icon = selectedMode.icon(),
+                enabled = enabled,
+                onClick = { onOpen(AppSettingsRoute.ConnectionSettings) }
+            )
+            SettingsCardDivider()
+            // The legacy standalone "Routing & rules" screen has been folded into routing profiles.
+            SettingsCardRow(
+                title = s.routingTitle,
+                subtitle = s.routingProfilesSubtitle,
+                icon = Icons.Outlined.AltRoute,
+                onClick = { onOpen(AppSettingsRoute.RoutingProfiles) }
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.trafficSettings,
+                subtitle = s.trafficSettingsSubtitle,
+                icon = Icons.Outlined.Dns,
+                onClick = { onOpen(AppSettingsRoute.Traffic) }
+            )
+        }
+
+        SettingsCaption(s.settingsSectionApp)
+        SettingsCard {
+            SettingsCardRow(
+                title = s.language,
+                value = languageLabel(language),
+                icon = Icons.Outlined.Language,
+                onClick = { onOpen(AppSettingsRoute.Language) }
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.appearanceTitle,
+                subtitle = themeSummary(s, dynamicThemeEnabled, lightThemeEnabled),
+                icon = Icons.Outlined.Palette,
+                onClick = { onOpen(AppSettingsRoute.Appearance) }
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.privacy,
+                subtitle = s.privacySubtitle,
+                icon = Icons.Outlined.Lock,
+                onClick = { onOpen(AppSettingsRoute.Privacy) }
+            )
+        }
+
+        SettingsCaption(s.settingsSectionMore)
+        SettingsCard {
+            SettingsCardRow(
+                title = s.advancedSettingsTitle,
+                subtitle = s.advancedSettingsSubtitle,
+                icon = Icons.Outlined.Build,
+                onClick = { onOpen(AppSettingsRoute.Advanced) }
+            )
+            if (appBehavior.experimentalUnlocked) {
+                SettingsCardDivider()
+                SettingsCardRow(
+                    title = s.experimental,
+                    subtitle = s.experimentalSubtitle,
+                    icon = Icons.Outlined.Science,
+                    onClick = { onOpen(AppSettingsRoute.Experimental) }
+                )
+            }
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.aboutTitle,
+                subtitle = "${CurrentAppInfo.value.version} · ${s.aboutSubtitle}",
+                icon = Icons.Outlined.Info,
+                onClick = { onOpen(AppSettingsRoute.About) }
+            )
+        }
+
+        // iOS: Live Activity and the local notifications IosVpnManager posts (subscription expiry,
+        // panel announcements). The desktop has neither, so the card is iOS-only.
+        if (isIosPlatform()) {
+            SettingsCaption(s.notificationsSettingsTitle)
+            SettingsCard {
+                SettingsCardToggle(s.liveActivityTitle, s.liveActivitySubtitle, liveActivityEnabled) {
+                    onLiveActivityChanged(it)
+                }
+                SettingsCardDivider()
+                SettingsCardToggle(s.notifySubExpiryTitle, s.notifySubExpirySubtitle, appBehavior.notifySubscriptionExpiry) {
+                    onAppBehaviorChanged(appBehavior.copy(notifySubscriptionExpiry = it))
+                }
+                SettingsCardDivider()
+                SettingsCardToggle(s.panelAnnouncementsTitle, s.panelAnnouncementsSubtitle, appBehavior.notifyPanelAnnouncements) {
+                    onAppBehaviorChanged(appBehavior.copy(notifyPanelAnnouncements = it))
+                }
+            }
+        }
+
+        // Donations stay off the iOS build (App Store Review Guideline 3.1.1: no external payment links).
+        if (!isIosPlatform()) {
+            Spacer(Modifier.height(10.dp))
+            SupportProjectSection(
+                onCopyAddress = { it -> clipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
+                onOpenUrl = { it -> SettingsPlatform.openUri(it) }
+            )
+        }
+        }
+    }
+}
+
+/** Topic page: back arrow + title, then the page's cards in one scrolling column. */
+@Composable
+private fun SettingsPage(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        SettingsSheetHeader(
-            icon = Icons.Outlined.Settings,
-            title = s.settings,
-            subtitle = selectedMode.shortLabel(),
-            onClose = onClose
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        // "Dynamic theme" derives the accent from the OS (Material You on Android, the system accent
-        // on Windows). iOS exposes no such color, so the switch would change nothing while hiding the
-        // swatches below it.
-        if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
-            SettingsSwitchRow(
-                title = s.dynamicTheme,
-                value = if (dynamicThemeEnabled) s.dynamicThemeOn else s.dynamicThemeOff,
-                icon = Icons.Outlined.Palette,
-                checked = dynamicThemeEnabled,
-                enabled = true,
-                onCheckedChange = onDynamicThemeChanged
-            )
-        }
-
-        SettingsSwitchRow(
-            title = s.lightTheme,
-            value = if (lightThemeEnabled) s.lightThemeOn else s.lightThemeOff,
-            icon = Icons.Outlined.LightMode,
-            checked = lightThemeEnabled,
-            enabled = true,
-            onCheckedChange = onLightThemeChanged
-        )
-
-        if (!dynamicThemeEnabled) {
-            ThemeColorSection(
-                lightMode = lightThemeEnabled,
-                onAccentColorSelected = onAccentColorSelected,
-                onTextColorSelected = onTextColorSelected,
-                onBackgroundColorSelected = onBackgroundColorSelected
-            )
-        }
-
-        // --- Маршрутизация (профили) + настройки трафика ---
-        // The legacy standalone "Routing & rules" screen has been folded into routing profiles.
-        SettingsGroupCard {
-            SettingsGroupRow(
-                title = s.routingTitle,
-                subtitle = s.routingProfilesSubtitle,
-                icon = Icons.Outlined.AltRoute,
-                enabled = true,
-                onClick = onRoutingProfilesClick
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.trafficSettings,
-                subtitle = s.trafficSettingsSubtitle,
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                onClick = onTrafficClick
-            )
-        }
-
-        // --- Подключение / подписки / журнал ---
-        SettingsGroupCard {
-            SettingsGroupRow(
-                title = s.connectionSettings,
-                subtitle = s.connectionSettingsSubtitle,
-                icon = selectedMode.icon(),
-                enabled = enabled,
-                onClick = onConnectionSettingsClick
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.subscriptionsSharing,
-                subtitle = subscriptionsCount.subscriptionSummary(),
-                icon = Icons.Outlined.Share,
-                enabled = true,
-                onClick = onSubscriptionsSharingClick
-            )
-            if (showUpdates) {
-                SettingsGroupDivider()
-                SettingsGroupRow(
-                    title = s.updates,
-                    subtitle = "${LocalStrings.current.releaseChannelLabel} · ${LocalStrings.current.hoursShort(updateSettings.intervalHours)}",
-                    icon = Icons.Outlined.Refresh,
-                    enabled = true,
-                    onClick = onUpdatesClick
-                )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+            Surface(
+                modifier = Modifier.size(46.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                }
             }
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.applicationSettings,
-                subtitle = s.applicationSettingsSubtitle,
-                icon = Icons.Outlined.Settings,
-                enabled = true,
-                onClick = onApplicationClick
+            Spacer(Modifier.width(14.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface
             )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.pingSettings,
-                subtitle = s.pingSettingsSubtitle,
-                icon = Icons.Outlined.Bolt,
-                enabled = true,
-                onClick = onPingClick
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.urlSchemes,
-                subtitle = s.urlSchemesSubtitle,
-                icon = Icons.Outlined.Share,
-                enabled = true,
-                onClick = onUrlSchemesClick
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.logs,
-                subtitle = s.logsSubtitle,
-                icon = Icons.Outlined.History,
-                enabled = true,
-                onClick = onApplicationLogsClick
-            )
-            if (experimentalUnlocked) {
-                SettingsGroupDivider()
-                SettingsGroupRow(
-                    title = s.experimental,
-                    subtitle = s.experimentalSubtitle,
-                    icon = Icons.Outlined.Tune,
-                    enabled = true,
-                    onClick = onExperimentalClick
+        }
+        content()
+    }
+}
+
+private fun themeSummary(s: Strings, dynamicTheme: Boolean, lightTheme: Boolean): String =
+    "${if (dynamicTheme) s.dynamicThemeOn else s.dynamicThemeOff} · ${if (lightTheme) s.lightTheme else s.lightThemeOff}"
+
+private val LANGUAGE_OPTIONS = listOf(
+    AppLanguage.System to "Авто / Auto",
+    AppLanguage.Russian to "Русский",
+    AppLanguage.English to "English",
+    AppLanguage.Persian to "فارسی",
+    AppLanguage.Chinese to "中文",
+    AppLanguage.Slovak to "Slovenčina",
+    AppLanguage.Czech to "Čeština",
+    AppLanguage.Belarusian to "Беларуская"
+)
+
+private fun languageLabel(language: AppLanguage): String =
+    LANGUAGE_OPTIONS.firstOrNull { it.first == language }?.second ?: language.name
+
+/** «Язык»: one tap picks it. */
+@Composable
+private fun LanguageContent(
+    language: AppLanguage,
+    onBack: () -> Unit,
+    onLanguageChanged: (AppLanguage) -> Unit
+) {
+    val s = LocalStrings.current
+    SettingsPage(title = s.language, onBack = onBack) {
+        SettingsCard {
+            LANGUAGE_OPTIONS.forEachIndexed { index, (lang, title) ->
+                if (index > 0) SettingsCardDivider()
+                SettingsCardRow(
+                    title = title,
+                    showChevron = false,
+                    trailing = if (language == lang) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    } else null,
+                    onClick = { onLanguageChanged(lang) }
                 )
             }
         }
-
-        // --- ИНФОРМАЦИЯ ---
-        SettingsSectionLabel(s.info)
-        val hwidClipboard = LocalClipboardManager.current
-        SettingsGroupCard {
-            SettingsGroupRow(
-                title = s.version(CurrentAppInfo.value.version),
-                icon = Icons.Outlined.Settings,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            // Every version comes from the running core (yptuncore), like libbox/xraybridge do on
-            // Android — the sing-box one used to be a hardcoded "1.12.25" that no longer matched the
-            // bundled core, which read as "the desktop ships an old sing-box".
-            fun ver(core: CoreName) = runCatching { SettingsPlatform.coreVersion(core) }.getOrNull()?.ifBlank { null } ?: "—"
-            val xrayVer = remember { ver(CoreName.Xray) }
-            val singboxVer = remember { ver(CoreName.SingBox) }
-            val olcrtcVer = remember { ver(CoreName.OlcRtc) }
-            val vkturnVer = remember { ver(CoreName.Freeturn) }
-            val wdttVer = remember { ver(CoreName.Wdtt) }
-            val awgVer = remember { ver(CoreName.AmneziaWg) }
-            SettingsGroupRow(
-                title = s.xrayVersion(xrayVer),
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.singboxVersion(singboxVer),
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.olcrtcVersion(olcrtcVer),
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.vkturnVersion(vkturnVer),
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.wdttVersion(wdttVer),
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.awgVersion(awgVer),
-                icon = Icons.Outlined.Tune,
-                enabled = true,
-                showChevron = false
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.hwid(hwid.ifBlank { "—" }),
-                icon = Icons.Rounded.Key,
-                enabled = hwid.isNotBlank(),
-                showChevron = false,
-                onClick = if (hwid.isNotBlank()) {
-                    { hwidClipboard.setText(AnnotatedString(hwid)) }
-                } else null
-            )
-        }
-
-        // --- Сообщество / помощь ---
-        SettingsGroupCard {
-            SettingsGroupRow(
-                title = s.community,
-                subtitle = "t.me/YPtun",
-                icon = Icons.Rounded.Person,
-                enabled = true,
-                onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.howToConnect,
-                icon = Icons.Outlined.Shield,
-                enabled = true,
-                onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
-            )
-        }
-
-        // --- Документы и правила / Legal ---
-        SettingsGroupCard {
-            SettingsGroupRow(
-                title = s.privacyPolicy,
-                subtitle = "yanisplugg.github.io/yptun/privacy.html",
-                icon = Icons.Outlined.Shield,
-                enabled = true,
-                onClick = { SettingsPlatform.openUri(DonationInfo.PRIVACY_URL) }
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.termsOfService,
-                subtitle = "yanisplugg.github.io/yptun/terms.html",
-                icon = Icons.Outlined.ContentPaste,
-                enabled = true,
-                onClick = { SettingsPlatform.openUri(DonationInfo.TERMS_URL) }
-            )
-            SettingsGroupDivider()
-            SettingsGroupRow(
-                title = s.supportPage,
-                subtitle = "yanisplugg.github.io/yptun/support.html",
-                icon = Icons.Outlined.History,
-                enabled = true,
-                onClick = { SettingsPlatform.openUri(DonationInfo.SUPPORT_URL) }
-            )
-        }
-
-        if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
-            SupportProjectSection(
-                onCopyAddress = { hwidClipboard.setText(AnnotatedString(it)); SettingsPlatform.toast(s.donateAddressCopied) },
-                onOpenUrl = { SettingsPlatform.openUri(it) }
-            )
-        }
-
-        Spacer(Modifier.height(4.dp))
     }
 }
 
@@ -1003,6 +1063,7 @@ private fun ConnectionSettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 32.dp)
     ) {
@@ -1016,160 +1077,172 @@ private fun ConnectionSettingsContent(
         Spacer(Modifier.height(20.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
-                SettingsNavigationRow(
-                    title = s.connectionMode,
-                    value = selectedMode.settingsSummary(),
-                    icon = selectedMode.icon(),
+            SettingsCard {
+                // iOS: the Network Extension always runs as a VPN (TUN); there is no proxy-only mode.
+                if (!isIosPlatform()) {
+                    SettingsCardRow(
+                        title = s.connectionMode,
+                        subtitle = selectedMode.settingsSummary(),
+                        icon = selectedMode.icon(),
+                        enabled = enabled,
+                        onClick = onConnectionModeClick
+                    )
+                    SettingsCardDivider()
+                }
+                SettingsCardRow(
+                    title = s.socks5Proxy,
+                    subtitle = "${proxySettings.host}:${proxySettings.port}",
+                    icon = Icons.Rounded.Public,
                     enabled = enabled,
-                    onClick = onConnectionModeClick
+                    onClick = onProxySettingsClick
                 )
-            }
-            SettingsNavigationRow(
-                title = s.socks5Proxy,
-                value = "${proxySettings.host}:${proxySettings.port}",
-                icon = Icons.Rounded.Public,
-                enabled = enabled,
-                onClick = onProxySettingsClick
-            )
-            // Per-app routing needs the TUN owner to attribute traffic to processes: only sing-box's
-            // in-core TUN on Windows can. Linux's hev bridge and macOS's proxy mode silently ignored it;
-            // iOS cannot enumerate installed apps at all (no PackageManager equivalent).
-            if (org.olcbox.app.update.UpdatePlatform.current().os !in setOf("linux", "macos", "ios")) {
-                SettingsNavigationRow(
-                    title = s.splitTunneling,
-                    value = splitTunnelSettings.settingsSummary(),
-                    icon = Icons.Outlined.Apps,
-                    enabled = enabled,
-                    onClick = onSplitTunnelingClick
-                )
+                // Per-app routing needs the TUN owner to attribute traffic to processes: only sing-box's
+                // in-core TUN on Windows can. Linux's hev bridge and macOS's proxy mode silently ignored it;
+                // iOS cannot enumerate installed apps at all (no PackageManager equivalent).
+                if (org.olcbox.app.update.UpdatePlatform.current().os !in setOf("linux", "macos", "ios")) {
+                    SettingsCardDivider()
+                    SettingsCardRow(
+                        title = s.splitTunneling,
+                        subtitle = splitTunnelSettings.settingsSummary(),
+                        icon = Icons.Outlined.Apps,
+                        enabled = enabled,
+                        onClick = onSplitTunnelingClick
+                    )
+                }
             }
 
-            // The Telegram-over-WARP proxy is an Android/desktop feature (vpn/telegram); iOS has no
-            // implementation and SettingsPlatform.telegramProxyEndpoint is empty there, so the whole
-            // section would be a dead toggle. Hide it rather than show something that does nothing.
-            if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
-                RoutingToggleRow(
-                    title = s.setSystemProxyTitle,
-                    subtitle = if (appBehavior.setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
-                    checked = appBehavior.setSystemProxy
-                ) { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) }
+            // System proxy and the Telegram-over-WARP proxy are desktop/Android features (vpn/telegram);
+            // iOS has no implementation, so the toggles would do nothing there.
+            if (!isIosPlatform()) {
+            RoutingToggleRow(
+                title = s.setSystemProxyTitle,
+                subtitle = if (appBehavior.setSystemProxy) s.setSystemProxyOn else s.setSystemProxyOff,
+                checked = appBehavior.setSystemProxy
+            ) { onAppBehaviorChanged(appBehavior.copy(setSystemProxy = it)) }
 
-                RoutingToggleRow(
-                    title = s.telegramProxyTitle,
-                    subtitle = s.telegramProxySubtitle,
-                    checked = appBehavior.telegramProxyEnabled
-                ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
+            RoutingToggleRow(
+                title = s.telegramProxyTitle,
+                subtitle = s.telegramProxySubtitle,
+                checked = appBehavior.telegramProxyEnabled
+            ) { onAppBehaviorChanged(appBehavior.copy(telegramProxyEnabled = it)) }
 
-                val tgStatus = when (val st = telegramProxyState) {
-                    is TelegramProxyState.Generating -> s.telegramProxyGenerating
-                    is TelegramProxyState.Running ->
-                        "${s.telegramProxyRunning}: SOCKS5 ${st.host}:${st.port}"
-                    is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
-                    is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
-                        "${s.telegramProxyRunning}: SOCKS5 " +
-                            SettingsPlatform.telegramProxyEndpoint
+            val tgStatus = when (val st = telegramProxyState) {
+                is TelegramProxyState.Generating -> s.telegramProxyGenerating
+                is TelegramProxyState.Running ->
+                    "${s.telegramProxyRunning}: SOCKS5 ${st.host}:${st.port}"
+                is TelegramProxyState.Error -> "${s.telegramProxyError}: ${st.message}"
+                is TelegramProxyState.Stopped -> if (appBehavior.telegramProxyEnabled) {
+                    "${s.telegramProxyRunning}: SOCKS5 " +
+                        SettingsPlatform.telegramProxyEndpoint
+                } else {
+                    null
+                }
+            }
+            if (tgStatus != null) {
+                Text(
+                    text = tgStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (telegramProxyState is TelegramProxyState.Error) {
+                        MaterialTheme.colorScheme.error
                     } else {
-                        null
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+            // WARP-based: the proxy depends on Cloudflare WARP reachability, which is throttled or
+            // blocked on some networks — warn that it works mainly in Russia and not on every ISP.
+            if (appBehavior.telegramProxyEnabled) {
+                Text(
+                    text = s.telegramProxyRegionNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+            // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
+            (telegramProxyState as? TelegramProxyState.Running)
+                ?.takeIf { it.user.isNotBlank() }
+                ?.let { running ->
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "${s.telegramProxyLogin}: ${running.user}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            Text(
+                                text = "${s.telegramProxyPassword}: ${running.pass}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
                     }
-                }
-                if (tgStatus != null) {
-                    Text(
-                        text = tgStatus,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (telegramProxyState is TelegramProxyState.Error) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                }
-                // WARP-based: the proxy depends on Cloudflare WARP reachability, which is throttled or
-                // blocked on some networks — warn that it works mainly in Russia and not on every ISP.
-                if (appBehavior.telegramProxyEnabled) {
-                    Text(
-                        text = s.telegramProxyRegionNote,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                }
-                // Auto-generated SOCKS5 credentials — selectable so the user can copy them into Telegram.
-                (telegramProxyState as? TelegramProxyState.Running)
-                    ?.takeIf { it.user.isNotBlank() }
-                    ?.let { running ->
-                        SelectionContainer {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    text = "${s.telegramProxyLogin}: ${running.user}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 4.dp)
-                                )
-                                Text(
-                                    text = "${s.telegramProxyPassword}: ${running.pass}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 4.dp)
-                                )
-                            }
-                        }
-                        // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
-                        // proxy (server/port/user/pass), no manual entry.
-                        val clipboard = LocalClipboardManager.current
-                        val tgLink = remember(running) {
-                            "https://t.me/socks?server=${running.host}&port=${running.port}" +
-                                "&user=${running.user}&pass=${running.pass}"
-                        }
-                        // Side-by-side (equal weights) so BOTH actions fit on one row and stay fully
-                        // visible without scrolling the sheet.
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    // One-tap copyable t.me/socks link: opening it in Telegram auto-fills the SOCKS5
+                    // proxy (server/port/user/pass), no manual entry.
+                    val clipboard = LocalClipboardManager.current
+                    val tgLink = remember(running) {
+                        "https://t.me/socks?server=${running.host}&port=${running.port}" +
+                            "&user=${running.user}&pass=${running.pass}"
+                    }
+                    // Side-by-side (equal weights) so BOTH actions fit on one row and stay fully
+                    // visible without scrolling the sheet.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // One tap → Telegram Desktop's "Enable proxy?" dialog via the tg:// deep link
+                        // (it registers the scheme on Windows), falling back to the https link when
+                        // no handler is registered. Launched through [DesktopUriLauncher], NOT
+                        // LocalUriHandler: in TUN mode this process is elevated, and a handler
+                        // ShellExecute'd from here starts elevated too — it can't reach the Telegram
+                        // the user already has open, so the click did nothing at all.
+                        Button(
+                            onClick = {
+                                val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
+                                    "&user=${running.user}&pass=${running.pass}"
+                                val target = if (SettingsPlatform.schemeRegistered("tg")) tgDeep else tgLink
+                                SettingsPlatform.openUri(target)
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            // One tap → Telegram Desktop's "Enable proxy?" dialog via the tg:// deep link
-                            // (it registers the scheme on Windows), falling back to the https link when
-                            // no handler is registered. Launched through [DesktopUriLauncher], NOT
-                            // LocalUriHandler: in TUN mode this process is elevated, and a handler
-                            // ShellExecute'd from here starts elevated too — it can't reach the Telegram
-                            // the user already has open, so the click did nothing at all.
-                            Button(
-                                onClick = {
-                                    val tgDeep = "tg://socks?server=${running.host}&port=${running.port}" +
-                                        "&user=${running.user}&pass=${running.pass}"
-                                    val target = if (SettingsPlatform.schemeRegistered("tg")) tgDeep else tgLink
-                                    SettingsPlatform.openUri(target)
-                                },
-                                contentPadding = PaddingValues(horizontal = 12.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.Send,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    clipboard.setText(AnnotatedString(tgLink))
-                                    SettingsPlatform.toast(s.telegramProxyLinkCopied)
-                                },
-                                contentPadding = PaddingValues(horizontal = 12.dp),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ContentCopy,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.telegramProxyOpen, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(tgLink))
+                                SettingsPlatform.toast(s.telegramProxyLinkCopied)
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(s.telegramProxyCopyLink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
+                }
+            }
+
+            // What happens on launch sits with the connection it starts.
+            SettingsCaption(s.startupSection)
+            SettingsCard {
+                SettingsCardToggle(s.autoConnectTitle, s.autoConnectSubtitle, appBehavior.autoConnectOnLaunch) {
+                    onAppBehaviorChanged(appBehavior.copy(autoConnectOnLaunch = it))
+                }
             }
         }
     }
@@ -1249,7 +1322,8 @@ private fun SocksProxySettingsContent(
     onBack: () -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
-    onSecuredProxyChanged: (Boolean) -> Unit
+    onSecuredProxyChanged: (Boolean) -> Unit,
+    onUnsecuredPortSaved: (Int) -> Unit
 ) {
     var editedHost by remember(proxySettings.host) { mutableStateOf(proxySettings.host) }
     var editedPort by remember(proxySettings.port) { mutableStateOf(proxySettings.port.toString()) }
@@ -1301,7 +1375,38 @@ private fun SocksProxySettingsContent(
             onCheckedChange = onSecuredProxyChanged
         )
 
-        if (!proxySettings.secured) return@Column
+        if (!proxySettings.secured) {
+            // No credentials, but the listener port is still the user's to pick.
+            Spacer(Modifier.height(20.dp))
+            val s = LocalStrings.current
+            val canSavePort = portValid && portChanged && enabled
+            SocksProxyTextField(
+                value = editedPort,
+                onValueChange = { value -> editedPort = value.filter { it.isDigit() }.take(MAX_PROXY_PORT_LENGTH) },
+                label = s.port,
+                placeholder = proxySettings.port.toString(),
+                enabled = enabled,
+                isError = editedPort.isBlank() || !portValid,
+                leadingIcon = Icons.Rounded.Public,
+                supportingText = when {
+                    editedPort.isBlank() -> s.portRequired
+                    !portValid -> "Use ${AndroidSocksProxySettings.MIN_PORT}-${AndroidSocksProxySettings.MAX_PORT}"
+                    portChanged && isConnectionActive -> s.savingRestarts
+                    portChanged -> s.unsavedChange
+                    else -> null
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(enabled = canSavePort, onClick = { parsedPort?.let(onUnsecuredPortSaved) }) {
+                    Icon(Icons.Rounded.Check, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.save)
+                }
+            }
+            return@Column
+        }
 
         Spacer(Modifier.height(20.dp))
 
@@ -1694,87 +1799,44 @@ private fun ApplicationLogsSettingsContent(
     onBack: () -> Unit,
     onSaveClick: () -> Unit,
     onShareClick: () -> Unit,
-    onClearClick: () -> Unit
+    onClearClick: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxHeight(0.8f)
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 24.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsDetailHeader(
                 title = LocalStrings.current.applicationLogsTitle,
                 subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
                 onBack = onBack,
-                titleStyle = MaterialTheme.typography.titleLarge,
-                subtitleMaxLines = 1,
                 modifier = Modifier.weight(1f)
             )
 
-            Spacer(Modifier.width(8.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+            IconButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onClearClick
             ) {
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                ) {
-                    IconButton(
-                        enabled = logs.isNotEmpty(),
-                        onClick = onClearClick
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Delete,
-                            contentDescription = LocalStrings.current.clearLogs,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                ) {
-                    IconButton(
-                        enabled = logs.isNotEmpty(),
-                        onClick = onSaveClick
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Download,
-                            contentDescription = LocalStrings.current.save,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Surface(
-                    modifier = Modifier.size(38.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (logs.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                ) {
-                    IconButton(
-                        enabled = logs.isNotEmpty(),
-                        onClick = onShareClick
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Share,
-                            contentDescription = LocalStrings.current.share,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = LocalStrings.current.clearLogs,
+                    tint = if (logs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                )
+            }
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onSaveClick
+            ) {
+                Text(LocalStrings.current.save)
+            }
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onShareClick
+            ) {
+                Text(LocalStrings.current.share)
             }
         }
 
@@ -1784,33 +1846,19 @@ private fun ApplicationLogsSettingsContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            if (logs.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = LocalStrings.current.noLogEntries,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-                }
-            } else {
-                LogLines(
-                    logs = logs,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(14.dp)
-                )
-            }
+            LogLines(
+                logs = logs,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(14.dp)
+            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun UpdatesSettingsContent(
     settings: AppUpdateSettings,
@@ -1838,7 +1886,10 @@ private fun UpdatesSettingsContent(
 
         SettingsSectionLabel(LocalStrings.current.checkInterval)
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             AppUpdateSettings.INTERVAL_PRESETS.forEach { hours ->
                 FilterChip(
                     selected = settings.intervalHours == hours,
@@ -1852,9 +1903,8 @@ private fun UpdatesSettingsContent(
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
@@ -1901,228 +1951,6 @@ private fun UpdatesSettingsContent(
 }
 
 @Composable
-private fun SubscriptionsSharingSettingsContent(
-    subscriptions: List<SubscriptionShareItem>,
-    onBack: () -> Unit,
-    onCopyConfigClick: () -> Unit,
-    onShareClick: (String) -> Unit,
-    onRefreshClick: (String) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 620.dp)
-            .padding(horizontal = 24.dp)
-            .padding(top = 16.dp, bottom = 12.dp)
-    ) {
-        SettingsDetailHeader(
-            title = LocalStrings.current.subscriptionsSharing,
-            subtitle = subscriptions.size.subscriptionSummary(),
-            onBack = onBack
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 500.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            SettingsSectionLabel(LocalStrings.current.currentConfig)
-
-            SettingsNavigationRow(
-                title = LocalStrings.current.copyFullConfig,
-                value = "→ clipboard",
-                icon = Icons.Outlined.ContentPaste,
-                enabled = true,
-                showChevron = false,
-                onClick = onCopyConfigClick
-            )
-
-            SettingsSectionLabel(LocalStrings.current.subscriptionsSection)
-
-            if (subscriptions.isEmpty()) {
-                EmptyAppsState(
-                    title = LocalStrings.current.noSubscriptions,
-                    subtitle = LocalStrings.current.noSubscriptionsSubtitle
-                )
-            } else {
-                subscriptions.forEach { item ->
-                    SubscriptionShareRow(
-                        item = item,
-                        onShareClick = { onShareClick(item.url) },
-                        onRefreshClick = { onRefreshClick(item.url) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SubscriptionShareRow(
-    item: SubscriptionShareItem,
-    onShareClick: () -> Unit,
-    onRefreshClick: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.name,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = item.url,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Text(
-                text = item.subscriptionSummary(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            // Panel announcement (Remnawave/Happ `announce` header), shown verbatim to the user.
-            item.announce?.takeIf { it.isNotBlank() }?.let { announce ->
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = announce,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
-                }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onShareClick) {
-                    Text(LocalStrings.current.qrShare)
-                }
-                TextButton(onClick = onRefreshClick) {
-                    Text(LocalStrings.current.refresh)
-                }
-                // Panel-advertised links (Remnawave/Happ `profile-web-page-url` / `support-url`).
-                item.webPageUrl?.takeIf { it.isNotBlank() }?.let { web ->
-                    TextButton(onClick = { SettingsPlatform.openUri(web) }) {
-                        Text(LocalStrings.current.subscriptionWebPage)
-                    }
-                }
-                item.supportUrl?.takeIf { it.isNotBlank() }?.let { support ->
-                    TextButton(onClick = { SettingsPlatform.openUri(support) }) {
-                        Text(LocalStrings.current.subscriptionSupport)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** A rounded card that visually groups several [SettingsGroupRow]s with thin dividers. */
-@Composable
-private fun SettingsGroupCard(content: @Composable () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer
-    ) {
-        Column { content() }
-    }
-}
-
-/** A single row inside a [SettingsGroupCard]: blue leading icon, title, optional subtitle, trailing slot. */
-@Composable
-private fun SettingsGroupRow(
-    title: String,
-    icon: ImageVector,
-    subtitle: String? = null,
-    enabled: Boolean = true,
-    showChevron: Boolean = true,
-    trailing: (@Composable () -> Unit)? = null,
-    onClick: (() -> Unit)? = null
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(26.dp)
-        )
-        Spacer(Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (subtitle != null) {
-                Text(
-                    text = subtitle,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        if (trailing != null) {
-            trailing()
-        } else if (showChevron && onClick != null) {
-            Icon(
-                imageVector = Icons.Rounded.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-    }
-}
-
-/** Thin divider between rows inside a group card. */
-@Composable
-private fun SettingsGroupDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(start = 16.dp),
-        thickness = 0.5.dp,
-        color = MaterialTheme.colorScheme.outlineVariant
-    )
-}
-
-@Composable
 private fun SettingsNavigationRow(
     title: String,
     value: String,
@@ -2134,12 +1962,12 @@ private fun SettingsNavigationRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .height(72.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -2148,7 +1976,7 @@ private fun SettingsNavigationRow(
             Surface(
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Icon(
@@ -2202,12 +2030,12 @@ private fun SettingsSwitchRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .settingsHighlight(title)
             .height(72.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled) { onCheckedChange(!checked) },
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -2216,7 +2044,7 @@ private fun SettingsSwitchRow(
             Surface(
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Icon(
@@ -2256,53 +2084,11 @@ private fun SettingsSwitchRow(
 }
 
 @Composable
-private fun SettingsSheetHeader(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClose: (() -> Unit)? = null
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        HeaderIcon(icon = icon)
-
-        Spacer(Modifier.width(14.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        if (onClose != null) {
-            IconButton(onClick = onClose) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Close",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun SettingsDetailHeader(
     title: String,
     subtitle: String,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-    titleStyle: TextStyle = MaterialTheme.typography.headlineSmall,
-    subtitleMaxLines: Int = 2
+    modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier,
@@ -2311,8 +2097,8 @@ private fun SettingsDetailHeader(
         Surface(
             modifier = Modifier.size(46.dp),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface
         ) {
             IconButton(onClick = onBack) {
                 Icon(
@@ -2322,12 +2108,12 @@ private fun SettingsDetailHeader(
             }
         }
 
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(14.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = titleStyle,
+                style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -2336,26 +2122,10 @@ private fun SettingsDetailHeader(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = subtitleMaxLines,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
-    }
-}
-
-@Composable
-private fun HeaderIcon(icon: ImageVector) {
-    Surface(
-        modifier = Modifier.size(46.dp),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.padding(11.dp)
-        )
     }
 }
 
@@ -2415,7 +2185,7 @@ private fun SplitTunnelRoutingOption(
         targetValue = if (selected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.outlineVariant
+            Color.Transparent
         },
         label = "splitTunnelRoutingOptionBorder"
     )
@@ -2424,9 +2194,9 @@ private fun SplitTunnelRoutingOption(
         modifier = Modifier
             .fillMaxWidth()
             .height(74.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -2440,7 +2210,7 @@ private fun SplitTunnelRoutingOption(
                 color = if (selected) {
                     MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                    MaterialTheme.colorScheme.surfaceContainerHigh
                 },
                 contentColor = if (selected) {
                     MaterialTheme.colorScheme.onPrimary
@@ -2505,7 +2275,7 @@ private fun SelectableSettingsCard(
         targetValue = if (selected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.outlineVariant
+            Color.Transparent
         },
         label = "selectableSettingsCardBorder"
     )
@@ -2514,9 +2284,9 @@ private fun SelectableSettingsCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(82.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -2530,7 +2300,7 @@ private fun SelectableSettingsCard(
                 color = if (selected) {
                     MaterialTheme.colorScheme.primary
                 } else {
-                    MaterialTheme.colorScheme.surfaceVariant
+                    MaterialTheme.colorScheme.surfaceContainerHigh
                 },
                 contentColor = if (selected) {
                     MaterialTheme.colorScheme.onPrimary
@@ -2579,13 +2349,7 @@ private fun SelectableSettingsCard(
 
 @Composable
 private fun SettingsSectionLabel(text: String) {
-    Text(
-        text = text,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(start = 2.dp)
-    )
+    SettingsCaption(text)
 }
 
 @Composable
@@ -2596,10 +2360,9 @@ private fun SplitTunnelStatusCard(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -2608,7 +2371,7 @@ private fun SplitTunnelStatusCard(
             Surface(
                 modifier = Modifier.size(42.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
                 Icon(
@@ -2644,9 +2407,8 @@ private fun SplitTunnelStatusCard(
 private fun SplitTunnelNoListCard() {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
@@ -2656,7 +2418,7 @@ private fun SplitTunnelNoListCard() {
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -2906,10 +2668,9 @@ private fun RussianBypassPresetChips(
 @Composable
 private fun RussianBypassInfoPill(value: String) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Text(
             text = value,
@@ -2944,15 +2705,15 @@ private fun SplitTunnelAppRow(
         targetValue = when {
             autoSelected -> colors.tertiary.copy(alpha = 0.72f)
             selected -> colors.primary
-            else -> colors.outlineVariant
+            else -> Color.Transparent
         },
         label = "splitTunnelAppRowBorder"
     )
     val iconContainerColor by animateColorAsState(
         targetValue = when {
-            autoSelected -> colors.surfaceContainerHighest
+            autoSelected -> colors.surfaceContainerHigh
             selected -> colors.primary
-            else -> colors.surfaceVariant
+            else -> colors.surfaceContainerHigh
         },
         label = "splitTunnelAppRowIconContainer"
     )
@@ -2969,9 +2730,9 @@ private fun SplitTunnelAppRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(76.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = containerColor,
         border = BorderStroke(1.dp, borderColor)
     ) {
@@ -3030,7 +2791,7 @@ private fun SplitTunnelAppRow(
 
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = colors.surfaceContainerHighest,
+                    color = colors.surfaceContainerHigh,
                     contentColor = colors.tertiary
                 ) {
                     Text(
@@ -3063,9 +2824,8 @@ private fun EmptyAppsState(
         modifier = Modifier
             .fillMaxWidth()
             .height(128.dp),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -3367,7 +3127,7 @@ private fun SingBoxRuleCard(
     val s = LocalStrings.current
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh
     ) {
         Column(
@@ -3564,7 +3324,8 @@ private fun RoutingToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .settingsHighlight(title)
+            .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -3766,237 +3527,238 @@ private fun TrafficSettingsContent(
     }
 }
 
+/** «Оформление»: theme and colors. */
 @Composable
-private fun ApplicationBehaviorContent(
-    settings: AppBehaviorSettings,
-    language: AppLanguage,
-    onBack: () -> Unit,
-    onChanged: (AppBehaviorSettings) -> Unit,
-    onLanguageChanged: (AppLanguage) -> Unit,
-    liveActivityEnabled: Boolean = false,
-    onLiveActivityChanged: (Boolean) -> Unit = {}
+private fun AppearanceContent(
+    dynamicThemeEnabled: Boolean,
+    lightThemeEnabled: Boolean,
+    onDynamicThemeChanged: (Boolean) -> Unit,
+    onLightThemeChanged: (Boolean) -> Unit,
+    onAccentColorSelected: (Color?) -> Unit,
+    onTextColorSelected: (Color?) -> Unit,
+    onBackgroundColorSelected: (Color?) -> Unit,
+    onBack: () -> Unit
 ) {
     val s = LocalStrings.current
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
-            }
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = s.applicationSettings,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface
+    SettingsPage(title = s.appearanceTitle, onBack = onBack) {
+        // "Dynamic theme" derives the accent from the OS (Material You on Android, the system accent
+        // on Windows). iOS exposes no such color, so the switch would change nothing there.
+        if (!isIosPlatform()) {
+            SettingsSwitchRow(
+                title = s.dynamicTheme,
+                value = if (dynamicThemeEnabled) s.dynamicThemeOn else s.dynamicThemeOff,
+                icon = Icons.Outlined.Palette,
+                checked = dynamicThemeEnabled,
+                enabled = true,
+                onCheckedChange = onDynamicThemeChanged
             )
         }
-
-        RoutingToggleRow(
-            title = s.autoConnectTitle,
-            subtitle = s.autoConnectSubtitle,
-            checked = settings.autoConnectOnLaunch
-        ) { onChanged(settings.copy(autoConnectOnLaunch = it)) }
-
-        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
-            RoutingToggleRow(
-                title = s.liveActivityTitle,
-                subtitle = s.liveActivitySubtitle,
-                checked = liveActivityEnabled
-            ) { onLiveActivityChanged(it) }
-        }
-
-        RoutingToggleRow(
-            title = s.showAutoButtonTitle,
-            subtitle = s.showAutoButtonSubtitle,
-            checked = settings.showAutoButton
-        ) { onChanged(settings.copy(showAutoButton = it)) }
-
-        RoutingToggleRow(
-            title = s.confirmDeleteTitle,
-            subtitle = s.confirmDeleteSubtitle,
-            checked = settings.confirmBeforeDelete
-        ) { onChanged(settings.copy(confirmBeforeDelete = it)) }
-
-        // NOTE: no "speed in the notification" row here — the desktop build has no notifications,
-        // so the toggle had nothing to drive. AppBehaviorSettings.showSpeedInNotification stays in
-        // the model for Android, which does show it.
-
-        RoutingToggleRow(
-            title = s.speedOnHomeTitle,
-            subtitle = s.speedOnHomeSubtitle,
-            checked = settings.showSpeedOnHome
-        ) { onChanged(settings.copy(showSpeedOnHome = it)) }
-
-        RoutingToggleRow(
-            title = s.showSubscriptionExpiryTitle,
-            subtitle = s.showSubscriptionExpirySubtitle,
-            checked = settings.showSubscriptionExpiry
-        ) { onChanged(settings.copy(showSubscriptionExpiry = it)) }
-
-        RoutingToggleRow(
-            title = s.showSubscriptionDescriptionTitle,
-            subtitle = s.showSubscriptionDescriptionSubtitle,
-            checked = settings.showSubscriptionDescription
-        ) { onChanged(settings.copy(showSubscriptionDescription = it)) }
-
-        if (settings.showSubscriptionDescription) {
-            Text(
-                text = s.subscriptionDescriptionLinesTitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        SettingsSwitchRow(
+            title = s.lightTheme,
+            value = if (lightThemeEnabled) s.lightThemeOn else s.lightThemeOff,
+            icon = Icons.Outlined.LightMode,
+            checked = lightThemeEnabled,
+            enabled = true,
+            onCheckedChange = onLightThemeChanged
+        )
+        if (!dynamicThemeEnabled) {
+            ThemeColorSection(
+                lightMode = lightThemeEnabled,
+                onAccentColorSelected = onAccentColorSelected,
+                onTextColorSelected = onTextColorSelected,
+                onBackgroundColorSelected = onBackgroundColorSelected
             )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(3 to "3", 5 to "5", 0 to s.subscriptionDescriptionLinesUnlimited).forEach { (n, label) ->
-                    FilterChip(
-                        selected = settings.subscriptionDescriptionLines == n,
-                        onClick = { onChanged(settings.copy(subscriptionDescriptionLines = n)) },
-                        label = { Text(label) }
-                    )
-                }
-            }
         }
+    }
+}
 
-        RoutingToggleRow(
-            title = s.showSubscriptionIconsTitle,
-            subtitle = s.showSubscriptionIconsSubtitle,
-            checked = settings.showSubscriptionIcons
-        ) { onChanged(settings.copy(showSubscriptionIcons = it)) }
-
-        RoutingToggleRow(
-            title = s.hideEndpointWhenDescriptionTitle,
-            subtitle = s.hideEndpointWhenDescriptionSubtitle,
-            checked = settings.hideEndpointWhenDescription
-        ) { onChanged(settings.copy(hideEndpointWhenDescription = it)) }
-
-        // Local notifications, as on Android: only iOS implements them among the platforms using this
-        // screen (IosVpnManager.notifyExpiringSubscriptions / notifyPanelAnnouncements); the desktop
-        // would show toggles that do nothing.
-        if (org.olcbox.app.update.UpdatePlatform.current().os == "ios") {
-            RoutingToggleRow(
-                title = s.notifySubExpiryTitle,
-                subtitle = s.notifySubExpirySubtitle,
-                checked = settings.notifySubscriptionExpiry
-            ) { onChanged(settings.copy(notifySubscriptionExpiry = it)) }
-
-            RoutingToggleRow(
-                title = s.panelAnnouncementsTitle,
-                subtitle = s.panelAnnouncementsSubtitle,
-                checked = settings.notifyPanelAnnouncements
-            ) { onChanged(settings.copy(notifyPanelAnnouncements = it)) }
-        }
-
-        if (org.olcbox.app.update.UpdatePlatform.current().os != "ios") {
-            RoutingToggleRow(
-                title = s.twoColumnLayoutTitle,
-                subtitle = s.twoColumnLayoutSubtitle,
-                checked = settings.twoColumnLayout
-            ) { onChanged(settings.copy(twoColumnLayout = it)) }
-
-            RoutingToggleRow(
-                title = s.vpsAutoInstallTitle,
-                subtitle = s.vpsAutoInstallSubtitle,
-                checked = settings.allowVpsAutoInstall
-            ) { onChanged(settings.copy(allowVpsAutoInstall = it)) }
-        }
-
+/** «Для продвинутых»: rarely touched switches for people who know what they change. */
+@Composable
+private fun AdvancedSettingsContent(
+    settings: AppBehaviorSettings,
+    onBack: () -> Unit,
+    onChanged: (AppBehaviorSettings) -> Unit,
+    onUrlSchemesClick: () -> Unit
+) {
+    val s = LocalStrings.current
+    SettingsPage(title = s.advancedSettingsTitle, onBack = onBack) {
         // App-wide engine for VLESS-like transports. Applies only when a server's own core is "Auto";
         // an explicit per-server choice overrides it (xhttp/raw-Xray always force Xray regardless).
-        SettingsSectionLabel(s.globalEngineLabel)
-        Text(
-            text = s.globalEngineSubtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val engineOptions = listOf(
+        SettingsCaption(s.globalEngineLabel)
+        SettingsNote(s.globalEngineSubtitle)
+        SettingsChoiceChips(
+            options = listOf(
                 ProxyCore.Auto to s.globalEngineAuto,
                 ProxyCore.SingBox to "sing-box",
                 ProxyCore.Xray to "Xray",
-            )
-            engineOptions.forEach { (core, title) ->
-                FilterChip(
-                    selected = settings.globalProxyCore == core,
-                    onClick = { onChanged(settings.copy(globalProxyCore = core)) },
-                    label = { Text(title) }
-                )
-            }
-        }
+            ),
+            selected = settings.globalProxyCore
+        ) { onChanged(settings.copy(globalProxyCore = it)) }
 
-        // Subscription User-Agent selector is intentionally NOT rendered here (no UI). The default —
-        // YPtun main fetch + automatic FakeDNS enrichment from a Happ-UA fetch — is correct for everyone.
-        // The selector code is preserved (unused) in [SubscriptionUserAgentSelector] below and can be
-        // dropped back into this screen if it ever needs to be exposed again.
-
-        SettingsSectionLabel(s.language)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val options = listOf(
-                AppLanguage.System to "Авто / Auto",
-                AppLanguage.Russian to "🇷🇺 Русский",
-                AppLanguage.English to "🇺🇸 English",
-                AppLanguage.Persian to "🇮🇷 فارسی",
-                AppLanguage.Chinese to "🇨🇳 中文"
-            )
-            options.forEach { (lang, title) ->
-                FilterChip(
-                    selected = language == lang,
-                    onClick = { onLanguageChanged(lang) },
-                    label = { Text(title) }
-                )
+        SettingsCaption(s.advancedConfigsSection)
+        SettingsCard {
+            SettingsCardToggle(s.shareUniversalLinkTitle, s.shareUniversalLinkSubtitle, settings.shareUniversalLink) {
+                onChanged(settings.copy(shareUniversalLink = it))
             }
+            SettingsCardDivider()
+            SettingsCardToggle(s.allowConfigEditingTitle, s.allowConfigEditingSubtitle, settings.allowConfigEditing) {
+                onChanged(settings.copy(allowConfigEditing = it))
+            }
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.urlSchemes,
+                subtitle = s.urlSchemesSubtitle,
+                onClick = onUrlSchemesClick
+            )
         }
     }
 }
 
-/**
- * Subscription User-Agent selector. PRESERVED but intentionally NOT shown anywhere (no UI). The fetch
- * defaults to YPtun + automatic FakeDNS enrichment from a Happ-UA request, which is right for everyone;
- * this lets the choice be re-exposed later (drop a call into AppBehaviorSettingsContent) without
- * rewriting it. Suppress the "unused" lint since keeping it is deliberate.
- */
-@Suppress("unused")
+/** «О приложении»: version and updates, the log, help links, core versions, the device ID, terms. */
 @Composable
-private fun SubscriptionUserAgentSelector(
-    settings: AppBehaviorSettings,
-    onChanged: (AppBehaviorSettings) -> Unit
+private fun AboutContent(
+    showUpdates: Boolean = true,
+    hwid: String,
+    updateSettings: AppUpdateSettings,
+    onBack: () -> Unit,
+    onUpdatesClick: () -> Unit,
+    onLogsClick: () -> Unit,
+    onCopyConfigClick: () -> Unit
 ) {
     val s = LocalStrings.current
-    SettingsSectionLabel(s.subscriptionUserAgentLabel)
-    Text(
-        text = s.subscriptionUserAgentSubtitle,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val uaOptions = listOf(
-            AppBehaviorSettings.SUB_UA_HAPP to "Happ/1.0",
-            AppBehaviorSettings.SUB_UA_YPTUN to "YPtun",
-        )
-        uaOptions.forEach { (mode, title) ->
-            FilterChip(
-                selected = settings.subscriptionUserAgent == mode,
-                onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
-                label = { Text(title) }
+    val clipboard = LocalClipboardManager.current
+    SettingsPage(title = s.aboutTitle, onBack = onBack) {
+        SettingsCard {
+            SettingsCardRow(
+                title = "YPtun",
+                value = CurrentAppInfo.value.version,
+                icon = Icons.Outlined.Info,
+                showChevron = false
             )
+            if (showUpdates) {
+                SettingsCardDivider()
+                SettingsCardRow(
+                    title = s.updates,
+                    value = "${s.releaseChannelLabel} · ${s.hoursShort(updateSettings.intervalHours)}",
+                    icon = Icons.Outlined.Refresh,
+                    onClick = onUpdatesClick
+                )
+            }
+        }
+
+        SettingsCaption(s.helpSection)
+        SettingsCard {
+            SettingsCardRow(
+                title = s.howToConnect,
+                icon = Icons.AutoMirrored.Outlined.HelpOutline,
+                onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.community,
+                value = "t.me/YPtun",
+                icon = Icons.Rounded.Person,
+                onClick = { SettingsPlatform.openUri("https://t.me/YPtun") }
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.logs,
+                subtitle = s.logsSubtitle,
+                icon = Icons.Outlined.History,
+                onClick = onLogsClick
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.copyFullConfig,
+                icon = Icons.Outlined.ContentPaste,
+                showChevron = false,
+                onClick = onCopyConfigClick
+            )
+        }
+
+        SettingsCaption(s.coreVersionsLabel)
+        // Every version comes from the running core (yptuncore), like libbox/xraybridge do on Android.
+        fun ver(core: CoreName) = runCatching { SettingsPlatform.coreVersion(core) }.getOrNull()?.ifBlank { null } ?: "—"
+        val xrayVer = remember { ver(CoreName.Xray) }
+        val singboxVer = remember { ver(CoreName.SingBox) }
+        val olcrtcVer = remember { ver(CoreName.OlcRtc) }
+        val vkturnVer = remember { ver(CoreName.Freeturn) }
+        val wdttVer = remember { ver(CoreName.Wdtt) }
+        val awgVer = remember { ver(CoreName.AmneziaWg) }
+        val cores = listOf(
+            "Xray" to xrayVer,
+            "sing-box" to singboxVer,
+            "olcRTC" to olcrtcVer,
+            "VK-TURN" to vkturnVer,
+            "WDTT" to wdttVer,
+            "AmneziaWG" to awgVer,
+            "OpenFlux" to org.olcbox.app.vpn.CoreVersions.OPENFLUX,
+            "Trust Tunnel" to org.olcbox.app.vpn.CoreVersions.TRUSTTUNNEL_DESKTOP,
+            "Snolc" to org.olcbox.app.vpn.CoreVersions.SNOLC,
+            "csqtt" to org.olcbox.app.vpn.CoreVersions.CSQTT,
+        ).filterNot { (name, _) -> isIosPlatform() && name == "Trust Tunnel" } // no Trust Tunnel engine on iOS
+        SettingsCard {
+            cores.forEachIndexed { index, (name, version) ->
+                if (index > 0) SettingsCardDivider()
+                SettingsCardRow(title = name, value = version, showChevron = false)
+            }
+        }
+
+        SettingsCaption(s.deviceSection)
+        SettingsCard {
+            SettingsCardRow(
+                title = s.hwid(hwid.ifBlank { "—" }),
+                icon = Icons.Rounded.Key,
+                enabled = hwid.isNotBlank(),
+                showChevron = false,
+                trailing = if (hwid.isNotBlank()) {
+                    {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCopy,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else null,
+                onClick = if (hwid.isNotBlank()) {
+                    { clipboard.setText(AnnotatedString(hwid)) }
+                } else null
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.termsOfUse,
+                icon = Icons.Outlined.Shield,
+                onClick = { SettingsPlatform.openUri("https://yanisplugg.github.io/yptun/terms.html") }
+            )
+            // App Store Review: the privacy policy and a support page must be reachable from inside the app.
+            if (isIosPlatform()) {
+                SettingsCardDivider()
+                SettingsCardRow(
+                    title = s.privacyPolicy,
+                    icon = Icons.Outlined.Lock,
+                    onClick = { SettingsPlatform.openUri(org.olcbox.app.DonationInfo.PRIVACY_URL) }
+                )
+                SettingsCardDivider()
+                SettingsCardRow(
+                    title = s.supportPage,
+                    icon = Icons.AutoMirrored.Outlined.HelpOutline,
+                    onClick = { SettingsPlatform.openUri(org.olcbox.app.DonationInfo.SUPPORT_URL) }
+                )
+            }
         }
     }
 }
 
-/** Dedicated «Пинг» screen: how locations/inbounds are probed + the proxy-probe target URL. */
+/** Settings -> Privacy: what the app sends out on its own, and the switches for it. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun PingSettingsContent(
+private fun PrivacyContent(
     settings: AppBehaviorSettings,
     onBack: () -> Unit,
     onChanged: (AppBehaviorSettings) -> Unit
 ) {
     val s = LocalStrings.current
-    val isProxyMode = settings.pingMode == AppBehaviorSettings.PING_PROXY_GET ||
-        settings.pingMode == AppBehaviorSettings.PING_PROXY_HEAD
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -4011,201 +3773,48 @@ private fun PingSettingsContent(
             }
             Spacer(Modifier.width(4.dp))
             Text(
-                text = s.pingSettings,
+                text = s.privacy,
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
-
-        SettingsSectionLabel(s.pingMethod)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val pingOptions = listOf(
-                AppBehaviorSettings.PING_AUTO to s.pingModeAuto,
-                AppBehaviorSettings.PING_TCP to s.pingModeTcp,
-                AppBehaviorSettings.PING_ICMP to s.pingModeIcmp,
-                AppBehaviorSettings.PING_PROXY_GET to s.pingModeProxyGet,
-                AppBehaviorSettings.PING_PROXY_HEAD to s.pingModeProxyHead,
-            )
-            pingOptions.forEach { (mode, title) ->
-                FilterChip(
-                    selected = settings.pingMode == mode,
-                    onClick = { onChanged(settings.copy(pingMode = mode)) },
-                    label = { Text(title) }
-                )
-            }
-        }
-        // The target URL is meaningful ONLY for the proxy GET/HEAD probes; TCP/ICMP probe the
-        // location's own server, so the field is disabled for those modes.
-        OutlinedTextField(
-            value = settings.pingUrl,
-            onValueChange = { onChanged(settings.copy(pingUrl = it)) },
-            label = { Text(s.pingTarget) },
-            placeholder = { Text(s.pingTargetHint) },
-            singleLine = true,
-            enabled = isProxyMode,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        SettingsSectionLabel(s.pingResultLabel)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val resultOptions = listOf(
-                AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
-                AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
-                AppBehaviorSettings.PING_RESULT_BOTH to s.pingResultBoth,
-            )
-            resultOptions.forEach { (mode, title) ->
-                FilterChip(
-                    selected = settings.pingResultDisplay == mode,
-                    onClick = { onChanged(settings.copy(pingResultDisplay = mode)) },
-                    label = { Text(title) }
-                )
-            }
-        }
-
         RoutingToggleRow(
-            title = s.savePingResultsTitle,
-            subtitle = s.savePingResultsSubtitle,
-            checked = settings.savePingResults
-        ) { onChanged(settings.copy(savePingResults = it)) }
-
-        RoutingToggleRow(
-            title = s.showAliveCountTitle,
-            subtitle = s.showAliveCountSubtitle,
-            checked = settings.showSubscriptionAliveCount
-        ) { onChanged(settings.copy(showSubscriptionAliveCount = it)) }
-
-        RoutingToggleRow(
-            title = s.showPingControlsTitle,
-            subtitle = s.showPingControlsSubtitle,
-            checked = settings.showPingControls
-        ) { onChanged(settings.copy(showPingControls = it)) }
-
-        PingParallelismRow(
-            value = settings.effectivePingParallelism(),
-            onChange = { onChanged(settings.copy(pingParallelism = it)) }
-        )
-
-        PingTimeoutRow(
-            seconds = settings.pingTimeoutSec.coerceIn(AppBehaviorSettings.MIN_PING_TIMEOUT_SEC, AppBehaviorSettings.MAX_PING_TIMEOUT_SEC),
-            onChange = { onChanged(settings.copy(pingTimeoutSec = it)) }
-        )
-
-        SettingsSectionLabel(s.pingPrecisionTitle)
+            title = s.providerReportTitle,
+            subtitle = s.providerReportSubtitle,
+            checked = settings.providerReportEnabled
+        ) { onChanged(settings.copy(providerReportEnabled = it)) }
         Text(
-            text = s.pingPrecisionSubtitle,
+            text = s.providerReportDetails,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SettingsSectionLabel(s.subscriptionUserAgentLabel)
+        Text(
+            text = s.subscriptionUserAgentSubtitle,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(1 to s.pingPrecisionSingle, 2 to s.pingPrecisionDouble, 3 to s.pingPrecisionTriple).forEach { (rounds, title) ->
+            val uaOptions = listOf(
+                AppBehaviorSettings.SUB_UA_BOTH to s.uaModeBoth,
+                AppBehaviorSettings.SUB_UA_HAPP to s.uaModeHapp,
+                AppBehaviorSettings.SUB_UA_YPTUN_ONLY to s.uaModeYptun,
+                AppBehaviorSettings.SUB_UA_V2RAYTUN to s.uaModeV2raytun,
+            )
+            uaOptions.forEach { (mode, title) ->
                 FilterChip(
-                    selected = settings.effectivePingPrecision() == rounds,
-                    onClick = { onChanged(settings.copy(pingPrecision = rounds)) },
+                    selected = settings.effectiveSubscriptionUa() == mode,
+                    onClick = { onChanged(settings.copy(subscriptionUserAgent = mode)) },
                     label = { Text(title) }
                 )
             }
         }
 
-        SettingsSectionLabel(s.freeServersLimitTitle)
-        Text(
-            text = s.freeServersLimitSubtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AppBehaviorSettings.FREE_SERVERS_LIMITS.forEach { limit ->
-                FilterChip(
-                    selected = settings.freeServersLimit == limit,
-                    onClick = { onChanged(settings.copy(freeServersLimit = limit)) },
-                    label = { Text(if (limit == AppBehaviorSettings.FREE_SERVERS_UNLIMITED) s.freeServersLimitUnlimited else limit.toString()) }
-                )
-            }
-        }
-
         RoutingToggleRow(
-            title = s.freeServersPagesTitle,
-            subtitle = s.freeServersPagesSubtitle,
-            checked = settings.freeServersFromPages
-        ) { onChanged(settings.copy(freeServersFromPages = it)) }
-    }
-}
-
-/** Slider for the ping timeout: 2..15 s, default 7. */
-@Composable
-private fun PingTimeoutRow(seconds: Int, onChange: (Int) -> Unit) {
-    val s = LocalStrings.current
-    val min = AppBehaviorSettings.MIN_PING_TIMEOUT_SEC
-    val max = AppBehaviorSettings.MAX_PING_TIMEOUT_SEC
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = s.pingTimeoutTitle,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = s.pingTimeoutSubtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text(
-                text = s.secondsShort(seconds),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        Slider(
-            value = seconds.toFloat(),
-            onValueChange = { onChange(it.toInt().coerceIn(min, max)) },
-            valueRange = min.toFloat()..max.toFloat(),
-            steps = max - min - 1
-        )
-    }
-}
-
-/** Stepper for the parallel-ping count (ping speed): default 5, range 1..20. */
-@Composable
-private fun PingParallelismRow(value: Int, onChange: (Int) -> Unit) {
-    val s = LocalStrings.current
-    val min = AppBehaviorSettings.MIN_PING_PARALLELISM
-    val max = AppBehaviorSettings.MAX_PING_PARALLELISM
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = s.pingThreadsTitle,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = s.pingThreadsSubtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        OutlinedButton(
-            onClick = { onChange((value - 1).coerceIn(min, max)) },
-            enabled = value > min,
-            contentPadding = PaddingValues(0.dp),
-            modifier = Modifier.size(40.dp)
-        ) { Text("−", style = MaterialTheme.typography.titleLarge) }
-        Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.width(40.dp)
-        )
-        OutlinedButton(
-            onClick = { onChange((value + 1).coerceIn(min, max)) },
-            enabled = value < max,
-            contentPadding = PaddingValues(0.dp),
-            modifier = Modifier.size(40.dp)
-        ) { Text("+", style = MaterialTheme.typography.titleLarge) }
+            title = s.sendDeviceInfoTitle,
+            subtitle = s.sendDeviceInfoSubtitle,
+            checked = settings.sendDeviceInfoToSubscriptions
+        ) { onChanged(settings.copy(sendDeviceInfoToSubscriptions = it)) }
     }
 }
 
@@ -4236,6 +3845,12 @@ private fun ExperimentalContent(
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
+
+        RoutingToggleRow(
+            title = s.legacyUi,
+            subtitle = s.legacyUiSubtitle,
+            checked = settings.legacyUi
+        ) { onChanged(settings.copy(legacyUi = it)) }
 
         SettingsSectionLabel("Yandex Telemost")
         Text(
@@ -4330,7 +3945,7 @@ private fun UrlSchemesContent(onBack: () -> Unit) {
 private fun UrlSchemeRow(scheme: String, clipboard: androidx.compose.ui.platform.ClipboardManager) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceContainer
     ) {
         Row(
@@ -4362,17 +3977,38 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object ConnectionMode : AppSettingsRoute(1)
     object SocksProxy : AppSettingsRoute(1)
     object SplitTunneling : AppSettingsRoute(1)
-    object SubscriptionsSharing : AppSettingsRoute(1)
     object Routing : AppSettingsRoute(1)
     object RoutingProfiles : AppSettingsRoute(1)
     object Traffic : AppSettingsRoute(1)
-    object Application : AppSettingsRoute(1)
-    object Ping : AppSettingsRoute(1)
+    object Language : AppSettingsRoute(1)
+    object Appearance : AppSettingsRoute(1)
+    object Privacy : AppSettingsRoute(1)
+    object Advanced : AppSettingsRoute(1)
     object UrlSchemes : AppSettingsRoute(1)
+    object Experimental : AppSettingsRoute(1)
+    object About : AppSettingsRoute(1)
     object Updates : AppSettingsRoute(1)
     object ApplicationLogs : AppSettingsRoute(1)
-    object Experimental : AppSettingsRoute(1)
     data class AppList(val list: AndroidSplitTunnelList) : AppSettingsRoute(2)
+}
+
+private fun settingsRouteFor(page: String): AppSettingsRoute? = when (page) {
+        "ConnectionSettings" -> AppSettingsRoute.ConnectionSettings
+        "ConnectionMode" -> AppSettingsRoute.ConnectionMode
+        "SocksProxy" -> AppSettingsRoute.SocksProxy
+        "SplitTunneling" -> AppSettingsRoute.SplitTunneling
+        "RoutingProfiles" -> AppSettingsRoute.RoutingProfiles
+        "Traffic" -> AppSettingsRoute.Traffic
+        "Language" -> AppSettingsRoute.Language
+        "Appearance" -> AppSettingsRoute.Appearance
+        "Privacy" -> AppSettingsRoute.Privacy
+        "Advanced" -> AppSettingsRoute.Advanced
+        "UrlSchemes" -> AppSettingsRoute.UrlSchemes
+        "Experimental" -> AppSettingsRoute.Experimental
+        "About" -> AppSettingsRoute.About
+        "Updates" -> AppSettingsRoute.Updates
+        "ApplicationLogs" -> AppSettingsRoute.ApplicationLogs
+        else -> null
 }
 
 private fun AppSettingsInitialRoute.toRoute(): AppSettingsRoute {
@@ -4387,24 +4023,6 @@ private fun AndroidConnectionMode.label(): String {
         AndroidConnectionMode.Tun -> "TUN"
         AndroidConnectionMode.Proxy -> "Proxy"
     }
-}
-
-private fun Int.subscriptionSummary(): String {
-    return when (this) {
-        0 -> "No HTTPS subscriptions"
-        1 -> "1 HTTPS subscription"
-        else -> "$this HTTPS subscriptions"
-    }
-}
-
-private fun SubscriptionShareItem.subscriptionSummary(): String {
-    val interval = updateIntervalHours?.let { "every ${it}h" } ?: "default interval"
-    val count = when (locationCount) {
-        1 -> "1 location"
-        else -> "$locationCount locations"
-    }
-    val refresh = lastRefreshAtEpochMs?.let { "last refresh ${it.formatDateTime()}" } ?: "not refreshed yet"
-    return "$interval · $count · $refresh"
 }
 
 private fun Long.formatDateTime(): String {
@@ -4615,3 +4233,8 @@ private val RUSSIAN_BYPASS_PACKAGE_NAMES = setOf(
     "ru.vtb24.mobilebanking.android",
     "ru.tinkoff.mb"
 )
+
+private fun isIosPlatform(): Boolean = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
+
+/** Settings pages the iOS build does not show (see [ConnectionSettingsContent]); kept out of the search too. */
+private val IOS_HIDDEN_SETTINGS_PAGES = setOf("ConnectionMode", "SplitTunneling")

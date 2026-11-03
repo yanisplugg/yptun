@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::protocol::StreamRepairCommand;
 use std::sync::{
     Arc,
@@ -65,10 +62,13 @@ impl RepairState {
             return;
         };
         loop {
+            let notified = slot.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if slot.restart_generation.load(Ordering::Acquire) != observed_generation {
                 return;
             }
-            slot.notify.notified().await;
+            notified.await;
         }
     }
 
@@ -80,10 +80,17 @@ impl RepairState {
         slot.ready_sequence.store(sequence, Ordering::Release);
     }
 
-    pub fn apply_repair(&self, command: &StreamRepairCommand) -> RepairApplyResult {
+    pub fn apply_repair(
+        &self,
+        command: &StreamRepairCommand,
+        max_worker_id: usize,
+    ) -> RepairApplyResult {
         let mut result = RepairApplyResult::default();
         for worker_id in &command.worker_ids {
             let worker_id = usize::from(*worker_id);
+            if worker_id == 0 || worker_id > max_worker_id {
+                continue;
+            }
             let Some(slot) = self.slot(worker_id) else {
                 continue;
             };
@@ -115,10 +122,13 @@ impl RepairState {
         result
     }
 
-    pub fn apply_alive(&self, command: &StreamRepairCommand) -> usize {
+    pub fn apply_alive(&self, command: &StreamRepairCommand, max_worker_id: usize) -> usize {
         let mut applied = 0usize;
         for worker_id in &command.worker_ids {
             let worker_id = usize::from(*worker_id);
+            if worker_id == 0 || worker_id > max_worker_id {
+                continue;
+            }
             let Some(slot) = self.slot(worker_id) else {
                 continue;
             };
@@ -152,14 +162,14 @@ mod tests {
     fn duplicate_repair_sequence_is_ignored() {
         let repair = RepairState::new(36);
         assert_eq!(
-            repair.apply_repair(&command(1, &[14, 28])),
+            repair.apply_repair(&command(1, &[14, 28]), 36),
             RepairApplyResult {
                 restarts: 2,
                 credential_resets: 0,
             }
         );
         assert_eq!(
-            repair.apply_repair(&command(1, &[14, 28])),
+            repair.apply_repair(&command(1, &[14, 28]), 36),
             RepairApplyResult::default()
         );
         assert_eq!(repair.restart_generation(14), 1);
@@ -169,27 +179,61 @@ mod tests {
     #[test]
     fn unresolved_second_sequence_requests_new_credentials() {
         let repair = RepairState::new(36);
-        assert_eq!(repair.apply_repair(&command(1, &[14])).credential_resets, 0);
-        assert_eq!(repair.apply_repair(&command(2, &[14])).credential_resets, 1);
+        assert_eq!(
+            repair
+                .apply_repair(&command(1, &[14]), 36)
+                .credential_resets,
+            0
+        );
+        assert_eq!(
+            repair
+                .apply_repair(&command(2, &[14]), 36)
+                .credential_resets,
+            1
+        );
         assert_eq!(repair.credential_generation(14), 1);
     }
 
     #[test]
     fn ready_or_alive_sequence_prevents_credential_escalation() {
         let repair = RepairState::new(36);
-        repair.apply_repair(&command(1, &[14]));
+        repair.apply_repair(&command(1, &[14]), 36);
         repair.mark_ready(14);
-        assert_eq!(repair.apply_repair(&command(2, &[14])).credential_resets, 0);
-        repair.apply_alive(&command(2, &[14]));
-        assert_eq!(repair.apply_repair(&command(3, &[14])).credential_resets, 0);
+        assert_eq!(
+            repair
+                .apply_repair(&command(2, &[14]), 36)
+                .credential_resets,
+            0
+        );
+        repair.apply_alive(&command(2, &[14]), 36);
+        assert_eq!(
+            repair
+                .apply_repair(&command(3, &[14]), 36)
+                .credential_resets,
+            0
+        );
     }
 
     #[test]
     fn invalid_worker_ids_are_ignored() {
         let repair = RepairState::new(9);
         assert_eq!(
-            repair.apply_repair(&command(1, &[0, 10])),
+            repair.apply_repair(&command(1, &[0, 10]), 9),
             RepairApplyResult::default()
         );
+    }
+
+    #[test]
+    fn worker_ids_above_max_are_ignored() {
+        let repair = RepairState::new(36);
+        assert_eq!(
+            repair.apply_repair(&command(1, &[10, 30]), 20),
+            RepairApplyResult {
+                restarts: 1,
+                credential_resets: 0,
+            }
+        );
+        assert_eq!(repair.restart_generation(10), 1);
+        assert_eq!(repair.restart_generation(30), 0);
     }
 }

@@ -23,8 +23,11 @@ object ShareLinkParser {
             trimmed.startsWith("naive+", true) || trimmed.startsWith("naive://", true) -> parseNaive(trimmed)
             // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
             trimmed.startsWith("amneziawg://", true) -> {
-                val payload = trimmed.substring("amneziawg://".length).substringBefore('#')
-                SubscriptionDecoder.decodeBase64Chunk(payload)?.let { AmneziaWgParser.parse(it) }
+                val rest = trimmed.substring("amneziawg://".length)
+                // `#name` after the payload (the panel puts the host name there) wins over the conf's own comment.
+                val name = UriCodec.percentDecode(rest.substringAfter('#', "")).trim()
+                SubscriptionDecoder.decodeBase64Chunk(rest.substringBefore('#'))?.let { AmneziaWgParser.parse(it) }
+                    ?.let { if (name.isEmpty()) it else it.copy(tag = name) }
             }
             AmneziaWgParser.looksLikeAmneziaWg(trimmed) -> AmneziaWgParser.parse(trimmed)
             // tt://<base64> — AdGuard Trust Tunnel deep-link (decoded natively at connect time).
@@ -137,6 +140,8 @@ object ShareLinkParser {
             host = str("host"),
             xhttpMode = str("mode"),
             xhttpExtra = str("extra"),
+            // v2rayN-style vmess JSON: free lists mark self-signed / mismatched certs this way.
+            allowInsecure = str("allowInsecure", "skip-cert-verify", "insecure").let { it == "1" || it.equals("true", true) },
         )
     }
 
@@ -209,9 +214,23 @@ object ShareLinkParser {
             auth = UriCodec.percentDecode(authority.substring(0, atIndex))
             authority = authority.substring(atIndex + 1)
         }
+        // Official hy2 form carries port hopping in the authority: host:443,5000-6000 / host:20000-30000.
+        // splitHostPort only takes a plain int, so peel the port list off first (otherwise the whole
+        // "host:443,5000-6000" becomes the hostname and the dial fails).
+        var portSpec = ""
+        val portSep = authority.lastIndexOf(':')
+        if (portSep > authority.lastIndexOf(']')) {
+            val tail = authority.substring(portSep + 1)
+            if (tail.isNotEmpty() && tail.all { it.isDigit() || it == ',' || it == '-' } && tail.toIntOrNull() == null) {
+                portSpec = tail
+                authority = authority.substring(0, portSep)
+            }
+        }
         val hostPort = UriCodec.splitHostPort(authority)
         val host = hostPort?.first ?: authority.trim('[', ']')
-        val port = hostPort?.second ?: 443 // hysteria2 default
+        val port = hostPort?.second
+            ?: portSpec.split(',').firstNotNullOfOrNull { it.substringBefore('-').toIntOrNull() }
+            ?: 443 // hysteria2 default
         if (host.isBlank()) return null
 
         val params = UriCodec.parseQuery(query)
@@ -227,12 +246,17 @@ object ShareLinkParser {
             security = ProxyProfile.SECURITY_TLS, // hysteria2 always runs over QUIC+TLS
             sni = (params["sni"] ?: params["peer"]).orEmpty(),
             alpn = params["alpn"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
-            allowInsecure = params["insecure"] == "1" || params["insecure"] == "true",
+            // pinSHA256 pins the CERTIFICATE hash (self-signed servers); sing-box can only pin the
+            // public-key hash, so a pinned link can't be verified here — fall back to insecure like
+            // other sing-box clients do, otherwise it fails with "unknown authority".
+            allowInsecure = params["pinSHA256"].orEmpty().isNotBlank() ||
+                listOf("insecure", "allowInsecure", "skip-cert-verify")
+                    .any { params[it] == "1" || params[it].equals("true", true) },
             hy2Obfs = params["obfs"].orEmpty().lowercase(),
             hy2ObfsPassword = params["obfs-password"].orEmpty(),
             hy2UpMbps = mbps(params["up"]),
             hy2DownMbps = mbps(params["down"]),
-            hy2Ports = (params["mport"] ?: params["ports"]).orEmpty(),
+            hy2Ports = (params["mport"] ?: params["ports"] ?: portSpec.takeIf { it.isNotEmpty() }).orEmpty(),
         )
     }
 

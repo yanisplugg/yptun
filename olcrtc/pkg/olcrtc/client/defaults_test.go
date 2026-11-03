@@ -51,15 +51,14 @@ func runDefaultsHelper(t *testing.T, constructor string) {
 	}
 	wg.Wait()
 
-	requireRegistryNames(t, "auth providers", auth.Available(), []string{"jitsi", "telemost", "wbstream"})
-	requireRegistryNames(t, "provider factories", enginebuiltin.Available(), []string{"jitsi", "none", "telemost", "wbstream"})
-	requireRegistryNames(t, "engines", engine.Available(), []string{"goolom", "jitsi", "livekit"})
+	requireRegistryNames(t, "auth providers", auth.Available(), []string{"jitsi", "max", "mtslink", "salutejazz", "telemost", "vkcalls", "wbstream"})
+	requireRegistryNames(t, "provider factories", enginebuiltin.Available(), []string{"jitsi", "max", "mtslink", "none", "salutejazz", "telemost", "vkcalls", "wbstream"})
+	requireRegistryNames(t, "engines", engine.Available(), expectedEngines())
 	if constructor == "engineconn" {
 		requireRegistryNames(t, "transports", transport.Available(), nil)
 		return
 	}
-	requireRegistryNames(t, "transports", transport.Available(),
-		[]string{"datachannel", "seichannel", "videochannel", "vp8channel"})
+	requireRegistryNames(t, "transports", transport.Available(), expectedTransports())
 }
 
 func callPublicNew(constructor string) {

@@ -13,6 +13,7 @@ import (
 	"github.com/openlibrecommunity/olcrtc/internal/framing"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
+	"github.com/openlibrecommunity/olcrtc/internal/runtime"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 	"github.com/openlibrecommunity/olcrtc/internal/tunnelcore"
 )
@@ -96,8 +97,8 @@ func (s *Server) handleAcceptError(ctx context.Context, session *smux.Session, e
 	hadSession := s.handshakeReady()
 	logger.Infof("server: AcceptStream(data) error - reinstalling session: %v", err)
 	s.reinstallSession(ctx, session)
-	if hadSession && s.ln != nil {
-		s.ln.Reconnect("liveness")
+	if hadSession {
+		s.reconnectLink("liveness")
 	}
 	return false
 }
@@ -128,7 +129,28 @@ type handshakeResult struct {
 	deviceID  string
 }
 
+// acceptHandshake answers the hello on the server's own session, and
+// reinstalls that session when the handshake fails.
 func (s *Server) acceptHandshake(
+	ctx context.Context,
+	session *smux.Session,
+) (*smux.Stream, handshakeResult, bool) {
+	stream, result, ok := s.answerHello(ctx, session)
+	if !ok && ctx.Err() == nil {
+		tunnelcore.ResetPeer(s.ln)
+		s.reinstallSession(ctx, session)
+	}
+	return stream, result, ok
+}
+
+// answerHello answers the hello on the first stream of session that carries
+// one, skipping up to maxStaleRetries streams a torn-down session left
+// behind. A failure is left to the caller: the server's own session is
+// reinstalled (acceptHandshake), a peer's is that peer's to end alone.
+//
+// ai-generated: split out of acceptHandshake, which reinstalled peer routing -
+// every peer's session - for one peer's failed handshake (olcrtc#49).
+func (s *Server) answerHello(
 	ctx context.Context,
 	session *smux.Session,
 ) (*smux.Stream, handshakeResult, bool) {
@@ -136,12 +158,9 @@ func (s *Server) acceptHandshake(
 	for retry := 0; retry <= maxStaleRetries; retry++ {
 		stream, err := session.AcceptStream()
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, handshakeResult{}, false
+			if ctx.Err() == nil {
+				logger.Infof("server: AcceptStream(control) error: %v", err)
 			}
-			logger.Infof("server: AcceptStream(control) error - reinstalling session: %v", err)
-			tunnelcore.ResetPeer(s.ln)
-			s.reinstallSession(ctx, session)
 			return nil, handshakeResult{}, false
 		}
 		_ = stream.SetDeadline(time.Now().Add(handshake.DefaultTimeout))
@@ -154,8 +173,6 @@ func (s *Server) acceptHandshake(
 				continue
 			}
 			logger.Warnf("handshake failed: %v", err)
-			tunnelcore.ResetPeer(s.ln)
-			s.reinstallSession(ctx, session)
 			return nil, handshakeResult{}, false
 		}
 		s.health.RecordSession(sessionID)
@@ -183,6 +200,7 @@ func (s *Server) acceptSingletonHandshake(ctx context.Context, session *smux.Ses
 	s.sessMu.Lock()
 	s.deviceID = result.deviceID
 	s.sessionID = result.sessionID
+	s.meter.bind(result.sessionID, s.group.KeyID())
 	s.sessMu.Unlock()
 	s.state.broadcast()
 	s.startControlLoop(ctx, session, stream)
@@ -208,7 +226,11 @@ func (s *Server) handleStream(ctx context.Context, stream *smux.Stream, sessionI
 	const maxConnectRequest = 4096
 	header := make([]byte, 0, 256)
 	buffer := make([]byte, 256)
-	_ = stream.SetReadDeadline(time.Now().Add(15 * time.Second))
+	// The SYN that opened this stream is a smux control frame and jumps the
+	// send queue; the request behind it is data and waits its turn behind
+	// whatever bulk the client is sending. The deadline is therefore paired
+	// with the client's ack deadline in runtime, and is the longer of the two.
+	_ = stream.SetReadDeadline(time.Now().Add(runtime.ConnectRequestTimeout()))
 	for {
 		n, err := stream.Read(buffer)
 		if n > 0 {

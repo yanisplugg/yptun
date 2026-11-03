@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/openlibrecommunity/olcrtc/internal/app/session"
@@ -105,8 +106,9 @@ func requireAppliedConfig(t *testing.T, got session.Config) {
 		TrafficMinDelay:       "5ms",
 		TrafficMaxDelay:       "30ms",
 		Amount:                3,
+		UDPDisabled:           true,
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Apply produced wrong config: %+v, want %+v", got, want)
 	}
 }
@@ -168,9 +170,10 @@ func TestApplyMapsEverySection(t *testing.T) {
 		Video:              session.VideoConfig{Width: 640, Height: 480, QRSize: 128, Codec: "tile", TileModule: 4, TileRS: 2},
 		SEI:                session.SEIConfig{FPS: 15, BatchSize: 8, FragmentSize: 700, AckTimeoutMS: 1500},
 		MaxSessionDuration: "1h",
+		UDPDisabled:        true,
 	}
 
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Apply() = %+v, want %+v", got, want)
 	}
 }
@@ -208,8 +211,118 @@ video:
 		file.Video.Bitrate != "5000k" || file.Video.HW != "nvenc" {
 		t.Fatalf("legacy fields = %#v", file)
 	}
-	if got := Apply(file); got != (session.Config{Mode: "cnc"}) {
+	if got := Apply(file); !reflect.DeepEqual(got, session.Config{Mode: "cnc", UDPDisabled: true}) {
 		t.Fatalf("Apply() mapped ignored legacy fields: %#v", got)
+	}
+}
+
+func TestUDPRelayIsOptIn(t *testing.T) {
+	if got := Apply(File{}); !got.UDPDisabled {
+		t.Fatal("no udp block: UDPDisabled = false, want true")
+	}
+	enabled := true
+	if got := Apply(File{Settings: Settings{UDP: UDP{Enabled: &enabled}}}); got.UDPDisabled {
+		t.Fatal("udp.enabled=true: UDPDisabled = true, want false")
+	}
+	disabled := true
+	got := Apply(File{Settings: Settings{UDP: UDP{Enabled: &enabled, Disabled: &disabled}}})
+	if !got.UDPDisabled {
+		t.Fatal("udp.enabled+disabled: UDPDisabled = false, want disabled to win")
+	}
+	maxFlows := 7
+	if got := Apply(File{Settings: Settings{UDP: UDP{MaxFlows: &maxFlows}}}); got.UDPMaxFlows != 7 {
+		t.Fatalf("UDPMaxFlows = %d, want 7", got.UDPMaxFlows)
+	}
+}
+
+func TestApplyProfileOverridesOnlyTheUDPKeysItNames(t *testing.T) {
+	base := Apply(File{})
+	enabled := true
+	if got := ApplyProfile(base, Profile{Settings: Settings{UDP: UDP{Enabled: &enabled}}}); got.UDPDisabled {
+		t.Fatal("profile udp.enabled=true over the gated base: UDPDisabled = true, want false")
+	}
+	on := session.Config{UDPDisabled: false, UDPMaxFlows: 10}
+	if got := ApplyProfile(on, Profile{}); got.UDPDisabled || got.UDPMaxFlows != 10 {
+		t.Fatalf("profile without a udp block changed it: %+v", got)
+	}
+	zero := 0
+	notDisabled := false
+	got := ApplyProfile(session.Config{UDPDisabled: true, UDPMaxFlows: 10},
+		Profile{Settings: Settings{UDP: UDP{Disabled: &notDisabled, MaxFlows: &zero}}})
+	if !got.UDPDisabled {
+		t.Fatal("a bare disabled: false turned the relay on; only enabled: true may")
+	}
+	if got.UDPMaxFlows != 0 {
+		t.Fatalf("UDPMaxFlows = %d, want the profile's explicit 0", got.UDPMaxFlows)
+	}
+}
+
+func TestApplyMapsStatsListen(t *testing.T) {
+	got := Apply(File{Mode: testModeSrv, Stats: Stats{Listen: "127.0.0.1:9464"}})
+	if got.StatsListen != "127.0.0.1:9464" {
+		t.Fatalf("StatsListen = %q, want the stats.listen value", got.StatsListen)
+	}
+}
+
+func TestLoadCryptoKeysListAndFile(t *testing.T) {
+	dir := t.TempDir()
+	ring := []string{
+		"0011223344556677889900112233445566778899001122334455667788990011",
+		"aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+		"ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+	}
+
+	inline := filepath.Join(dir, "inline.yaml")
+	body := "mode: srv\ncrypto:\n  keys:\n    - " + ring[0] + "\n    - " + ring[1] + "\n    - " + ring[2] + "\n"
+	if err := os.WriteFile(inline, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	file, err := Load(inline)
+	if err != nil {
+		t.Fatalf("Load(inline) error = %v", err)
+	}
+	if got := Apply(file).KeysHex; !reflect.DeepEqual(got, ring) {
+		t.Fatalf("inline KeysHex = %v, want %v", got, ring)
+	}
+
+	keysFile := filepath.Join(dir, "keys.txt")
+	listing := "# the room key\n" + ring[0] + "\n\n  " + ring[1] + "  \n# a per-user key\n" + ring[2] + "\n"
+	if err = os.WriteFile(keysFile, []byte(listing), 0o600); err != nil {
+		t.Fatalf("write keys file: %v", err)
+	}
+	fromFile := filepath.Join(dir, "file.yaml")
+	if err = os.WriteFile(fromFile, []byte("mode: srv\ncrypto:\n  keys_file: keys.txt\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	file, err = Load(fromFile)
+	if err != nil {
+		t.Fatalf("Load(keys_file) error = %v", err)
+	}
+	if got := Apply(file).KeysHex; !reflect.DeepEqual(got, ring) {
+		t.Fatalf("keys_file KeysHex = %v, want %v", got, ring)
+	}
+	if file.Crypto.KeysFile != "" {
+		t.Fatalf("Load kept keys_file = %q after reading it", file.Crypto.KeysFile)
+	}
+}
+
+func TestLoadCryptoKeysConflicts(t *testing.T) {
+	const key = "0011223344556677889900112233445566778899001122334455667788990011"
+	bodies := map[string]string{
+		"keys+key":       "mode: srv\ncrypto:\n  key: " + key + "\n  keys:\n    - " + key + "\n",
+		"keys+key_file":  "mode: srv\ncrypto:\n  key_file: k\n  keys:\n    - " + key + "\n",
+		"keys+keys_file": "mode: srv\ncrypto:\n  keys_file: k\n  keys:\n    - " + key + "\n",
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "olcrtc.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			if _, err := Load(path); !errors.Is(err, ErrCryptoKeysConflict) {
+				t.Fatalf("Load() error = %v, want %v", err, ErrCryptoKeysConflict)
+			}
+		})
 	}
 }
 
@@ -404,5 +517,72 @@ func TestLoadInvalidUTF8(t *testing.T) {
 	_, err := Load(path)
 	if !errors.Is(err, ErrConfigInvalidUTF8) {
 		t.Fatalf("Load() error = %v, want invalid UTF-8 error", err)
+	}
+}
+
+func TestLoadRouteInlineAndFile(t *testing.T) {
+	dir := t.TempDir()
+	const listing = "# ru\ndomain:ru\n1.2.3.0/24\n"
+	if err := os.WriteFile(filepath.Join(dir, "rules.txt"), []byte(listing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "olcrtc.yaml")
+	body := "mode: cnc\nroute:\n  direct:\n    - full:a.test\n  direct_file: rules.txt\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if file.Route.DirectFile != "" {
+		t.Fatalf("Load() left direct_file = %q, want it read into direct", file.Route.DirectFile)
+	}
+	if got, want := Apply(file).DirectRules, "full:a.test\n"+listing; got != want {
+		t.Fatalf("DirectRules = %q, want %q", got, want)
+	}
+}
+
+func TestLoadRouteDirectFileMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "olcrtc.yaml")
+	if err := os.WriteFile(path, []byte("mode: cnc\nroute:\n  direct_file: nope.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() accepted a missing direct_file")
+	}
+}
+
+func TestApplyProfileOverridesRouteOnlyWhenNamed(t *testing.T) {
+	base := Apply(File{Mode: "cnc", Settings: Settings{Route: Route{Direct: []string{"domain:ru"}}}})
+	if base.DirectRules != "domain:ru\n" {
+		t.Fatalf("base DirectRules = %q", base.DirectRules)
+	}
+	kept := ApplyProfile(base, Profile{Name: "same"})
+	if kept.DirectRules != "domain:ru\n" {
+		t.Fatalf("profile without route changed DirectRules to %q", kept.DirectRules)
+	}
+	replaced := ApplyProfile(base, Profile{
+		Name: "by", Settings: Settings{Route: Route{Direct: []string{"domain:by", "10.0.0.0/8"}}},
+	})
+	if replaced.DirectRules != "domain:by\n10.0.0.0/8\n" {
+		t.Fatalf("profile route = %q", replaced.DirectRules)
+	}
+}
+
+func TestApplySettingsDTLSProfileInheritsAndOverrides(t *testing.T) {
+	base := ApplySettings(session.Config{UDPDisabled: true}, Settings{DTLS: DTLS{Profile: "chrome-linux-138-compat-v1"}})
+	if base.DTLSProfile != "chrome-linux-138-compat-v1" {
+		t.Fatalf("base profile not applied: %q", base.DTLSProfile)
+	}
+	// A profile without dtls inherits the base value.
+	inherited := ApplyProfile(base, Profile{Settings: Settings{Room: Room{ID: "r2"}}})
+	if inherited.DTLSProfile != "chrome-linux-138-compat-v1" {
+		t.Fatalf("profile lost inherited dtls profile: %q", inherited.DTLSProfile)
+	}
+	// An explicit off overrides the inherited profile.
+	off := ApplyProfile(base, Profile{Settings: Settings{DTLS: DTLS{Profile: "off"}}})
+	if off.DTLSProfile != "off" {
+		t.Fatalf("explicit off did not override: %q", off.DTLSProfile)
 	}
 }

@@ -1,7 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
-use crate::client_perf::{self, Stage as PerfStage};
 use anyhow::{Result, bail};
 use bytes::BytesMut;
 use crossbeam_queue::ArrayQueue;
@@ -13,12 +9,13 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
+use tokio::sync::Notify;
 
 pub const PACKET_HEADROOM: usize = 64;
-pub const PACKET_CAPACITY: usize = 2304;
-pub const PACKET_POOL_PER_WORKER: usize = 256;
-pub const PACKET_POOL_SHARED: usize = 512;
-const PACKET_POOL_RETAINED_MAX: usize = 2048;
+pub const PACKET_CAPACITY: usize = 2048;
+pub const PACKET_POOL_PER_WORKER: usize = 64;
+pub const PACKET_POOL_SHARED: usize = 256;
+const PACKET_POOL_RETAINED_MAX: usize = 4096;
 
 pub const fn packet_pool_size(workers: usize) -> usize {
     workers
@@ -30,6 +27,7 @@ pub struct PacketPool {
     queue: ArrayQueue<BytesMut>,
     allocated: AtomicUsize,
     allocation_limit: usize,
+    available: Notify,
 }
 
 impl PacketPool {
@@ -40,14 +38,15 @@ impl PacketPool {
             queue: ArrayQueue::new(retained_limit),
             allocated: AtomicUsize::new(0),
             allocation_limit: capacity,
+            available: Notify::new(),
         })
     }
 
-    pub fn try_acquire(self: &Arc<Self>) -> Option<PacketBuf> {
-        client_perf::measure_sampled(PerfStage::PacketPool, 128, || self.try_acquire_inner())
+    pub async fn wait_available(&self) {
+        self.available.notified().await;
     }
 
-    fn try_acquire_inner(self: &Arc<Self>) -> Option<PacketBuf> {
+    pub fn try_acquire(self: &Arc<Self>) -> Option<PacketBuf> {
         let storage = if let Some(storage) = self.queue.pop() {
             storage
         } else {
@@ -93,17 +92,15 @@ impl PacketPool {
     }
 
     fn release(&self, storage: BytesMut) {
-        client_perf::measure_sampled(PerfStage::PacketPool, 128, || self.release_inner(storage));
-    }
-
-    fn release_inner(&self, storage: BytesMut) {
         if storage.len() != PACKET_CAPACITY {
             self.allocated.fetch_sub(1, Ordering::AcqRel);
+            self.available.notify_one();
             return;
         }
         if self.queue.push(storage).is_err() {
             self.allocated.fetch_sub(1, Ordering::AcqRel);
         }
+        self.available.notify_one();
     }
 }
 
@@ -126,7 +123,6 @@ impl PacketBuf {
         &self.storage[self.range.clone()]
     }
 
-    #[allow(dead_code)]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.storage[self.range.clone()]
     }
@@ -327,7 +323,7 @@ mod tests {
 
     #[test]
     fn production_pool_covers_all_bounded_worker_queues() {
-        for (workers, expected) in [(9, 2_816), (27, 7_424), (108, 28_160), (126, 32_768)] {
+        for (workers, expected) in [(9, 832), (27, 1_984), (90, 6_016), (100, 6_656)] {
             assert_eq!(packet_pool_size(workers), expected);
         }
     }

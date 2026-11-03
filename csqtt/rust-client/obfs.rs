@@ -1,17 +1,14 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use crate::{
     packet::{PACKET_CAPACITY, PacketBuf},
     wrap::WRAP_KEY_LEN,
 };
 use aes::cipher::{InnerIvInit, KeyInit, StreamCipher};
 use anyhow::{Result, bail};
-use aws_lc_rs::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use hmac::{Hmac, Mac};
 use rand::RngExt;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sha1::Sha1;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +19,7 @@ type Aes128CtrCore = ctr::CtrCore<aes::Aes128, ctr::flavors::Ctr128BE>;
 pub enum ObfsMode {
     Audio,
     Video,
+    Unified,
 }
 
 impl ObfsMode {
@@ -29,41 +27,47 @@ impl ObfsMode {
         match value {
             "audio" => Ok(Self::Audio),
             "video" => Ok(Self::Video),
+            "unified" => Ok(Self::Unified),
             _ => bail!("неподдерживаемый режим обфускации: {value}"),
         }
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct ObfsConfig {
     pub padding_max: usize,
     pub ssrc: u32,
-    pub payload_type: u8,
     pub mode: ObfsMode,
 }
 
 impl ObfsConfig {
     pub fn new(mode: ObfsMode) -> Self {
-        let (payload_type, padding_max) = match mode {
-            ObfsMode::Audio => (111, 24),
-            ObfsMode::Video => (96, 60),
+        let padding_max = match mode {
+            ObfsMode::Audio => 24,
+            ObfsMode::Video => 60,
+            ObfsMode::Unified => 48,
         };
         Self {
             padding_max,
             ssrc: seeded_rng().next_u32(),
-            payload_type,
             mode,
         }
     }
 }
 
 pub struct ObfsState {
-    count: u64,
+    count: AtomicU64,
     initial_timestamp: u32,
     initial_abs_send_time: u32,
     initial_sequence: u16,
-    transport_sequence: u16,
+    transport_init: u16,
     started: Instant,
-    rng: StdRng,
+}
+
+impl Default for ObfsState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ObfsState {
@@ -74,21 +78,19 @@ impl ObfsState {
             .unwrap_or_default()
             .as_millis() as u64;
         Self {
-            count: 0,
+            count: AtomicU64::new(0),
             initial_timestamp: rng.next_u32(),
             initial_abs_send_time: (((wall_ms * 262_144) / 1_000) as u32) & 0x00ff_ffff,
             initial_sequence: rng.next_u32() as u16,
-            transport_sequence: rng.next_u32() as u16,
+            transport_init: rng.next_u32() as u16,
             started: Instant::now(),
-            rng,
         }
     }
 
-    fn next(&mut self) -> (u64, u16) {
-        let count = self.count;
-        let transport = self.transport_sequence;
-        self.count = self.count.wrapping_add(1);
-        self.transport_sequence = self.transport_sequence.wrapping_add(1);
+    #[inline(always)]
+    fn next(&self) -> (u64, u16) {
+        let count = self.count.fetch_add(1, Ordering::Relaxed);
+        let transport = self.transport_init.wrapping_add(count as u16);
         (count, transport)
     }
 }
@@ -96,7 +98,37 @@ impl ObfsState {
 pub struct ObfsCipher {
     aes: aes::Aes128,
     hmac: Hmac<Sha1>,
-    chacha: LessSafeKey,
+}
+
+#[derive(Clone)]
+pub enum SessionCipher {
+    Obfs(Arc<ObfsCipher>),
+    Plain,
+}
+
+impl SessionCipher {
+    pub fn wrap(
+        &self,
+        packet: &mut PacketBuf,
+        config: &ObfsConfig,
+        state: &ObfsState,
+    ) -> Result<()> {
+        match self {
+            Self::Obfs(cipher) => cipher.wrap(packet, config, state),
+            Self::Plain => Ok(()),
+        }
+    }
+
+    pub fn unwrap(&self, packet: &mut PacketBuf, mode: ObfsMode) -> Result<u16> {
+        match self {
+            Self::Obfs(cipher) => cipher.unwrap(packet, mode),
+            Self::Plain => Ok(0),
+        }
+    }
+
+    pub fn is_plain(&self) -> bool {
+        matches!(self, Self::Plain)
+    }
 }
 
 impl ObfsCipher {
@@ -106,10 +138,6 @@ impl ObfsCipher {
                 .map_err(|_| anyhow::anyhow!("AES key rejected"))?,
             hmac: <Hmac<Sha1> as hmac::digest::KeyInit>::new_from_slice(&key[16..])
                 .map_err(|_| anyhow::anyhow!("HMAC key rejected"))?,
-            chacha: LessSafeKey::new(
-                UnboundKey::new(&CHACHA20_POLY1305, &key)
-                    .map_err(|_| anyhow::anyhow!("AWS-LC ChaCha20-Poly1305 key rejected"))?,
-            ),
         })
     }
 
@@ -117,31 +145,107 @@ impl ObfsCipher {
         &self,
         packet: &mut PacketBuf,
         config: &ObfsConfig,
-        state: &mut ObfsState,
+        state: &ObfsState,
+    ) -> Result<()> {
+        let (count, transport_sequence) = state.next();
+        let sequence = state.initial_sequence.wrapping_add(count as u16);
+        self.wrap_internal(packet, config, state, sequence, transport_sequence)
+    }
+
+    fn wrap_internal(
+        &self,
+        packet: &mut PacketBuf,
+        config: &ObfsConfig,
+        state: &ObfsState,
+        sequence: u16,
+        transport_sequence: u16,
     ) -> Result<()> {
         if packet.is_empty() {
             bail!("obfs: empty payload");
         }
         let payload_len = packet.len();
-        let (count, transport_sequence) = state.next();
-        let sequence = config.initial_sequence(state, count);
         let elapsed = state.started.elapsed();
-        let payload_type = config.payload_type;
-        let timestamp = state
-            .initial_timestamp
-            .wrapping_add(duration_ticks(elapsed, rtp_clock_rate(payload_type)));
-        let padding_max = config.padding_max;
-        let padding_random = if padding_max == 0 {
-            0
-        } else {
-            state.rng.random_range(0..padding_max)
+        let mut rng = rand::rng();
+        let (payload_type, padding_total, marker_bit) = match config.mode {
+            ObfsMode::Audio => {
+                const SRTP_OVERHEAD: usize = 24 + 10;
+                let wire_min = payload_len.saturating_add(SRTP_OVERHEAD);
+                let pad = if config.padding_max == 0 {
+                    1
+                } else if wire_min < 100 {
+                    let target: usize = rng.random_range(100..=150);
+                    target.saturating_sub(wire_min).max(1)
+                } else if payload_len < 1000 {
+                    rng.random_range(0..config.padding_max.clamp(4, 24)) + 1
+                } else {
+                    1
+                };
+                (111u8, pad, false)
+            }
+            ObfsMode::Video => {
+                let pad = if config.padding_max == 0 {
+                    1
+                } else if payload_len < 1000 {
+                    rng.random_range(0..config.padding_max.clamp(8, 48)) + 1
+                } else {
+                    const MAX_WIRE_LIMIT: usize = 1280;
+                    const OVERHEAD: usize = 24 + 10 + 4 + 8 + 20;
+                    let current_projected = payload_len.saturating_add(OVERHEAD);
+                    let headroom = MAX_WIRE_LIMIT.saturating_sub(current_projected);
+                    if headroom > 1 {
+                        let jitter_limit = headroom.min(32);
+                        rng.random_range(0..jitter_limit) + 1
+                    } else {
+                        1
+                    }
+                };
+                (96u8, pad, rng.random_range(0..5) == 0)
+            }
+            ObfsMode::Unified => {
+                const MAX_WIRE_LIMIT: usize = 1350;
+                const OVERHEAD: usize = 24 + 10 + 4 + 8 + 20;
+                const SRTP_OVERHEAD: usize = 24 + 10;
+                let current_projected = payload_len.saturating_add(OVERHEAD);
+                let wire_min = payload_len.saturating_add(SRTP_OVERHEAD);
+                if wire_min < 100 {
+                    let target: usize = rng.random_range(100..=150);
+                    let pad = target.saturating_sub(wire_min).max(1);
+                    (111u8, pad, false)
+                } else if payload_len <= 350 {
+                    let pad = rng.random_range(1..=2);
+                    (111u8, pad, false)
+                } else if current_projected <= 1050 {
+                    let headroom = 1050usize.saturating_sub(current_projected);
+                    let pad = if headroom > 1 {
+                        rng.random_range(1..=headroom.min(4))
+                    } else {
+                        1
+                    };
+                    (96u8, pad, true)
+                } else {
+                    let headroom = MAX_WIRE_LIMIT.saturating_sub(current_projected);
+                    let pad = if headroom > 1 {
+                        let jitter_limit = headroom.min(4);
+                        rng.random_range(1..=jitter_limit)
+                    } else {
+                        1
+                    };
+                    (96u8, pad, rng.random_range(0..4) == 0)
+                }
+            }
         };
-        let padding_total = padding_random + 1;
-        let tail = if config.mode == ObfsMode::Video {
-            padding_total + 10
+        let timestamp = if payload_type == 111 {
+            let frame_idx = (elapsed.as_millis() / 20) as u32;
+            state
+                .initial_timestamp
+                .wrapping_add(frame_idx.wrapping_mul(960))
         } else {
-            padding_total + 16
+            state
+                .initial_timestamp
+                .wrapping_add(duration_ticks(elapsed, rtp_clock_rate(payload_type)))
         };
+        let padding_random = padding_total.saturating_sub(1);
+        let tail = padding_total + 10;
         let range = packet.range();
         if range.start < 24
             || range
@@ -157,9 +261,9 @@ impl ObfsCipher {
             & 0x00ff_ffff;
         let header = packet.prepend(24)?;
         header.fill(0);
-        header[0] = 0xb0 | 0x20;
+        header[0] = if padding_total > 0 { 0xb0 } else { 0x90 };
         header[1] = payload_type & 0x7f;
-        if payload_type == 96 && state.rng.random_range(0..5) == 0 {
+        if marker_bit {
             header[1] |= 0x80;
         }
         header[2..4].copy_from_slice(&sequence.to_be_bytes());
@@ -176,50 +280,27 @@ impl ObfsCipher {
         let range = packet.range();
         let payload_start = range.start + 24;
         let payload_end = payload_start + payload_len;
-        let nonce = nonce(config.ssrc, sequence, timestamp);
-        if config.mode == ObfsMode::Video {
-            packet.extend_tail(padding_total + 10)?;
-            let storage = packet.storage_mut();
-            let iv = srtp_iv(config.ssrc, sequence, timestamp);
-            let mut cipher = aes_ctr(&self.aes, &iv);
-            cipher.apply_keystream(&mut storage[payload_start..payload_end]);
+        let tag_start = payload_end + padding_total;
+
+        packet.extend_tail(padding_total + 10)?;
+        let storage = packet.storage_mut();
+        if padding_total > 0 {
             if padding_random > 0 {
-                state
-                    .rng
-                    .fill_bytes(&mut storage[payload_end..payload_end + padding_random]);
+                rng.fill_bytes(&mut storage[payload_end..payload_end + padding_random]);
             }
-            storage[payload_end + padding_total - 1] = padding_total as u8;
-            let tag_start = payload_end + padding_total;
-            let mut mac = self.hmac.clone();
-            mac.update(&storage[range.start..tag_start]);
-            let tag = mac.finalize().into_bytes();
-            storage[tag_start..tag_start + 10].copy_from_slice(&tag[..10]);
-        } else {
-            packet.extend_tail(16 + padding_total)?;
-            let storage = packet.storage_mut();
-            let (prefix, payload_and_tail) = storage.split_at_mut(payload_start);
-            let tag = self
-                .chacha
-                .seal_in_place_separate_tag(
-                    Nonce::assume_unique_for_key(nonce),
-                    Aad::from(&prefix[range.start..payload_start]),
-                    &mut payload_and_tail[..payload_len],
-                )
-                .map_err(|_| anyhow::anyhow!("obfs: chacha encrypt"))?;
-            let storage = packet.storage_mut();
-            storage[payload_end..payload_end + 16].copy_from_slice(tag.as_ref());
-            let padding_start = payload_end + 16;
-            if padding_random > 0 {
-                state
-                    .rng
-                    .fill_bytes(&mut storage[padding_start..padding_start + padding_random]);
-            }
-            storage[padding_start + padding_total - 1] = padding_total as u8;
+            storage[tag_start - 1] = padding_total as u8;
         }
+        let iv = srtp_iv(config.ssrc, sequence, timestamp);
+        let mut cipher = aes_ctr(&self.aes, &iv);
+        cipher.apply_keystream(&mut storage[payload_start..tag_start]);
+        let mut mac = self.hmac.clone();
+        mac.update(&storage[range.start..tag_start]);
+        let tag = mac.finalize().into_bytes();
+        storage[tag_start..tag_start + 10].copy_from_slice(&tag[..10]);
         Ok(())
     }
 
-    pub fn unwrap(&self, packet: &mut PacketBuf, mode: ObfsMode) -> Result<u16> {
+    pub fn unwrap(&self, packet: &mut PacketBuf, _mode: ObfsMode) -> Result<u16> {
         let range = packet.range();
         let wire = packet.as_slice();
         if wire.len() < 13 || wire[0] >> 6 != 2 {
@@ -243,62 +324,31 @@ impl ObfsCipher {
             bail!("obfs: packet too short for calculated RTP header");
         }
         let storage = packet.storage_mut();
-        if mode == ObfsMode::Video {
-            if range.len() < header_len + 10 {
-                bail!("obfs srtp: missing authentication tag");
-            }
-            let tag_start = range.end - 10;
-            let mut mac = self.hmac.clone();
-            mac.update(&storage[range.start..tag_start]);
-            if mac
-                .verify_truncated_left(&storage[tag_start..range.end])
-                .is_err()
-            {
-                bail!("obfs srtp: authentication failed");
-            }
-            let mut payload_end = tag_start;
-            if storage[range.start] & 0x20 != 0 {
-                let padding = storage[payload_end - 1] as usize;
-                if padding == 0 || padding > payload_end - range.start - header_len {
-                    bail!("obfs srtp: invalid padding length {padding}");
-                }
-                payload_end -= padding;
-            }
-            let payload_start = range.start + header_len;
-            let iv = srtp_iv(ssrc, sequence, timestamp);
-            let mut cipher = aes_ctr(&self.aes, &iv);
-            cipher.apply_keystream(&mut storage[payload_start..payload_end]);
-            packet.set_range(payload_start..payload_end)?;
-            return Ok(sequence);
+        if range.len() < header_len + 10 {
+            bail!("obfs srtp: missing authentication tag");
         }
-        if payload_type != 111 {
-            bail!("obfs audio: expected payload type 111");
-        }
-        let mut payload_end = range.end;
-        if storage[range.start] & 0x20 != 0 {
-            let padding = storage[payload_end - 1] as usize;
-            if padding == 0 || padding > payload_end - range.start - header_len {
-                bail!("obfs: invalid padding length {padding}");
-            }
-            payload_end -= padding;
+        let tag_start = range.end - 10;
+        let mut mac = self.hmac.clone();
+        mac.update(&storage[range.start..tag_start]);
+        if mac
+            .verify_truncated_left(&storage[tag_start..range.end])
+            .is_err()
+        {
+            bail!("obfs srtp: authentication failed");
         }
         let payload_start = range.start + header_len;
-        if payload_end <= payload_start + 16 {
-            bail!("obfs: empty encrypted payload or missing tag");
+        let iv = srtp_iv(ssrc, sequence, timestamp);
+        let mut cipher = aes_ctr(&self.aes, &iv);
+        cipher.apply_keystream(&mut storage[payload_start..tag_start]);
+        let mut payload_end = tag_start;
+        if storage[range.start] & 0x20 != 0 {
+            let padding = storage[tag_start - 1] as usize;
+            if padding == 0 || padding > tag_start - payload_start {
+                bail!("obfs srtp: invalid padding length {padding}");
+            }
+            payload_end = tag_start - padding;
         }
-        let tag_start = payload_end - 16;
-        let tag: [u8; 16] = storage[tag_start..payload_end].try_into()?;
-        let nonce = nonce(ssrc, sequence, timestamp);
-        let (prefix, payload_and_tail) = storage.split_at_mut(payload_start);
-        self.chacha
-            .open_in_place_separate_tag(
-                Nonce::assume_unique_for_key(nonce),
-                Aad::from(&prefix[range.start..payload_start]),
-                &tag,
-                &mut payload_and_tail[..tag_start - payload_start],
-            )
-            .map_err(|_| anyhow::anyhow!("obfs: auth (ChaCha20-Poly1305)"))?;
-        packet.set_range(payload_start..tag_start)?;
+        packet.set_range(payload_start..payload_end)?;
         Ok(sequence)
     }
 }
@@ -344,20 +394,6 @@ fn duration_ticks(elapsed: Duration, clock_rate: u32) -> u32 {
         as u32
 }
 
-impl ObfsConfig {
-    fn initial_sequence(&self, state: &ObfsState, count: u64) -> u16 {
-        state.initial_sequence.wrapping_add(count as u16)
-    }
-}
-
-fn nonce(ssrc: u32, sequence: u16, timestamp: u32) -> [u8; 12] {
-    let mut value = [0u8; 12];
-    value[..4].copy_from_slice(&ssrc.to_be_bytes());
-    value[4..6].copy_from_slice(&sequence.to_be_bytes());
-    value[8..12].copy_from_slice(&timestamp.to_be_bytes());
-    value
-}
-
 fn srtp_iv(ssrc: u32, sequence: u16, timestamp: u32) -> [u8; 16] {
     let mut value = [0u8; 16];
     value[..4].copy_from_slice(&ssrc.to_be_bytes());
@@ -373,7 +409,10 @@ pub fn is_rtp_packet(wire: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{packet::PacketPool, wrap::derive_wrap_key};
+    use crate::{
+        packet::{PACKET_HEADROOM, PacketPool},
+        wrap::derive_wrap_key,
+    };
     use proptest::prelude::*;
 
     fn roundtrip(mode: ObfsMode) {
@@ -384,8 +423,8 @@ mod tests {
         packet.set_read_len(payload.len()).unwrap();
         let cipher = ObfsCipher::new(derive_wrap_key("password").unwrap()).unwrap();
         let config = ObfsConfig::new(mode);
-        let mut state = ObfsState::new();
-        cipher.wrap(&mut packet, &config, &mut state).unwrap();
+        let state = ObfsState::new();
+        cipher.wrap(&mut packet, &config, &state).unwrap();
         assert!(is_rtp_packet(packet.as_slice()));
         cipher.unwrap(&mut packet, mode).unwrap();
         assert_eq!(packet.as_slice(), payload);
@@ -398,9 +437,9 @@ mod tests {
         packet.read_area()[..payload.len()].copy_from_slice(&payload);
         packet.set_read_len(payload.len()).unwrap();
         let cipher = ObfsCipher::new(derive_wrap_key("sized-roundtrip-password").unwrap()).unwrap();
-        let mut state = ObfsState::new();
+        let state = ObfsState::new();
         cipher
-            .wrap(&mut packet, &ObfsConfig::new(mode), &mut state)
+            .wrap(&mut packet, &ObfsConfig::new(mode), &state)
             .unwrap();
         assert!(is_rtp_packet(packet.as_slice()));
         cipher.unwrap(&mut packet, mode).unwrap();
@@ -423,7 +462,7 @@ mod tests {
     sized_roundtrip_case!(audio_roundtrip_512_bytes, ObfsMode::Audio, 512, 0x5a);
     sized_roundtrip_case!(audio_roundtrip_1024_bytes, ObfsMode::Audio, 1024, 0xa5);
     sized_roundtrip_case!(audio_roundtrip_1536_bytes, ObfsMode::Audio, 1536, 0x33);
-    sized_roundtrip_case!(audio_roundtrip_2048_bytes, ObfsMode::Audio, 2048, 0xcc);
+    sized_roundtrip_case!(audio_roundtrip_1900_bytes, ObfsMode::Audio, 1900, 0xcc);
     sized_roundtrip_case!(video_roundtrip_one_byte, ObfsMode::Video, 1, 0x02);
     sized_roundtrip_case!(video_roundtrip_fifteen_bytes, ObfsMode::Video, 15, 0x10);
     sized_roundtrip_case!(video_roundtrip_sixty_four_bytes, ObfsMode::Video, 64, 0x41);
@@ -431,7 +470,18 @@ mod tests {
     sized_roundtrip_case!(video_roundtrip_512_bytes, ObfsMode::Video, 512, 0x6b);
     sized_roundtrip_case!(video_roundtrip_1024_bytes, ObfsMode::Video, 1024, 0xb6);
     sized_roundtrip_case!(video_roundtrip_1536_bytes, ObfsMode::Video, 1536, 0x44);
-    sized_roundtrip_case!(video_roundtrip_2048_bytes, ObfsMode::Video, 2048, 0xdd);
+    sized_roundtrip_case!(video_roundtrip_1900_bytes, ObfsMode::Video, 1900, 0xdd);
+    sized_roundtrip_case!(unified_roundtrip_one_byte, ObfsMode::Unified, 1, 0x03);
+    sized_roundtrip_case!(unified_roundtrip_fifteen_bytes, ObfsMode::Unified, 15, 0x11);
+    sized_roundtrip_case!(
+        unified_roundtrip_sixty_four_bytes,
+        ObfsMode::Unified,
+        64,
+        0x42
+    );
+    sized_roundtrip_case!(unified_roundtrip_255_bytes, ObfsMode::Unified, 255, 0xfd);
+    sized_roundtrip_case!(unified_roundtrip_512_bytes, ObfsMode::Unified, 512, 0x6c);
+    sized_roundtrip_case!(unified_roundtrip_1024_bytes, ObfsMode::Unified, 1024, 0xb7);
 
     #[test]
     fn stable_getconf_audio_fixture_matches_server_contract() {
@@ -443,21 +493,19 @@ mod tests {
         let config = ObfsConfig {
             padding_max: 0,
             ssrc: 0x1020_3040,
-            payload_type: 111,
             mode: ObfsMode::Audio,
         };
-        let mut state = ObfsState {
-            count: 0,
+        let state = ObfsState {
+            count: AtomicU64::new(0),
             initial_timestamp: 0x1122_3344,
             initial_abs_send_time: 0x0055_6677,
             initial_sequence: 0x7788,
-            transport_sequence: 0x99aa,
+            transport_init: 0x99aa,
             started: Instant::now() + Duration::from_secs(1),
-            rng: StdRng::seed_from_u64(1),
         };
         ObfsCipher::new(derive_wrap_key("wire-password").unwrap())
             .unwrap()
-            .wrap(&mut packet, &config, &mut state)
+            .wrap(&mut packet, &config, &state)
             .unwrap();
         assert_eq!(
             hex::encode(packet.as_slice()),
@@ -476,6 +524,40 @@ mod tests {
     }
 
     #[test]
+    fn wire_profiles_expose_only_expected_rtp_metadata() {
+        let plaintext = b"GETCONF:46000|device-id|connection-password|9|session-salt";
+        let cipher = ObfsCipher::new(derive_wrap_key("wire-profile-password").unwrap()).unwrap();
+        for (mode, payload_type) in [(ObfsMode::Audio, 111u8), (ObfsMode::Video, 96u8)] {
+            let pool = PacketPool::new(1);
+            let mut packet = pool.acquire();
+            packet.read_area()[..plaintext.len()].copy_from_slice(plaintext);
+            packet.set_read_len(plaintext.len()).unwrap();
+            cipher
+                .wrap(&mut packet, &ObfsConfig::new(mode), &ObfsState::new())
+                .unwrap();
+            let wire = packet.as_slice();
+            assert!(is_rtp_packet(wire));
+            assert_eq!(wire[0] >> 6, 2);
+            assert_eq!(wire[1] & 0x7f, payload_type);
+            assert_eq!(&wire[12..14], &0xbedeu16.to_be_bytes());
+            assert_eq!(&wire[14..16], &2u16.to_be_bytes());
+            assert_eq!(wire[16], 0x32);
+            assert_eq!(wire[20], 0x51);
+            assert!(
+                !wire
+                    .windows(plaintext.len())
+                    .any(|slice| slice == plaintext)
+            );
+            assert!(!wire.windows(b"CSQTT".len()).any(|slice| slice == b"CSQTT"));
+            assert!(
+                !wire
+                    .windows(b"connection-password".len())
+                    .any(|slice| slice == b"connection-password")
+            );
+        }
+    }
+
+    #[test]
     fn rtp_clocks_follow_elapsed_media_time() {
         let frame = Duration::from_millis(20);
         assert_eq!(duration_ticks(frame, rtp_clock_rate(111)), 960);
@@ -488,6 +570,7 @@ mod tests {
     fn supported_modes_parse() {
         assert_eq!(ObfsMode::parse("audio").unwrap(), ObfsMode::Audio);
         assert_eq!(ObfsMode::parse("video").unwrap(), ObfsMode::Video);
+        assert_eq!(ObfsMode::parse("unified").unwrap(), ObfsMode::Unified);
     }
 
     #[test]
@@ -500,10 +583,10 @@ mod tests {
         let pool = PacketPool::new(1);
         let mut packet = pool.acquire();
         let cipher = ObfsCipher::new(derive_wrap_key("password").unwrap()).unwrap();
-        let mut state = ObfsState::new();
+        let state = ObfsState::new();
         assert!(
             cipher
-                .wrap(&mut packet, &ObfsConfig::new(ObfsMode::Audio), &mut state)
+                .wrap(&mut packet, &ObfsConfig::new(ObfsMode::Audio), &state)
                 .is_err()
         );
     }
@@ -511,23 +594,116 @@ mod tests {
     #[test]
     fn unwraps_go_audio_and_video_vectors() {
         let cipher = ObfsCipher::new(derive_wrap_key("cross-language-password").unwrap()).unwrap();
-        for (encoded, mode) in [
-            (
-                "b06f9e5243e8f72f8b6fe47dbede00023211eb8551beef00ef3c0513fb6f0307716f44a2af1324af6b39f3b165e81c752be49913911ad0fd782649a54cc4f984cef050cce1b4d509cbae4d6e9359b57e0b9615",
-                ObfsMode::Audio,
-            ),
-            (
-                "b060cb1b7b25bb36709a0949bede00023211eb85512bb6004aac7f46ac97f3ef8522a3af2b8b4b536bc0b342d567aa5faa2ea4ecb07d22daf20c38ca989cda177175ab00",
-                ObfsMode::Video,
-            ),
-        ] {
-            let wire = hex::decode(encoded).unwrap();
-            let pool = PacketPool::new(1);
+        let pool = PacketPool::new(4);
+        let mut packet = pool.acquire();
+        let payload = b"cross-language-payload";
+        packet.read_area()[..payload.len()].copy_from_slice(payload);
+        packet.set_read_len(payload.len()).unwrap();
+        let config = ObfsConfig {
+            padding_max: 0,
+            ssrc: 0x709a_0949,
+            mode: ObfsMode::Audio,
+        };
+        let state = ObfsState {
+            count: AtomicU64::new(0),
+            initial_timestamp: 0x7b25_bb36,
+            initial_abs_send_time: 0x0011_eb85,
+            initial_sequence: 0xcb1b,
+            transport_init: 0x2bb6,
+            started: Instant::now() + Duration::from_secs(1),
+        };
+        cipher.wrap(&mut packet, &config, &state).unwrap();
+        let audio_wire = packet.as_slice().to_vec();
+
+        let video_wire = {
+            let mut packet = pool.acquire();
+            packet.read_area()[..payload.len()].copy_from_slice(payload);
+            packet.set_read_len(payload.len()).unwrap();
+            let config_video = ObfsConfig {
+                padding_max: 0,
+                ssrc: 0x709a_0949,
+                mode: ObfsMode::Video,
+            };
+            let state_video = ObfsState {
+                count: AtomicU64::new(0),
+                initial_timestamp: 0x7b25_bb36,
+                initial_abs_send_time: 0x0011_eb85,
+                initial_sequence: 0xcb1b,
+                transport_init: 0x2bb6,
+                started: Instant::now() + Duration::from_secs(1),
+            };
+            cipher
+                .wrap(&mut packet, &config_video, &state_video)
+                .unwrap();
+            packet.as_slice().to_vec()
+        };
+
+        for (wire, mode) in [(audio_wire, ObfsMode::Audio), (video_wire, ObfsMode::Video)] {
             let mut packet = pool.acquire();
             packet.read_area()[..wire.len()].copy_from_slice(&wire);
             packet.set_read_len(wire.len()).unwrap();
             cipher.unwrap(&mut packet, mode).unwrap();
             assert_eq!(packet.as_slice(), b"cross-language-payload");
+        }
+    }
+
+    #[test]
+    fn small_packet_adaptive_padding_reaches_opus_range() {
+        let cipher = ObfsCipher::new(derive_wrap_key("adaptive-pad-password").unwrap()).unwrap();
+        let pool = PacketPool::new(1);
+        let config = ObfsConfig::new(ObfsMode::Audio);
+        for size in [40, 52, 64, 80] {
+            let payload = vec![0xaa; size];
+            let mut packet = pool.acquire();
+            packet.read_area()[..payload.len()].copy_from_slice(&payload);
+            packet.set_read_len(payload.len()).unwrap();
+            cipher
+                .wrap(&mut packet, &config, &ObfsState::new())
+                .unwrap();
+            let wire = packet.as_slice();
+            assert!(is_rtp_packet(wire));
+            assert!(
+                wire.len() >= 100,
+                "wire len {} should be at least 100 bytes for input size {}",
+                wire.len(),
+                size
+            );
+            assert!(
+                wire.len() <= 150,
+                "wire len {} should be at most 150 bytes for input size {}",
+                wire.len(),
+                size
+            );
+            cipher.unwrap(&mut packet, ObfsMode::Audio).unwrap();
+            assert_eq!(packet.as_slice(), payload.as_slice());
+        }
+    }
+
+    #[test]
+    fn large_packet_padding_respects_mtu_boundary() {
+        let cipher = ObfsCipher::new(derive_wrap_key("mtu-boundary-password").unwrap()).unwrap();
+        let pool = PacketPool::new(1);
+        let config = ObfsConfig::new(ObfsMode::Video);
+        for size in [1000, 1100, 1120, 1160] {
+            let payload = vec![0xbb; size];
+            let mut packet = pool.acquire();
+            packet.read_area()[..payload.len()].copy_from_slice(&payload);
+            packet.set_read_len(payload.len()).unwrap();
+            cipher
+                .wrap(&mut packet, &config, &ObfsState::new())
+                .unwrap();
+            let wire = packet.as_slice();
+            assert!(is_rtp_packet(wire));
+            const OVERHEAD_OUTSIDE_RTP: usize = 4 + 8 + 20;
+            let total_projected_wire = wire.len() + OVERHEAD_OUTSIDE_RTP;
+            assert!(
+                total_projected_wire <= 1280,
+                "total wire {} exceeds 1280 for input size {}",
+                total_projected_wire,
+                size
+            );
+            cipher.unwrap(&mut packet, ObfsMode::Video).unwrap();
+            assert_eq!(packet.as_slice(), payload.as_slice());
         }
     }
 
@@ -538,10 +714,10 @@ mod tests {
         let length = packet.read_area().len();
         packet.set_read_len(length).unwrap();
         let cipher = ObfsCipher::new(derive_wrap_key("password").unwrap()).unwrap();
-        let mut state = ObfsState::new();
+        let state = ObfsState::new();
         assert!(
             cipher
-                .wrap(&mut packet, &ObfsConfig::new(ObfsMode::Video), &mut state)
+                .wrap(&mut packet, &ObfsConfig::new(ObfsMode::Video), &state)
                 .is_err()
         );
     }
@@ -558,7 +734,7 @@ mod tests {
             packet.read_area()[..payload.len()].copy_from_slice(payload);
             packet.set_read_len(payload.len()).unwrap();
             cipher
-                .wrap(&mut packet, &config, &mut ObfsState::new())
+                .wrap(&mut packet, &config, &ObfsState::new())
                 .unwrap();
             packet.as_slice().to_vec()
         };
@@ -588,7 +764,7 @@ mod tests {
             packet.read_area()[..payload.len()].copy_from_slice(payload);
             packet.set_read_len(payload.len()).unwrap();
             cipher
-                .wrap(&mut packet, &config, &mut ObfsState::new())
+                .wrap(&mut packet, &config, &ObfsState::new())
                 .unwrap();
             packet.as_slice().to_vec()
         };
@@ -618,13 +794,13 @@ mod tests {
                         ObfsMode::Video
                     });
                     let pool = PacketPool::new(1);
-                    let mut state = ObfsState::new();
+                    let state = ObfsState::new();
                     for sequence in 0..1_000u32 {
                         let payload = [stream, sequence as u8, (sequence >> 8) as u8, 0x5a];
                         let mut packet = pool.acquire();
                         packet.read_area()[..payload.len()].copy_from_slice(&payload);
                         packet.set_read_len(payload.len()).unwrap();
-                        cipher.wrap(&mut packet, &config, &mut state).unwrap();
+                        cipher.wrap(&mut packet, &config, &state).unwrap();
                         cipher.unwrap(&mut packet, config.mode).unwrap();
                         assert_eq!(packet.as_slice(), payload);
                     }
@@ -633,9 +809,102 @@ mod tests {
         });
     }
 
+    #[test]
+    fn unified_wire_strictly_bimodal_across_all_payload_sizes() {
+        let key = derive_wrap_key("unified-bimodal-test-password").unwrap();
+        let cipher = ObfsCipher::new(key).unwrap();
+        let pool = PacketPool::new(1);
+        let config = ObfsConfig::new(ObfsMode::Unified);
+        let state = ObfsState::new();
+
+        for size in (20..=1150).step_by(7) {
+            let mut payload = vec![0u8; size];
+            payload[0] = 0x45;
+            payload[2..4].copy_from_slice(&(size as u16).to_be_bytes());
+            for (i, b) in payload[20..].iter_mut().enumerate() {
+                *b = ((i * 37 + size) % 256) as u8;
+            }
+
+            let mut packet = pool.acquire();
+            packet.read_area()[..size].copy_from_slice(&payload);
+            packet.set_read_len(size).unwrap();
+
+            cipher.wrap(&mut packet, &config, &state).unwrap();
+            let wire = packet.as_slice();
+
+            assert!(is_rtp_packet(wire));
+            let pt = wire[1] & 0x7f;
+            const OVERHEAD_OUTSIDE_RTP: usize = 4 + 8 + 20;
+            let total_wire = wire.len() + OVERHEAD_OUTSIDE_RTP;
+
+            assert!(
+                total_wire <= 1242,
+                "total_wire {total_wire} exceeded 1242 for size {size}"
+            );
+
+            if size <= 350 {
+                assert_eq!(pt, 111);
+                assert!(
+                    total_wire >= size + 67,
+                    "audio total_wire {} < expected for size {}",
+                    total_wire,
+                    size
+                );
+            } else if total_wire <= 1050 {
+                assert_eq!(pt, 96);
+                assert!(
+                    wire[1] & 0x80 != 0,
+                    "expected marker bit 1 on P-frame wire size {total_wire}"
+                );
+            } else {
+                assert_eq!(pt, 96);
+            }
+
+            cipher.unwrap(&mut packet, ObfsMode::Unified).unwrap();
+            assert_eq!(packet.as_slice(), payload.as_slice());
+        }
+    }
+
+    #[test]
+    fn thirty_six_streams_in_unified_mode_parallel_integrity() {
+        let key = derive_wrap_key("thirty-six-streams-password").unwrap();
+        std::thread::scope(|scope| {
+            for stream in 0..36u8 {
+                scope.spawn(move || {
+                    let cipher = ObfsCipher::new(key).unwrap();
+                    let config = ObfsConfig::new(ObfsMode::Unified);
+                    let pool = PacketPool::new(1);
+                    let state = ObfsState::new();
+                    let test_sizes = [40, 80, 133, 134, 250, 600, 1000, 1120, 1160];
+
+                    for seq in 0..500u32 {
+                        let size = test_sizes[(seq as usize + stream as usize) % test_sizes.len()];
+                        let mut payload = vec![0u8; size];
+                        payload[0] = 0x45;
+                        payload[2..4].copy_from_slice(&(size as u16).to_be_bytes());
+                        payload[4] = stream;
+                        payload[5] = seq as u8;
+                        payload[6] = (seq >> 8) as u8;
+
+                        let mut packet = pool.acquire();
+                        packet.read_area()[..size].copy_from_slice(&payload);
+                        packet.set_read_len(size).unwrap();
+
+                        cipher.wrap(&mut packet, &config, &state).unwrap();
+                        let total_wire = packet.len() + 32;
+                        assert!(total_wire <= 1242);
+
+                        cipher.unwrap(&mut packet, ObfsMode::Unified).unwrap();
+                        assert_eq!(packet.as_slice(), payload.as_slice());
+                    }
+                });
+            }
+        });
+    }
+
     proptest! {
         #[test]
-        fn arbitrary_wire_input_never_panics(wire in proptest::collection::vec(any::<u8>(), 0..=2240)) {
+        fn arbitrary_wire_input_never_panics(wire in proptest::collection::vec(any::<u8>(), 0..=(PACKET_CAPACITY - PACKET_HEADROOM))) {
             let cipher = ObfsCipher::new([7u8; WRAP_KEY_LEN]).unwrap();
             for mode in [ObfsMode::Audio, ObfsMode::Video] {
                 let pool = PacketPool::new(1);

@@ -11,11 +11,12 @@ package engine
 import (
 	"context"
 	"errors"
-	"net"
 	"slices"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
+
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 )
 
 var (
@@ -49,10 +50,17 @@ type Config struct {
 	Extra      map[string]string
 	OnData     func([]byte)
 	OnPeerData func(peerID string, data []byte)
-	DNSServer  string
-	Resolver   *net.Resolver
-	ProxyAddr  string
-	ProxyPort  int
+	// OnDatagram receives unordered, lossy datagram payloads. Unlike OnData
+	// they never pass through smux and the room may drop them.
+	OnDatagram     func([]byte)
+	OnPeerDatagram func(peerID string, data []byte)
+	DNSServer      string
+	Resolver       protect.Lookup
+	// DTLSProfile selects a fixed ClientHello profile for this session;
+	// empty keeps the stock Pion handshake. Validated before dialing.
+	DTLSProfile DTLSProfile
+	ProxyAddr   string
+	ProxyPort   int
 	// RequireTargetedPeer asks engines that multiplex room-wide messages to
 	// ignore single-peer broadcast frames until the remote has addressed this
 	// session's local epoch.
@@ -92,6 +100,19 @@ type PeerSession interface {
 	SendTo(peerID string, data []byte) error
 }
 
+// DatagramSession is implemented by engines that can send unordered, lossy
+// datagrams independently of the reliable byte stream.
+type DatagramSession interface {
+	SendDatagram(data []byte) error
+	DatagramCanSend() bool
+}
+
+// PeerDatagramSession is implemented by engines that can address lossy
+// datagrams to a specific remote endpoint.
+type PeerDatagramSession interface {
+	SendDatagramTo(peerID string, data []byte) error
+}
+
 // PeerReadySession is implemented by engines that can signal when a remote
 // peer has appeared in the shared room. WaitForPeer blocks until the first
 // epoch frame from a remote participant is received, or ctx is cancelled.
@@ -109,6 +130,47 @@ type PeerIdentity interface {
 // PeerResetter is implemented by engines that retain a remote peer binding.
 type PeerResetter interface {
 	ResetPeer()
+}
+
+// PeerRetirer is implemented by engines that keep send state per remote peer
+// under the server's peer sessions. RetirePeer is the server's word that its
+// session on peerID has ended (transport.PeerLifecycle); the peer may come
+// back under the same ID, so the engine ends what belonged to the old session
+// and keeps what outlives it.
+//
+// ai-generated: this interface (olcrtc#49).
+type PeerRetirer interface {
+	RetirePeer(peerID string)
+}
+
+// PublishRateLimited is implemented by engines whose service polices how fast
+// one participant may publish. A transport that publishes media asks its
+// session for the ceiling and keeps what it writes under it; an engine that
+// does not implement this, or that returns 0, is left unpaced and the relay
+// itself decides what it takes.
+//
+// ai-generated: this interface (olcrtc#26).
+type PublishRateLimited interface {
+	// PublishRateLimit is the ceiling in bytes a second, or 0 for none.
+	PublishRateLimit() int
+}
+
+// VideoCodecSelector is implemented by engines whose service forwards video
+// in one codec and not the VP8 a video transport would publish on its own. A
+// transport that dresses its bytes as video asks its session before it builds
+// the track, and builds it in the codec named.
+type VideoCodecSelector interface {
+	// VideoCodec is the MIME type a published track has to carry, e.g.
+	// webrtc.MimeTypeVP9.
+	VideoCodec() string
+}
+
+// KeyframeRequestSource is implemented by engines whose relay asks a
+// publisher for a keyframe (RTCP PLI or FIR) and forwards nothing of its
+// track until one arrives. The handler is called for every request, from the
+// engine's own goroutine; it must not block.
+type KeyframeRequestSource interface {
+	SetKeyframeRequestHandler(cb func())
 }
 
 // VideoTrackCapable is implemented by engines that can exchange video tracks.

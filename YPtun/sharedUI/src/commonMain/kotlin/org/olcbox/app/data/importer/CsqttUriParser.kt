@@ -10,8 +10,8 @@ import org.olcbox.app.data.model.VkTurnConfig
  * ```
  *
  * `host` is the server, `peer` its DTLS port (46000 by default), `hashes` the VK call hashes joined by
- * `+`. Older links are `csqtt://<password>@host:port[#name]`. Maps onto a VK-TURN location whose core is
- * [VkTurnConfig.CORE_CSQTT].
+ * `+`. csqtt 2.5.0 wraps that query in AES-GCM (`csqtt://<base64url>`, see [CsqttLinkCipher]). Older links are `csqtt://<password>@host:port`. Maps onto a VK-TURN location whose core is
+ * [VkTurnConfig.CORE_CSQTT]. An optional `#<name>` fragment (percent-encoded) names the location.
  */
 object CsqttUriParser {
 
@@ -23,6 +23,7 @@ object CsqttUriParser {
         val password: String,
         /** VK hashes, ONE PER LINE — the storage format of [VkTurnConfig.vkLink]. */
         val hashes: String,
+        /** Location name from the `#fragment`; blank when the link has none. */
         val name: String = "",
     )
 
@@ -32,7 +33,7 @@ object CsqttUriParser {
         val afterScheme = trimmed.substring(SCHEME.length).trim()
         val fragment = if ('#' in afterScheme) {
             val rawFrag = afterScheme.substringAfter('#').trim()
-            runCatching { UriCodec.percentDecode(rawFrag) }.getOrDefault(rawFrag)
+            runCatching { UriCodec.percentDecode(rawFrag) }.getOrDefault(rawFrag).trim()
         } else ""
         val withoutFrag = afterScheme.substringBefore('#').trim()
         val query = withoutFrag.substringAfter('?', "")
@@ -40,6 +41,12 @@ object CsqttUriParser {
 
         if (path.equals("connect", ignoreCase = true) && query.isNotBlank()) {
             return parseV2(query, fragment)
+        }
+        // csqtt 2.5.0: the whole `connect?v=2&…` query is AES-GCM'd and base64'd into the link body.
+        if ('@' !in withoutFrag && query.isEmpty()) {
+            CsqttLinkCipher.decrypt(withoutFrag)?.let { plain ->
+                return parse(SCHEME + plain)?.let { if (fragment.isNotBlank()) it.copy(name = fragment) else it }
+            }
         }
         if (query.isNotBlank()) {
             val v2 = parseV2(query, fragment)
@@ -119,8 +126,7 @@ object CsqttUriParser {
             append("&peer=").append(port)
             append("&password=").append(encode(vk.csqttPassword.trim()))
             if (hashes.isNotEmpty()) append("&hashes=").append(hashes.joinToString("+") { encode(it) })
-            val label = name.trim().takeIf { it.isNotBlank() }
-            if (label != null) append("#").append(encode(label))
+            if (name.isNotBlank()) append('#').append(encode(name.trim()))
         }
     }
 

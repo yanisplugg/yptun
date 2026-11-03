@@ -1,11 +1,19 @@
 package org.olcbox.app.ui.features.locations
 
 import org.olcbox.app.ui.i18n.LocalStrings
+import org.olcbox.app.ui.components.SettingsCaption
+import org.olcbox.app.ui.components.SettingsCard
+import org.olcbox.app.ui.components.SettingsCardDivider
+import org.olcbox.app.ui.components.SettingsCardRow
+import org.olcbox.app.ui.components.SettingsCardToggle
+import org.olcbox.app.ui.components.SettingsNote
+import org.olcbox.app.ui.components.LocalSettingsGapColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import org.olcbox.app.ui.i18n.LocalizationState
 import org.olcbox.app.ui.i18n.stringsFor
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -125,6 +133,9 @@ import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing
+import org.olcbox.app.ui.features.locations.components.LockedLocationNotice
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.WdttPlusOptions
@@ -184,6 +195,16 @@ fun LocationSettingsScreen(
     // Settings → «Разрешить редактирование конфигураций»: every AmneziaWG parameter becomes a field.
     val allowConfigEditing = LocalAllowConfigEditing.current
     val name = viewModel.editingName
+    if (viewModel.editingLocked) {
+        val id = viewModel.editingId
+        LockedLocationNotice(
+            name = name,
+            onBack = onBack,
+            vkLink = if (config.engine == EngineType.VkTurn) config.vkturn?.vkLink.orEmpty() else null,
+            onSaveVkLink = { link -> id?.let { viewModel.setLocationVkLink(it, link) } },
+        )
+        return
+    }
     val isSaving = viewModel.isSaving
     val normalizedTransport = LocationConfig.normalizeTransport(
         config.transport,
@@ -250,6 +271,28 @@ fun LocationSettingsScreen(
         )
     }
 
+    var showEnginePicker by remember { mutableStateOf(false) }
+    if (showEnginePicker) {
+        EnginePickerSheet(
+            selected = config.engine,
+            wireguard = viewModel.isWireguardEngine,
+            vless = viewModel.isVlessEngine,
+            onDismiss = { showEnginePicker = false },
+            onSelected = { engine ->
+                showEnginePicker = false
+                viewModel.onEngineChanged(engine)
+            },
+            onWireguard = {
+                showEnginePicker = false
+                viewModel.onWireguardEngineSelected()
+            },
+            onVless = {
+                showEnginePicker = false
+                viewModel.onVlessEngineSelected()
+            }
+        )
+    }
+
     var showSnolcInstall by remember { mutableStateOf(false) }
     if (showSnolcInstall) {
         SnolcInstallDialog(
@@ -275,6 +318,25 @@ fun LocationSettingsScreen(
         )
     }
 
+    // The engines that run against your own server get one «install on VPS» action, offered first: most
+    // people asking how to set one up have a VPS and nothing else. Which installer depends on the engine
+    // (and, for VK-TURN, on its transport core).
+    val autoInstall: (() -> Unit)? = when {
+        !allowVpsAutoInstall -> null
+        config.engine == EngineType.VkTurn -> when (viewModel.editingVkTurn.core) {
+            VkTurnConfig.CORE_WDTT -> { { showWdttInstall = true } }
+            VkTurnConfig.CORE_CSQTT -> { { showCsqttInstall = true } }
+            else -> { { showFreeturnInstall = true } }
+        }
+        config.engine == EngineType.MasterDns -> { { showMasterDnsInstall = true } }
+        config.engine == EngineType.Snolc -> { { showSnolcInstall = true } }
+        config.engine == EngineType.OpenFlux -> viewModel.editingOpenFlux
+            .takeIf { !it.isSession() && it.transport != OpenFluxConfig.TRANSPORT_AVITO }
+            ?.let { { showOpenFluxInstall = true } }
+        config.engine == EngineType.Stealth || config.engine == EngineType.Chain -> { { showOlcRtcInstall = true } }
+        else -> null
+    }
+
     Scaffold(
         topBar = {
             LocationSettingsTopBar(
@@ -291,7 +353,7 @@ fun LocationSettingsScreen(
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         .padding(horizontal = 24.dp, vertical = 16.dp),
-                    showDelete = viewModel.editingId != null,
+                    showDelete = false,
                     isSaving = isSaving,
                     isFormValid = viewModel.isFormValid,
                     onDelete = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
@@ -306,6 +368,8 @@ fun LocationSettingsScreen(
             }
         }
     ) { innerPadding ->
+        // A full screen, not a sheet: the gaps between card rows show the page background.
+        CompositionLocalProvider(LocalSettingsGapColor provides MaterialTheme.colorScheme.background) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -328,26 +392,55 @@ fun LocationSettingsScreen(
                 )
             }
 
-            item {
-                EngineSelector(
-                    selected = config.engine,
-                    wireguard = viewModel.isWireguardEngine,
-                    enabled = !isSaving,
-                    onSelected = viewModel::onEngineChanged,
-                    onWireguard = viewModel::onWireguardEngineSelected
-                )
+            // An existing location: check it right under its name.
+            if (viewModel.editingId != null) {
+                item {
+                    PingButton(
+                        homeViewModel = homeViewModel,
+                        configGetter = { viewModel.editingConfig }
+                    )
+                }
             }
 
-            // Routing profile applies wherever a rule-capable core runs (sing-box / Xray): every
-            // engine except pure Stealth (olcRTC has no routing layer).
-            if (config.engine != EngineType.Stealth) {
-                item {
-                    RoutingProfileSelector(
-                        selected = config.routingProfileId,
-                        profiles = homeViewModel.routingProfileChoices(),
-                        enabled = !isSaving,
-                        onSelected = viewModel::onRoutingProfileChanged
-                    )
+            if (autoInstall != null) {
+                item { AutoInstallCard(enabled = !isSaving, onInstall = autoInstall) }
+            }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SettingsCaption(s.howToConnectSection)
+                    SettingsCard {
+                        SettingsCardRow(
+                            title = s.engineTypeTitle,
+                            value = engineDisplayName(config.engine, viewModel.isWireguardEngine, viewModel.isVlessEngine),
+                            enabled = !isSaving,
+                            onClick = { showEnginePicker = true }
+                        )
+                        // Routing profile applies wherever a rule-capable core runs (sing-box / Xray): every
+                        // engine except pure Stealth (olcRTC has no routing layer).
+                        if (config.engine != EngineType.Stealth) {
+                            SettingsCardDivider()
+                            RoutingProfileRow(
+                                selected = config.routingProfileId,
+                                profiles = homeViewModel.routingProfileChoices(),
+                                enabled = !isSaving,
+                                onSelected = viewModel::onRoutingProfileChanged
+                            )
+                        }
+                        // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
+                        if ((config.engine == EngineType.Standard || config.engine == EngineType.Chain) &&
+                            !viewModel.isWireguardEngine
+                        ) {
+                            SettingsCardDivider()
+                            CoreRow(
+                                selected = config.core,
+                                enabled = !isSaving,
+                                // xhttp / FakeDNS configs can only run on xray-core — lock out sing-box.
+                                singBoxLocked = config.requiresXray(),
+                                onSelected = viewModel::onCoreChanged
+                            )
+                        }
+                    }
                 }
             }
 
@@ -379,15 +472,21 @@ fun LocationSettingsScreen(
                 // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
-                // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
-                if (!viewModel.isWireguardEngine) item {
-                    CoreSelector(
-                        selected = config.core,
-                        enabled = !isSaving,
-                        // xhttp / FakeDNS configs can only run on xray-core — lock out sing-box.
-                        singBoxLocked = config.requiresXray(),
-                        onSelected = viewModel::onCoreChanged
-                    )
+                if (!viewModel.isWireguardEngine && viewModel.isVlessEngine && (viewModel.editingId == null || allowConfigEditing)) {
+                    item {
+                        ProxyField(
+                            title = "VLESS",
+                            subtitle = "Ссылка vless:// или конфиг",
+                            link = viewModel.editingProxyLink,
+                            currentProxy = config.proxy,
+                            error = viewModel.proxyError,
+                            enabled = !isSaving,
+                            onChange = viewModel::onProxyLinkChanged
+                        )
+                    }
+                }
+                if (allowConfigEditing && !viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
+                    item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
                 }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
                 if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
@@ -400,97 +499,96 @@ fun LocationSettingsScreen(
                         )
                     }
                 }
-                // Optional SECOND (cascade) proxy. Toggling it on reveals a second link chained ON TOP
-                // of the main: traffic → main → second. Toggling off clears it (→ main only).
+                // Optional SECOND (cascade) proxy chained ON TOP of the main (traffic → main → second), and
+                // Cloudflare WARP on either side — both make the exit harder to see, so one card.
                 item {
                     var additionalOn by remember(config.proxy2 != null) {
                         mutableStateOf(config.proxy2 != null)
                     }
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        VkTurnSwitchRow(
-                            label = LocalStrings.current.enableAdditionalProxy,
-                            checked = additionalOn,
-                            enabled = !isSaving,
-                            onCheckedChange = { on ->
-                                additionalOn = on
-                                if (!on) viewModel.onProxy2LinkChanged("")
-                            }
-                        )
-                        if (additionalOn) {
-                            ProxyField(
-                                title = LocalStrings.current.additionalProxySection,
-                                subtitle = LocalStrings.current.additionalProxySubtitle,
-                                link = viewModel.editingProxy2Link,
-                                currentProxy = config.proxy2,
-                                error = viewModel.proxy2Error,
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SettingsCaption(s.extraProtectionSection)
+                        SettingsCard {
+                            SettingsCardToggle(
+                                title = s.enableAdditionalProxy,
+                                subtitle = s.additionalProxySubtitle,
+                                checked = additionalOn,
                                 enabled = !isSaving,
-                                onChange = viewModel::onProxy2LinkChanged
+                                onCheckedChange = { on ->
+                                    additionalOn = on
+                                    if (!on) viewModel.onProxy2LinkChanged("")
+                                }
                             )
-                        }
-                    }
-                }
-
-                // Cloudflare WARP chaining for VLESS: toggle + protocol selector (Server side: VLESS -> WARP)
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        VkTurnSwitchRow(
-                            label = LocalStrings.current.enableWarp,
-                            checked = config.warpEnabled,
-                            enabled = !isSaving,
-                            onCheckedChange = viewModel::onWarpEnabledChanged
-                        )
-                        if (config.warpEnabled) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = LocalStrings.current.warpModeServerSubtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = LocalStrings.current.warpProtocolSection,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                val protocols = listOf(WarpProtocol.Wg, WarpProtocol.Awg)
-                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                    protocols.forEachIndexed { index, protocol ->
-                                        SegmentedButton(
-                                            shape = SegmentedButtonDefaults.itemShape(index = index, count = protocols.size),
-                                            selected = config.warpProtocol == protocol,
-                                            onClick = { viewModel.onWarpProtocolChanged(protocol) },
-                                            enabled = !isSaving,
-                                            label = {
-                                                Text(
-                                                    text = if (protocol == WarpProtocol.Wg) {
-                                                        LocalStrings.current.warpProtocolWg
-                                                    } else {
-                                                        LocalStrings.current.warpProtocolAwg
-                                                    },
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                            if (additionalOn) {
+                                Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                                    ProxyField(
+                                        title = s.additionalProxySection,
+                                        subtitle = s.additionalProxySubtitle,
+                                        link = viewModel.editingProxy2Link,
+                                        currentProxy = config.proxy2,
+                                        error = viewModel.proxy2Error,
+                                        enabled = !isSaving,
+                                        onChange = viewModel::onProxy2LinkChanged
+                                    )
+                                }
+                            }
+                            SettingsCardDivider()
+                            SettingsCardToggle(
+                                title = s.enableWarp,
+                                subtitle = s.warpSubtitle,
+                                checked = config.warpEnabled,
+                                enabled = !isSaving,
+                                onCheckedChange = viewModel::onWarpEnabledChanged
+                            )
+                            if (config.warpEnabled) {
+                                Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
+                                    // iOS: WARP runs on the server side only (VLESS -> WARP), so there is no client/server picker.
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = LocalStrings.current.warpModeServerSubtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = LocalStrings.current.warpProtocolSection,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        val protocols = listOf(WarpProtocol.Wg, WarpProtocol.Awg)
+                                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                            protocols.forEachIndexed { index, protocol ->
+                                                SegmentedButton(
+                                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = protocols.size),
+                                                    selected = config.warpProtocol == protocol,
+                                                    onClick = { viewModel.onWarpProtocolChanged(protocol) },
+                                                    enabled = !isSaving,
+                                                    label = {
+                                                        Text(
+                                                            text = if (protocol == WarpProtocol.Wg) {
+                                                                LocalStrings.current.warpProtocolWg
+                                                            } else {
+                                                                LocalStrings.current.warpProtocolAwg
+                                                            },
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
                                                 )
                                             }
+                                        }
+                                        Text(
+                                            text = if (config.warpProtocol == WarpProtocol.Wg) {
+                                                LocalStrings.current.warpProtocolWgSubtitle
+                                            } else {
+                                                LocalStrings.current.warpProtocolAwgSubtitle
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
-                                Text(
-                                    text = if (config.warpProtocol == WarpProtocol.Wg) {
-                                        LocalStrings.current.warpProtocolWgSubtitle
-                                    } else {
-                                        LocalStrings.current.warpProtocolAwgSubtitle
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
                         }
                     }
@@ -501,7 +599,7 @@ fun LocationSettingsScreen(
                 vkTurnSection(
                     draft = viewModel.editingVkTurn,
                     enabled = !isSaving,
-                    showAutoInstall = allowVpsAutoInstall,
+                    showAutoInstall = false,
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true },
                     onCsqttAutoInstall = { showCsqttInstall = true },
@@ -513,7 +611,7 @@ fun LocationSettingsScreen(
                 masterDnsSection(
                     config = viewModel.editingMasterDns,
                     enabled = !isSaving,
-                    showAutoInstall = allowVpsAutoInstall,
+                    showAutoInstall = false,
                     onChange = viewModel::updateMasterDns,
                     onMasterDnsAutoInstall = { showMasterDnsInstall = true }
                 )
@@ -523,7 +621,7 @@ fun LocationSettingsScreen(
                 snolcSection(
                     config = viewModel.editingSnolc,
                     enabled = !isSaving,
-                    showAutoInstall = allowVpsAutoInstall,
+                    showAutoInstall = false,
                     onChange = viewModel::updateSnolc,
                     onAutoInstall = { showSnolcInstall = true }
                 )
@@ -533,7 +631,7 @@ fun LocationSettingsScreen(
                 openFluxSection(
                     config = viewModel.editingOpenFlux,
                     enabled = !isSaving,
-                    showAutoInstall = allowVpsAutoInstall,
+                    showAutoInstall = false,
                     onChange = viewModel::updateOpenFlux,
                     onAutoInstall = { showOpenFluxInstall = true }
                 )
@@ -616,22 +714,6 @@ fun LocationSettingsScreen(
                 )
             }
 
-            if (allowVpsAutoInstall) {
-                item {
-                    // Своя кнопка рядом с комнатой и ключом: у olcRTC сервер задаётся ровно этими
-                    // полями, и установка их же и заполняет.
-                    OutlinedButton(
-                        onClick = { showOlcRtcInstall = true },
-                        enabled = !isSaving,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Установить olcRTC на VPS")
-                    }
-                }
-            }
-
             item {
                 MultiRoomSection(
                     enabled = config.multiRoomEnabled,
@@ -652,12 +734,29 @@ fun LocationSettingsScreen(
 
             }
 
-            item {
-                PingButton(
-                    homeViewModel = homeViewModel,
-                    configGetter = { viewModel.editingConfig }
-                )
+            if (viewModel.editingId == null) {
+                item {
+                    PingButton(
+                        homeViewModel = homeViewModel,
+                        configGetter = { viewModel.editingConfig }
+                    )
+                }
+            } else {
+                item {
+                    TextButton(
+                        onClick = { if (confirmBeforeDelete) confirmDelete = true else deleteNow() },
+                        enabled = !isSaving,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                            contentColor = MaterialTheme.colorScheme.error
+                        ),
+                    ) {
+                        Text(s.deleteLocationButton)
+                    }
+                }
             }
+        }
         }
     }
 }
@@ -680,6 +779,9 @@ private fun MultiRoomSection(
     onBondPortChange: (String) -> Unit
 ) {
     val providers = listOf(
+        LocationConfig.PROVIDER_MTS_LINK,
+        LocationConfig.PROVIDER_VK_CALLS,
+        LocationConfig.PROVIDER_JAZZ,
         LocationConfig.PROVIDER_TELEMOST,
         LocationConfig.PROVIDER_WB_STREAM,
         LocationConfig.PROVIDER_JITSI
@@ -793,108 +895,19 @@ private fun MultiRoomSection(
     }
 }
 
+/** A section's caption, the same small caps as on the settings pages, with an optional note under it. */
 @Composable
 private fun SectionTitle(
     title: String,
     subtitle: String? = null
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-        if (subtitle != null) {
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SettingsCaption(title)
+        if (subtitle != null) SettingsNote(subtitle)
     }
 }
 
-@Composable
-private fun EngineSelector(
-    selected: EngineType,
-    wireguard: Boolean,
-    enabled: Boolean,
-    onSelected: (EngineType) -> Unit,
-    onWireguard: () -> Unit
-) {
-    // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
-    // "iPadOS" on an iPad, which a check for "iOS" would miss.
-    val options = remember {
-        val ios = org.olcbox.app.update.UpdatePlatform.current().os == "ios"
-        listOf(
-            EngineType.Stealth,
-            EngineType.Standard,
-            EngineType.Chain,
-            EngineType.VkTurn,
-            EngineType.MasterDns,
-            EngineType.OpenFlux,
-            EngineType.Snolc
-        ).filterNot { ios && (it == EngineType.OpenFlux || it == EngineType.Snolc) }
-    }
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        SectionTitle(
-            title = LocalStrings.current.engineSection,
-            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE else engineSubtitle(selected)
-        )
-
-        // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
-        // inner dividers between the cells. Two equal-width cells per row; the row height tracks the
-        // tallest cell (IntrinsicSize.Min) so the vertical divider spans it.
-        val shape = RoundedCornerShape(20.dp)
-        val outline = MaterialTheme.colorScheme.outline
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .border(BorderStroke(1.dp, outline), shape)
-        ) {
-            // AmneziaWG/WG sits right after Standard: it IS a Standard location (see LocationViewModel.isWireguardEngine).
-            val cells = options.flatMap { engine ->
-                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && wireguard)) { onSelected(engine) }
-                if (engine == EngineType.Standard) listOf(cell, EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)) else listOf(cell)
-            }
-            cells.chunked(2).forEachIndexed { rowIndex, rowOptions ->
-                if (rowIndex > 0) HorizontalDivider(color = outline)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min)
-                ) {
-                    rowOptions.forEachIndexed { colIndex, cell ->
-                        if (colIndex > 0) VerticalDivider(color = outline)
-                        EngineCell(
-                            label = cell.label,
-                            selected = cell.selected,
-                            enabled = enabled,
-                            onClick = cell.onClick,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    if (rowOptions.size == 1) {
-                        VerticalDivider(color = outline)
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-        }
-    }
-}
-
-private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
 private const val WIREGUARD_NEEDS_EDITING = "Загрузите файл конфигурации или включите в настройках «Разрешить редактирование конфигураций», чтобы ввести ключи и параметры вручную"
-private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
-
-private class EngineCellSpec(val label: String, val selected: Boolean, val onClick: () -> Unit)
-
 /**
  * The AmneziaWG/WG engine page: the protocol (AmneziaWG has obfuscation parameters, WireGuard none) and, with the
  * "allow editing configurations" setting, every parameter of the wg-quick config as its own field, keys included.
@@ -912,7 +925,7 @@ private fun WireguardEngineSection(
     val s = LocalStrings.current
     val isAwg = AwgIniEditor.isAwg(ini)
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(s.wgProtocolTitle, style = MaterialTheme.typography.titleSmall)
+        SettingsCaption(s.wgProtocolTitle)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = isAwg, onClick = { onProtocol(true) }, enabled = enabled, label = { Text("AmneziaWG") })
             FilterChip(selected = !isAwg, onClick = { onProtocol(false) }, enabled = enabled, label = { Text("WireGuard") })
@@ -938,7 +951,7 @@ private fun WireguardEngineSection(
             )
         }
         if (allowEditing) {
-            Text(s.wgConnectionTitle, style = MaterialTheme.typography.titleSmall)
+            SettingsCaption(s.wgConnectionTitle)
             AwgIniEditor.CONNECTION.forEach { knob ->
                 VkTurnField(
                     value = AwgIniEditor.get(ini, knob.key, knob.section),
@@ -966,49 +979,6 @@ private fun WireguardEngineSection(
                     }
             }
         }
-    }
-}
-
-/** A single segment of the 2x2 engine block: fills its half, highlights (filled + check) when selected. */
-@Composable
-private fun EngineCell(
-    label: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
-    val content = when {
-        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-        selected -> MaterialTheme.colorScheme.onSecondaryContainer
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    Row(
-        modifier = modifier
-            .fillMaxHeight()
-            .background(background)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 14.dp, horizontal = 8.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (selected) {
-            Icon(
-                imageVector = Icons.Rounded.Check,
-                contentDescription = null,
-                tint = content,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(6.dp))
-        }
-        Text(
-            text = label,
-            color = content,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelLarge
-        )
     }
 }
 
@@ -1731,8 +1701,8 @@ internal fun InstallLogView(log: List<String>, logScroll: ScrollState) {
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 160.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .padding(8.dp)
                 .verticalScroll(logScroll)
         ) {
@@ -3365,10 +3335,10 @@ private fun MasterDnsInstallDialog(
                     enabled = !running,
                     modifier = Modifier.fillMaxWidth()
                 )
-                VkTurnSwitchRow("Разрешить сжатие (ZSTD/LZ4/ZLIB)", allowCompression, !running) { allowCompression = it }
-                VkTurnSwitchRow("Новый ключ шифрования (старые клиенты отвалятся)", regenerateKey, !running) { regenerateKey = it }
-                VkTurnSwitchRow("Освободить порт, если занят другой службой", freePort, !running) { freePort = it }
-                VkTurnSwitchRow("Подробный журнал сервера (DEBUG)", debugLog, !running) { debugLog = it }
+                VkTurnSwitchRow("Разрешить сжатие (ZSTD/LZ4/ZLIB)", allowCompression, !running, inCard = false) { allowCompression = it }
+                VkTurnSwitchRow("Новый ключ шифрования (старые клиенты отвалятся)", regenerateKey, !running, inCard = false) { regenerateKey = it }
+                VkTurnSwitchRow("Освободить порт, если занят другой службой", freePort, !running, inCard = false) { freePort = it }
+                VkTurnSwitchRow("Подробный журнал сервера (DEBUG)", debugLog, !running, inCard = false) { debugLog = it }
                 InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
@@ -3570,7 +3540,7 @@ private fun AwgTuningSection(
     )
     val rowKeys = numberRows.flatten().toSet()
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(s.awgTuningTitle, style = MaterialTheme.typography.titleSmall)
+        SettingsCaption(s.awgTuningTitle)
         Text(
             s.awgTuningHint,
             style = MaterialTheme.typography.bodySmall,
@@ -3611,8 +3581,16 @@ private fun VkTurnSwitchRow(
     label: String,
     checked: Boolean,
     enabled: Boolean,
+    // On the page a switch is its own small card; inside a dialog it stays a plain row.
+    inCard: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    if (inCard) {
+        SettingsCard {
+            SettingsCardToggle(title = label, checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
+        }
+        return
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -3941,9 +3919,197 @@ private fun coreLabel(core: ProxyCore): String = when (core) {
     ProxyCore.Xray -> "Xray"
 }
 
+/** The «Тип» row's value and the picker's names: what the traffic goes through, not the engine's code name. */
+@Composable
+private fun engineDisplayName(engine: EngineType, wireguard: Boolean, vless: Boolean): String {
+    val s = LocalStrings.current
+    return when {
+        wireguard -> "AmneziaWG / WireGuard"
+        vless -> "VLESS"
+        engine == EngineType.Standard -> s.engineStandardName
+        engine == EngineType.Chain -> s.engineChainName
+        engine == EngineType.Stealth -> s.engineStealthName
+        engine == EngineType.VkTurn -> "VK-TURN"
+        engine == EngineType.MasterDns -> "MasterDNS"
+        engine == EngineType.OpenFlux -> "OpenFlux"
+        else -> "Snolc"
+    }
+}
+
+/** «Тип»: every engine with one plain line about it, grouped by what it needs. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RoutingProfileSelector(
+private fun EnginePickerSheet(
+    selected: EngineType,
+    wireguard: Boolean,
+    vless: Boolean,
+    onDismiss: () -> Unit,
+    onSelected: (EngineType) -> Unit,
+    onWireguard: () -> Unit,
+    onVless: () -> Unit
+) {
+    val s = LocalStrings.current
+    // OpenFlux and Snolc have no iOS engine. The build platform, not UIDevice.systemName — that one reads
+    // "iPadOS" on an iPad, which a check for "iOS" would miss.
+    val ios = remember { org.olcbox.app.update.UpdatePlatform.current().os == "ios" }
+    @Composable
+    fun option(title: String, subtitle: String, isSelected: Boolean, onClick: () -> Unit) {
+        SettingsCardRow(
+            title = title,
+            subtitle = subtitle,
+            showChevron = false,
+            trailing = if (isSelected) {
+                {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            } else null,
+            onClick = onClick
+        )
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(s.engineTypeTitle, style = MaterialTheme.typography.headlineSmall)
+            SettingsCaption(s.engineGroupProxy)
+            SettingsCard {
+                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard && !vless) { onSelected(EngineType.Standard) }
+                SettingsCardDivider()
+                option("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", vless) { onVless() }
+                SettingsCardDivider()
+                option(s.engineChainName, s.engineChainDesc, selected == EngineType.Chain) { onSelected(EngineType.Chain) }
+                SettingsCardDivider()
+                option("AmneziaWG / WireGuard", s.engineWireguardDesc, wireguard) { onWireguard() }
+            }
+            SettingsCaption(s.manualViaServices)
+            SettingsCard {
+                option(s.engineStealthName, s.engineStealthDesc, selected == EngineType.Stealth) { onSelected(EngineType.Stealth) }
+                SettingsCardDivider()
+                option("VK-TURN", s.engineVkTurnDesc, selected == EngineType.VkTurn) { onSelected(EngineType.VkTurn) }
+                if (!ios) {
+                    SettingsCardDivider()
+                    option("OpenFlux", s.engineOpenFluxDesc, selected == EngineType.OpenFlux) { onSelected(EngineType.OpenFlux) }
+                }
+            }
+            SettingsCaption(s.manualOwnServer)
+            SettingsCard {
+                if (!ios) {
+                    option("Snolc", s.engineSnolcDesc, selected == EngineType.Snolc) { onSelected(EngineType.Snolc) }
+                    SettingsCardDivider()
+                }
+                option("MasterDNS", s.engineMasterDnsDesc, selected == EngineType.MasterDns) { onSelected(EngineType.MasterDns) }
+            }
+        }
+    }
+}
+
+/** «Установить на VPS», offered first for the engines that need your own server. */
+@Composable
+private fun AutoInstallCard(enabled: Boolean, onInstall: () -> Unit) {
+    val s = LocalStrings.current
+    androidx.compose.material3.Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.CloudUpload,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = s.autoInstallTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Text(
+                text = s.autoInstallText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(
+                onClick = onInstall,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                Text(s.autoInstallButton, fontWeight = FontWeight.SemiBold)
+            }
+            Text(
+                text = s.autoInstallOrManual,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** A row with the current value that opens a short menu of choices. */
+@Composable
+private fun <T> ChoiceMenuRow(
+    title: String,
+    subtitle: String? = null,
+    value: String,
+    options: List<Pair<T, String>>,
+    isEnabled: (T) -> Boolean = { true },
+    enabled: Boolean,
+    onSelected: (T) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    androidx.compose.foundation.layout.Box {
+        SettingsCardRow(
+            title = title,
+            subtitle = subtitle,
+            value = value,
+            enabled = enabled,
+            onClick = { expanded = true }
+        )
+        androidx.compose.material3.DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { (option, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    enabled = isEnabled(option),
+                    onClick = {
+                        expanded = false
+                        onSelected(option)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutingProfileRow(
     selected: String,
     profiles: List<RoutingProfile>,
     enabled: Boolean,
@@ -3951,47 +4117,35 @@ private fun RoutingProfileSelector(
 ) {
     val s = LocalStrings.current
     // "" = follow the global profile; NONE_ID = explicitly none; otherwise a specific profile id.
-    val options = listOf("", RoutingProfile.NONE_ID) + profiles.map { it.id }
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        SectionTitle(title = s.locationRoutingProfile)
-        SettingsDropdown(
-            label = s.locationRoutingProfile,
-            selectedValue = if (selected in options) selected else "",
-            options = options,
-            enabled = enabled,
-            onValueSelected = onSelected,
-            valueLabel = { id ->
-                when (id) {
-                    "" -> s.locationRoutingGlobalDefault
-                    RoutingProfile.NONE_ID -> s.routingProfileNone
-                    else -> profiles.firstOrNull { it.id == id }?.displayName() ?: id
-                }
-            }
-        )
-    }
+    val options = listOf("" to s.locationRoutingGlobalDefault, RoutingProfile.NONE_ID to s.routingProfileNone) +
+        profiles.map { it.id to it.displayName() }
+    ChoiceMenuRow(
+        title = s.locationRoutingProfile,
+        value = options.firstOrNull { it.first == selected }?.second ?: s.locationRoutingGlobalDefault,
+        options = options,
+        enabled = enabled,
+        onSelected = onSelected
+    )
 }
 
-private fun engineLabel(engine: EngineType): String = when (engine) {
-    EngineType.Stealth -> "Stealth"
-    EngineType.Standard -> "Standard"
-    EngineType.Chain -> "Chain"
-    EngineType.VkTurn -> "VK-TURN"
-    EngineType.MasterDns -> "MasterDNS"
-    EngineType.OpenFlux -> "OpenFlux"
-    EngineType.Snolc -> "Snolc"
-}
-
-private fun engineSubtitle(engine: EngineType): String = when (engine) {
-    EngineType.Stealth -> "olcRTC WebRTC tunnel"
-    EngineType.Standard -> "sing-box proxy (VLESS, VMess, Trojan, SS…)"
-    EngineType.Chain -> "Proxy wrapped inside the olcRTC tunnel"
-    EngineType.VkTurn -> "WireGuard over a VK TURN tunnel (free-turn-proxy)"
-    EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
-    EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы (старый или новый редактор) или звонок MAX до своей выходной ноды"
-    EngineType.Snolc -> "Rust-туннель Noise по TCP до своей ноды (github.com/owenewans/snolc), автоустановка на VPS"
+@Composable
+private fun CoreRow(
+    selected: ProxyCore,
+    enabled: Boolean,
+    singBoxLocked: Boolean,
+    onSelected: (ProxyCore) -> Unit
+) {
+    val s = LocalStrings.current
+    ChoiceMenuRow(
+        title = s.coreSection,
+        subtitle = if (singBoxLocked) s.coreSubtitleXrayOnly else s.coreSubtitle,
+        value = coreLabel(selected),
+        options = listOf(ProxyCore.Auto, ProxyCore.SingBox, ProxyCore.Xray).map { it to coreLabel(it) },
+        // sing-box is disabled for xhttp / FakeDNS configs (xray-core only).
+        isEnabled = { !(singBoxLocked && it == ProxyCore.SingBox) },
+        enabled = enabled,
+        onSelected = onSelected
+    )
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {
@@ -4277,7 +4431,6 @@ private fun ActionsBar(
                 modifier = Modifier.size(56.dp),
                 enabled = !isSaving,
                 shape = CircleShape,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Icon(Icons.Outlined.Delete, contentDescription = "Delete")
             }
@@ -4311,7 +4464,9 @@ private fun ActionsBar(
 private fun roomIdPlaceholder(provider: String): String {
     return when (LocationConfig.normalizeProvider(provider)) {
         LocationConfig.PROVIDER_TELEMOST -> "12345678901234"
-        LocationConfig.PROVIDER_JAZZ -> "room id or any"
+        LocationConfig.PROVIDER_JAZZ -> "code:password"
+        LocationConfig.PROVIDER_VK_CALLS -> "https://vk.ru/call/join/…"
+        LocationConfig.PROVIDER_MTS_LINK -> "https://my.mts-link.ru/j/…/…"
         LocationConfig.PROVIDER_WB_STREAM -> "123e4567-e89b-12d3-a456-426614174000"
         LocationConfig.PROVIDER_JITSI -> "https://meet.example.com/room"
         else -> "room id"
@@ -4319,11 +4474,17 @@ private fun roomIdPlaceholder(provider: String): String {
 }
 
 private fun roomIdLabel(provider: String): String {
-    return if (isJitsiProvider(provider)) "Room URL" else "Room ID"
+    return if (isLinkRoomProvider(provider)) "Room URL" else "Room ID"
 }
 
 private fun roomKeyboardType(provider: String): KeyboardType {
-    return if (isJitsiProvider(provider)) KeyboardType.Uri else KeyboardType.Text
+    return if (isLinkRoomProvider(provider)) KeyboardType.Uri else KeyboardType.Text
+}
+
+/** Комната задаётся ссылкой, а не id: Jitsi, VK Calls, MTS Link. */
+private fun isLinkRoomProvider(provider: String): Boolean = when (LocationConfig.normalizeProvider(provider)) {
+    LocationConfig.PROVIDER_JITSI, LocationConfig.PROVIDER_VK_CALLS, LocationConfig.PROVIDER_MTS_LINK -> true
+    else -> false
 }
 
 private fun isJitsiProvider(provider: String): Boolean {

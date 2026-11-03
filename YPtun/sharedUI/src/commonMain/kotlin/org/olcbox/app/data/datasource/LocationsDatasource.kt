@@ -39,6 +39,8 @@ import org.olcbox.app.data.importer.OpenFluxUriParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
+import org.olcbox.app.data.share.SubscriptionCrypto
+import org.olcbox.app.data.importer.MasterDnsUriParser
 import org.olcbox.app.data.importer.UriCodec
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.DeviceInfo
@@ -47,6 +49,7 @@ import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.WdttPlusOptions
 import org.olcbox.app.data.model.SubscriptionUserAgentHolder
 import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.FakeDnsSpec
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.ProxyCore
@@ -284,7 +287,9 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun exportBundle(): String {
-        return json.encodeToString(LocationBundleV4.serializer(), getBundle())
+        // Locations of an encrypted subscription stay out of the backup: it would spell out what the panel hides.
+        val bundle = getBundle()
+        return json.encodeToString(LocationBundleV4.serializer(), bundle.copy(locations = bundle.locations.filterNot { it.metadata?.locked == true }))
     }
 
     override suspend fun importText(text: String, subscriptionProxy: SubscriptionFetchProxy?): Boolean {
@@ -505,7 +510,9 @@ class LocationsRepositoryImpl(
                         customName = previousCustomName,
                         cascadeLink = previousCascadeLink
                     )
-                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }.normalized()
+                ).let { if (previousCascade != null) it.withCascade(previousCascade) else it }
+                    .withVkLinkOverride(reusedEntry?.metadata?.vkLinkOverride)
+                    .normalized()
             }
 
             // Only reset the selection when the selected server actually vanished from this
@@ -816,6 +823,28 @@ class LocationsRepositoryImpl(
             }
             saveBundleUnlocked(bundle.copy(locations = updated))
         }
+    }
+
+    override suspend fun setLocationVkLink(storageId: String, link: String) {
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            if (bundle.locations.none { it.storageId == storageId }) return@withLock
+            val updated = bundle.locations.map { entry ->
+                if (entry.storageId != storageId || entry.vkturn == null) entry
+                else entry.copy(
+                    vkturn = entry.vkturn.copy(vkLink = link.trim()),
+                    metadata = (entry.metadata ?: LocationMetadata()).copy(vkLinkOverride = link.trim()),
+                ).normalized()
+            }
+            saveBundleUnlocked(bundle.copy(locations = updated))
+        }
+    }
+
+    /** The user's own VK call link beats the one the subscription brings. */
+    private fun LocationEntry.withVkLinkOverride(link: String?): LocationEntry {
+        val vk = vkturn
+        if (link.isNullOrBlank() || vk == null) return this
+        return copy(vkturn = vk.copy(vkLink = link), metadata = (metadata ?: LocationMetadata()).copy(vkLinkOverride = link))
     }
 
     override suspend fun changeSubscriptionUrl(oldUrl: String, newUrl: String): Boolean {
@@ -1384,7 +1413,22 @@ class LocationsRepositoryImpl(
         ).normalized()
     }
 
+    /** Decrypts `yptun-enc://` lines (encrypted panel subscription) and marks every resulting location locked. */
     private fun parseImport(
+        text: String,
+        subscriptionUrl: String? = null,
+        updateIntervalHours: Int? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): ParsedImport? {
+        val decrypted = SubscriptionCrypto.decryptLines(SubscriptionDecoder.toLinkText(text))
+        val parsed = parseImportPlain(if (decrypted.encrypted) decrypted.text else text, subscriptionUrl, updateIntervalHours, subscriptionMetadata)
+        if (!decrypted.encrypted || parsed == null) return parsed
+        return parsed.copy(bundle = parsed.bundle.copy(locations = parsed.bundle.locations.map {
+            it.copy(metadata = (it.metadata ?: LocationMetadata()).copy(locked = true)).normalized()
+        }))
+    }
+
+    private fun parseImportPlain(
         text: String,
         subscriptionUrl: String? = null,
         updateIntervalHours: Int? = null,
@@ -1417,6 +1461,9 @@ class LocationsRepositoryImpl(
         // snolc share links (snolc://):
         parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
+        // MasterDNS links (masterdns://v1?…) from the panel's personal subscription:
+        parseMasterDnsText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
         // OpenFlux share links (openflux://):
         parseOpenFluxText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
@@ -1442,8 +1489,34 @@ class LocationsRepositoryImpl(
         // JSON panels with a "links" array) become sing-box (Standard) locations.
         parseProxyText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
-        mergeParsedBundles(linkBundles)?.let {
-            return ParsedImport(it, ImportMode.Additive)
+        mergeParsedBundles(linkBundles)?.let { merged ->
+            // Only the proxy parser carried the panel's title/traffic/expiry/announce; every other
+            // family (snolc, masterdns, freeturn, …) dropped them, so the subscription showed no name.
+            val sub = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+            // The panel's per-host description rides in `#desc:<name>=<text>` lines (both percent-encoded):
+            // plain share links have no field for it. Matched by location name.
+            val descByName = linkText.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("#desc:") }
+                .mapNotNull { it.removePrefix("#desc:").trim().split('=', limit = 2).takeIf { p -> p.size == 2 } }
+                .associate { (n, d) -> UriCodec.percentDecode(n.trim()) to UriCodec.percentDecode(d.trim()) }
+            // `#order:<name>` lines (one per link, in the panel's order): the per-family parsers above
+            // concatenate by family, so restore the panel's own order. Absent → untouched (other panels).
+            val order = linkText.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("#order:") }
+                .map { UriCodec.percentDecode(it.removePrefix("#order:").trim()) }
+                .toList()
+            val ordered = if (order.isEmpty()) merged.locations else
+                merged.locations.sortedBy { e -> order.indexOf(e.name).takeIf { it >= 0 } ?: Int.MAX_VALUE }
+            val withMeta = merged.copy(
+                locations = ordered.map { e ->
+                    val withSub = withPanelSubscription(e, sub)
+                    val desc = descByName[withSub.name]
+                    if (desc != null && withSub.description.isBlank()) withSub.copy(description = desc) else withSub
+                }
+            )
+            return ParsedImport(withMeta, ImportMode.Additive)
         }
 
         // Raw sing-box config (full config with "outbounds", a single outbound object, or an
@@ -2106,7 +2179,7 @@ class LocationsRepositoryImpl(
                 ),
                 vkturn = VkTurnConfig(
                     uri = link.uri,
-                    vkLink = "",
+                    vkLink = link.vkLink,
                     listenPort = listenPort,
                     outbound = VkTurnConfig.OUTBOUND_PROXY,
                     outboundProxyLink = link.exitProxyLink,
@@ -2125,7 +2198,7 @@ class LocationsRepositoryImpl(
                 ),
                 vkturn = VkTurnConfig(
                     uri = link.uri,
-                    vkLink = "",
+                    vkLink = link.vkLink,
                     listenPort = link.listenPort,
                 ),
             ).normalized()
@@ -2219,6 +2292,38 @@ class LocationsRepositoryImpl(
             subscriptionUrl = subscriptionUrl,
             metadata = metadata,
         )
+    }
+
+    /** Parses every [MasterDnsUriParser.SCHEME] link into an [EngineType.MasterDns] location. */
+    private fun parseMasterDnsText(
+        text: String,
+        subscriptionUrl: String?,
+        subscriptionMetadata: SubscriptionMetadata?
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+        val entries = text.trim().lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith(MasterDnsUriParser.SCHEME, ignoreCase = true) }
+            .mapNotNull { MasterDnsUriParser.parse(it) }
+            .map { link ->
+                val domain = link.config.domainList().first()
+                val location = LocationConfig(
+                    name = link.name.ifBlank { "MasterDNS $domain" },
+                    engine = EngineType.MasterDns,
+                    masterDns = link.config,
+                ).normalized()
+                val storageId = uniqueStorageId("imported_masterdns_${domain.storageSlug()}", usedStorageIds)
+                LocationEntry.from(
+                    storageId = storageId,
+                    location = location,
+                    subscriptionUrl = subscriptionUrl,
+                    metadata = locationMetadata
+                )
+            }
+            .toList()
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
     private fun parseSnolcText(
@@ -2918,8 +3023,27 @@ class LocationsRepositoryImpl(
         )
     }
 
+    /**
+     * `olcrtc://` link, optionally with several rooms: `provider?transport@room#key!provider?transport@room#key$Name`.
+     * The first segment is the main room, the rest become the multi-room [LocationConfig.extraRooms]; the
+     * `$Name` suffix (or `%client`) belongs to the whole link and is read off the first segment.
+     */
     private fun parseOlcRtcUri(line: String): ParsedOlcRtcUri? {
         val payload = line.removePrefix(OLCRTC_URI_PREFIX)
+        val nameStart = payload.indexOf('$').takeIf { it >= 0 } ?: payload.length
+        val segments = payload.substring(0, nameStart).split('!')
+        if (segments.size == 1) return parseOlcRtcSegment(payload)
+
+        val main = parseOlcRtcSegment(segments.first() + payload.substring(nameStart)) ?: return null
+        val extras = segments.drop(1)
+            .mapNotNull { parseOlcRtcSegment(it)?.location }
+            .map { ExtraRoom(provider = it.bypassProvider, transport = it.transport, room = it.id, key = it.key) }
+            .take(LocationConfig.MAX_EXTRA_ROOMS)
+        if (extras.isEmpty()) return main
+        return main.copy(location = main.location.copy(multiRoomEnabled = true, extraRooms = extras).normalized())
+    }
+
+    private fun parseOlcRtcSegment(payload: String): ParsedOlcRtcUri? {
 
         val transportMarker = payload.indexOf('?')
         val roomMarker = payload.indexOf('@', startIndex = transportMarker + 1)
@@ -3256,4 +3380,20 @@ class LocationsRepositoryImpl(
          */
         const val HEADER_APP_ID = "x-app-id"
     }
+}
+
+/**
+ * Puts the panel's subscription metadata (title, traffic, expiry, support link…) on an imported location. A family whose
+ * parser built its own metadata without a title (olcRTC does: its `#refresh:` header) must still join the panel's
+ * subscription: the list groups by title + URL, so without the title it showed up as a separate "subscription".
+ */
+internal fun withPanelSubscription(e: LocationEntry, sub: LocationMetadata?): LocationEntry {
+    val panel = sub?.subscription ?: return e
+    val own = e.metadata?.subscription ?: return e.copy(metadata = sub)
+    if (!own.name.isNullOrBlank()) return e
+    val merged = panel.copy(
+        update = panel.update ?: own.update, refresh = panel.refresh ?: own.refresh, color = panel.color ?: own.color,
+        icon = panel.icon ?: own.icon, used = panel.used ?: own.used, available = panel.available ?: own.available,
+    )
+    return e.copy(metadata = (e.metadata ?: LocationMetadata()).copy(subscription = merged))
 }

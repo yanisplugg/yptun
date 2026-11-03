@@ -43,7 +43,7 @@ import org.olcbox.app.vpn.olcrtc.rememberOlcRtcServerInstaller
  * процессу на комнату, а в локацию вернуть комнаты и общий ключ шифрования.
  *
  * Комнаты: у jitsi комната создаётся самим фактом захода, поэтому имена генерируются кнопкой из
- * адреса инстанса. У telemost/wbstream ссылку выдаёт сам сервис, её вставляют руками — по одной в
+ * адреса инстанса. У mtslink/vkcalls/salutejazz/telemost ссылку выдаёт сам сервис, её вставляют руками — по одной в
  * строке, сколько комнат, столько и процессов.
  */
 @Composable
@@ -69,6 +69,7 @@ internal fun OlcRtcInstallDialog(
     var transport by remember {
         mutableStateOf(config.transport.takeIf { it in OLCRTC_TRANSPORTS } ?: "vp8channel")
     }
+    val providerTransports = LocationConfig.supportedTransportsForProvider(provider)
     var jitsiInstance by remember { mutableStateOf("https://meet.jit.si") }
     var roomsText by remember { mutableStateOf(config.id) }
     var dns by remember { mutableStateOf("8.8.8.8:53") }
@@ -159,13 +160,18 @@ internal fun OlcRtcInstallDialog(
                     selectedValue = provider,
                     options = OLCRTC_PROVIDERS,
                     enabled = !running,
-                    onValueSelected = { provider = it },
+                    onValueSelected = {
+                        provider = it
+                        // MTS Link едет только по vp8channel, SaluteJazz — только по datachannel.
+                        val allowed = LocationConfig.supportedTransportsForProvider(it)
+                        if (transport !in allowed) transport = allowed.first()
+                    },
                     valueLabel = { it }
                 )
                 SettingsDropdown(
                     label = "Транспорт",
                     selectedValue = transport,
-                    options = OLCRTC_TRANSPORTS,
+                    options = OLCRTC_TRANSPORTS.filter { it in providerTransports },
                     enabled = !running,
                     onValueSelected = { transport = it },
                     valueLabel = { it }

@@ -192,6 +192,10 @@ struct Options {
     max_resolved_addresses: usize,
     resolve_timeout_ms: u64,
     connect_timeout_ms: u64,
+    /// YPtun: каскад. Адрес локального SOCKS5 (клиент snolc к узлу выхода): все TCP/UDP-потоки идут через него,
+    /// имена доменов уходят на выход как есть (без локального DNS). Пусто = выходить напрямую.
+    #[serde(default)]
+    upstream: String,
 }
 
 fn validate_config(config: &[u8], _base: &[u8]) -> Result<(), String> {
@@ -208,6 +212,9 @@ fn parse_options(config: &[u8]) -> Result<Options, String> {
         || options.connect_timeout_ms == 0
     {
         return Err("direct adapter options are inconsistent".into());
+    }
+    if !options.upstream.is_empty() && options.upstream.parse::<SocketAddr>().is_err() {
+        return Err("direct adapter upstream must be an ip:port".into());
     }
     Ok(options)
 }
@@ -228,6 +235,8 @@ enum WorkerRequest {
     Connect {
         kind: u32,
         addresses: Vec<SocketAddr>,
+        domain: Option<(String, u16)>,
+        upstream: Option<SocketAddr>,
         connect_timeout: Duration,
         response: SyncSender<Result<Endpoint, DirectError>>,
         wake: WorkerWake,
@@ -273,6 +282,7 @@ struct State {
     worker: Option<JoinHandle<()>>,
     pending_resolutions: HashMap<u64, PendingResolution>,
     resolved: HashMap<u64, Vec<SocketAddr>>,
+    domains: HashMap<u64, (String, u16)>,
     pending: HashMap<u64, PendingOpen>,
     ready: HashMap<u64, Endpoint>,
     active: HashMap<u64, DirectFlow<ForeignByteIo>>,
@@ -282,6 +292,8 @@ struct State {
 enum Endpoint {
     Tcp(TcpStream),
     Udp(UdpSocket),
+    /// UDP через SOCKS5 апстрима: управляющее TCP-соединение держит ассоциацию, заголовок SOCKS5 для адреса потока.
+    UdpRelay(UdpSocket, TcpStream, Vec<u8>),
 }
 
 impl Drop for State {
@@ -339,6 +351,7 @@ struct UdpIo {
     socket: UdpSocket,
     buffer: Vec<u8>,
     pending: Option<usize>,
+    relay: Option<(TcpStream, Vec<u8>)>,
 }
 
 impl DatagramIo for UdpIo {
@@ -349,6 +362,13 @@ impl DatagramIo for UdpIo {
     ) -> Poll<io::Result<DatagramRecv>> {
         if self.pending.is_none() {
             match self.socket.recv(&mut self.buffer) {
+                Ok(length) if self.relay.is_some() => match socks_udp_payload(&self.buffer[..length]) {
+                    Some(offset) => {
+                        self.buffer.copy_within(offset..length, 0);
+                        self.pending = Some(length - offset);
+                    }
+                    None => return Poll::Pending, // чужой/фрагментированный кадр: отбрасываем
+                },
                 Ok(length) => self.pending = Some(length),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Poll::Pending,
                 Err(error) => return Poll::Ready(Err(error)),
@@ -368,8 +388,16 @@ impl DatagramIo for UdpIo {
         _context: &mut Context<'_>,
         datagram: &[u8],
     ) -> Poll<io::Result<()>> {
-        match self.socket.send(datagram) {
-            Ok(length) if length == datagram.len() => Poll::Ready(Ok(())),
+        let framed;
+        let data = match &self.relay {
+            Some((_, header)) => {
+                framed = [header.as_slice(), datagram].concat();
+                framed.as_slice()
+            }
+            None => datagram,
+        };
+        match self.socket.send(data) {
+            Ok(length) if length == data.len() => Poll::Ready(Ok(())),
             Ok(_) => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::WriteZero,
                 "UDP socket accepted a partial datagram",
@@ -392,14 +420,15 @@ struct DirectDatagramFlow<S> {
 }
 
 impl<S: DatagramIo> DirectDatagramFlow<S> {
-    fn new(stack: S, socket: UdpSocket) -> Result<Self, DirectError> {
+    fn new(stack: S, socket: UdpSocket, relay: Option<(TcpStream, Vec<u8>)>) -> Result<Self, DirectError> {
         socket.set_nonblocking(true)?;
         Ok(Self {
             stack,
             endpoint: UdpIo {
                 socket,
-                buffer: vec![0; MAX_UDP_PAYLOAD],
+                buffer: vec![0; MAX_UDP_PAYLOAD + 262],
                 pending: None,
+                relay,
             },
             upload: DatagramPump::new(MAX_UDP_PAYLOAD).map_err(|_| DirectError::Resource)?,
             download: DatagramPump::new(MAX_UDP_PAYLOAD).map_err(|_| DirectError::Resource)?,
@@ -502,6 +531,7 @@ fn initialize(
                 worker: Some(worker),
                 pending_resolutions: HashMap::new(),
                 resolved: HashMap::new(),
+                domains: HashMap::new(),
                 pending: HashMap::new(),
                 ready: HashMap::new(),
                 active: HashMap::new(),
@@ -580,6 +610,15 @@ unsafe extern "C" fn resolve(
                     if matches!(state.options.dns_mode, DnsMode::RejectDomains) =>
                 {
                     abi::STATUS_DENIED
+                }
+                Destination::Domain(domain, port) if !state.options.upstream.is_empty() => {
+                    // каскад: имя резолвит узел выхода, здесь только заглушка из TEST-NET-1 (политика пропускает любой адрес)
+                    state.domains.insert(operation, (domain, port));
+                    state
+                        .resolved
+                        .insert(operation, vec![SocketAddr::new(Ipv4Addr::new(192, 0, 2, 1).into(), port)]);
+                    let addresses = state.resolved.get(&operation).expect("inserted above");
+                    write_resolved_addresses(addresses, output, written)
                 }
                 Destination::Domain(domain, port) => {
                     let Some(sender) = state.sender.as_ref() else {
@@ -706,6 +745,8 @@ unsafe extern "C" fn open(
             let request = WorkerRequest::Connect {
                 kind: metadata.kind,
                 addresses,
+                domain: state.domains.remove(&operation),
+                upstream: state.options.upstream.parse().ok(),
                 connect_timeout: Duration::from_millis(state.options.connect_timeout_ms),
                 response: response_tx,
                 wake: worker_wake,
@@ -777,11 +818,16 @@ fn connect_worker(receiver: Receiver<WorkerRequest>, host: HostApi) {
             WorkerRequest::Connect {
                 kind,
                 addresses,
+                domain,
+                upstream,
                 connect_timeout,
                 response,
                 wake,
             } => {
-                let result = connect_addresses(kind, addresses, connect_timeout, host);
+                let result = match upstream {
+                    Some(upstream) => connect_via_socks(kind, upstream, domain, &addresses, connect_timeout),
+                    None => connect_addresses(kind, addresses, connect_timeout, host),
+                };
                 let _ = response.send(result);
                 wake.wake();
             }
@@ -836,6 +882,139 @@ fn connect_addresses(
         }
     }
     Err(last_error.map_or(DirectError::NoAddress, DirectError::Io))
+}
+
+/// SOCKS5-адрес назначения: ATYP + адрес + порт (формат общий для CONNECT и заголовка UDP).
+fn socks_target(
+    domain: Option<&(String, u16)>,
+    addresses: &[SocketAddr],
+) -> Result<Vec<u8>, DirectError> {
+    let mut out = Vec::new();
+    let port = if let Some((name, port)) = domain {
+        let bytes = name.as_bytes();
+        if bytes.is_empty() || bytes.len() > 255 {
+            return Err(DirectError::InvalidDestination);
+        }
+        out.push(3);
+        out.push(bytes.len() as u8);
+        out.extend_from_slice(bytes);
+        *port
+    } else {
+        let address = addresses.first().ok_or(DirectError::NoAddress)?;
+        match address.ip() {
+            IpAddr::V4(ip) => {
+                out.push(1);
+                out.extend_from_slice(&ip.octets());
+            }
+            IpAddr::V6(ip) => {
+                out.push(4);
+                out.extend_from_slice(&ip.octets());
+            }
+        }
+        address.port()
+    };
+    out.extend_from_slice(&port.to_be_bytes());
+    Ok(out)
+}
+
+fn socks_error(message: &str) -> DirectError {
+    DirectError::Io(io::Error::other(message.to_owned()))
+}
+
+/// Читает ответ SOCKS5 (VER REP RSV ATYP ADDR PORT) и возвращает адрес из ответа.
+fn socks_reply(stream: &mut TcpStream) -> Result<SocketAddr, DirectError> {
+    let mut head = [0u8; 4];
+    stream.read_exact(&mut head)?;
+    if head[0] != 5 {
+        return Err(socks_error("upstream is not SOCKS5"));
+    }
+    if head[1] != 0 {
+        return Err(socks_error("upstream refused the request"));
+    }
+    let ip: IpAddr = match head[3] {
+        1 => {
+            let mut raw = [0u8; 4];
+            stream.read_exact(&mut raw)?;
+            Ipv4Addr::from(raw).into()
+        }
+        4 => {
+            let mut raw = [0u8; 16];
+            stream.read_exact(&mut raw)?;
+            Ipv6Addr::from(raw).into()
+        }
+        3 => {
+            let mut length = [0u8; 1];
+            stream.read_exact(&mut length)?;
+            let mut name = vec![0u8; usize::from(length[0])];
+            stream.read_exact(&mut name)?;
+            Ipv4Addr::UNSPECIFIED.into()
+        }
+        _ => return Err(socks_error("upstream replied with an unknown address type")),
+    };
+    let mut port = [0u8; 2];
+    stream.read_exact(&mut port)?;
+    Ok(SocketAddr::new(ip, u16::from_be_bytes(port)))
+}
+
+/// Каскад: поток открывается через локальный SOCKS5 (клиент snolc к узлу выхода), домен уходит на выход как есть.
+fn connect_via_socks(
+    kind: u32,
+    upstream: SocketAddr,
+    domain: Option<(String, u16)>,
+    addresses: &[SocketAddr],
+    timeout: Duration,
+) -> Result<Endpoint, DirectError> {
+    let mut control = TcpStream::connect_timeout(&upstream, timeout)?;
+    control.set_read_timeout(Some(timeout))?;
+    control.set_write_timeout(Some(timeout))?;
+    control.write_all(&[5, 1, 0])?;
+    let mut method = [0u8; 2];
+    control.read_exact(&mut method)?;
+    if method != [5, 0] {
+        return Err(socks_error("upstream requires authentication"));
+    }
+    let target = socks_target(domain.as_ref(), addresses)?;
+    match kind {
+        abi::FLOW_TCP => {
+            let mut request = vec![5, 1, 0];
+            request.extend_from_slice(&target);
+            control.write_all(&request)?;
+            socks_reply(&mut control)?;
+            control.set_read_timeout(None)?;
+            control.set_write_timeout(None)?;
+            Ok(Endpoint::Tcp(control))
+        }
+        abi::FLOW_UDP => {
+            control.write_all(&[5, 3, 0, 1, 0, 0, 0, 0, 0, 0])?;
+            let mut relay = socks_reply(&mut control)?;
+            if relay.ip().is_unspecified() {
+                relay.set_ip(upstream.ip());
+            }
+            let bind = if relay.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+            let socket = UdpSocket::bind(bind)?;
+            socket.connect(relay)?;
+            control.set_read_timeout(None)?;
+            control.set_write_timeout(None)?;
+            let mut header = vec![0, 0, 0];
+            header.extend_from_slice(&target);
+            Ok(Endpoint::UdpRelay(socket, control, header))
+        }
+        _ => Err(DirectError::InvalidDestination),
+    }
+}
+
+/// Смещение полезной нагрузки в UDP-кадре SOCKS5 (RSV RSV FRAG ATYP ADDR PORT); `None` для фрагментов и мусора.
+fn socks_udp_payload(frame: &[u8]) -> Option<usize> {
+    if frame.len() < 4 || frame[0] != 0 || frame[1] != 0 || frame[2] != 0 {
+        return None;
+    }
+    let offset = match frame[3] {
+        1 => 4 + 4 + 2,
+        4 => 4 + 16 + 2,
+        3 => 4 + 1 + usize::from(*frame.get(4)?) + 2,
+        _ => return None,
+    };
+    (frame.len() >= offset).then_some(offset)
 }
 
 fn connect_udp(address: SocketAddr, host: HostApi) -> io::Result<UdpSocket> {
@@ -1041,6 +1220,7 @@ unsafe extern "C" fn attach(
                 return abi::STATUS_INVALID;
             };
             state.resolved.remove(&flow);
+            state.domains.remove(&flow);
             let Endpoint::Tcp(endpoint) = endpoint else {
                 state.ready.insert(flow, endpoint);
                 return abi::STATUS_INVALID;
@@ -1078,16 +1258,21 @@ unsafe extern "C" fn attach_datagram(
                 return abi::STATUS_INVALID;
             };
             state.resolved.remove(&flow);
-            let Endpoint::Udp(endpoint) = endpoint else {
-                state.ready.insert(flow, endpoint);
-                return abi::STATUS_INVALID;
+            state.domains.remove(&flow);
+            let (endpoint, relay) = match endpoint {
+                Endpoint::Udp(socket) => (socket, None),
+                Endpoint::UdpRelay(socket, control, header) => (socket, Some((control, header))),
+                other => {
+                    state.ready.insert(flow, other);
+                    return abi::STATUS_INVALID;
+                }
             };
             let stack = match unsafe { ForeignDatagramIo::from_raw(stack_socket, stack_socket_io) }
             {
                 Ok(stack) => stack,
                 Err(_) => return abi::STATUS_INVALID,
             };
-            let flow_state = match DirectDatagramFlow::new(stack, endpoint) {
+            let flow_state = match DirectDatagramFlow::new(stack, endpoint, relay) {
                 Ok(flow) => flow,
                 Err(error) => return error_status(&error),
             };
@@ -1122,6 +1307,7 @@ unsafe extern "C" fn close_flow(instance: u64, flow: u64) -> u32 {
             };
             let removed = state.pending_resolutions.remove(&flow).is_some()
                 | state.resolved.remove(&flow).is_some()
+                | state.domains.remove(&flow).is_some()
                 | state.pending.remove(&flow).is_some()
                 | state.ready.remove(&flow).is_some()
                 | state.active.remove(&flow).is_some()
@@ -1345,6 +1531,8 @@ mod tests {
             .try_send(WorkerRequest::Connect {
                 kind: abi::FLOW_TCP,
                 addresses: vec![address],
+                domain: None,
+                upstream: None,
                 connect_timeout: Duration::from_secs(1),
                 response: response_tx,
                 wake: WorkerWake::new(no_wake()).unwrap(),

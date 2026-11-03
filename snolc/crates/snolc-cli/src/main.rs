@@ -208,6 +208,12 @@ impl Host for CliHost {
     fn engine_event(&self, event: &Event) {
         eprintln!("{event:?}");
     }
+
+    // The default denies every socket on Android (it expects a VpnService host to protect it). Here the
+    // client is a subprocess of an app that is itself excluded from the TUN, so its sockets already bypass it.
+    fn protect_socket(&self, _socket: i64) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

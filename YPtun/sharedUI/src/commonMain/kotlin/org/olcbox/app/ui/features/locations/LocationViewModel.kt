@@ -139,6 +139,9 @@ class LocationViewModel(
     var editingConfig by mutableStateOf(LocationConfig())
     var editingName by mutableStateOf("")
     var editingId by mutableStateOf<String?>(null)
+    /** The edited location comes from an encrypted subscription: its settings are not shown at all. */
+    val editingLocked: Boolean
+        get() = editingId?.let { id -> locations.find { it.storageId == id }?.metadata?.locked } == true
     var editingSubscriptionUrl by mutableStateOf<String?>(null)
         private set
     var editingSubscriptionIntervalHours by mutableStateOf(SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_HOURS.toString())
@@ -282,6 +285,7 @@ class LocationViewModel(
         fullName = name,
         config = LocationConfig(
             name = name,
+            description = description,
             engine = engine,
             bypassProvider = authProvider,
             transport = transport,
@@ -661,6 +665,8 @@ class LocationViewModel(
         editingMasterDns = editingConfig.masterDns ?: MasterDnsConfig()
         editingOpenFlux = editingConfig.openFlux ?: OpenFluxConfig()
         editingSnolc = editingConfig.snolc ?: SnolcConfig()
+        isVlessEngine = editingConfig.engine == EngineType.Standard &&
+            editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_VLESS && it.isManuallyEditableVless() }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -833,6 +839,7 @@ class LocationViewModel(
     }
 
     fun onEngineChanged(engine: EngineType) {
+        isVlessEngine = false
         if (isWireguardEngine) {
             // Leaving AmneziaWG/WG: hand back the proxy it replaced (nothing for a location that was always WG).
             editingConfig = editingConfig.copy(proxy = wgStashedProxy)
@@ -878,6 +885,14 @@ class LocationViewModel(
         }
     }
 
+    /** Manual VLESS form: applies [edit] to the main proxy (a fresh VLESS profile when there is none). */
+    fun editVless(edit: (ProxyProfile) -> ProxyProfile) {
+        val profile = edit(editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_VLESS } ?: ProxyProfile())
+        editingConfig = editingConfig.copy(proxy = profile)
+        editingProxyLink = ShareLinkComposer.compose(profile).orEmpty() // display-only, like the pasted link
+        proxyError = null
+    }
+
     /** Parses a pasted proxy share link or raw sing-box outbound into [editingConfig].proxy. */
     fun onProxyLinkChanged(value: String) {
         editingProxyLink = value
@@ -918,6 +933,21 @@ class LocationViewModel(
     private var wgStashedProxy: ProxyProfile? = null
     private var wgStashedLink: String = ""
     private var awgBackup: List<Pair<String, String>> = emptyList()
+
+    /** The «VLESS» entry of the type picker: a Standard location whose main proxy is a hand-made VLESS. */
+    var isVlessEngine by mutableStateOf(false)
+        private set
+
+    fun onVlessEngineSelected() {
+        if (isVlessEngine) return
+        onEngineChanged(EngineType.Standard)
+        if (editingConfig.proxy?.type != ProxyProfile.TYPE_VLESS) {
+            editingConfig = editingConfig.copy(proxy = null)
+            editingProxyLink = ""
+            proxyError = null
+        }
+        isVlessEngine = true
+    }
 
     /** Picks the AmneziaWG/WG engine: an empty AmneziaWG template to fill in or paste over. */
     fun onWireguardEngineSelected() {
@@ -1192,6 +1222,15 @@ class LocationViewModel(
         viewModelScope.launch {
             locationsRepository.setSubscriptionCustomName(subscriptionUrl, name)
             loadLocations()
+        }
+    }
+
+    /** Own VK call link(s) of a (locked) VK-TURN location; blank = the subscription's again. */
+    fun setLocationVkLink(storageId: String, link: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            locationsRepository.setLocationVkLink(storageId, link)
+            loadLocations()
+            onDone()
         }
     }
 

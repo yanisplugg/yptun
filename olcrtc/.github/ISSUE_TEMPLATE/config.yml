@@ -1,11 +1,11 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: Чат сообщества (Telegram)
-    url: https://t.me/openlibrecommunity
-    about: Общие вопросы, помощь по запуску, обсуждения. Перед созданием issue загляни сюда.
-  - name: Документация
-    url: https://github.com/openlibrecommunity/olcrtc/tree/main/docs
-    about: Конфигурация, быстрый старт, формат URI, примеры YAML.
-  - name: olcbox (UI клиент)
-    url: https://github.com/alananisimov/olcbox/issues
-    about: Баги интерфейса/мобильного клиента сообщай туда, ядро olcrtc их не чинит.
+  - name: Security vulnerability
+    url: https://github.com/ghostlane-project/olcrtc/security/advisories/new
+    about: Report privately, never in a public issue. See SECURITY.md.
+  - name: Documentation
+    url: https://github.com/ghostlane-project/olcrtc/tree/proofkit/docs
+    about: Configuration, quick start, the URI format, the release gate.
+  - name: Ghostlane (the application)
+    url: https://github.com/ghostlane-project/ghostlane/issues
+    about: Interface and mobile client problems belong there; this repository is the engine.

@@ -1,37 +1,29 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: 2026 amurcanov
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 set -Eeuo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export TERM="${TERM:-xterm}"
 
-readonly SCRIPT_VERSION="2.1.9"
-readonly CSQTT_WIRE_PROTOCOL_REVISION="CSQTT-WIRE-3"
+readonly SCRIPT_VERSION="2.5.0"
 readonly LOG_FILE="/var/log/csqtt-install.log"
 readonly PEER_PORT="${CSQTT_PEER_PORT:-46000}"
 readonly SSH_PORT="${CSQTT_SSH_PORT:-22}"
 readonly WEB_PORT="${CSQTT_WEB_PORT:-46002}"
 readonly LE_HTTP_PORT="80"
-readonly LE_RENEW_BEFORE_SECONDS="86400"
+readonly LE_RENEW_BEFORE_SECONDS="259200"
 readonly DEPLOY_MODE="${CSQTT_DEPLOY_MODE:-systemd}"
 readonly CSQTT_IFACE="csqtt1"
 readonly CSQTT_CONFIG_DIR="/etc/csqtt"
 readonly CSQTT_LE_CERTBOT="/opt/csqtt-certbot/bin/certbot"
 readonly CSQTT_LE_VENV="/opt/csqtt-certbot"
 readonly CSQTT_LE_STATE_FILE="${CSQTT_CONFIG_DIR}/letsencrypt-ip.env"
-readonly CSQTT_LE_RENEW_HELPER="/usr/local/lib/csqtt/letsencrypt-renew.sh"
+readonly CSQTT_LE_RENEW_HELPER="/usr/local/lib/csqtt-letsencrypt-renew.sh"
 readonly CSQTT_LE_SERVICE="csqtt-letsencrypt.service"
 readonly CSQTT_LE_TIMER="csqtt-letsencrypt.timer"
-# Persistent state is intentionally kept on both redeploy and uninstall.  The
-# only durable database format is SQLite; its WAL sidecars are part of the
-# same consistent state while the process is running.
 readonly CSQTT_DATABASE_FILE="csqtt.db"
 readonly CSQTT_DATABASE_WAL_FILE="csqtt.db-wal"
 readonly CSQTT_DATABASE_SHM_FILE="csqtt.db-shm"
-# Legacy JSON is only a one-time migration input. The installer must preserve
-# it across cutover; the server removes it only after SQLite import commits.
 readonly CSQTT_LEGACY_MIGRATION_JSON="passwords.json"
 readonly CSQTT_LEGACY_MIGRATION_IMPORTED_JSON="passwords.json.imported"
 readonly CSQTT_ENV_FILE="${CSQTT_CONFIG_DIR}/csqtt.env"
@@ -43,7 +35,7 @@ readonly UPLOAD_OVERRIDES_FILE="/tmp/.csqtt-upload-overrides.json"
 readonly CSQTT_SYSCTL_FILE="/etc/sysctl.d/99-csqtt.conf"
 readonly CSQTT_UDP_SYSCTL_FILE="/etc/sysctl.d/99-csqtt-udp-buffers.conf"
 readonly IPT_COMMENT="CSQTT_MANAGED"
-readonly CSQTT_DOCKER_IMAGE="csqtt:2.1.9"
+readonly CSQTT_DOCKER_IMAGE="csqtt:2.5.0"
 readonly CSQTT_DOCKER_CONTAINER="csqtt"
 readonly CSQTT_DOCKER_PREREQ_SERVICE="csqtt-docker-prereq.service"
 readonly CSQTT_DOCKER_PREREQ_HELPER="/usr/local/lib/csqtt/docker-prereq.sh"
@@ -358,6 +350,9 @@ list_csqtt_systemd_units() {
             *.service) ;;
             *) continue ;;
         esac
+        case "$unit" in
+            "$CSQTT_DOCKER_PREREQ_SERVICE"|"$CSQTT_LE_SERVICE") continue ;;
+        esac
         if systemd_unit_runs_csqtt "$unit"; then
             printf '%s\n' "$unit"
         fi
@@ -366,6 +361,35 @@ list_csqtt_systemd_units() {
         systemctl list-unit-files --type=service --no-legend --plain 2>/dev/null || true
     } | awk '{print $1}' | sort -u)
     return 0
+}
+
+stop_csqtt_docker_prereq() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local requires_link="/etc/systemd/system/docker.service.requires/${CSQTT_DOCKER_PREREQ_SERVICE}"
+    local wants_link="/etc/systemd/system/docker.service.wants/${CSQTT_DOCKER_PREREQ_SERVICE}"
+    if [ -e "$requires_link" ] || [ -L "$requires_link" ]; then
+        rm -f -- "$requires_link"
+        SYSTEMD_NEEDS_RELOAD=1
+    fi
+    if [ -e "$wants_link" ] || [ -L "$wants_link" ]; then
+        rm -f -- "$wants_link"
+        SYSTEMD_NEEDS_RELOAD=1
+    fi
+    systemctl disable "$CSQTT_DOCKER_PREREQ_SERVICE" >/dev/null 2>&1 || true
+    if [ "$SYSTEMD_NEEDS_RELOAD" -eq 1 ]; then
+        systemctl daemon-reload || die "systemctl daemon-reload завершился ошибкой при отключении Docker prerequisites"
+        SYSTEMD_NEEDS_RELOAD=0
+    fi
+    if systemctl is-active --quiet "$CSQTT_DOCKER_PREREQ_SERVICE"; then
+        log_info "Остановка Docker prerequisite CSQTT: $CSQTT_DOCKER_PREREQ_SERVICE"
+        timeout 10 systemctl stop "$CSQTT_DOCKER_PREREQ_SERVICE" >/dev/null 2>&1 || true
+        if systemctl is-active --quiet "$CSQTT_DOCKER_PREREQ_SERVICE"; then
+            timeout 2 systemctl kill --kill-who=all --signal=SIGKILL "$CSQTT_DOCKER_PREREQ_SERVICE" >/dev/null 2>&1 || true
+        fi
+        if systemctl is-active --quiet "$CSQTT_DOCKER_PREREQ_SERVICE"; then
+            die "Не удалось остановить Docker prerequisite CSQTT: $CSQTT_DOCKER_PREREQ_SERVICE"
+        fi
+    fi
 }
 
 stop_all_running_csqtt_systemd_units() {
@@ -636,6 +660,7 @@ fw_add_input_tcp() {
 fw_add_forward() {
     ipt_add_or_ensure filter INPUT -i "$CSQTT_IFACE" -s "10.66.67.0/24" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
         die "Не удалось установить INPUT -i $CSQTT_IFACE"
+    ipt_add_or_ensure filter FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true
     ipt_add_or_ensure filter FORWARD -i "$CSQTT_IFACE" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
         die "Не удалось установить FORWARD -i $CSQTT_IFACE"
     ipt_add_or_ensure filter FORWARD -o "$CSQTT_IFACE" -m comment --comment "$IPT_COMMENT" -j ACCEPT || \
@@ -644,9 +669,19 @@ fw_add_forward() {
 
 fw_add_masquerade() {
     local iface="$1" subnet="$2"
-    iptables -w "$XT_WAIT" -t nat -C POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$IPT_COMMENT" -j MASQUERADE >/dev/null 2>&1 || \
-        iptables -w "$XT_WAIT" -t nat -A POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$IPT_COMMENT" -j MASQUERADE >>"$LOG_FILE" 2>&1 || \
-        die "Не удалось установить NAT MASQUERADE через $iface"
+    if [ -n "$iface" ]; then
+        iptables -w "$XT_WAIT" -t nat -C POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$IPT_COMMENT" -j MASQUERADE >/dev/null 2>&1 || \
+            iptables -w "$XT_WAIT" -t nat -A POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$IPT_COMMENT" -j MASQUERADE >>"$LOG_FILE" 2>&1 || true
+        local wan_ip
+        wan_ip="$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n 1)"
+        if [ -n "$wan_ip" ]; then
+            iptables -w "$XT_WAIT" -t nat -C POSTROUTING -s "$subnet" -o "$iface" -m comment --comment "$IPT_COMMENT" -j SNAT --to-source "$wan_ip" >/dev/null 2>&1 || \
+                iptables -w "$XT_WAIT" -t nat -I POSTROUTING 1 -s "$subnet" -o "$iface" -m comment --comment "$IPT_COMMENT" -j SNAT --to-source "$wan_ip" >>"$LOG_FILE" 2>&1 || true
+        fi
+    fi
+    iptables -w "$XT_WAIT" -t nat -C POSTROUTING -s "$subnet" ! -o "$CSQTT_IFACE" -m comment --comment "$IPT_COMMENT" -j MASQUERADE >/dev/null 2>&1 || \
+        iptables -w "$XT_WAIT" -t nat -A POSTROUTING -s "$subnet" ! -o "$CSQTT_IFACE" -m comment --comment "$IPT_COMMENT" -j MASQUERADE >>"$LOG_FILE" 2>&1 || \
+        die "Не удалось установить NAT MASQUERADE"
 }
 
 fw_add_mss_clamping() {
@@ -683,7 +718,7 @@ EOF
 cleanup_csqtt_netfilter_rules() {
     local table chain marker
     for marker in "$IPT_COMMENT" CSQTT_MIRRORED CSQTT_TPROXY CSQTT_LOCAL_SOCKS CSQTT_LOCAL_SOCKS_MARK CSQTT_SOCKS CSQTT_CASCADE_NO_QUIC; do
-        for table in filter nat mangle raw; do
+        for table in filter nat mangle; do
             for chain in INPUT FORWARD PREROUTING POSTROUTING OUTPUT; do
                 delete_marked_rules "$table" "$chain" "$marker"
             done
@@ -696,9 +731,6 @@ secure_persistent_state() {
     chmod 700 "$CSQTT_CONFIG_DIR" 2>/dev/null || true
     [ -d "$CSQTT_RUNTIME_ARCHIVE_DIR" ] && chmod 700 "$CSQTT_RUNTIME_ARCHIVE_DIR" 2>/dev/null || true
 
-    # Never use a blanket find/rm here. SQLite in WAL mode consists of the
-    # main database and up to two sidecars; legacy JSON must also survive until
-    # the new server commits its SQLite import.
     local file
     for file in \
         "$CSQTT_DATABASE_FILE" \
@@ -773,13 +805,10 @@ validate_candidate_environment() {
         die "В переданной WEB-конфигурации отсутствует CSQTT_WEB_PASS" "$EXIT_PREFLIGHT_FAILED"
     grep -q '"main_password"' "$candidate_overrides" || \
         die "В deploy-конфигурации отсутствует main_password" "$EXIT_PREFLIGHT_FAILED"
-    grep -q '"device_id"' "$candidate_overrides" || \
-        die "В deploy-конфигурации отсутствует device_id" "$EXIT_PREFLIGHT_FAILED"
 }
 
 prepare_uploaded_release() {
     DEPLOY_PHASE="preflight"
-    local uploaded_wire_protocol
     [ -f "$UPLOAD_BINARY" ] && [ -s "$UPLOAD_BINARY" ] || \
         die "Новый бинарник не загружен или пуст" "$EXIT_PREFLIGHT_FAILED"
     [ -f "$UPLOAD_ENV_FILE" ] && [ -s "$UPLOAD_ENV_FILE" ] || \
@@ -791,10 +820,8 @@ prepare_uploaded_release() {
     chmod 0600 "$UPLOAD_ENV_FILE" "$UPLOAD_OVERRIDES_FILE" || \
         die "Не удалось защитить загруженную конфигурацию" "$EXIT_PREFLIGHT_FAILED"
     validate_candidate_environment "$UPLOAD_ENV_FILE" "$UPLOAD_OVERRIDES_FILE"
-    uploaded_wire_protocol="$(timeout 5 "$UPLOAD_BINARY" --protocol-revision 2>/dev/null || true)"
-    [ "$uploaded_wire_protocol" = "$CSQTT_WIRE_PROTOCOL_REVISION" ] || \
-        die "Загруженный бинарник CSQTT несовместим с этой версией деплоя" "$EXIT_PREFLIGHT_FAILED"
-    log_info "Загруженный бинарник соответствует ревизии протокола $CSQTT_WIRE_PROTOCOL_REVISION"
+    [ -x "$UPLOAD_BINARY" ] || die "Загруженный бинарник CSQTT не исполняемый" "$EXIT_PREFLIGHT_FAILED"
+    log_info "Загруженный бинарник csqtt проверен"
     log_info "Загруженный бинарник и конфигурация проверены до остановки текущего сервиса"
 }
 
@@ -806,8 +833,6 @@ finish_deployment() {
     cleanup_deploy_uploads
 }
 
-# Удаляет TUN-интерфейсы csqtp*, оставшиеся от старой tun2proxy-архитектуры
-# локального SOCKS5-форвардера (новые версии используют TPROXY без второго TUN).
 cleanup_legacy_proxy_interfaces() {
     local iface
     for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^csqtp' || true); do
@@ -859,10 +884,8 @@ csqtt_cleanup() {
     remove_all_csqtt_docker_containers
 
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop "$CSQTT_LE_TIMER" --no-block >/dev/null 2>&1 || true
-        timeout 10 systemctl stop "$CSQTT_LE_SERVICE" >/dev/null 2>&1 || true
+        stop_csqtt_docker_prereq
         stop_all_running_csqtt_systemd_units
-        systemctl disable "$CSQTT_DOCKER_PREREQ_SERVICE" >/dev/null 2>&1 || true
     fi
 
     force_stop_csqtt_processes || die "Не удалось завершить процессы CSQTT"
@@ -894,24 +917,73 @@ setup_sysctl() {
     prog 0.25 "Sysctl..."
     echo "⚙️  Настройка сетевых параметров..."
 
+    modprobe tcp_bbr 2>/dev/null || true
+    if [ -d /etc/modules-load.d ]; then
+        echo "tcp_bbr" > /etc/modules-load.d/bbr.conf 2>/dev/null || true
+    fi
+
     echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+    echo 2 > /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null || true
+    echo 2 > /proc/sys/net/ipv4/conf/default/rp_filter 2>/dev/null || true
+    echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
+    echo 0 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
+    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
+    echo 1 > /proc/sys/net/ipv6/conf/default/forwarding 2>/dev/null || true
+    echo 2 > /proc/sys/net/ipv6/conf/all/accept_ra 2>/dev/null || true
+    echo 2 > /proc/sys/net/ipv6/conf/default/accept_ra 2>/dev/null || true
+    for dev in /proc/sys/net/ipv6/conf/*; do
+        if [ -d "$dev" ]; then
+            echo 0 > "$dev/disable_ipv6" 2>/dev/null || true
+            echo 2 > "$dev/accept_ra" 2>/dev/null || true
+        fi
+    done
     mkdir -p /etc/sysctl.d
     cat > "$CSQTT_SYSCTL_FILE" << 'SYSEOF'
 net.ipv4.ip_forward = 1
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.default.forwarding = 1
+net.ipv6.conf.all.accept_ra = 2
+net.ipv6.conf.default.accept_ra = 2
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.netdev_max_backlog = 10000
+net.core.somaxconn = 65535
+net.ipv4.tcp_rmem = 4096 131072 67108864
+net.ipv4.tcp_wmem = 4096 131072 67108864
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_timestamps = 1
+net.ipv4.tcp_fastopen = 3
 SYSEOF
 
     cat > "$CSQTT_UDP_SYSCTL_FILE" << 'SYSEOF'
-net.core.rmem_max = 33554432
-net.core.wmem_max = 33554432
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
 SYSEOF
 
     sysctl -p "$CSQTT_SYSCTL_FILE" >>"$LOG_FILE" 2>&1 || log_warn "Не удалось применить обязательные параметры маршрутизации"
-    sysctl -p "$CSQTT_UDP_SYSCTL_FILE" >>"$LOG_FILE" 2>&1 || log_warn "Ядро ограничило лимиты UDP-буферов; сервер продолжит работу с доступными значениями"
+    sysctl -p "$CSQTT_UDP_SYSCTL_FILE" >>"$LOG_FILE" 2>&1 || log_warn "Ядро ограничило лимиты сетевых буферов; сервер продолжит работу с доступными значениями"
 
     [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)" = "1" ] || \
         die "IPv4 forwarding невозможно включить на этом VPS"
 
-    echo "✓ Sysctl настроен"
+    echo "✓ Sysctl настроен (IPv4/IPv6 forwarding + BBR + буферы)"
+}
+
+tune_cpu_mitigations() {
+    if [ -f /etc/default/grub ]; then
+        if ! grep -q "mitigations=off" /etc/default/grub; then
+            sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 mitigations=off nowatchdog/' /etc/default/grub 2>/dev/null || true
+            update-grub >>"$LOG_FILE" 2>&1 || grub2-mkconfig -o /boot/grub2/grub.cfg >>"$LOG_FILE" 2>&1 || true
+            log_info "Оптимизация CPU: mitigations=off добавлено в GRUB"
+        fi
+    fi
 }
 
 setup_nat_and_firewall() {
@@ -927,6 +999,17 @@ setup_nat_and_firewall() {
     ip link show "$iface" >/dev/null 2>&1 || die "Определённый WAN-интерфейс $iface не существует"
 
     log_info "WAN-интерфейс: $iface"
+    sysctl -w "net.ipv4.conf.${iface}.rp_filter=2" >>"$LOG_FILE" 2>&1 || true
+    sysctl -w "net.ipv6.conf.${iface}.disable_ipv6=0" >>"$LOG_FILE" 2>&1 || true
+    sysctl -w "net.ipv6.conf.${iface}.accept_ra=2" >>"$LOG_FILE" 2>&1 || true
+    sysctl -w "net.ipv6.conf.${iface}.forwarding=1" >>"$LOG_FILE" 2>&1 || true
+    command -v netplan >/dev/null 2>&1 && netplan apply >>"$LOG_FILE" 2>&1 || true
+
+    local gw_ip
+    gw_ip="$(ip -4 route show default 2>/dev/null | awk '/default/ {for(i=1;i<=NF;i++) if($i=="via") {print $(i+1); break}}')"
+    if [ -n "$gw_ip" ]; then
+        ip route replace "$gw_ip" dev "$iface" scope link >>"$LOG_FILE" 2>&1 || true
+    fi
 
     fw_add_input_udp "$PEER_PORT"
     fw_add_input_tcp "$WEB_PORT"
@@ -954,6 +1037,7 @@ LE_HTTP_PORT="$LE_HTTP_PORT"
 CSQTT_IFACE="$CSQTT_IFACE"
 IPT_COMMENT="$IPT_COMMENT"
 SUBNET="10.66.67.0/24"
+SUBNET6="fd66:67::/64"
 XT_WAIT="$XT_WAIT"
 CSQTT_RUNTIME_DIR="$CSQTT_RUNTIME_DIR"
 NETWORK_READY_FILE="$CSQTT_DOCKER_NETWORK_READY"
@@ -961,7 +1045,10 @@ NETWORK_READY_FILE="$CSQTT_DOCKER_NETWORK_READY"
 command -v ip >/dev/null 2>&1 || exit 20
 command -v iptables >/dev/null 2>&1 || exit 21
 [ -w /proc/sys/net/ipv4/ip_forward ] && echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-[ -f "\$NETWORK_READY_FILE" ] && exit 0
+[ -w /proc/sys/net/ipv6/conf/all/forwarding ] && echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
+[ -w /proc/sys/net/ipv4/conf/all/rp_filter ] && echo 2 > /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null || true
+[ -w /proc/sys/net/ipv4/conf/default/rp_filter ] && echo 2 > /proc/sys/net/ipv4/conf/default/rp_filter 2>/dev/null || true
+[ -w /proc/sys/net/ipv4/tcp_notsent_lowat ] && echo 131072 > /proc/sys/net/ipv4/tcp_notsent_lowat 2>/dev/null || true
 
 is_ignored_wan_interface() {
     ignored_iface="\${1%%@*}"
@@ -1019,17 +1106,46 @@ while [ "\$network_waited" -lt 90 ]; do
     sleep 1
 done
 [ -n "\$WAN_IFACE" ] || exit 22
+[ -w "/proc/sys/net/ipv4/conf/\$WAN_IFACE/rp_filter" ] && echo 2 > "/proc/sys/net/ipv4/conf/\$WAN_IFACE/rp_filter" 2>/dev/null || true
+[ -w "/proc/sys/net/ipv4/conf/\$CSQTT_IFACE/rp_filter" ] && echo 2 > "/proc/sys/net/ipv4/conf/\$CSQTT_IFACE/rp_filter" 2>/dev/null || true
+
+# Для /32 сетей с onlink-шлюзом обеспечиваем явный host route к шлюзу
+gw=\$(ip -4 route show default 2>/dev/null | awk '/default/ {for(i=1;i<=NF;i++) if(\$i=="via") {print \$(i+1); break}}')
+if [ -n "\$gw" ]; then
+    ip route replace "\$gw" dev "\$WAN_IFACE" scope link 2>/dev/null || true
+fi
+
+if ip link show "\$CSQTT_IFACE" >/dev/null 2>&1; then
+    ip link set dev "\$CSQTT_IFACE" txqueuelen 1000 2>/dev/null || true
+fi
 
 ipt() { iptables -w "\$XT_WAIT" "\$@"; }
 ipt -C INPUT -p udp --dport "\$PEER_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -p udp --dport "\$PEER_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
 ipt -C INPUT -p tcp --dport "\$WEB_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -p tcp --dport "\$WEB_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
 ipt -C INPUT -p tcp --dport "\$LE_HTTP_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -p tcp --dport "\$LE_HTTP_PORT" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
 ipt -C INPUT -i "\$CSQTT_IFACE" -s "\$SUBNET" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I INPUT -i "\$CSQTT_IFACE" -s "\$SUBNET" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
+ipt -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ipt -I FORWARD 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 ipt -C FORWARD -i "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I FORWARD -i "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
 ipt -C FORWARD -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ipt -I FORWARD -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
-ipt -t nat -C POSTROUTING -s "\$SUBNET" -o "\$WAN_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE 2>/dev/null || ipt -t nat -A POSTROUTING -s "\$SUBNET" -o "\$WAN_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE
+ipt -t nat -C POSTROUTING -s "\$SUBNET" -o "\$WAN_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE 2>/dev/null || ipt -t nat -A POSTROUTING -s "\$SUBNET" -o "\$WAN_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE || true
+ipt -t nat -C POSTROUTING -s "\$SUBNET" ! -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE 2>/dev/null || ipt -t nat -A POSTROUTING -s "\$SUBNET" ! -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE
+WAN_IP="\$(ip -4 -o addr show dev "\$WAN_IFACE" scope global 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -n 1)"
+if [ -n "\$WAN_IP" ]; then
+    ipt -t nat -C POSTROUTING -s "\$SUBNET" -o "\$WAN_IFACE" -m comment --comment "\$IPT_COMMENT" -j SNAT --to-source "\$WAN_IP" 2>/dev/null || \
+    ipt -t nat -I POSTROUTING 1 -s "\$SUBNET" -o "\$WAN_IFACE" -m comment --comment "\$IPT_COMMENT" -j SNAT --to-source "\$WAN_IP" 2>/dev/null || true
+fi
 ipt -t mangle -C FORWARD -s "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || ipt -t mangle -I FORWARD -s "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu
 ipt -t mangle -C FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || ipt -t mangle -I FORWARD -d "\$SUBNET" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu
+
+if command -v ip6tables >/dev/null 2>&1 && ip -6 route show default 2>/dev/null | grep -q .; then
+    ip6t() { ip6tables -w "\$XT_WAIT" "\$@"; }
+    ip6t -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6t -I FORWARD 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    ip6t -C FORWARD -i "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ip6t -I FORWARD -i "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
+    ip6t -C FORWARD -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT 2>/dev/null || ip6t -I FORWARD -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j ACCEPT
+    ip6t -t nat -C POSTROUTING -s "\$SUBNET6" ! -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE 2>/dev/null || ip6t -t nat -A POSTROUTING -s "\$SUBNET6" ! -o "\$CSQTT_IFACE" -m comment --comment "\$IPT_COMMENT" -j MASQUERADE || true
+    ip6t -t mangle -C FORWARD -s "\$SUBNET6" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || ip6t -t mangle -I FORWARD -s "\$SUBNET6" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+    ip6t -t mangle -C FORWARD -d "\$SUBNET6" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || ip6t -t mangle -I FORWARD -d "\$SUBNET6" -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment "\$IPT_COMMENT" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+fi
 umask 077
 mkdir -p "\$CSQTT_RUNTIME_DIR"
 : > "\$NETWORK_READY_FILE"
@@ -1123,7 +1239,6 @@ install_network_helper() {
 }
 
 verify_configured_network() {
-    # Быстрая финальная проверка без повторных семи iptables -C вызовов.
     local iface="${1:-$(detect_wan_interface)}"
     [ -n "$iface" ] || die "WAN-интерфейс не определён при проверке сети"
     [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)" = "1" ] || die "IPv4 forwarding не включён"
@@ -1138,14 +1253,9 @@ setup_csqtt_binary() {
         die "Не удалось установить новый бинарник csqtt"
     echo "✓ csqtt установлен"
 
-    # Локальный SOCKS5-форвардер встроен в csqtt (TPROXY + kernel TCP, in-process)
-    # и поднимается автоматически при активации SOCKS5-профиля.
-    # Удаляем старые внешние копии HEV, если они остались от прошлых версий.
     rm -f /usr/local/bin/hev-socks5-tunnel
     echo "✓ SOCKS5-форвардер встроен в csqtt (TPROXY, поднимается при первом использовании)"
 
-    # Миграция: удаляем старый межсерверный каскад. HEV tunnel остаётся и
-    # теперь подключается только к обычному локальному SOCKS5 в 3x-ui.
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop csqtt-cascade.service --no-block >/dev/null 2>&1 || true
         timeout 1 systemctl kill --kill-who=all --signal=SIGKILL csqtt-cascade.service >/dev/null 2>&1 || true
@@ -1157,8 +1267,6 @@ setup_csqtt_binary() {
     rm -f /etc/systemd/system/multi-user.target.wants/csqtt-cascade.service
     rm -f /usr/local/bin/csqtt-cascade /usr/local/bin/hev-socks5-server
     rm -f /usr/local/share/csqtt/cascade.sh
-    # Keep the retired cascade configuration for an explicit uninstall or
-    # manual migration; a normal redeploy must not erase user configuration.
 
     mkdir -p "$CSQTT_CONFIG_DIR"
 }
@@ -1167,6 +1275,14 @@ setup_csqtt_environment() {
     ensure_csqtt_directory "$CSQTT_CONFIG_DIR" 700
     install -m 0600 "$UPLOAD_ENV_FILE" "$CSQTT_ENV_FILE" || \
         die "Не удалось активировать загруженную WEB-конфигурацию"
+    if ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?CSQTT_PUBLIC_IP=.+$' "$CSQTT_ENV_FILE"; then
+        local detected_ip="${CSQTT_PUBLIC_IP:-}"
+        [ -n "$detected_ip" ] || detected_ip="$(detect_public_ipv4 2>/dev/null || true)"
+        if [ -n "$detected_ip" ]; then
+            printf 'CSQTT_PUBLIC_IP=%s\n' "$detected_ip" >> "$CSQTT_ENV_FILE"
+            log_info "Определен публичный IP сервера: $detected_ip"
+        fi
+    fi
     install -m 0600 "$UPLOAD_OVERRIDES_FILE" "$CSQTT_DEPLOY_OVERRIDES_FILE" || \
         die "Не удалось активировать загруженную deploy-конфигурацию"
     echo "✓ Конфигурация запуска установлена безопасным EnvironmentFile"
@@ -1201,6 +1317,12 @@ is_public_ipv4() {
 }
 
 detect_public_ipv4() {
+    local route_ip
+    route_ip="$(ip -4 route get 77.88.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1)"
+    if [ -n "$route_ip" ] && is_public_ipv4 "$route_ip"; then
+        printf '%s\n' "$route_ip"
+        return 0
+    fi
     local endpoint value
     for endpoint in https://api.ipify.org https://ipv4.icanhazip.com; do
         value="$(curl -4 -fsS --connect-timeout 3 --max-time 7 "$endpoint" 2>/dev/null || true)"
@@ -1250,7 +1372,7 @@ ensure_letsencrypt_client() {
             return 1
         fi
     fi
-    if [ ! -x "$CSQTT_LE_CERTBOT" ]; then
+    if [ ! -x "$CSQTT_LE_CERTBOT" ] || ! "$CSQTT_LE_CERTBOT" --version >/dev/null 2>&1; then
         rm -rf "$CSQTT_LE_VENV"
         if ! python3 -m venv "$CSQTT_LE_VENV" >>"$LOG_FILE" 2>&1; then
             log_warn "Не удалось создать изолированный Let’s Encrypt client; WEB-панель временно останется на self-signed TLS"
@@ -1302,11 +1424,11 @@ certificate_is_csqtt_letsencrypt() {
     issuer="$(openssl x509 -noout -issuer -nameopt RFC2253 -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
     issuer="${issuer#issuer=}"
     case "$issuer" in
-        *"O=Let's Encrypt"*) ;;
+        *"O=Let's Encrypt"*|*ISRG*) ;;
         *) return 1 ;;
     esac
     subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
-    printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${saved_ip}"
+    printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${saved_ip}" || printf '%s\n' "$subject_alt_names" | grep -Fq "IP:${saved_ip}"
 }
 
 web_certificate_is_csqtt_managed() {
@@ -1328,6 +1450,7 @@ letsencrypt_certificate_is_current() {
 }
 
 disable_letsencrypt_renewal_timer() {
+    rm -f -- /etc/cron.d/csqtt-letsencrypt
     command -v systemctl >/dev/null 2>&1 || return 0
     systemctl disable --now "$CSQTT_LE_TIMER" >/dev/null 2>&1 || true
 }
@@ -1358,6 +1481,34 @@ install_letsencrypt_certificate() {
     secure_persistent_state
 }
 
+letsencrypt_certificate_ip() {
+    local subject_alt_names
+    [ -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || return 1
+    command -v openssl >/dev/null 2>&1 || return 1
+    subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
+    printf '%s\n' "$subject_alt_names" | sed -n -E 's/.*(IP Address:|IP:)([0-9.]+).*/\2/p' | head -n 1
+}
+
+adopt_letsencrypt_certificate() {
+    local public_ip cert_name source_dir issuer
+    [ -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || return 1
+    [ -s "$CSQTT_CONFIG_DIR/web_key.pem" ] || return 1
+    command -v openssl >/dev/null 2>&1 || return 1
+    issuer="$(openssl x509 -noout -issuer -nameopt RFC2253 -in "$CSQTT_CONFIG_DIR/web_cert.pem" 2>/dev/null || true)"
+    issuer="${issuer#issuer=}"
+    case "$issuer" in
+        *"O=Let's Encrypt"*|*ISRG*) ;;
+        *) return 1 ;;
+    esac
+    public_ip="$(letsencrypt_certificate_ip 2>/dev/null || true)"
+    is_public_ipv4 "$public_ip" || return 1
+    cert_name="$(letsencrypt_cert_name "$public_ip")"
+    source_dir="/etc/letsencrypt/live/${cert_name}"
+    [ -s "$source_dir/fullchain.pem" ] || return 1
+    [ -s "$source_dir/privkey.pem" ] || return 1
+    install_letsencrypt_certificate "$public_ip" "$cert_name"
+}
+
 issue_letsencrypt_ip_certificate() {
     local certbot="$1" public_ip="$2" cert_name="$3"
     if ss -ltnH "sport = :${LE_HTTP_PORT}" 2>/dev/null | grep -q .; then
@@ -1368,8 +1519,13 @@ issue_letsencrypt_ip_certificate() {
         --non-interactive --agree-tos --register-unsafely-without-email \
         --preferred-profile shortlived --ip-address "$public_ip" \
         --cert-name "$cert_name" --keep-until-expiring >>"$LOG_FILE" 2>&1; then
-        log_warn "Let’s Encrypt не подтвердил IP ${public_ip}; сохранён self-signed fallback, следующая проверка выполнится автоматически"
-        return 1
+        if ! timeout 90 "$certbot" certonly --standalone --http-01-port "$LE_HTTP_PORT" \
+            --non-interactive --agree-tos --register-unsafely-without-email \
+            --ip-address "$public_ip" \
+            --cert-name "$cert_name" --keep-until-expiring >>"$LOG_FILE" 2>&1; then
+            log_warn "Let’s Encrypt не подтвердил IP ${public_ip}; сохранён self-signed fallback, следующая проверка выполнится автоматически"
+            return 1
+        fi
     fi
     if ! install_letsencrypt_certificate "$public_ip" "$cert_name"; then
         log_warn "Let’s Encrypt выдал сертификат, но CSQTT не смог безопасно активировать его"
@@ -1378,18 +1534,52 @@ issue_letsencrypt_ip_certificate() {
     log_info "Let’s Encrypt IP-сертификат активирован для ${public_ip}"
 }
 
+generate_rcgen_fallback_certificate() {
+    local cert_tmp key_tmp current_ip="${1:-}" san_ext
+    command -v openssl >/dev/null 2>&1 || return 1
+    cert_tmp="$(mktemp "${CSQTT_CONFIG_DIR}/.web_cert.XXXXXX")" || return 1
+    key_tmp="$(mktemp "${CSQTT_CONFIG_DIR}/.web_key.XXXXXX")" || { rm -f -- "$cert_tmp"; return 1; }
+    san_ext="subjectAltName = DNS:localhost,IP:127.0.0.1"
+    if [ -n "$current_ip" ] && is_public_ipv4 "$current_ip"; then
+        san_ext="${san_ext},IP:${current_ip}"
+    fi
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -subj "/CN=rcgen self signed cert" \
+        -addext "$san_ext" \
+        -keyout "$key_tmp" -out "$cert_tmp" >/dev/null 2>&1; then
+        if ! openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+            -subj "/CN=rcgen self signed cert" \
+            -keyout "$key_tmp" -out "$cert_tmp" >/dev/null 2>&1; then
+            rm -f -- "$cert_tmp" "$key_tmp"
+            return 1
+        fi
+    fi
+    mv -f -- "$cert_tmp" "$CSQTT_CONFIG_DIR/web_cert.pem"
+    mv -f -- "$key_tmp" "$CSQTT_CONFIG_DIR/web_key.pem"
+    chmod 644 "$CSQTT_CONFIG_DIR/web_cert.pem"
+    chmod 600 "$CSQTT_CONFIG_DIR/web_key.pem"
+    rm -f -- "$CSQTT_LE_STATE_FILE"
+}
+
 write_letsencrypt_renewal_helper() {
-    ensure_csqtt_directory /usr/local/lib/csqtt 755
+    install -d -m 0755 /usr/local/lib
     cat > "$CSQTT_LE_RENEW_HELPER" << 'LEHELPER'
 #!/bin/bash
 set -Eeuo pipefail
 
-CERTBOT="${CSQTT_LE_CERTBOT:-/opt/csqtt-certbot/bin/certbot}"
+CERTBOT="${CSQTT_LE_CERTBOT:-}"
+if [ -z "$CERTBOT" ] || ! "$CERTBOT" --version >/dev/null 2>&1; then
+    if [ -x /opt/csqtt-certbot/bin/certbot ] && /opt/csqtt-certbot/bin/certbot --version >/dev/null 2>&1; then
+        CERTBOT="/opt/csqtt-certbot/bin/certbot"
+    elif command -v certbot >/dev/null 2>&1 && certbot --version >/dev/null 2>&1; then
+        CERTBOT="$(command -v certbot)"
+    fi
+fi
 CONFIG_DIR="${CSQTT_CONFIG_DIR:-/etc/csqtt}"
 STATE_FILE="${CONFIG_DIR}/letsencrypt-ip.env"
 CERT_PATH="${CONFIG_DIR}/web_cert.pem"
 KEY_PATH="${CONFIG_DIR}/web_key.pem"
-RENEW_BEFORE_SECONDS="${CSQTT_LE_RENEW_BEFORE_SECONDS:-86400}"
+RENEW_BEFORE_SECONDS="${CSQTT_LE_RENEW_BEFORE_SECONDS:-259200}"
 HTTP_PORT="${CSQTT_LE_HTTP_PORT:-80}"
 SERVICE_MANAGER="${CSQTT_DEPLOY_MODE:-systemd}"
 
@@ -1420,6 +1610,12 @@ is_public_ipv4() {
 }
 
 public_ipv4() {
+    local route_ip
+    route_ip="$(ip -4 route get 77.88.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1)"
+    if [ -n "$route_ip" ] && is_public_ipv4 "$route_ip"; then
+        printf '%s\n' "$route_ip"
+        return 0
+    fi
     local endpoint value
     for endpoint in https://api.ipify.org https://ipv4.icanhazip.com; do
         value="$(curl -4 -fsS --connect-timeout 3 --max-time 7 "$endpoint" 2>/dev/null || true)"
@@ -1429,6 +1625,11 @@ public_ipv4() {
             return 0
         fi
     done
+    value="$(state_value IP 2>/dev/null || true)"
+    if is_public_ipv4 "$value"; then
+        printf '%s\n' "$value"
+        return 0
+    fi
     return 1
 }
 
@@ -1456,16 +1657,20 @@ certificate_is_csqtt_letsencrypt() {
     command -v openssl >/dev/null 2>&1 || return 1
     saved_ip="$(state_value IP 2>/dev/null || true)"
     cert_name="$(state_value CERT_NAME 2>/dev/null || true)"
+    if [ -z "$saved_ip" ] || [ -z "$cert_name" ]; then
+        saved_ip="$(openssl x509 -noout -ext subjectAltName -in "$CERT_PATH" 2>/dev/null | sed -n -E 's/.*(IP Address:|IP:)([0-9.]+).*/\2/p' | head -n 1)"
+        cert_name="csqtt-ip-${saved_ip//./-}"
+    fi
     is_public_ipv4 "$saved_ip" || return 1
     [ "$cert_name" = "csqtt-ip-${saved_ip//./-}" ] || return 1
     issuer="$(openssl x509 -noout -issuer -nameopt RFC2253 -in "$CERT_PATH" 2>/dev/null || true)"
     issuer="${issuer#issuer=}"
     case "$issuer" in
-        *"O=Let's Encrypt"*) ;;
+        *"O=Let's Encrypt"*|*ISRG*) ;;
         *) return 1 ;;
     esac
     subject_alt_names="$(openssl x509 -noout -ext subjectAltName -in "$CERT_PATH" 2>/dev/null || true)"
-    printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${saved_ip}"
+    printf '%s\n' "$subject_alt_names" | grep -Fq "IP Address:${saved_ip}" || printf '%s\n' "$subject_alt_names" | grep -Fq "IP:${saved_ip}"
 }
 
 certificate_is_csqtt_managed() {
@@ -1474,11 +1679,58 @@ certificate_is_csqtt_managed() {
 
 needs_renewal() {
     local current_ip="$1" saved_ip
+    if certificate_is_csqtt_rcgen; then
+        return 0
+    fi
     saved_ip="$(state_value IP 2>/dev/null || true)"
     [ "$saved_ip" = "$current_ip" ] || return 0
     [ -s "$CERT_PATH" ] || return 0
     openssl x509 -noout -checkend "$RENEW_BEFORE_SECONDS" -in "$CERT_PATH" >/dev/null 2>&1 || return 0
     return 1
+}
+
+certificate_is_expired() {
+    [ -s "$CERT_PATH" ] || return 0
+    command -v openssl >/dev/null 2>&1 || return 1
+    ! openssl x509 -noout -checkend 0 -in "$CERT_PATH" >/dev/null 2>&1
+}
+
+generate_rcgen_fallback() {
+    local current_ip="${1:-}" cert_tmp key_tmp san_ext
+    command -v openssl >/dev/null 2>&1 || return 1
+    cert_tmp="$(mktemp "${CONFIG_DIR}/.web_cert.XXXXXX")" || return 1
+    key_tmp="$(mktemp "${CONFIG_DIR}/.web_key.XXXXXX")" || { rm -f -- "$cert_tmp"; return 1; }
+    san_ext="subjectAltName = DNS:localhost,IP:127.0.0.1"
+    if [ -n "$current_ip" ] && is_public_ipv4 "$current_ip"; then
+        san_ext="${san_ext},IP:${current_ip}"
+    fi
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -subj "/CN=rcgen self signed cert" \
+        -addext "$san_ext" \
+        -keyout "$key_tmp" -out "$cert_tmp" >/dev/null 2>&1; then
+        if ! openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+            -subj "/CN=rcgen self signed cert" \
+            -keyout "$key_tmp" -out "$cert_tmp" >/dev/null 2>&1; then
+            rm -f -- "$cert_tmp" "$key_tmp"
+            return 1
+        fi
+    fi
+    mv -f -- "$cert_tmp" "$CERT_PATH"
+    mv -f -- "$key_tmp" "$KEY_PATH"
+    chmod 644 "$CERT_PATH"
+    chmod 600 "$KEY_PATH"
+    rm -f -- "$STATE_FILE"
+}
+
+fallback_if_expired() {
+    local current_ip="${1:-}"
+    if certificate_is_expired; then
+        log "Let’s Encrypt: текущий сертификат истёк; активируется fallback rcgen сертификат"
+        if generate_rcgen_fallback "$current_ip"; then
+            reload_csqtt_tls
+            log "Let’s Encrypt: fallback rcgen сертификат успешно активирован"
+        fi
+    fi
 }
 
 install_certificate() {
@@ -1513,24 +1765,38 @@ main() {
     local current_ip cert_name
     if [ -s "$CERT_PATH" ] && ! certificate_is_csqtt_managed; then
         log "Let’s Encrypt: обнаружен пользовательский TLS-сертификат; CSQTT не изменяет его и отключает собственное продление"
-        systemctl disable --now csqtt-letsencrypt.timer >/dev/null 2>&1 || true
         return 0
     fi
-    [ -x "$CERTBOT" ] || { log "Let’s Encrypt: Certbot не найден, обновление отложено"; return 0; }
     current_ip="$(public_ipv4 2>/dev/null || true)"
-    [ -n "$current_ip" ] || { log "Let’s Encrypt: публичный IPv4 не определён, обновление отложено"; return 0; }
-    needs_renewal "$current_ip" || return 0
+    if [ -z "$CERTBOT" ] || [ ! -x "$CERTBOT" ]; then
+        log "Let’s Encrypt: Certbot не найден, обновление отложено"
+        fallback_if_expired "$current_ip"
+        return 0
+    fi
+    if [ -z "$current_ip" ]; then
+        log "Let’s Encrypt: публичный IPv4 не определён, обновление отложено"
+        fallback_if_expired ""
+        return 0
+    fi
+    if ! needs_renewal "$current_ip"; then
+        return 0
+    fi
     if ss -ltnH "sport = :${HTTP_PORT}" 2>/dev/null | grep -q .; then
         log "Let’s Encrypt: TCP/${HTTP_PORT} занят, обновление отложено"
+        fallback_if_expired "$current_ip"
         return 0
     fi
     cert_name="csqtt-ip-${current_ip//./-}"
     if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --preferred-profile shortlived --ip-address "$current_ip" --cert-name "$cert_name" --force-renewal; then
-        log "Let’s Encrypt: перевыпуск IP-сертификата не удался, текущий сертификат сохранён"
-        return 0
+        if ! timeout 90 "$CERTBOT" certonly --standalone --http-01-port "$HTTP_PORT" --non-interactive --agree-tos --register-unsafely-without-email --ip-address "$current_ip" --cert-name "$cert_name" --force-renewal; then
+            log "Let’s Encrypt: перевыпуск IP-сертификата не удался, текущий сертификат сохранён"
+            fallback_if_expired "$current_ip"
+            return 0
+        fi
     fi
     if ! install_certificate "$current_ip" "$cert_name"; then
         log "Let’s Encrypt: не удалось безопасно активировать новый сертификат"
+        fallback_if_expired "$current_ip"
         return 0
     fi
     reload_csqtt_tls
@@ -1543,8 +1809,9 @@ LEHELPER
 }
 
 install_letsencrypt_renewal_timer() {
+    rm -f -- /etc/cron.d/csqtt-letsencrypt
     command -v systemctl >/dev/null 2>&1 || {
-        log_warn "systemd не найден: Let’s Encrypt сертификат получен, но автоматическое продление не установлено"
+        log_warn "systemd не найден: автоматическое продление Let’s Encrypt требует systemd"
         return 0
     }
     cat > "/etc/systemd/system/${CSQTT_LE_SERVICE}" << LEUNIT
@@ -1556,6 +1823,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Environment=CSQTT_DEPLOY_MODE=${DEPLOY_MODE}
+Environment=CSQTT_LE_CERTBOT=${LE_CERTBOT_COMMAND}
+Environment=CSQTT_LE_RENEW_BEFORE_SECONDS=${LE_RENEW_BEFORE_SECONDS}
 ExecStart=${CSQTT_LE_RENEW_HELPER}
 LEUNIT
     cat > "/etc/systemd/system/${CSQTT_LE_TIMER}" << LETIMER
@@ -1563,8 +1832,9 @@ LEUNIT
 Description=Check CSQTT Let’s Encrypt IP certificate lifetime
 
 [Timer]
-OnBootSec=10min
-OnUnitInactiveSec=6h
+OnBootSec=5min
+OnUnitInactiveSec=24h
+RandomizedDelaySec=10min
 Persistent=true
 
 [Install]
@@ -1580,19 +1850,31 @@ LETIMER
 
 setup_letsencrypt_ip_tls() {
     local public_ip cert_name
+    if ! certificate_is_csqtt_letsencrypt && adopt_letsencrypt_certificate; then
+        log_info "Let’s Encrypt IP-сертификат CSQTT принят под автоматическое продление"
+    fi
     if web_certificate_is_user_managed; then
         rm -f -- "$CSQTT_LE_STATE_FILE"
         disable_letsencrypt_renewal_timer
         log_info "Используется заранее установленный TLS-сертификат пользователя; CSQTT сохраняет его и не заменяет Let’s Encrypt"
         return 0
     fi
+    public_ip="$(detect_public_ipv4 2>/dev/null || true)"
+    if [ -z "$public_ip" ]; then
+        public_ip="$(state_value IP 2>/dev/null || true)"
+    fi
     if ! ensure_letsencrypt_client; then
+        if [ ! -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || ! openssl x509 -noout -checkend 0 -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1; then
+            generate_rcgen_fallback_certificate "$public_ip" || true
+        fi
         return 0
     fi
     write_letsencrypt_renewal_helper
-    public_ip="$(detect_public_ipv4 2>/dev/null || true)"
     if [ -z "$public_ip" ]; then
         log_warn "Публичный IPv4 не определён; WEB-панель временно останется на self-signed TLS"
+        if [ ! -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || ! openssl x509 -noout -checkend 0 -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1; then
+            generate_rcgen_fallback_certificate "" || true
+        fi
         install_letsencrypt_renewal_timer
         return 0
     fi
@@ -1600,7 +1882,11 @@ setup_letsencrypt_ip_tls() {
         log_info "Let’s Encrypt IP-сертификат действителен; перевыпуск не требуется"
     else
         cert_name="$(letsencrypt_cert_name "$public_ip")"
-        issue_letsencrypt_ip_certificate "$LE_CERTBOT_COMMAND" "$public_ip" "$cert_name" || true
+        if ! issue_letsencrypt_ip_certificate "$LE_CERTBOT_COMMAND" "$public_ip" "$cert_name"; then
+            if [ ! -s "$CSQTT_CONFIG_DIR/web_cert.pem" ] || ! openssl x509 -noout -checkend 0 -in "$CSQTT_CONFIG_DIR/web_cert.pem" >/dev/null 2>&1; then
+                generate_rcgen_fallback_certificate "$public_ip" || true
+            fi
+        fi
     fi
     install_letsencrypt_renewal_timer
 }
@@ -1608,12 +1894,20 @@ setup_letsencrypt_ip_tls() {
 verify_web_panel() {
     local attempt scheme code
     local probe_file="/tmp/csqtt-web-probe.$$"
+    local secret_path="${CSQTT_WEB_SECRET_PATH:-}"
+    if [ -z "$secret_path" ] && [ -f "$CSQTT_ENV_FILE" ]; then
+        secret_path="$(grep -E '^[[:space:]]*(export[[:space:]]+)?CSQTT_WEB_SECRET_PATH=' "$CSQTT_ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\"' | tr -d "'\"'" | tr -d '[:space:]' || true)"
+    fi
+    local probe_path=""
+    if [ -n "$secret_path" ]; then
+        probe_path="${secret_path#/}"
+    fi
 
     for attempt in $(seq 1 24); do
         for scheme in https http; do
             code="$(curl -k -sS -o "$probe_file" -w "%{http_code}" \
                 --connect-timeout 1 --max-time 2 \
-                "${scheme}://127.0.0.1:${WEB_PORT}/" 2>>"$LOG_FILE" || true)"
+                "${scheme}://127.0.0.1:${WEB_PORT}/${probe_path}" 2>>"$LOG_FILE" || true)"
             case "$code" in
                 200|301|302|401)
                     rm -f -- "$probe_file"
@@ -1696,7 +1990,7 @@ check_kernel_compatibility() {
 load_kernel_network_modules() {
     command -v modprobe >/dev/null 2>&1 || return 0
     local module
-    for module in tun nf_tables ip_tables iptable_filter iptable_nat iptable_mangle iptable_raw nf_nat nf_conntrack xt_comment xt_MASQUERADE xt_TCPMSS; do
+    for module in tun nf_tables ip_tables iptable_filter iptable_nat iptable_mangle nf_nat nf_conntrack xt_comment xt_MASQUERADE xt_TCPMSS; do
         modprobe "$module" >>"$LOG_FILE" 2>&1 || true
     done
 }
@@ -1780,8 +2074,6 @@ PREREQUNIT
 write_csqtt_dockerfile() {
     local target="$1"
     cat > "$target" << 'DOCKERFILE'
-# SPDX-FileCopyrightText: 2026 amurcanov
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 FROM alpine:3.21
 ARG CSQTT_BUILD_DNS_PRIMARY
 ARG CSQTT_BUILD_DNS_SECONDARY
@@ -1998,6 +2290,7 @@ RestartSec=3
 KillMode=control-group
 TimeoutStartSec=30
 TimeoutStopSec=5
+Nice=-20
 
 [Install]
 WantedBy=multi-user.target
@@ -2042,9 +2335,7 @@ start_csqtt() {
 
     [ -x /usr/local/bin/csqtt ] || die "Исполняемый файл /usr/local/bin/csqtt не установлен"
 
-    # cleanup уже остановил старый runtime. Блокирующего systemctl stop здесь нет.
     if ! systemctl start csqtt; then
-        # start-limit-hit после старого crash-loop: reset только по необходимости.
         systemctl reset-failed csqtt >/dev/null 2>&1 || true
         if ! systemctl start csqtt; then
             diagnose_systemd_failure
@@ -2054,7 +2345,6 @@ start_csqtt() {
 
     local props key value active sub main_pid restarts
     local candidate_pid=0 candidate_restarts=0 attempts=0 found=0
-    # Обычный успешный путь занимает несколько сотен мс; 12с — только аварийный потолок.
     while [ "$attempts" -lt 48 ]; do
         attempts=$((attempts + 1))
         active=""; sub=""; main_pid=0; restarts=0
@@ -2082,7 +2372,6 @@ start_csqtt() {
         die "CSQTT не запустился: сервис не running или TUN $CSQTT_IFACE не создан"
     fi
 
-    # Короткое окно ловит прежний immediate signal/crash-loop без фиксированных 5 секунд.
     sleep "$START_STABILITY_SECONDS"
     active=""; sub=""; main_pid=0; restarts=0
     props="$(systemctl show csqtt -p ActiveState -p SubState -p MainPID -p NRestarts 2>/dev/null || true)"
@@ -2138,28 +2427,25 @@ do_uninstall() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl disable --now "$CSQTT_LE_TIMER" >/dev/null 2>&1 || true
         systemctl stop "$CSQTT_LE_SERVICE" --no-block >/dev/null 2>&1 || true
+        stop_csqtt_docker_prereq
         stop_all_running_csqtt_systemd_units
-        systemctl disable "$CSQTT_DOCKER_PREREQ_SERVICE" >/dev/null 2>&1 || true
     fi
     force_stop_csqtt_processes || log_warn "Не все процессы CSQTT завершились до удаления runtime"
     remove_all_csqtt_systemd_units
     rm -f "/etc/systemd/system/${CSQTT_DOCKER_PREREQ_SERVICE}"
     rm -f "/etc/systemd/system/docker.service.requires/${CSQTT_DOCKER_PREREQ_SERVICE}"
     rm -f "/etc/systemd/system/docker.service.wants/${CSQTT_DOCKER_PREREQ_SERVICE}"
-    rm -f "/etc/systemd/system/${CSQTT_LE_SERVICE}" "/etc/systemd/system/${CSQTT_LE_TIMER}"
+    rm -f "/etc/systemd/system/${CSQTT_LE_SERVICE}" "/etc/systemd/system/${CSQTT_LE_TIMER}" /etc/cron.d/csqtt-letsencrypt
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true
 
     cleanup_legacy_proxy_interfaces
     remove_csqtt_tun_interface || log_warn "Не удалось удалить TUN-интерфейс $CSQTT_IFACE во время uninstall"
     cleanup_csqtt_netfilter_rules || true
 
-    rm -f /usr/local/bin/csqtt /usr/local/bin/csqtt-cascade
+    rm -f /usr/local/bin/csqtt /usr/local/bin/csqtt-cascade "$CSQTT_LE_RENEW_HELPER"
     rm -f /usr/local/bin/hev-socks5-tunnel /usr/local/bin/hev-socks5-server
     rm -rf /run/csqtt /usr/local/lib/csqtt /var/lib/csqtt /opt/csqtt-certbot
     secure_persistent_state
-    # Uninstall removes runtime artifacts, not SQLite state, certificates or
-    # user configuration. The server owns the transactional JSON-to-SQLite
-    # migration and is the only component allowed to delete its legacy input.
     rm -f "$CSQTT_SYSCTL_FILE" "$CSQTT_UDP_SYSCTL_FILE"
     sysctl --system >/dev/null 2>&1 || true
 
@@ -2247,6 +2533,7 @@ main() {
                 run_timed "Docker" ensure_docker
             fi
             run_timed "sysctl" setup_sysctl
+            run_timed "CPU mitigations" tune_cpu_mitigations
 
             run_timed "проверка upload" prepare_uploaded_release
             if [ "$DEPLOY_MODE" = "docker" ]; then

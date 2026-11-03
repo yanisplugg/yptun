@@ -4,6 +4,7 @@ package datachannel
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
@@ -12,11 +13,29 @@ import (
 
 const defaultMaxPayloadSize = 12 * 1024
 
+// writeInterval is the least time between two small messages of one tunnel
+// (see transport.Features.WriteInterval). The Jitsi bridge passes every
+// message an endpoint sends through a queue of 50 and drops the oldest when
+// forwarding falls behind, which it does for a moment whenever the receiving
+// endpoint is busy; one tiny message per smux frame turned a burst of new
+// streams into hundreds of messages and lost the acks of dozens of them
+// (olcrtc#11). At one message per 5 ms the bridge can stall for a quarter of
+// a second before it drops anything.
+//
+// ai-generated: this constant.
+const writeInterval = 5 * time.Millisecond
+
 // PeerResetter is satisfied so upper layers can clear the peer binding.
 var _ transport.PeerResetter = (*streamTransport)(nil)
 
 // PeerIdentity is satisfied when the underlying engine exposes routing epochs.
 var _ transport.PeerIdentity = (*streamTransport)(nil)
+
+// PeerLifecycle is satisfied so the server's peer retirements reach engines
+// that keep send state per peer.
+//
+// ai-generated: this assertion (olcrtc#49).
+var _ transport.PeerLifecycle = (*streamTransport)(nil)
 
 type streamTransport struct {
 	common.Lifecycle
@@ -76,6 +95,44 @@ func (p *streamTransport) sendTo(peerID string, data []byte) error {
 	return nil
 }
 
+// SendDatagram forwards an unordered, lossy payload to the engine's datagram
+// lane when it has one.
+func (p *streamTransport) SendDatagram(data []byte) error {
+	dg, ok := p.session.(engine.DatagramSession)
+	if !ok {
+		return transport.ErrDatagramUnsupported
+	}
+	if err := dg.SendDatagram(data); err != nil {
+		return fmt.Errorf("session send datagram: %w", err)
+	}
+	return nil
+}
+
+// SendDatagramTo forwards a lossy payload to a specific peer when the engine
+// can address one, and to the room otherwise.
+func (p *streamTransport) SendDatagramTo(peerID string, data []byte) error {
+	peer, ok := p.session.(engine.PeerDatagramSession)
+	if !ok {
+		return p.SendDatagram(data)
+	}
+	if err := peer.SendDatagramTo(peerID, data); err != nil {
+		return fmt.Errorf("session send datagram to peer: %w", err)
+	}
+	return nil
+}
+
+// DatagramCanSend reports whether the engine's datagram lane is writable.
+func (p *streamTransport) DatagramCanSend() bool {
+	dg, ok := p.session.(engine.DatagramSession)
+	return ok && dg.DatagramCanSend()
+}
+
+// PeerSeen implements transport.PeerObserver when the engine can answer it.
+func (p *streamTransport) PeerSeen() bool {
+	observer, ok := p.session.(transport.PeerObserver)
+	return ok && observer.PeerSeen()
+}
+
 // SupportsPeerRouting reports whether this transport can address individual peers.
 func (p *streamTransport) SupportsPeerRouting() bool {
 	_, ok := p.session.(engine.PeerSession)
@@ -118,6 +175,16 @@ func (p *streamTransport) ResetPeer() {
 	}
 }
 
+// RetirePeer passes the server's word that its session on peerID has ended to
+// an engine that keeps send state per peer. The transport itself keeps none.
+//
+// ai-generated: this method (olcrtc#49).
+func (p *streamTransport) RetirePeer(peerID string) {
+	if retirer, ok := p.session.(engine.PeerRetirer); ok {
+		retirer.RetirePeer(peerID)
+	}
+}
+
 // SetReconnectCallback registers reconnect handling.
 func (p *streamTransport) SetReconnectCallback(cb func()) {
 	p.session.SetReconnectCallback(cb)
@@ -143,5 +210,8 @@ func (p *streamTransport) WaitForPeer(ctx context.Context) error {
 
 // Features describes the current datachannel transport semantics.
 func (p *streamTransport) Features() transport.Features {
-	return p.shaper.Features(transport.Features{MaxPayloadSize: defaultMaxPayloadSize})
+	_, datagram := p.session.(engine.DatagramSession)
+	return p.shaper.Features(transport.Features{
+		MaxPayloadSize: defaultMaxPayloadSize, Datagram: datagram, WriteInterval: writeInterval,
+	})
 }

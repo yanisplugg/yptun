@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 amurcanov
-// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-
 use primp::{Impersonate, ImpersonateOS};
 use rand::RngExt;
 use serde::Deserialize;
@@ -31,15 +28,15 @@ impl Default for Profile {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct SavedProfile {
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub user_agent: String,
     pub device_json: String,
     pub browser_fp: String,
 }
 
-pub fn load_saved_profile() -> Option<SavedProfile> {
-    let data = std::fs::read("vk_profile.json").ok()?;
+pub async fn load_saved_profile() -> Option<SavedProfile> {
+    let data = tokio::task::spawn_blocking(|| std::fs::read("vk_profile.json"))
+        .await
+        .ok()?
+        .ok()?;
     serde_json::from_slice(&data).ok()
 }
 
@@ -59,6 +56,12 @@ fn wp(impersonate: Impersonate, os: ImpersonateOS, weight: u32) -> WeightedProfi
 
 fn pick_weighted(pool: &[WeightedProfile]) -> (Impersonate, ImpersonateOS) {
     let total: u32 = pool.iter().map(|entry| entry.weight).sum();
+    if total == 0 {
+        return pool
+            .last()
+            .map(|entry| (entry.impersonate, entry.os))
+            .unwrap_or((Impersonate::Chrome, ImpersonateOS::Windows));
+    }
     let mut roll = rand::rng().random_range(0..total);
     for entry in pool {
         if roll < entry.weight {
@@ -66,8 +69,9 @@ fn pick_weighted(pool: &[WeightedProfile]) -> (Impersonate, ImpersonateOS) {
         }
         roll -= entry.weight;
     }
-    let last = &pool[pool.len() - 1];
-    (last.impersonate, last.os)
+    pool.last()
+        .map(|entry| (entry.impersonate, entry.os))
+        .unwrap_or((Impersonate::Chrome, ImpersonateOS::Windows))
 }
 
 fn weighted_browser_pool(
@@ -201,7 +205,6 @@ mod tests {
                 .unwrap();
         assert_eq!(saved.device_json, "{}");
         assert_eq!(saved.browser_fp, "0123456789abcdef");
-        assert!(saved.user_agent.is_empty());
     }
 
     #[test]

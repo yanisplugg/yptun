@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,13 +29,22 @@ const (
 	defaultNick       = "olcrtc"
 	credentialKeyRoom = "room"
 	maxReconnects     = 5
+	// defaultSendQueueSize bounds what waits for the bridge, per destination.
+	// At the ~5 Mbit/s a JVB relay carries, 32 frames of 16 KB is under a
+	// second of queue. Control pings and pongs share this path with bulk
+	// data, and a pong that waits longer than the liveness timeout is a
+	// session torn down. 5000 was minutes of queue, and a full queue was an
+	// error that closed smux at once (olcbox #15).
+	defaultSendQueueSize = 32
+	// peerQueueIdle is how long an untouched per-peer queue lives. Peer IDs
+	// are data epochs, so a client that reconnects arrives under a new one;
+	// on a server that runs for days the map would otherwise only grow.
+	peerQueueIdle = time.Minute
 )
 
 var (
 	// ErrSessionClosed is returned when an operation is attempted on a closed session.
 	ErrSessionClosed = errors.New("jitsi session closed")
-	// ErrSendQueueFull is returned when the outbound queue cannot accept more data.
-	ErrSendQueueFull = errors.New("jitsi send queue full")
 	// ErrBridgeNotReady is returned when send is attempted before the bridge is open.
 	ErrBridgeNotReady = errors.New("jitsi bridge not ready")
 	// ErrSendTooLarge is returned when a payload exceeds the JVB message limit.
@@ -54,11 +62,17 @@ type Session struct {
 	engine.Reconnector
 	engine.VideoTrackState
 
-	host       string
-	room       string
-	name       string
-	resolver   *net.Resolver
-	httpClient *http.Client
+	host        string
+	room        string
+	name        string
+	resolver    protect.Lookup
+	dtlsProfile engine.DTLSProfile
+	httpClient  *http.Client
+	// configJSLimits times config.js discovery; its zero fields take the
+	// constants. Tests shorten them.
+	//
+	// ai-generated: added with the config.js guard (ghostlane#22).
+	configJSLimits configJSLimits
 
 	onData              func([]byte)
 	onPeerData          func(peerID string, data []byte)
@@ -73,12 +87,43 @@ type Session struct {
 	pcCancel      context.CancelFunc
 	trickleCancel context.CancelFunc
 
-	sendQueue     chan []byte
-	peerSendQueue chan bridgeOutbound
-	bridgeReady   atomic.Bool
-	bridgeGen     atomic.Uint64
-	closed        atomic.Bool
-	reconnecting  atomic.Bool
+	sendQueue chan []byte
+	// backlogGauge stands in for bridgeBacklog in tests; nil means the real
+	// gauge. See waitBridgeRoom.
+	backlogGauge func() int
+	// sendHook stands in for the bridge in tests: every frame the session
+	// puts on the bridge goes to it instead. nil means the live bridge.
+	//
+	// ai-generated: the seam the relay window's tests drive sessions
+	// through (olcrtc#15).
+	sendHook func(to string, frame []byte) error
+	// relayWin holds the end-to-end window toward each destination, see
+	// relaywindow.go. relayCount is every byte counted against a window
+	// since the session began, where a new window's count starts. relayWake
+	// (buffered 1) wakes a sender waitRelayRoom holds. relayTiming shortens
+	// the window's timers in tests.
+	//
+	// ai-generated: the relay window's state (olcrtc#15).
+	relayMu     sync.Mutex
+	relayWin    map[string]*relayState
+	relayCount  uint64
+	relayWake   chan struct{}
+	relayTiming relayTiming
+	// askVideo stands in for the session's RequestVideo in tests; nil means
+	// the real one. See requestPeerVideo.
+	//
+	// ai-generated: this field.
+	askVideo func(ctx context.Context, jSess *j.Session) error
+	// peerQueues holds one bounded queue per addressed peer, so a client that
+	// cannot drain its share does not hold the room's other clients behind
+	// it. peerWake is buffered(1): "some peer queue has data".
+	peerQueueMu  sync.Mutex
+	peerQueues   map[string]*peerQueue
+	peerWake     chan struct{}
+	bridgeReady  atomic.Bool
+	bridgeGen    atomic.Uint64
+	closed       atomic.Bool
+	reconnecting atomic.Bool
 
 	goMu sync.Mutex
 	// recvMu admits one recvLoop at a time; see recvLoop.
@@ -89,15 +134,34 @@ type Session struct {
 	localEpoch      atomic.Uint32
 	peerEpoch       atomic.Uint32
 	peerEndpoint    atomic.Pointer[string]
-	peerEpochMu     sync.Mutex
-	peerEpochs      map[string]uint32
-	peerVideoSSRC   atomic.Uint32
+	// peerEndpointSeen is when a frame last arrived from the latched
+	// endpoint, in unix nanoseconds; see broadcastTarget.
+	peerEndpointSeen atomic.Int64
+	peerEpochMu      sync.Mutex
+	peerEpochs       map[string]uint32
+	peerVideoSSRC    atomic.Uint32
+	// sourceOwners is which endpoint owns which source, as the session's
+	// stanzas announce them: the bridge's own, which the peerVideoSSRC
+	// latch skips, and the peers', which tell the latch when the source
+	// holding it is gone.
+	//
+	// ai-generated: this field.
+	sourceOwners atomic.Pointer[map[uint32]string]
 
 	done     chan struct{}
 	doneOnce sync.Once
 	cancel   context.CancelFunc
 	runCtx   context.Context //nolint:containedctx // engine owns supervisor lifetime
 	wg       sync.WaitGroup
+}
+
+// peerQueue is one peer's share of the bridge, with the bookkeeping that
+// lets it be dropped safely: refs counts senders that hold the channel and
+// may still push into it, lastUsed is when it last took a frame.
+type peerQueue struct {
+	ch       chan []byte
+	refs     int
+	lastUsed time.Time
 }
 
 // New creates a Jitsi engine session.
@@ -124,12 +188,16 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 		room:                room,
 		name:                name,
 		resolver:            cfg.Resolver,
+		dtlsProfile:         cfg.DTLSProfile,
 		httpClient:          protect.NewHTTPClient(cfg.Resolver),
 		onData:              cfg.OnData,
 		onPeerData:          cfg.OnPeerData,
 		requireTargetedPeer: cfg.RequireTargetedPeer,
-		sendQueue:           make(chan []byte, engine.DefaultSendQueueSize),
-		peerSendQueue:       make(chan bridgeOutbound, engine.DefaultSendQueueSize),
+		sendQueue:           make(chan []byte, defaultSendQueueSize),
+		peerQueues:          make(map[string]*peerQueue),
+		relayWin:            make(map[string]*relayState),
+		relayWake:           make(chan struct{}, 1),
+		peerWake:            make(chan struct{}, 1),
 		peerEpochs:          make(map[string]uint32),
 		jSessReady:          make(chan struct{}),
 		done:                make(chan struct{}),
@@ -189,15 +257,11 @@ func (s *Session) Connect(ctx context.Context) error {
 	}
 
 	logger.Infof("jitsi: joining MUC %s/%s as %s …", s.host, s.room, s.name)
-	jSess, err := j.JoinMUC(ctx, j.Config{
-		Host:       s.host,
-		Room:       s.room,
-		Nick:       s.name,
-		Debug:      logger.IsVerbose(),
-		HTTPClient: s.httpClient,
-	})
+	// ai-generated: joinMUC puts config.js discovery under the library and
+	// falls back to the docker-jitsi-meet domain (ghostlane#22).
+	jSess, err := s.joinMUC(ctx)
 	if err != nil {
-		return fmt.Errorf("jitsi join muc: %w", err)
+		return err
 	}
 	s.setJSession(jSess)
 	logger.Infof("jitsi: MUC joined %s/%s; waiting for peer …", s.host, s.room)
@@ -323,9 +387,11 @@ func (s *Session) AddVideoTrack(track webrtc.TrackLocal) error {
 	if pc == nil {
 		return nil
 	}
-	if _, err := pc.AddTrack(track); err != nil {
+	sender, err := pc.AddTrack(track)
+	if err != nil {
 		return fmt.Errorf("add track: %w", err)
 	}
+	s.drainSenderRTCP(sender)
 	return nil
 }
 

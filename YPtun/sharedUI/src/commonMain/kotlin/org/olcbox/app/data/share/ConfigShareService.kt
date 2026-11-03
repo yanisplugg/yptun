@@ -7,6 +7,19 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 
 object ConfigShareService {
+    /**
+     * The link the "Share" button shows. [universal] = yptun:// (carries the whole inbound); otherwise the
+     * engine's own protocol link. Engines with no link of their own (MasterDNS/OpenFlux/Snolc) fall back
+     * to yptun:// — [olcRtcUri] would emit a bogus olcrtc:// link for them.
+     */
+    fun shareLink(config: LocationConfig, universal: Boolean): String {
+        val hasOwnLink = when (config.engine) {
+            EngineType.MasterDns, EngineType.OpenFlux, EngineType.Snolc -> false
+            else -> true
+        }
+        return if (universal || !hasOwnLink) YptunInboundCodec.compose(config) else olcRtcUri(config)
+    }
+
     fun olcRtcUri(entry: LocationEntry): String = olcRtcUri(entry.location)
 
     fun olcRtcUri(config: LocationConfig): String {
@@ -26,37 +39,54 @@ object ConfigShareService {
                 ?.takeIf { it.isNotBlank() }
                 ?.let { return it }
         }
-        val transport = when (normalized.transport) {
-            LocationConfig.TRANSPORT_VP8CHANNEL -> {
-                "vp8channel<vp8-fps=${normalized.vp8Fps}&vp8-batch=${normalized.vp8Batch}>"
-            }
-            // The location's own parameters (docs/uri.md payload), so the link opens the same way elsewhere.
-            LocationConfig.TRANSPORT_SEICHANNEL -> normalized.seiOptions().let {
-                "seichannel<fps=${it.fps}&batch=${it.batch}&frag=${it.fragmentSize}&ack-ms=${it.ackTimeoutMs}>"
-            }
-            LocationConfig.TRANSPORT_VIDEOCHANNEL -> normalized.videoOptions().let {
-                "videochannel<video-w=${it.width}&video-h=${it.height}&video-fps=${it.fps}&video-codec=${it.codec}" +
-                    "&video-qr-size=${it.qrSize}&video-qr-recovery=${it.qrRecovery}" +
-                    "&video-tile-module=${it.tileModule}&video-tile-rs=${it.tileRs}>"
-            }
-            else -> normalized.transport
-        }
-
+        val main = olcRtcRoomLink(normalized, normalized.bypassProvider, normalized.transport, normalized.id, normalized.key)
         return buildString {
             append("olcrtc://")
-            append(normalized.bypassProvider)
-            append('?')
-            append(transport)
-            append('@')
-            append(normalized.id)
-            append('#')
-            append(normalized.key)
+            append(main)
+            // Multi-room: the extra rooms ride in the same link, `!`-separated, so copying it keeps them all.
+            if (normalized.usesMultiRoom()) {
+                normalized.extraRooms
+                    .filter { it.room.isNotBlank() && it.key.isNotBlank() }
+                    .take(LocationConfig.MAX_EXTRA_ROOMS)
+                    .forEach {
+                        append('!')
+                        append(
+                            olcRtcRoomLink(
+                                normalized,
+                                it.provider.ifBlank { normalized.bypassProvider },
+                                it.transport.ifBlank { normalized.transport },
+                                it.room,
+                                it.key
+                            )
+                        )
+                    }
+            }
             val name = normalized.displayName()
             if (name.isNotBlank() && name != normalized.id) {
                 append('$')
                 append(name)
             }
         }
+    }
+
+    /** `provider?transport@room#key` — one room of an olcrtc:// link. */
+    private fun olcRtcRoomLink(config: LocationConfig, provider: String, transportName: String, room: String, key: String): String {
+        val transport = when (transportName) {
+            LocationConfig.TRANSPORT_VP8CHANNEL -> {
+                "vp8channel<vp8-fps=${config.vp8Fps}&vp8-batch=${config.vp8Batch}>"
+            }
+            // The location's own parameters (docs/uri.md payload), so the link opens the same way elsewhere.
+            LocationConfig.TRANSPORT_SEICHANNEL -> config.seiOptions().let {
+                "seichannel<fps=${it.fps}&batch=${it.batch}&frag=${it.fragmentSize}&ack-ms=${it.ackTimeoutMs}>"
+            }
+            LocationConfig.TRANSPORT_VIDEOCHANNEL -> config.videoOptions().let {
+                "videochannel<video-w=${it.width}&video-h=${it.height}&video-fps=${it.fps}&video-codec=${it.codec}" +
+                    "&video-qr-size=${it.qrSize}&video-qr-recovery=${it.qrRecovery}" +
+                    "&video-tile-module=${it.tileModule}&video-tile-rs=${it.tileRs}>"
+            }
+            else -> transportName
+        }
+        return "$provider?$transport@$room#$key"
     }
 
     fun subscriptionQrText(subscriptionUrl: String): String = subscriptionUrl.trim()

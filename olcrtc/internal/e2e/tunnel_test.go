@@ -683,6 +683,9 @@ func builtInProviderNames() []string {
 }
 
 func builtInTransportNames() []string {
+	if leanBuild {
+		return []string{transportData, transportSEI, transportVP8}
+	}
 	return []string{transportData, transportVideo, transportSEI, transportVP8}
 }
 
@@ -1051,47 +1054,8 @@ type tunnelRuntime struct {
 
 func startTunnel(t *testing.T) *tunnelRuntime {
 	t.Helper()
-
-	providerName, room := registerMemoryProvider(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	socksAddr := freeLocalAddr(ctx, t)
-
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- server.Run(ctx, server.Config{
-			Transport: transportData,
-			Provider:  providerName,
-			RoomURL:   testRoom,
-			KeyHex:    testKeyHex,
-			DNSServer: localDNSServer,
-		})
-	}()
-	room.waitConnected(t, 1)
-
-	ready := make(chan struct{})
-	clientErr := make(chan error, 1)
-	go func() {
-		clientErr <- client.RunWithReady(ctx, client.Config{
-			Transport: transportData,
-			Provider:  providerName,
-			RoomURL:   testRoom,
-			KeyHex:    testKeyHex,
-			DeviceID:  testClientDeviceID,
-			LocalAddr: socksAddr,
-			DNSServer: localDNSServer,
-		}, func() { close(ready) })
-	}()
-	waitForReady(t, ready)
-
-	return &tunnelRuntime{
-		socksAddr: socksAddr,
-		room:      room,
-		cancel:    cancel,
-		serverErr: serverErr,
-		clientErr: clientErr,
-		stopWait:  3 * time.Second,
-	}
+	// ai-generated: true, the echo servers are on loopback (egress hardening).
+	return startMemoryTunnel(t, transportData, true)
 }
 
 func startRealTunnel(
@@ -1119,6 +1083,8 @@ func startRealTunnel(
 			DNSServer:        *realE2EDNSServer,
 			TransportOptions: e2eTransportOptions(transportName),
 			Liveness:         control.Config{Interval: 10 * time.Second, Timeout: 60 * time.Second, Failures: 10},
+			// ai-generated: the echo server is on loopback (egress hardening).
+			UnsafeAllowPrivateTargets: true,
 		})
 	}()
 
@@ -1591,6 +1557,8 @@ func failoverSessionConfig(mode, providerName, socksHost string, socksPort int) 
 		RoomID:    testRoom,
 		KeyHex:    testKeyHex,
 		DNSServer: localDNSServer,
+		// ai-generated: the echo server is on loopback (egress hardening).
+		UnsafeAllowPrivateTargets: true,
 	}
 	if mode == "cnc" {
 		cfg.SOCKSHost = socksHost

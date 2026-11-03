@@ -22,15 +22,20 @@ data class AppUpdateSettings(
         // migrates any settings that were persisted with the stale Nightly value.
         return copy(
             channel = ReleaseChannel.Stable,
-            intervalHours = intervalHours.coerceIn(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS)
+            intervalHours = if (intervalHours <= 0) NEVER_HOURS else intervalHours.coerceIn(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS)
         )
     }
+
+    /** "Never": no automatic update checks at all (only the manual button). */
+    val autoCheckDisabled: Boolean get() = intervalHours <= 0
 
     companion object {
         const val MIN_INTERVAL_HOURS = 1
         const val MAX_INTERVAL_HOURS = 24
         const val DEFAULT_INTERVAL_HOURS = 24
-        val INTERVAL_PRESETS = listOf(1, 6, 12, 24)
+        /** [intervalHours] value meaning "never check automatically". */
+        const val NEVER_HOURS = 0
+        val INTERVAL_PRESETS = listOf(1, 6, 12, 24, NEVER_HOURS)
         /** How often a running app asks "is a check due yet?" — well under the shortest interval. */
         const val CHECK_TICK_MS = 15L * 60L * 1_000L
     }
@@ -55,6 +60,7 @@ class InMemoryAppUpdateSettingsStore(
 }
 
 fun AppUpdateSettings.isUpdateCheckDue(nowEpochMs: Long): Boolean {
+    if (autoCheckDisabled) return false
     val lastCheck = lastCheckAtEpochMs ?: return true
     val intervalMs = intervalHours.coerceIn(
         AppUpdateSettings.MIN_INTERVAL_HOURS,

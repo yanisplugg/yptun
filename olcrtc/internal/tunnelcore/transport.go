@@ -1,9 +1,9 @@
 package tunnelcore
 
 import (
-	"net"
-
+	"github.com/openlibrecommunity/olcrtc/internal/engine"
 	"github.com/openlibrecommunity/olcrtc/internal/names"
+	"github.com/openlibrecommunity/olcrtc/internal/protect"
 	"github.com/openlibrecommunity/olcrtc/internal/transport"
 )
 
@@ -17,6 +17,7 @@ type LinkConfig struct {
 	ProviderToken string
 	ChannelID     string
 	DNSServer     string
+	DTLSProfile   engine.DTLSProfile
 	Options       transport.Options
 	Traffic       transport.TrafficConfig
 }
@@ -26,10 +27,15 @@ type LinkRoleConfig struct {
 	DeviceID            string
 	OnData              func([]byte)
 	OnPeerData          func(string, []byte)
-	Resolver            *net.Resolver
+	OnDatagram          func([]byte)
+	OnPeerDatagram      func(string, []byte)
+	Resolver            protect.Lookup
 	ProxyAddr           string
 	ProxyPort           int
 	RequireTargetedPeer bool
+	// DefaultICE is the ICE mode this side asks for where a room link carries no
+	// hint (roomhint): the client side TCP, a server nothing. ai-generated.
+	DefaultICE string
 }
 
 // BuildTransportConfig combines shared link settings with role-specific callbacks.
@@ -46,11 +52,15 @@ func BuildTransportConfig(base LinkConfig, role LinkRoleConfig) transport.Config
 		Name:                names.Generate(),
 		OnData:              role.OnData,
 		OnPeerData:          role.OnPeerData,
+		OnDatagram:          role.OnDatagram,
+		OnPeerDatagram:      role.OnPeerDatagram,
 		DNSServer:           base.DNSServer,
+		DTLSProfile:         base.DTLSProfile,
 		Resolver:            Resolver(role.Resolver, base.DNSServer),
 		ProxyAddr:           role.ProxyAddr,
 		ProxyPort:           role.ProxyPort,
 		RequireTargetedPeer: role.RequireTargetedPeer,
+		DefaultICE:          role.DefaultICE,
 		Options:             base.Options,
 		Traffic:             base.Traffic,
 	}

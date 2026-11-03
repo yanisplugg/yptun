@@ -39,10 +39,10 @@ func TestSEIHelpersAndErrors(t *testing.T) {
 }
 
 func TestBuildVideoAccessUnitIntoReusesBuffer(t *testing.T) {
-	payload := make([]byte, 900)
-	first := buildVideoAccessUnitInto(nil, payload)
+	payloads := [][]byte{make([]byte, 900)}
+	first := buildVideoAccessUnitInto(nil, payloads)
 	want := bytes.Clone(first)
-	second := buildVideoAccessUnitInto(first[:0], payload)
+	second := buildVideoAccessUnitInto(first[:0], payloads)
 	if &first[0] != &second[0] {
 		t.Fatal("buildVideoAccessUnitInto() did not reuse writer-owned storage")
 	}
@@ -50,7 +50,7 @@ func TestBuildVideoAccessUnitIntoReusesBuffer(t *testing.T) {
 		t.Fatal("buildVideoAccessUnitInto() changed output while reusing storage")
 	}
 	if allocs := testing.AllocsPerRun(100, func() {
-		second = buildVideoAccessUnitInto(second[:0], payload)
+		second = buildVideoAccessUnitInto(second[:0], payloads)
 	}); allocs != 0 {
 		t.Fatalf("buildVideoAccessUnitInto() allocations = %v, want 0", allocs)
 	}

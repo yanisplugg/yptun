@@ -68,4 +68,32 @@ class CsqttUriParserTest {
         assertEquals("hash_alpha\nhash_beta", parsed.hashes)
         assertEquals("My Server", parsed.name)
     }
+
+    @Test
+    fun readsTheNameFromTheFragment() {
+        val v2 = CsqttUriParser.parse("csqtt://connect?v=2&host=h&peer=46000&password=p&hashes=aaa#%D0%9D%D0%B8%D0%B4%D0%B5%D1%80%D0%BB%D0%B0%D0%BD%D0%B4%D1%8B")!!
+        assertEquals("Нидерланды", v2.name)
+        assertEquals("aaa", v2.hashes)
+        assertEquals("My node", CsqttUriParser.parse("csqtt://secret@203.0.113.7:46001#My%20node")!!.name)
+        assertEquals("", CsqttUriParser.parse("csqtt://secret@203.0.113.7:46001")!!.name)
+    }
+
+    @Test
+    fun composeKeepsTheName() {
+        val vk = VkTurnConfig(core = VkTurnConfig.CORE_CSQTT, csqttPeer = "h", csqttPort = 46000, csqttPassword = "p", vkLink = "aaa")
+        assertEquals("Ams ter", CsqttUriParser.parse(CsqttUriParser.compose(vk, "Ams ter"))!!.name)
+    }
+
+    @Test
+    fun parsesTheEncryptedCsqtt25Link() {
+        val link = CsqttUriParser.parse(
+            "csqtt://iitgKpTQ2GayAklkGYsgdXkcXxGJ7_0RoL0yyMNXLQIbfge3SJQ21_IgLVnthuji1tDjb59PZiIyEuio0cj7is_JC8nmvNnEjv_xn_mD86YMLOrl6bS7oHt9Re6aRig7#%D0%A2"
+        )!!
+        assertEquals("1.2.3.4", link.host)
+        assertEquals(46000, link.port)
+        assertEquals("testpass", link.password)
+        assertEquals("aaa\nbbb", link.hashes)
+        assertEquals("Т", link.name)
+        assertNull(CsqttUriParser.parse("csqtt://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+    }
 }

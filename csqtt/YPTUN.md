@@ -1,7 +1,7 @@
 # csqtt in YPtun
 
 Third VK-TURN core next to freeturn and qWDTT (location editor → VK-TURN → «Ядро» → *csqtt*).
-Upstream: <https://github.com/amurcanov/csqtt> @ `71712b07` (`main`, v2.1.9). Vendored here:
+Upstream: <https://github.com/amurcanov/csqtt> @ `fd936ef` (tag v2.5.0; `domains.txt` from `main` d02da9b — the tag itself does not build without it). Vendored here:
 
 | dir | what |
 |---|---|
@@ -30,6 +30,8 @@ host (Kotlin)  ──OPTS json / STOP──▶  csqtthost (Go bridge)  ──arg
   closing the bridge's stdin stops everything, so a crashed app never leaves the Rust client behind.
 * Captcha: the client asks the host for a WebView (`CAPTCHA_SOLVE|…`); the bridge answers `error:no-webview`
   and the client falls back to its Rust solver. Manual WebView solving is not implemented.
+* Since 2.5.0 the client takes the password from `CSQTT_PASSWORD` (set by the bridge) and has no `--device-id` /
+  `--allow-hash-redistribution`; max 100 workers. The wire protocol changed — servers installed from older builds must be reinstalled.
 * Android/desktop only (iOS cannot spawn processes; the engine refuses with a clear message).
 * Kotlin side: `vpn/csqtt/CsqttBridge.kt` (process driver, shared by Android and desktop),
   `OlcboxVpnService.startVkTurnCore` / `DesktopEngineController.startVkTurn` (branch `usesCsqtt`),

@@ -43,12 +43,20 @@ func Validate(cfg Config) error {
 		validateLivenessConfig,
 		validateLifecycleConfig,
 		validateTrafficConfig,
+		validateUDPConfig,
 		validateModeConfig,
 	}
 	for _, check := range checks {
 		if err := check(cfg); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateUDPConfig(cfg Config) error {
+	if cfg.UDPMaxFlows < 0 {
+		return ErrUDPMaxFlowsInvalid
 	}
 	return nil
 }
@@ -86,11 +94,28 @@ func validateCommon(cfg Config) error {
 	if cfg.RoomID == "" && cfg.Provider != providerNone {
 		return ErrRoomIDRequired
 	}
-	if err := validateKey(cfg.KeyHex); err != nil {
+	if err := validateKeys(cfg); err != nil {
 		return err
 	}
 	if cfg.DNSServer == "" && cfg.Resolver == nil {
 		return ErrDNSServerRequired
+	}
+	return nil
+}
+
+// validateKeys accepts either the single crypto.key or, for a server, the
+// crypto.keys ring with every entry well formed.
+func validateKeys(cfg Config) error {
+	if len(cfg.KeysHex) == 0 {
+		return validateKey(cfg.KeyHex)
+	}
+	if cfg.Mode == ModeCnc {
+		return ErrKeysServerOnly
+	}
+	for _, keyHex := range cfg.KeysHex {
+		if err := validateKey(keyHex); err != nil {
+			return err
+		}
 	}
 	return nil
 }

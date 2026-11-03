@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/xtaci/smux"
 
+	"github.com/openlibrecommunity/olcrtc/internal/control"
 	"github.com/openlibrecommunity/olcrtc/internal/framing"
 	"github.com/openlibrecommunity/olcrtc/internal/handshake"
 	"github.com/openlibrecommunity/olcrtc/internal/logger"
@@ -45,7 +47,10 @@ type peerStat struct {
 
 // peerSession holds one client's independently synchronized peer-routing state.
 type peerSession struct {
-	peerID        string
+	peerID string
+	// group is the peer's pin group: data and control conns share it, so
+	// the key the peer's first record opens under serves both planes.
+	group         *muxconn.PinGroup
 	sessionReady  chan struct{}
 	readyOnce     sync.Once
 	handshakeOnce sync.Once
@@ -62,8 +67,8 @@ type peerSession struct {
 	closed        bool
 }
 
-func newPeerSession(peerID string, needsControl bool) *peerSession {
-	peer := &peerSession{peerID: peerID}
+func newPeerSession(peerID string, needsControl bool, group *muxconn.PinGroup) *peerSession {
+	peer := &peerSession{peerID: peerID, group: group}
 	if needsControl {
 		peer.sessionReady = make(chan struct{})
 	}
@@ -169,8 +174,20 @@ func (ps *peerSession) closeSnapshot() teardown {
 	}
 }
 
-func (s *Server) installPeerControlPlane(control transport.PeerControlPlane) {
-	control.SetControlOnPeerData(s.onPeerControlData)
+// closeConns closes the conns a peer's sessions run over.
+//
+// ai-generated: the whole method (olcrtc#49).
+func (t teardown) closeConns() {
+	if t.conn != nil {
+		_ = t.conn.Close()
+	}
+	if t.controlConn != nil {
+		_ = t.controlConn.Close()
+	}
+}
+
+func (s *Server) installPeerControlPlane(plane transport.PeerControlPlane) {
+	plane.SetControlOnPeerData(s.onPeerControlData)
 }
 
 func (s *Server) onPeerControlData(peerID string, data []byte) {
@@ -203,9 +220,9 @@ func (s *Server) getOrCreatePeerControlSession(peerID string) *peerSession {
 			s.sessMu.Unlock()
 			return nil
 		}
-		peer = newPeerSession(peerID, true)
+		peer = newPeerSession(peerID, true, muxconn.NewPinGroup(s.ring))
 	}
-	conn := muxconn.NewPeerControlUnbound(s.ln, s.keys, peerID)
+	conn := muxconn.NewPeerControlUnboundGrouped(s.ln, peer.group, peerID)
 	if conn == nil {
 		s.sessMu.Unlock()
 		return nil
@@ -306,18 +323,72 @@ func (s *Server) goTracked(fn func()) {
 func (s *Server) onPeerData(peerID string, data []byte) {
 	peer := s.getPeerSession(peerID)
 	if peer == nil {
-		s.onData(data)
+		// Not in peer-routing mode: fall back to the single data conn.
+		// ai-generated: a routed peer's frame never belongs to the singleton path.
+		if s.peerLn == nil {
+			s.onData(data)
+		}
 		return
 	}
-	tunnelcore.PushData(peer.dataConn(), data)
+	// ai-generated: the restart below (olcrtc#49). A peer whose handshake
+	// runs on its data session - a transport without a control plane of its
+	// own - is read for a session started over: a client that gives a
+	// handshake up and tries again under the same relay identity. One with a
+	// control plane starts over there.
+	conn := peer.dataConn()
+	if peer.sessionReady != nil || conn == nil {
+		tunnelcore.PushData(conn, data)
+		return
+	}
+	if record := conn.PushSession(data); record != nil {
+		s.restartPeer(peer, record)
+	}
+}
+
+// restartPeer gives a peer that has started its smux session over a session
+// of its own, beginning with record, the new session's first. The session the
+// peer left is ended without a word to it: the peer is gone from it, and what
+// it wrote now would land in the new one, whose streams have the numbers the
+// old one's had - a retried hello runs on the stream the old session's
+// control stream ran on. The new session keeps the pin group: the peer holds
+// the key it held.
+//
+// ai-generated: the whole function (olcrtc#49).
+func (s *Server) restartPeer(peer *peerSession, record []byte) {
+	logger.Infof("server: peer %s started its session over - replacing the one it left", peer.peerID)
+	s.endPeer(peer, "restarted", false)
+	next := s.peerSessionIn(peer.peerID, peer.group)
+	if next == nil {
+		return
+	}
+	if conn := next.dataConn(); conn != nil {
+		conn.PushOpened(record)
+	}
 }
 
 func (s *Server) getPeerSession(peerID string) *peerSession {
+	return s.peerSessionIn(peerID, nil)
+}
+
+// peerSessionIn is getPeerSession with the pin group a peer session built
+// from nothing starts in: carried, the group of the session a restarted peer
+// left, or a fresh one when that is nil.
+//
+// A session built from nothing is built after the peer's last one is retired
+// (retireEndedLocked).
+//
+// ai-generated: carried and the retirement first (olcrtc#49); the rest is
+// getPeerSession as it was.
+func (s *Server) peerSessionIn(peerID string, carried *muxconn.PinGroup) *peerSession {
 	if peerID == "" || s.peerLn == nil {
 		return nil
 	}
 	s.sessMu.Lock()
 	peer := s.peerSessions[peerID]
+	if peer == nil {
+		s.retireEndedLocked(peerID)
+		peer = s.peerSessions[peerID]
+	}
 	if peer != nil && peer.dataConn() != nil {
 		s.sessMu.Unlock()
 		return peer
@@ -326,7 +397,14 @@ func (s *Server) getPeerSession(peerID string) *peerSession {
 		s.sessMu.Unlock()
 		return nil
 	}
-	conn := muxconn.NewPeer(s.peerLn, s.keys, peerID)
+	group := carried
+	if peer != nil {
+		group = peer.group
+	}
+	if group == nil {
+		group = muxconn.NewPinGroup(s.ring)
+	}
+	conn := muxconn.NewPeerGrouped(s.peerLn, group, peerID)
 	session, err := tunnelcore.NewSession(conn, tunnelcore.ServerRole, runtime.SmuxConfigFor(s.ln))
 	if err != nil {
 		s.sessMu.Unlock()
@@ -336,7 +414,7 @@ func (s *Server) getPeerSession(peerID string) *peerSession {
 	}
 	if peer == nil {
 		_, needsControl := s.ln.(transport.PeerControlPlane)
-		peer = newPeerSession(peerID, needsControl)
+		peer = newPeerSession(peerID, needsControl, group)
 		s.peerSessions[peerID] = peer
 	}
 	if !peer.attachData(conn, session) {
@@ -382,6 +460,7 @@ func (s *Server) acceptPeerHandshake(ctx context.Context, peer *peerSession) {
 			_ = stream.Close()
 			return
 		}
+		s.meter.bind(sessionID, peer.group.KeyID())
 		peer.signalReady()
 		s.health.RecordSession(sessionID)
 		s.onOpen(sessionID, hello.DeviceID, hello.Claims)
@@ -402,13 +481,34 @@ func (s *Server) startPeerControlLoop(ctx context.Context, peer *peerSession, st
 	runner := tunnelcore.ControlRunner{
 		Transport: s.ln, Config: s.liveness, Health: s.health,
 		LogFields: func() string { return "role=server peer=" + peer.peerID },
-		OnDeath:   func(error) { s.removePeer(peer, "liveness") },
+		// ai-generated: a peer that ended the stream is told nothing, and its
+		// session is reported left, not dead of liveness (olcrtc#49).
+		OnDeath: func(err error) {
+			if peerLeft(err) {
+				s.endPeer(peer, "left", false)
+				return
+			}
+			s.endPeer(peer, "liveness", true)
+		},
+		Progress: func() uint64 { return peer.dataConn().PayloadBytes() },
 	}
 	s.goTracked(func() {
 		defer func() { _ = stream.Close() }()
-		runner.Run(controlCtx, stream)
+		runner.Run(controlCtx, closedByCaller{stream})
 	})
 }
+
+// closedByCaller is a control stream whose Close is left to the loop that
+// runs it. control.Run closes its stream the moment the read ends, which on a
+// peer that ended the stream sends that peer a FIN before OnDeath has decided
+// it is to hear nothing; closed after OnDeath, the peer's conns are shut and
+// the FIN goes nowhere.
+//
+// ai-generated: the whole type (olcrtc#49).
+type closedByCaller struct{ io.ReadWriter }
+
+// Close leaves the stream open for the caller to close.
+func (closedByCaller) Close() error { return nil }
 
 func (s *Server) servePeer(peer *peerSession) {
 	if peer.sid() == "" && !s.establishPeerSession(peer) {
@@ -452,15 +552,28 @@ func (s *Server) establishPeerSession(peer *peerSession) bool {
 		return false
 	}
 	ctx := s.streamContext()
-	stream, result, ok := s.acceptHandshake(ctx, session)
+	// ai-generated: answerHello, not acceptHandshake, which reinstalls peer
+	// routing for a failure (olcrtc#49).
+	stream, result, ok := s.answerHello(ctx, session)
 	if !ok {
 		s.removePeer(peer, "handshake failed")
 		return false
 	}
 	if !peer.setHandshake(result) {
+		// ai-generated: the close of a session the peer's teardown cannot
+		// see (olcrtc#49). The peer was ended while its hello was being
+		// answered - it started its session over - and the session opened
+		// for that hello is on no peer to be closed with it.
 		_ = stream.Close()
+		s.onClose(result.sessionID, "closed")
+		s.trackPeerClose(result.sessionID, "closed")
 		return false
 	}
+	// This is the handshake path of transports that route peers without a
+	// per-peer control plane (datachannel over jitsi or livekit): the meter
+	// learns the session's key here, as acceptPeerHandshake does for the
+	// control-plane path.
+	s.meter.bind(result.sessionID, peer.group.KeyID())
 	s.startPeerControlLoop(ctx, peer, stream)
 	return true
 }
@@ -489,40 +602,125 @@ func (s *Server) waitPeerHandshake(peer *peerSession) bool {
 	}
 }
 
+// removePeer ends peer if it is still the session for its peer ID, and then
+// tells the transport, after the CLOSE notification has gone out.
+// ai-generated: only the owning session retires the epoch, after teardown.
 func (s *Server) removePeer(peer *peerSession, reason string) {
+	s.endPeer(peer, reason, true)
+}
+
+// endPeer is removePeer, and with notify false it tells the peer nothing (see
+// endPeerSession).
+//
+// The transport is told after the teardown, unless a new session for the
+// peer ID has been built during it: that session told the transport before
+// its first send (retireEndedLocked), and the teardown then tells it nothing.
+// A close notice can take the whole notice budget on a stalled leg, and a
+// peer that has given the session up is sending its retried hello meanwhile;
+// told only now, the transport would refuse the new session's welcome, held
+// on the same full relay window, as a frame of the session that ended.
+//
+// ai-generated: notify and the retirement a new session takes over
+// (olcrtc#49); the rest is removePeer as it was.
+func (s *Server) endPeer(peer *peerSession, reason string, notify bool) {
 	if peer == nil {
 		return
 	}
 	s.sessMu.Lock()
-	current := s.peerSessions[peer.peerID] == peer
-	if current {
-		delete(s.peerSessions, peer.peerID)
+	if s.peerSessions[peer.peerID] != peer {
+		s.sessMu.Unlock()
+		return
+	}
+	delete(s.peerSessions, peer.peerID)
+	if s.retiring == nil {
+		s.retiring = make(map[string]*peerSession)
+	}
+	s.retiring[peer.peerID] = peer
+	s.sessMu.Unlock()
+	s.endPeerSession(peer, reason, notify)
+	s.sessMu.Lock()
+	own := s.retiring[peer.peerID] == peer
+	if own {
+		delete(s.retiring, peer.peerID)
 	}
 	s.sessMu.Unlock()
-	if current {
-		s.closePeerSession(peer, reason)
+	if own {
+		s.retirePeer(peer.peerID)
 	}
 }
 
+// retireEndedLocked tells the transport that the session ended for peerID
+// is over, when that session's teardown has not yet done so, before a new
+// session for peerID is built: the new session's sends then begin after the
+// retirement, and nothing the retirement refuses is theirs. What it refuses
+// is the old session's, its close notice too, and rightly: the peer is
+// sending into a new session by now, and anything the old one sends would
+// land there.
+//
+// Called with sessMu held and no session in the map for peerID. The lock is
+// let go around the transport's call and taken again, so the caller reads
+// the map afresh after it.
+//
+// ai-generated: the whole method (olcrtc#49).
+func (s *Server) retireEndedLocked(peerID string) {
+	for s.retiring[peerID] != nil && s.peerSessions[peerID] == nil {
+		delete(s.retiring, peerID)
+		s.sessMu.Unlock()
+		s.retirePeer(peerID)
+		s.sessMu.Lock()
+	}
+}
+
+// peerLeft reports whether a control stream ended because the peer ended it:
+// it closed the stream, or said it was leaving. The session is over at the
+// peer's end then, and nothing written into it would reach the peer - only
+// the session it runs next under the same relay identity, whose streams have
+// the numbers this one's had.
+//
+// ai-generated: the whole function (olcrtc#49).
+func peerLeft(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, control.ErrClosedByPeer)
+}
+
 func (s *Server) closePeerSession(peer *peerSession, reason string) {
+	s.endPeerSession(peer, reason, true)
+}
+
+// endPeerSession tears peer down, telling it first, with notify, that the
+// session is over. Without notify the peer has left the session and is told
+// nothing: its conns close before anything else, so not even the stream
+// closes below put a frame on the wire.
+//
+// ai-generated: notify, and the sessions closed before the control stream
+// (olcrtc#49); the rest is closePeerSession as it was.
+func (s *Server) endPeerSession(peer *peerSession, reason string, notify bool) {
 	peer.closeOnce.Do(func() {
 		teardown := peer.closeSnapshot()
 		peer.signalReady()
-		tunnelcore.NotifyControlClose(teardown.controlStrm)
+		if notify {
+			notifyPeerClose(teardown.controlStrm)
+		} else {
+			teardown.closeConns()
+		}
 		if teardown.controlStop != nil {
 			teardown.controlStop()
 		}
-		if teardown.controlStrm != nil {
-			_ = teardown.controlStrm.Close()
+		// The sessions close first: a closed session closes its streams, so
+		// the stream's own close below queues no FIN behind a send loop the
+		// link has stalled, which smux would wait 30 s on and then send into
+		// whatever the peer runs next under the same identity. What is still
+		// queued is dropped with the session.
+		if teardown.session != nil {
+			_ = teardown.session.Close()
 		}
 		if teardown.controlSess != nil {
 			_ = teardown.controlSess.Close()
 		}
+		if teardown.controlStrm != nil {
+			_ = teardown.controlStrm.Close()
+		}
 		if teardown.controlConn != nil {
 			_ = teardown.controlConn.Close()
-		}
-		if teardown.session != nil {
-			_ = teardown.session.Close()
 		}
 		if teardown.conn != nil {
 			_ = teardown.conn.Close()
@@ -532,6 +730,36 @@ func (s *Server) closePeerSession(peer *peerSession, reason string) {
 			s.trackPeerClose(teardown.sessionID, reason)
 		}
 	})
+}
+
+// peerCloseNoticeBudget bounds the close notice a peer is sent, as control's
+// closeNoticeBudget bounds its own: long enough for the frame on a link that
+// still works, short enough that one the relay has stalled cannot hold the
+// teardown - onClose, retirePeer - behind it.
+//
+// ai-generated (olcrtc#49).
+const peerCloseNoticeBudget = 1500 * time.Millisecond
+
+// notifyPeerClose tells the peer on stream that its session is over, waiting
+// at most peerCloseNoticeBudget. A notice still queued when the budget runs
+// out is released, and dropped, by the session's close.
+//
+// ai-generated: the whole function (olcrtc#49).
+func notifyPeerClose(stream *smux.Stream) {
+	if stream == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tunnelcore.NotifyControlClose(stream)
+	}()
+	timer := time.NewTimer(peerCloseNoticeBudget)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
 
 func (s *Server) trackPeerOpen(sessionID, deviceID string) {

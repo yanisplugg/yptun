@@ -4,7 +4,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 
-// Default black theme (v2rayTun-like): pure-black background, dark grey cards, blue accent.
+// Default black theme (v2rayTun-like): pure-black background, dark grey cards, blue accent. Three levels
+// only: the black canvas, cards (surfaceContainer) and things raised on a card — fields, tiles
+// (surfaceContainerHigh = surfaceVariant).
 internal val OlcboxDarkColorScheme = darkColorScheme(
     primary = Color(0xFF3B8EF7),
     onPrimary = Color(0xFFFFFFFF),
@@ -23,12 +25,12 @@ internal val OlcboxDarkColorScheme = darkColorScheme(
     onBackground = Color(0xFFECEDEF),
     surface = Color(0xFF000000),
     onSurface = Color(0xFFECEDEF),
-    surfaceVariant = Color(0xFF2A2C2F),
-    onSurfaceVariant = Color(0xFFAEB1B6),
+    surfaceVariant = Color(0xFF222427),
+    onSurfaceVariant = Color(0xFFA0A3A8),
     surfaceContainerLowest = Color(0xFF000000),
     surfaceContainerLow = Color(0xFF0E0F11),
     surfaceContainer = Color(0xFF161719),
-    surfaceContainerHigh = Color(0xFF1F2123),
+    surfaceContainerHigh = Color(0xFF222427),
     surfaceContainerHighest = Color(0xFF2A2C2E),
     inverseSurface = Color(0xFFECEDEF),
     inverseOnSurface = Color(0xFF2E3133),

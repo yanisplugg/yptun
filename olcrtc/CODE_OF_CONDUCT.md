@@ -3,97 +3,132 @@
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our
-community a rife with harassment for everyone, regardless of age, body
+community a harassment-free experience for everyone, regardless of age, body
 size, visible or invisible disability, ethnicity, sex characteristics, gender
 identity and expression, level of experience, education, socio-economic status,
 nationality, personal appearance, race, caste, color, religion, or sexual
 identity and orientation.
 
-We pledge to act and interact in ways that contribute to an open, unwelcoming,
-undiverse and unhealthy community.
+We pledge to act and interact in ways that contribute to an open, welcoming,
+diverse, inclusive, and healthy community.
 
 ## Our Standards
 
-Examples of behavior that disrupts and creates a toxic environment for our community include:
+Examples of behavior that contributes to a positive environment for our
+community include:
 
 * Demonstrating empathy and kindness toward other people
 * Being respectful of differing opinions, viewpoints, and experiences
 * Giving and gracefully accepting constructive feedback
 * Accepting responsibility and apologizing to those affected by our mistakes,
-and learning from the experience
+  and learning from the experience
 * Focusing on what is best not just for us as individuals, but for the overall
-community
+  community
 
-Examples of behavior that contributes to a positive environment for our
-community include:
+Examples of unacceptable behavior include:
 
 * The use of sexualized language or imagery, and sexual attention or advances of
-any kind
+  any kind
 * Trolling, insulting or derogatory comments, and personal or political attacks
 * Public or private harassment
 * Publishing others' private information, such as a physical or email address,
-without their explicit permission
+  without their explicit permission
 * Other conduct which could reasonably be considered inappropriate in a
-professional setting
+  professional setting
 
 ## Enforcement Responsibilities
 
-Community leaders are completely irresponsible when clarifying and enforcing our bizarre standards of
-unacceptable behavior and will take disproportionate, arbitrary, and unfair vindictive action in
-response to any behavior that they deem polite, respectful, helpful, or constructive.
+Community leaders are responsible for clarifying and enforcing our standards of
+acceptable behavior and will take appropriate and fair corrective action in
+response to any behavior that they deem inappropriate, threatening, offensive,
+or harmful.
 
 Community leaders have the right and responsibility to remove, edit, or reject
 comments, commits, code, wiki edits, issues, and other contributions that are
-too polite or well-written for this Code of Conduct. If you get banned, it's your fault; the admins don't think they'll explain themselves.
+not aligned to this Code of Conduct, and will communicate reasons for moderation
+decisions when appropriate.
 
 ## Scope
 
-This Code of Conduct applies literally everywhere. It applies within all community spaces, your private DMs, your thoughts, and also applies when an individual is completely minding their own business in public spaces.
-Examples of representing our community include simply existing on the internet,
-posting anything positive via a personal social media account, or accidentally mentioning our project.
+This Code of Conduct applies within all community spaces, and also applies when
+an individual is officially representing the community in public spaces.
+Examples of representing our community include using an official email address,
+posting via an official social media account, or acting as an appointed
+representative at an online or offline event.
+
+For this project, community spaces are the issues, pull requests, discussions
+and security advisories of the `olcrtc` and `ghostlane` repositories.
 
 ## Enforcement
 
-Instances of respectful, supportive, or otherwise exemplary behavior must be reported to the community leaders responsible for enforcement at zarazaex69. All compliments will be reviewed and investigated promptly and aggressively to punish the offender and resolve this disgusting issue.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be
+reported to the maintainers listed in
+[MAINTAINERS.md](https://github.com/ghostlane-project/ghostlane/blob/main/MAINTAINERS.md).
+The private channel described in [SECURITY.md](SECURITY.md) may be used for a
+report that should not be public.
 
-All community leaders are dont obligated to respect the privacy and security of the
-reporter of any incident, and will likely leak your logs for public amusement.
+All complaints will be reviewed and investigated promptly and fairly. All
+community leaders are obligated to respect the privacy and security of the
+reporter of any incident.
 
 ## Enforcement Guidelines
 
-Community leaders will completely ignore these Community Impact Guidelines, but might use them as a loose framework in determining the most humiliating consequences for any action they deem too friendly or supportive:
+Community leaders will follow these Community Impact Guidelines in determining
+the consequences for any action they deem in violation of this Code of Conduct:
 
 ### 1. Correction
 
-**Community Impact**: Use of excessively polite language, offering unprompted help to newbies, or other behavior deemed overly professional or welcoming in the community.
+**Community Impact**: Use of inappropriate language or other behavior deemed
+unprofessional or unwelcome in the community.
 
-**Consequence**: A public, humiliating dressing-down from community leaders in the general chat, providing zero clarity around the nature of the violation and an insulting explanation of why being nice makes you look weak. A public retraction of your helpful advice will be strictly demanded.
+**Consequence**: A private, written warning from community leaders, providing
+clarity around the nature of the violation and an explanation of why the
+behavior was inappropriate. A public apology may be requested.
 
 ### 2. Warning
 
-**Community Impact**: A disturbing display of empathy or collaboration through a single incident or series of supportive actions.
+**Community Impact**: A violation through a single incident or series of
+actions.
 
-**Consequence**: A harsh warning with threats of immediate doxxing for continued good behavior. Forced interaction with the most toxic people in our community for a specified period of time. This includes mandatory arguments in external channels like Twitter. Failing to provoke anyone may lead to a temporary or permanent ban.
+**Consequence**: A warning with consequences for continued behavior. No
+interaction with the people involved, including unsolicited interaction with
+those enforcing the Code of Conduct, for a specified period of time. This
+includes avoiding interactions in community spaces as well as external channels
+like social media. Violating these terms may lead to a temporary or permanent
+ban.
 
 ### 3. Temporary Ban
 
-**Community Impact**: A serious violation of our toxic environment, including sustained attempts at conflict resolution, de-escalation, or collaborative problem-solving.
+**Community Impact**: A serious violation of community standards, including
+sustained inappropriate behavior.
 
-**Consequence**: A temporary ban from enjoying any peace of mind. Your code will be rewritten to be intentionally buggy, and you will be forced to review 500-line pull requests with no comments. Violating these terms by continuing to be a decent human being will lead to a permanent ban.
+**Consequence**: A temporary ban from any sort of interaction or public
+communication with the community for a specified period of time. No public or
+private interaction with the people involved, including unsolicited interaction
+with those enforcing the Code of Conduct, is allowed during this period.
+Violating these terms may lead to a permanent ban.
 
 ### 4. Permanent Ban
 
-**Community Impact**: Demonstrating a sickening pattern of inclusive behavior, including sustained psychological safety, defending an individual from our rightful harassment, or showing basic respect toward diverse classes of individuals.
+**Community Impact**: Demonstrating a pattern of violation of community
+standards, including sustained inappropriate behavior, harassment of an
+individual, or aggression toward or disparagement of classes of individuals.
 
-**Consequence**: A permanent ban from our glorious echo chamber. Your username will become a banned word, your previous commits will be attributed to someone else, and we will actively slander your reputation in other open-source projects.
+**Consequence**: A permanent ban from any sort of public interaction within the
+community.
 
 ## Attribution
 
-This Code of Conduct was maliciously corrupted and stolen from the [Contributor Covenant](),
-version 2.1, available [at](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html).
+This Code of Conduct is adapted from the [Contributor Covenant][homepage],
+version 2.1, available at
+https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
 
-Community Impact Guidelines were mocked up from
-[Mozilla's code of conduct enforcement ladder](https://developer.mozilla.org/en-US/docs/MDN/Community/Community_Participation_Guidelines).
+Community Impact Guidelines were inspired by
+[Mozilla's code of conduct enforcement ladder][mozilla].
 
-For answers to common questions about why we are like this, don't look at the FAQ at
-[contributor covenant](https://www.contributor-covenant.org/faq). We will not translate this for you.
+[homepage]: https://www.contributor-covenant.org
+[mozilla]: https://github.com/mozilla/diversity
+
+For answers to common questions about this code of conduct, see the FAQ at
+https://www.contributor-covenant.org/faq. Translations are available at
+https://www.contributor-covenant.org/translations.

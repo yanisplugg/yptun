@@ -10,8 +10,25 @@ import (
 	grtile "github.com/zarazaex69/gr/tile"
 )
 
-// ErrUnexpectedQRFrameSize is returned when the decoded frame size does not match the expected dimensions.
-var ErrUnexpectedQRFrameSize = errors.New("unexpected qr frame size")
+var (
+	// ErrUnexpectedQRFrameSize is returned when the decoded frame size does not match the expected dimensions.
+	ErrUnexpectedQRFrameSize = errors.New("unexpected qr frame size")
+	// ErrQRTooLarge is returned when a payload's QR symbol does not fit the frame.
+	ErrQRTooLarge = errors.New("qr symbol larger than the frame")
+)
+
+// qrBlock is the side, in pixels, of the grid every QR module edge is drawn
+// on: VP8's transform block. A module edge inside a 4x4 block leaves the
+// quantiser a sharp step to code, and at the encoder's quantiser the residual
+// rings: a pixel of the white quiet zone above the symbol comes back mid-gray,
+// gozxing's pure-barcode search takes it for the symbol's corner and finds no
+// code. Drawn to fill a 1920x1080 frame, the symbol of every whole fragment
+// had 15 px modules and not one of those frames decoded (olcrtc#13). With the
+// edges on the block grid every block is flat and the encoder codes it
+// exactly.
+//
+// ai-generated: this constant and its note.
+const qrBlock = 4
 
 type visualCodec struct {
 	mu     sync.Mutex
@@ -71,11 +88,7 @@ func (c *visualCodec) render(payload []byte) ([]byte, error) {
 		}
 		return frame, nil
 	}
-	frame, err := c.qr.Encode(payload)
-	if err != nil {
-		return nil, fmt.Errorf("qr encode: %w", err)
-	}
-	return frame, nil
+	return renderQR(c.qr, payload, c.width, c.height)
 }
 
 func (c *visualCodec) extract(frame []byte) ([]byte, error) {
@@ -148,12 +161,65 @@ func renderQRFrame(payload []byte, width, height int, recoveryLevel string) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("qr codec: %w", err)
 	}
+	return renderQR(c, payload, width, height)
+}
 
-	result, err := c.Encode(payload)
+// renderQR draws payload's QR symbol, quiet zone included, centred in a white
+// width x height frame with every module edge on the qrBlock grid.
+//
+// ai-generated: the whole function (was the library's Encode, which scales
+// the symbol to fill the frame wherever its module edges fall).
+func renderQR(c *grqr.Codec, payload []byte, width, height int) ([]byte, error) {
+	grid, err := c.EncodeBitmap(payload)
 	if err != nil {
 		return nil, fmt.Errorf("qr encode: %w", err)
 	}
-	return result, nil
+	modules := len(grid)
+	scale, left, top := qrPlacement(modules, width, height)
+	if scale == 0 {
+		return nil, fmt.Errorf("%w: %d modules in %dx%d", ErrQRTooLarge, modules, width, height)
+	}
+	frame := make([]byte, width*height)
+	for i := range frame {
+		frame[i] = 0xff
+	}
+	for row, bits := range grid {
+		for col, black := range bits {
+			if !black {
+				continue
+			}
+			x := left + col*scale
+			for y := top + row*scale; y < top+(row+1)*scale; y++ {
+				clear(frame[y*width+x : y*width+x+scale])
+			}
+		}
+	}
+	return frame, nil
+}
+
+// qrPlacement is where a symbol modules wide goes in a width x height frame:
+// the side of a module and the symbol's top-left corner, on the qrBlock grid
+// so no transform block straddles a module edge. A module is one block, the
+// smallest side the codec keeps exact: the providers forward VP8 as it was
+// sent, so the symbol only has to survive the codec, and the less of the
+// frame it covers, the fewer bytes and RTP packets the frame takes. A whole
+// fragment at 1920x1080 is 12 KB this way, 31 KB at the largest aligned side.
+// A symbol too dense for a block a module keeps the largest side that fits,
+// and one that does not fit at a pixel a module gets a side of 0.
+//
+// ai-generated: the whole function.
+func qrPlacement(modules, width, height int) (int, int, int) {
+	if modules <= 0 {
+		return 0, 0, 0
+	}
+	scale := min(qrBlock, min(width, height)/modules)
+	if scale == 0 {
+		return 0, 0, 0
+	}
+	side := modules * scale
+	left := (width - side) / 2
+	top := (height - side) / 2
+	return scale, left - left%qrBlock, top - top%qrBlock
 }
 
 func renderTileFrame(payload []byte, tileModule, tileRS int) ([]byte, error) {

@@ -48,23 +48,38 @@ func NewShaper(cfg TrafficConfig, features Features) *Shaper {
 
 // Send enforces the payload cap, waits out the pacing delay and then calls
 // send. A nil Shaper calls send directly, so callers never need a nil check.
+//
+// The pacing spaces out when sends start, and send runs outside it: an
+// engine may hold a send for as long as one destination takes to drain (a
+// SaluteJazz relay window, olcrtc#49), and that must not hold the sends to
+// every other destination behind it.
+//
+// ai-generated: the lock moved from the whole send into pace (olcrtc#49).
 func (s *Shaper) Send(send func([]byte) error, data []byte) error {
 	if s == nil {
 		return send(data)
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.maxPayloadSize > 0 && len(data) > s.maxPayloadSize {
 		return fmt.Errorf("%w: size=%d max=%d", ErrTrafficPayloadTooLarge, len(data), s.maxPayloadSize)
 	}
 
+	s.pace()
+
+	return send(data)
+}
+
+// pace waits out the pacing delay, one caller at a time, so two sends start
+// at least a delay apart.
+//
+// ai-generated: this function (olcrtc#49).
+func (s *Shaper) pace() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if delay := s.nextDelay(); delay > 0 {
 		time.Sleep(delay)
 	}
-
-	return send(data)
 }
 
 // Features narrows f by the shaper's payload cap so upper layers size their

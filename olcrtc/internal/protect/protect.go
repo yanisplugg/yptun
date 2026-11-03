@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -38,6 +37,14 @@ var (
 	)
 	sensitiveBearerRE = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
 )
+
+// ErrProtectorRejected reports that the host protector refused a socket.
+//
+// This used to surface as net.ErrClosed, which prints "use of closed network
+// connection" - a protector that fails only for AF_INET6 then reads as an
+// unrelated bug in whatever was dialing. The network is in the OpError, so the
+// message now names both the cause and the family it happened on.
+var ErrProtectorRejected = errors.New("socket protector rejected the socket")
 
 type protectorHolder struct {
 	protect func(int) bool
@@ -68,7 +75,7 @@ func controlFunc(network, _ string, c syscall.RawConn) error {
 	var err error
 	controlErr := c.Control(func(fd uintptr) {
 		if !current.protect(int(fd)) {
-			err = &net.OpError{Op: "protect", Net: network, Err: net.ErrClosed}
+			err = &net.OpError{Op: "protect", Net: network, Err: ErrProtectorRejected}
 		}
 	})
 	if controlErr != nil {
@@ -77,111 +84,16 @@ func controlFunc(network, _ string, c syscall.RawConn) error {
 	return err
 }
 
-// newDialer returns a net.Dialer that protects each new socket.
-func newDialer() *net.Dialer {
-	return newDialerWithResolver(nil)
-}
-
-// newDialerWithResolver returns a protected dialer using resolver for DNS.
-func newDialerWithResolver(resolver *net.Resolver) *net.Dialer {
-	return &net.Dialer{
-		Timeout:   defaultDialTimeout,
-		KeepAlive: defaultKeepAlive,
-		Control:   controlFunc,
-		Resolver:  resolver,
-	}
-}
-
-// dnsProbeDomain is a stable, widely-resolvable name used to test whether a candidate UDP/53 resolver
-// actually answers. A plain dial can't tell — a UDP "connect" succeeds even to a blackholed server —
-// so we send a real query and check for a reply.
-const dnsProbeDomain = "dns.google"
-
-// NewResolver returns a local Go resolver that sends queries to dnsServer. dnsServer may be a single
-// "ip:port" OR a comma-separated list tried in PREFERENCE order. On restrictive IPv4-only mobile
-// networks the international resolvers (Cloudflare 1.1.1.1, Google 8.8.8.8) are frequently UDP/53-blocked
-// while a RU resolver (Yandex 77.88.8.8) still answers — pinning a single dead server leaves olcRTC unable
-// to resolve provider hostnames. So on first use we probe the candidates with a real query and stick to
-// the first that responds.
-func NewResolver(dnsServer string) *net.Resolver {
-	servers := splitDNSServers(dnsServer)
-	if len(servers) == 0 {
-		return nil
-	}
-
-	dialServer := func(ctx context.Context, network, server string) (net.Conn, error) {
-		dialer := net.Dialer{Timeout: 3 * time.Second, Control: controlFunc}
-		return dialer.DialContext(ctx, network, server)
-	}
-	if len(servers) == 1 {
-		return &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return dialServer(ctx, network, servers[0])
-			},
-		}
-	}
-
-	var (
-		probeOnce sync.Once
-		picked    string
-	)
-	return &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			probeOnce.Do(func() { picked = pickReachableDNS(servers, dialServer) })
-			server := picked
-			if server == "" {
-				server = servers[0] // none probed clean — fall back to the first listed
-			}
-			return dialServer(ctx, network, server)
-		},
-	}
-}
-
-// splitDNSServers parses a single server or a comma-separated preference list.
-func splitDNSServers(dnsServer string) []string {
-	servers := make([]string, 0, 4)
-	for _, s := range strings.Split(dnsServer, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			servers = append(servers, s)
-		}
-	}
-	return servers
-}
-
-// pickReachableDNS returns the first server that answers a real probe query (over the same dialer the
-// resolver will use), or "" when none answered (the caller then falls back to the first listed server).
-func pickReachableDNS(servers []string, dial func(context.Context, string, string) (net.Conn, error)) string {
-	for _, server := range servers {
-		srv := server
-		probe := &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return dial(ctx, network, srv)
-			},
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err := probe.LookupHost(ctx, dnsProbeDomain)
-		cancel()
-		if err == nil {
-			return srv
-		}
-	}
-	return ""
-}
-
 // newTLSConfig returns the shared TLS policy for provider HTTP/WebSocket clients.
 func newTLSConfig() *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS12}
 }
 
 // newHTTPTransport returns an HTTP transport using protected sockets and sane timeouts.
-func newHTTPTransport(resolvers ...*net.Resolver) *http.Transport {
-	dialer := newDialerWithResolver(firstResolver(resolvers))
+func newHTTPTransport(lookups ...Lookup) *http.Transport {
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
+		DialContext:           NewDialer(lookups...).DialContext,
 		TLSClientConfig:       newTLSConfig(),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          10,
@@ -192,9 +104,10 @@ func newHTTPTransport(resolvers ...*net.Resolver) *http.Transport {
 }
 
 // NewHTTPClient returns an http.Client using protected sockets with DNS retry.
-func NewHTTPClient(resolvers ...*net.Resolver) *http.Client {
+// Names resolve through the first non-nil lookup.
+func NewHTTPClient(lookups ...Lookup) *http.Client {
 	return &http.Client{
-		Transport: &retryTransport{base: newHTTPTransport(resolvers...)},
+		Transport: &retryTransport{base: newHTTPTransport(lookups...)},
 		Timeout:   defaultHTTPClientTimeout,
 	}
 }
@@ -214,6 +127,13 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		attempt, requestErr := requestForAttempt(req, i)
 		if requestErr != nil {
+			// A body that cannot be replayed is a reason not to retry, not a
+			// failure of its own: the caller wants to know what the transport
+			// said the first time, which this used to throw away and report as
+			// "prepare retry: request body is not replayable".
+			if err != nil {
+				return resp, fmt.Errorf("round trip: %w", err)
+			}
 			return resp, fmt.Errorf("prepare retry: %w", requestErr)
 		}
 		resp, err = t.base.RoundTrip(attempt)
@@ -249,12 +169,13 @@ func requestForAttempt(req *http.Request, attempt int) (*http.Request, error) {
 		return req, nil
 	}
 	retry := req.Clone(req.Context())
-	// ЛОКАЛЬНЫЙ ПАТЧ: http.NoBody is a NON-nil body that carries no GetBody, and every provider
-	// API call is built as NewRequestWithContext(..., http.MethodGet, u, http.NoBody). Without
-	// this case a bodyless GET was declared unreplayable, so the FIRST transient dial timeout
-	// turned into a hard startup failure ("prepare retry: request body is not replayable") and
-	// the real error was never seen. A bodyless request is always replayable.
+	// http.NoBody is a non-nil reader for "there is no body", and
+	// http.NewRequest does not give it a GetBody — it is not one of the three
+	// types it recognises. A GET built with it therefore looked unreplayable,
+	// so the first transient failure ended the whole request, and an iPhone
+	// changing cellular interface could not reach the room provider at all.
 	if req.Body == nil || req.Body == http.NoBody {
+		retry.Body = nil
 		return retry, nil
 	}
 	if req.GetBody == nil {
@@ -276,6 +197,14 @@ func isRetriableError(err error) bool {
 	if errors.As(err, &dnsErr) {
 		return true
 	}
+	// No route is a statement about this instant, not about the host: the
+	// link is still coming up, the phone is mid-handover, or the socket was
+	// pinned to an interface that had nothing behind it. It used to be the one
+	// dial error that ended the request on the first try, which on a mobile
+	// carrier is the difference between connecting and not.
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return true
+	}
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
 		return opErr.Timeout() || strings.Contains(opErr.Error(), "connection refused")
@@ -287,12 +216,12 @@ func isRetriableError(err error) bool {
 }
 
 // NewWebSocketDialer returns a WebSocket dialer using protected sockets and shared TLS policy.
-func NewWebSocketDialer(handshakeTimeout time.Duration, resolvers ...*net.Resolver) websocket.Dialer {
+func NewWebSocketDialer(handshakeTimeout time.Duration, lookups ...Lookup) websocket.Dialer {
 	if handshakeTimeout <= 0 {
 		handshakeTimeout = defaultWebSocketTimeout
 	}
 	return websocket.Dialer{
-		NetDialContext:   newDialerWithResolver(firstResolver(resolvers)).DialContext,
+		NetDialContext:   NewDialer(lookups...).DialContext,
 		Proxy:            http.ProxyFromEnvironment,
 		TLSClientConfig:  newTLSConfig(),
 		HandshakeTimeout: handshakeTimeout,
@@ -320,26 +249,15 @@ func redactSensitive(text string) string {
 
 // ProxyDialer implements golang.org/x/net/proxy.Dialer for pion ICE.
 type ProxyDialer struct {
-	resolver *net.Resolver
+	dialer *Dialer
 }
 
 // Dial connects to the address on the named network using a protected socket.
 func (d *ProxyDialer) Dial(network, addr string) (net.Conn, error) {
-	conn, err := newDialerWithResolver(d.resolver).Dial(network, addr)
-	if err != nil {
-		return nil, fmt.Errorf("dial failed: %w", err)
-	}
-	return conn, nil
+	return d.dialer.Dial(network, addr)
 }
 
 // NewProxyDialer returns a proxy.Dialer that protects ICE sockets.
-func NewProxyDialer(resolvers ...*net.Resolver) *ProxyDialer {
-	return &ProxyDialer{resolver: firstResolver(resolvers)}
-}
-
-func firstResolver(resolvers []*net.Resolver) *net.Resolver {
-	if len(resolvers) == 0 {
-		return nil
-	}
-	return resolvers[0]
+func NewProxyDialer(lookups ...Lookup) *ProxyDialer {
+	return &ProxyDialer{dialer: NewDialer(lookups...)}
 }
