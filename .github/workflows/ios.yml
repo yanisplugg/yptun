@@ -25,12 +25,19 @@ on:
         required: false
         type: boolean
         default: true
+      testflight_from_run:
+        description: 'Без пересборки: ID прошлого прогона iOS, чей подписанный .ipa выложить в TestFlight'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
+    if: inputs.testflight_from_run == ''
     runs-on: macos-15
     timeout-minutes: 120
     steps:
@@ -316,3 +323,35 @@ jobs:
           name: xcodebuild-log
           path: YPtun/iosApp/build/xcodebuild.log
           if-no-files-found: ignore
+
+  # Re-uses the signed .ipa an earlier run already built (artifact YPtun-ios-signed) and only uploads it:
+  # no rebuild, so TestFlight gets exactly the binary that run produced and checked.
+  testflight-from-run:
+    if: inputs.testflight_from_run != ''
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: YPtun-ios-signed
+          run-id: ${{ inputs.testflight_from_run }}
+          github-token: ${{ github.token }}
+          path: ipa
+
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -e
+          IPA=$(ls ipa/*-signed.ipa | head -n 1)
+          if [ -z "$IPA" ]; then echo "No signed IPA in run ${{ inputs.testflight_from_run }}"; exit 1; fi
+          if [ -z "$APP_STORE_CONNECT_KEY_ID" ]; then echo "TestFlight credentials missing"; exit 1; fi
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8
+          echo "Uploading $IPA (from run ${{ inputs.testflight_from_run }}) to TestFlight..."
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$APP_STORE_CONNECT_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --show-progress
