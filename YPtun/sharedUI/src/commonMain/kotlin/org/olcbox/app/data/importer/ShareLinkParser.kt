@@ -138,11 +138,9 @@ object ShareLinkParser {
             fingerprint = str("fp"),
             path = pathOrService,
             host = str("host"),
-            xhttpMode = str("mode"),
-            xhttpExtra = str("extra"),
             // v2rayN-style vmess JSON: free lists mark self-signed / mismatched certs this way.
             allowInsecure = str("allowInsecure", "skip-cert-verify", "insecure").let { it == "1" || it.equals("true", true) },
-        )
+        ).withXrayParams(listOf("mode", "extra", "fm", "pcs", "vcn", "ech").associateWith { str(it) })
     }
 
     // --- trojan://password@host:port?params#name ---
@@ -194,9 +192,9 @@ object ShareLinkParser {
             realityShortId = params["sid"].orEmpty(),
             path = path,
             host = params["host"].orEmpty(),
-            xhttpMode = params["mode"].orEmpty(),
-            xhttpExtra = params["extra"]?.let { if (it.contains('%')) UriCodec.percentDecode(it) else it }.orEmpty(),
-        )
+        ).withXrayParams(params + listOfNotNull(
+            params["extra"]?.let { "extra" to if (it.contains('%')) UriCodec.percentDecode(it) else it }
+        ))
     }
 
     // --- hysteria2://auth@host:port/?sni=&insecure=&obfs=salamander&obfs-password=&mport=&up=&down=#name ---

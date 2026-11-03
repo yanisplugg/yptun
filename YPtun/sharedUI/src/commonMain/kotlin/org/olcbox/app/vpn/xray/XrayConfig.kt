@@ -1865,7 +1865,8 @@ object XrayConfig {
                                     }.orEmpty()
                                     put("id", effectiveUuid)
                                     if (p.type == ProxyProfile.TYPE_VLESS) {
-                                        put("encryption", "none")
+                                        // VLESS Encryption (3x-ui `encryption=mlkem768x25519plus…`); "none" otherwise.
+                                        put("encryption", p.vlessEncryption.ifBlank { "none" })
                                         // XTLS Vision (xtls-rprx-vision) splices the RAW TLS connection to
                                         // ITS OWN server — it can't ride a chain. When this vless dials
                                         // through a detour (cascade exit over the main, an olcRTC/VK-TURN/
