@@ -202,6 +202,12 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     func rtcWaitReady(timeoutMs: Int32) -> String { err { CoreapiRtcWaitReady(Int(timeoutMs), $0) } }
     func rtcStop() -> String { err { CoreapiRtcStop($0) } }
     func rtcRunning() -> Bool { CoreapiRtcRunning() }
+    func rtcStartPool(roomsJson: String, clientId: String, listenAddr: String, socksUser: String, socksPass: String, readyTimeoutMs: Int32) -> String {
+        err { CoreapiRtcStartPool(roomsJson, clientId, listenAddr, socksUser, socksPass, Int(readyTimeoutMs), $0) }
+    }
+    func rtcStopPool() { CoreapiRtcStopPool() }
+    func rtcPoolRunning() -> Bool { CoreapiRtcPoolRunning() }
+    func rtcPoolRooms() -> Int32 { Int32(CoreapiRtcPoolRooms()) }
     func rtcPing(
         carrier: String, transport: String, roomId: String, clientId: String, keyHex: String,
         socksPort: Int32, timeoutMs: Int32, pingUrl: String, vp8Fps: Int32, vp8Batch: Int32

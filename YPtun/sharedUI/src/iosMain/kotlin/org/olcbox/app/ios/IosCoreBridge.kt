@@ -118,6 +118,11 @@ interface IosCoreBridge {
     fun rtcWaitReady(timeoutMs: Int): String
     fun rtcStop(): String
     fun rtcRunning(): Boolean
+    /** olcRTC multi-room: [roomsJson] = `[{"carrier","transport","room","key"}…]`, round-robin balancer on [listenAddr]. */
+    fun rtcStartPool(roomsJson: String, clientId: String, listenAddr: String, socksUser: String, socksPass: String, readyTimeoutMs: Int): String
+    fun rtcStopPool()
+    fun rtcPoolRunning(): Boolean
+    fun rtcPoolRooms(): Int
     fun rtcPing(
         carrier: String,
         transport: String,

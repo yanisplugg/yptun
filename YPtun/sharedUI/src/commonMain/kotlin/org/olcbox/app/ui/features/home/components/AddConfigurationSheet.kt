@@ -338,8 +338,6 @@ private fun ManualTypePage(
     onPickVless: () -> Unit
 ) {
     val s = LocalStrings.current
-    // OpenFlux and Snolc have no iOS engine (same rule as the engine picker in the location screen).
-    val ios = remember { org.olcbox.app.update.UpdatePlatform.current().os == "ios" }
     AddPageHeader(title = s.addManualTitle, onBack = onBack)
     Text(
         text = s.manualIntro,
@@ -355,10 +353,8 @@ private fun ManualTypePage(
         SettingsCardRow(s.engineChainName, s.engineChainDesc, icon = Icons.Outlined.Videocam) { onPick(EngineType.Chain, false) }
         SettingsCardDivider()
         SettingsCardRow("VK-TURN", s.engineVkTurnDesc, icon = Icons.Rounded.Phone) { onPick(EngineType.VkTurn, false) }
-        if (!ios) {
-            SettingsCardDivider()
-            SettingsCardRow("OpenFlux", s.engineOpenFluxDesc, icon = Icons.Outlined.Description) { onPick(EngineType.OpenFlux, false) }
-        }
+        SettingsCardDivider()
+        SettingsCardRow("OpenFlux", s.engineOpenFluxDesc, icon = Icons.Outlined.Description) { onPick(EngineType.OpenFlux, false) }
     }
 
     SettingsCaption(s.manualOwnServer)
@@ -366,10 +362,8 @@ private fun ManualTypePage(
         SettingsCardRow("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickVless() }
         SettingsCardDivider()
         SettingsCardRow("AmneziaWG / WireGuard", s.engineWireguardDesc, icon = Icons.Outlined.Shield) { onPick(EngineType.Standard, true) }
-        if (!ios) {
-            SettingsCardDivider()
-            SettingsCardRow("Snolc", s.engineSnolcDesc, icon = Icons.Outlined.Dns) { onPick(EngineType.Snolc, false) }
-        }
+        SettingsCardDivider()
+        SettingsCardRow("Snolc", s.engineSnolcDesc, icon = Icons.Outlined.Dns) { onPick(EngineType.Snolc, false) }
         SettingsCardDivider()
         SettingsCardRow("MasterDNS", s.engineMasterDnsDesc, icon = Icons.Outlined.Public) { onPick(EngineType.MasterDns, false) }
     }

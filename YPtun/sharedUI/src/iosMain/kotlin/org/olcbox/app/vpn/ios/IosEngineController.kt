@@ -108,6 +108,8 @@ internal class IosEngineController(
         runCatching { core.masterDnsStop() }
         runCatching { core.openfluxStop() }
         runCatching { core.rtcStop() }
+        runCatching { core.rtcStopPool() }
+        rtcPoolActive = false
         runCatching { core.snolcStop() }
         runCatching { core.csqttStop() }
         runCatching { core.csqttBridgeStop() }
@@ -119,14 +121,21 @@ internal class IosEngineController(
     }
 
     fun coreRunning(engine: EngineType): Boolean = when (engine) {
-        EngineType.Stealth -> core.rtcRunning()
+        EngineType.Stealth -> rtcUp()
         EngineType.Standard -> proxyCoreRunning() && (!warpProxyActive || core.awgRunning())
-        EngineType.Chain -> core.rtcRunning() && proxyCoreRunning() && (!warpProxyActive || core.awgRunning())
+        EngineType.Chain -> rtcUp() && proxyCoreRunning() && (!warpProxyActive || core.awgRunning())
         EngineType.VkTurn -> (core.ftRunning() || core.wdttRunning() || (core.csqttRunning() && core.csqttBridgeRunning())) && (!csqttProxyActive || proxyCoreRunning())
         EngineType.MasterDns -> core.masterDnsRunning() && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> core.openfluxRunning() && (!openfluxProxyActive || proxyCoreRunning())
         EngineType.Snolc -> core.snolcRunning() && (!snolcProxyActive || proxyCoreRunning())
     }
+
+    /** olcRTC is up: the multi-room balancer when it runs, else the single runtime. */
+    private fun rtcUp(): Boolean = if (rtcPoolActive) core.rtcPoolRunning() else core.rtcRunning()
+
+    /** Set while the olcRTC multi-room pool (not the single runtime) serves the SOCKS port. */
+    @kotlin.concurrent.Volatile
+    private var rtcPoolActive = false
 
     private fun proxyCoreRunning(): Boolean =
         if (activeProxyCore == ProxyCore.Xray) core.xrayRunning() else core.sbRunning()
@@ -189,6 +198,28 @@ internal class IosEngineController(
                 core.rtcSetVideoOptions(it.width, it.height, it.fps, it.qrSize, it.qrRecovery, it.codec, it.tileModule, it.tileRs)
                     .orThrow("olcRTC video options")
             }
+        }
+        if (config.usesMultiRoom()) {
+            val specs = config.multiRoomSpecs()
+            val roomsJson = kotlinx.serialization.json.buildJsonArray {
+                specs.forEach { r ->
+                    add(kotlinx.serialization.json.buildJsonObject {
+                        put("carrier", kotlinx.serialization.json.JsonPrimitive(r.provider.ifBlank { config.bypassProvider }))
+                        put("transport", kotlinx.serialization.json.JsonPrimitive(r.transport.ifBlank { config.transport }))
+                        put("room", kotlinx.serialization.json.JsonPrimitive(r.room))
+                        put("key", kotlinx.serialization.json.JsonPrimitive(r.key))
+                    })
+                }
+            }.toString()
+            log("Starting olcRTC MULTI-ROOM: ${specs.size} room(s) + round-robin balancer on 127.0.0.1:$port")
+            val err = core.rtcStartPool(roomsJson, deviceId, "127.0.0.1:$port", user, pass, MOBILE_READY_TIMEOUT_MS.toInt())
+            if (err.isEmpty()) {
+                rtcPoolActive = true
+                return
+            }
+            // Don't leave the user offline: fall back to the main room alone.
+            log("olcRTC multi-room failed ($err) - falling back to the main room")
+            runCatching { core.rtcStopPool() }
         }
         log("Starting olcRTC provider=${config.bypassProvider}, transport=${config.transport}, room=${config.id}")
         core.rtcStart(

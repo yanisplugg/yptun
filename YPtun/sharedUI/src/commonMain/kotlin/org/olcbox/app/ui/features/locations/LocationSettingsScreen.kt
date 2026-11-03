@@ -3949,9 +3949,6 @@ private fun EnginePickerSheet(
     onVless: () -> Unit
 ) {
     val s = LocalStrings.current
-    // OpenFlux and Snolc have no iOS engine. The build platform, not UIDevice.systemName — that one reads
-    // "iPadOS" on an iPad, which a check for "iOS" would miss.
-    val ios = remember { org.olcbox.app.update.UpdatePlatform.current().os == "ios" }
     @Composable
     fun option(title: String, subtitle: String, isSelected: Boolean, onClick: () -> Unit) {
         SettingsCardRow(
@@ -3999,17 +3996,13 @@ private fun EnginePickerSheet(
                 option(s.engineStealthName, s.engineStealthDesc, selected == EngineType.Stealth) { onSelected(EngineType.Stealth) }
                 SettingsCardDivider()
                 option("VK-TURN", s.engineVkTurnDesc, selected == EngineType.VkTurn) { onSelected(EngineType.VkTurn) }
-                if (!ios) {
-                    SettingsCardDivider()
-                    option("OpenFlux", s.engineOpenFluxDesc, selected == EngineType.OpenFlux) { onSelected(EngineType.OpenFlux) }
-                }
+                SettingsCardDivider()
+                option("OpenFlux", s.engineOpenFluxDesc, selected == EngineType.OpenFlux) { onSelected(EngineType.OpenFlux) }
             }
             SettingsCaption(s.manualOwnServer)
             SettingsCard {
-                if (!ios) {
-                    option("Snolc", s.engineSnolcDesc, selected == EngineType.Snolc) { onSelected(EngineType.Snolc) }
-                    SettingsCardDivider()
-                }
+                option("Snolc", s.engineSnolcDesc, selected == EngineType.Snolc) { onSelected(EngineType.Snolc) }
+                SettingsCardDivider()
                 option("MasterDNS", s.engineMasterDnsDesc, selected == EngineType.MasterDns) { onSelected(EngineType.MasterDns) }
             }
         }
