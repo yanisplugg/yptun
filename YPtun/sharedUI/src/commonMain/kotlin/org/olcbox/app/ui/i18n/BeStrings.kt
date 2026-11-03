@@ -1,6 +1,13 @@
 package org.olcbox.app.ui.i18n
 
 object BeStrings : Strings {
+    // iOS-only strings (journal, Live Activity, App Store legal links).
+    override val clearLogs = "Ачысціць"
+    override val liveActivityTitle = "Dynamic Island і Live Activity"
+    override val liveActivitySubtitle = "Стан злучэння і хуткасць на экране блакіроўкі і ў Dynamic Island"
+    override val privacyPolicy = "Палітыка прыватнасці"
+    override val termsOfService = "Умовы выкарыстання"
+    override val supportPage = "Падтрымка і кантакты"
     override val languageName = "Беларуская"
     override val navConnection = "Злучэнне"
     override val navSettings = "Налады"

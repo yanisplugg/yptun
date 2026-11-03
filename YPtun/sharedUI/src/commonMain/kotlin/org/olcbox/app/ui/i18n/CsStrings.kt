@@ -8,6 +8,13 @@ internal fun csPlural(n: Int, one: String, few: String, many: String): String = 
 }
 
 object CsStrings : Strings {
+    // iOS-only strings (journal, Live Activity, App Store legal links).
+    override val clearLogs = "Vymazat"
+    override val liveActivityTitle = "Dynamic Island a Live Activity"
+    override val liveActivitySubtitle = "Stav připojení a rychlost na zamčené obrazovce a v Dynamic Islandu"
+    override val privacyPolicy = "Zásady ochrany osobních údajů"
+    override val termsOfService = "Podmínky použití"
+    override val supportPage = "Podpora a kontakty"
     override val languageName = "Čeština"
     override val navConnection = "Připojení"
     override val navSettings = "Nastavení"

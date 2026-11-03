@@ -26,6 +26,16 @@ data class CustomGroup(
     }
 }
 
+/**
+ * Process-wide holder for the chosen subscription User-Agent mode. The subscription fetch (deep in the
+ * locations repository, with no access to the settings store) reads this; the platform settings layer
+ * keeps it in sync with [AppBehaviorSettings.subscriptionUserAgent] on load and on every change.
+ */
+object SubscriptionUserAgentHolder {
+    @kotlin.concurrent.Volatile
+    var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
+}
+
 /** General application behavior toggles (the "Настройки приложения" screen). */
 @Serializable
 data class AppBehaviorSettings(

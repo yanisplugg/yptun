@@ -2,6 +2,7 @@ package org.olcbox.app.ui.activities.legacy
 
 
 import org.olcbox.app.ui.activities.*
+import org.olcbox.app.DonationInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform

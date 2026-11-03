@@ -134,8 +134,6 @@ import org.olcbox.app.data.importer.AwgIniEditor
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.components.LocalAllowConfigEditing
 import org.olcbox.app.ui.features.locations.components.LockedLocationNotice
-import org.olcbox.app.data.model.WarpMode
-import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
 import org.olcbox.app.data.model.CsqttOptions
 import org.olcbox.app.data.model.WdttPlusOptions

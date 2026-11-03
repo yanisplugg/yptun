@@ -8,6 +8,13 @@ internal fun skPlural(n: Int, one: String, few: String, many: String): String = 
 }
 
 object SkStrings : Strings {
+    // iOS-only strings (journal, Live Activity, App Store legal links).
+    override val clearLogs = "Vymazať"
+    override val liveActivityTitle = "Dynamic Island a Live Activity"
+    override val liveActivitySubtitle = "Stav pripojenia a rýchlosť na zamknutej obrazovke a v Dynamic Islande"
+    override val privacyPolicy = "Zásady ochrany osobných údajov"
+    override val termsOfService = "Podmienky používania"
+    override val supportPage = "Podpora a kontakty"
     override val languageName = "Slovenčina"
     override val navConnection = "Pripojenie"
     override val navSettings = "Nastavenia"
