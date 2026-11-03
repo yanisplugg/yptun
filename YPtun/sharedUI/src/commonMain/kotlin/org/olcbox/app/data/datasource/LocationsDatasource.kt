@@ -1246,16 +1246,23 @@ class LocationsRepositoryImpl(
                             }
                         }
                     }
-                }.getOrNull() ?: return@withProxyAuthentication null
+                }.onFailure { ImportDiagnostics.requestFailed(it) }
+                    .getOrNull() ?: return@withProxyAuthentication null
 
                 if (response.status.value !in 200..299) {
+                    ImportDiagnostics.httpStatus(response.status.value)
                     return@withProxyAuthentication null
                 }
 
                 val content = runCatching {
                     response.bodyAsText()
-                }.getOrNull()?.takeIf { it.isNotBlank() }
-                    ?: return@withProxyAuthentication null
+                }.onFailure { ImportDiagnostics.requestFailed(it) }
+                    .getOrNull()?.takeIf { it.isNotBlank() }
+                    ?: run {
+                        ImportDiagnostics.httpStatus(response.status.value)
+                        return@withProxyAuthentication null
+                    }
+                ImportDiagnostics.body(response.status.value, response.headers[HttpHeaders.ContentType], content)
 
                 // Best-effort: Remnawave exposes the rich JSON (user.expiresAt + traffic) at <url>/info;
                 // the plain subscription endpoint returns only base64 links and expire=0. Failures are

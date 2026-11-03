@@ -445,6 +445,7 @@ class HomeScreenViewModel(
             onComplete()
             return
         }
+        org.olcbox.app.data.datasource.ImportDiagnostics.reset()
         viewModelScope.launch {
             try {
                 val imported = withContext(Dispatchers.IO) {
@@ -980,7 +981,9 @@ class HomeScreenViewModel(
             "This YPtun link is damaged — characters were lost in transit. " +
                 "Scan the QR instead, or send the link as a file."
         } else {
-            "No valid YPtun config found"
+            // What the subscription download actually got (status, type, link schemes), when it was a URL.
+            val diag = org.olcbox.app.data.datasource.ImportDiagnostics.last
+            if (diag.isNotBlank()) "No valid YPtun config found ($diag)" else "No valid YPtun config found"
         }
     }
 
