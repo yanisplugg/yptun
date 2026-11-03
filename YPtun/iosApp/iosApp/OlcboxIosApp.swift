@@ -115,7 +115,17 @@ struct OlcboxIosApp: App {
     /// `control/{start,stop,restart,auto}` drives the tunnel, everything else is a config to import —
     /// `import/<payload>` (percent-encoded), `inbound?…` (our own share link), `routing/…` (a routing
     /// profile bundle). Only `control` was handled before, so tapping a shared YPtun link did nothing.
+    /// Tunnel share links that open the importer, as on Android (AndroidManifest + MainActivity.IMPORT_SCHEMES):
+    /// qWDTT, OpenFlux and the QuofortpostProtocols panel families. Registered in Info.plist.
+    private static let importSchemes: Set<String> = [
+        "qwdtt", "openflux", "masterdns", "snolc", "csqtt", "freeturn", "olcrtc", "amneziawg",
+    ]
+
     private func handleUrl(_ url: URL) {
+        if let scheme = url.scheme?.lowercased(), Self.importSchemes.contains(scheme) {
+            appSession.importLink(text: url.absoluteString)
+            return
+        }
         guard url.scheme?.lowercased() == "yptun" else { return }
         let host = url.host?.lowercased() ?? ""
 
