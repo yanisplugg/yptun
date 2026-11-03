@@ -30,6 +30,8 @@ jobs:
       # Gradle configures every project, including the Android ones, so AGP wants an SDK location.
       - name: Set up Android SDK (only for AGP's SDK-location check)
         uses: android-actions/setup-android@v3
+        with:
+          packages: ""
 
       - name: Cache Kotlin/Native toolchain (~/.konan)
         uses: actions/cache@v4
