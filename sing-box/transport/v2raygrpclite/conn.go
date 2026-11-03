@@ -29,7 +29,8 @@ type GunConn struct {
 	create        chan struct{}
 	err           error
 	cancel        context.CancelFunc
-	readRemaining int
+	readRemaining uint64
+	onClose       func()
 }
 
 func newGunConn(reader io.Reader, writer io.Writer, flusher http.Flusher) *GunConn {
@@ -72,11 +73,11 @@ func (c *GunConn) read(b []byte) (n int, err error) {
 	}
 
 	if c.readRemaining > 0 {
-		if len(b) > c.readRemaining {
+		if uint64(len(b)) > c.readRemaining {
 			b = b[:c.readRemaining]
 		}
 		n, err = c.reader.Read(b)
-		c.readRemaining -= n
+		c.readRemaining -= uint64(n)
 		return
 	}
 
@@ -90,14 +91,13 @@ func (c *GunConn) read(b []byte) (n int, err error) {
 		return
 	}
 
-	readLen := int(dataLen)
-	c.readRemaining = readLen
-	if len(b) > readLen {
-		b = b[:readLen]
+	c.readRemaining = dataLen
+	if uint64(len(b)) > dataLen {
+		b = b[:dataLen]
 	}
 
 	n, err = c.reader.Read(b)
-	c.readRemaining -= n
+	c.readRemaining -= uint64(n)
 	return
 }
 
@@ -157,6 +157,9 @@ func (c *GunConn) Close() error {
 	err := common.Close(reader, c.writer)
 	if c.cancel != nil {
 		c.cancel()
+	}
+	if c.onClose != nil {
+		c.onClose()
 	}
 	return err
 }

@@ -13,16 +13,17 @@ import (
 	"sync"
 	"time"
 
-	"openflux/socks5"
-	"openflux/tunnel"
+	"github.com/p1neappleXpress/OpenFlux/socks5"
+	"github.com/p1neappleXpress/OpenFlux/tunnel"
 )
 
 // Secrets come from the environment rather than argv: a command line is readable by other processes
 // of the same user (Windows) and shows up in diagnostics.
 const (
-	envMaxToken  = "OPENFLUX_MAX_TOKEN"
-	envSocksUser = "OPENFLUX_SOCKS_USER"
-	envSocksPass = "OPENFLUX_SOCKS_PASS"
+	envMaxToken     = "OPENFLUX_MAX_TOKEN"
+	envSocksUser    = "OPENFLUX_SOCKS_USER"
+	envSocksPass    = "OPENFLUX_SOCKS_PASS"
+	envAvitoCookies = "OPENFLUX_AVITO_COOKIES"
 )
 
 func envOr(value, key string) string {

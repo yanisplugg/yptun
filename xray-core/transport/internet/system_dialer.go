@@ -86,7 +86,7 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 		if err != nil {
 			return nil, err
 		}
-		return &PacketConnWrapper{
+		return &net.PacketConnWrapper{
 			PacketConn: packetConn,
 			Dest:       destAddr,
 		}, nil
@@ -146,24 +146,6 @@ func (d *DefaultSystemDialer) Dial(ctx context.Context, src net.Address, dest ne
 
 func (d *DefaultSystemDialer) DestIpAddress() net.IP {
 	return nil
-}
-
-type PacketConnWrapper struct {
-	net.PacketConn
-	Dest net.Addr
-}
-
-func (c *PacketConnWrapper) Read(p []byte) (int, error) {
-	n, _, err := c.PacketConn.ReadFrom(p)
-	return n, err
-}
-
-func (c *PacketConnWrapper) Write(p []byte) (int, error) {
-	return c.PacketConn.WriteTo(p, c.Dest)
-}
-
-func (c *PacketConnWrapper) RemoteAddr() net.Addr {
-	return c.Dest
 }
 
 type SystemDialerAdapter interface {
@@ -235,5 +217,5 @@ func (c *FakePacketConn) WriteTo(p []byte, _ net.Addr) (n int, err error) {
 }
 
 func (c *FakePacketConn) LocalAddr() net.Addr {
-	return &net.UDPAddr{IP: c.Conn.LocalAddr().(*net.TCPAddr).IP, Port: c.Conn.LocalAddr().(*net.TCPAddr).Port}
+	return &net.UDPAddr{IP: []byte{0, 0, 0, 0}}
 }

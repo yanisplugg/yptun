@@ -67,13 +67,19 @@ interface IosCoreBridge {
     fun masterDnsLastError(): String
 
     fun openfluxVersion(): String
+    /**
+     * Starts the in-process OpenFlux client (openflux/mobile). [sessionSpecsJson] non-empty = multi-transport
+     * session (needs [secret]); otherwise the single carrier [transport]/[url] ([maxToken]/[maxUid] for MAX).
+     */
     fun openfluxStart(
         transport: String,
         url: String,
+        secret: String,
         maxToken: String,
         maxUid: String,
+        avitoCookies: String,
+        sessionSpecsJson: String,
         listenAddr: String,
-        dnsServer: String,
         socksUser: String,
         socksPass: String,
         debug: Boolean,

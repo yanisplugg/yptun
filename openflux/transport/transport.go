@@ -12,6 +12,10 @@ type TransportConfig struct {
 	ReconnectMultiplier  float64
 	MaxQueueSize         int
 	KeepAliveInterval    time.Duration
+	// Network the carrier dials through (netbind): "" is the default
+	// route, or netbind.NetworkCellular, NetworkWiFi, NetworkEthernet, so
+	// a Session's carriers may leave through different networks.
+	Network string
 }
 
 type Transport interface {
@@ -29,8 +33,21 @@ type TransportStats struct {
 	PacketsSent   uint64
 	PacketsRecv   uint64
 	Reconnects    uint64
+	QueueWaits    uint64
+	SendRetries   uint64
 	Connected     bool
 	Uptime        time.Duration
+}
+
+// BatchSizeHinter is an optional interface a transport implements to raise the
+// default coalescing batch size for its carrier. A carrier capped by the number
+// of messages per connection rather than by bytes wants each message as large
+// as possible: the Mail.ru docs chat channel, for instance, is cut by the
+// server's anti-abuse after ~12 messages regardless of their size, so a small
+// batch wastes most of the per-connection budget. newLink passes the hint to
+// NewBatchedTransport; OPENFLUX_BATCH_BYTES still overrides it.
+type BatchSizeHinter interface {
+	PreferredBatchBytes() int
 }
 
 func DefaultConfig() TransportConfig {
@@ -49,22 +66,29 @@ type BaseTransport struct {
 	connected atomic.Int32
 	stats     TransportStats
 	startTime time.Time
-	lastSend  atomic.Int64
 
 	receiveCallback func([]byte)
 	Mu              sync.RWMutex
 
 	reconnectAttempts atomic.Int32
+
+	// done is closed by Stop. Subclasses can select on Done() to
+	// interrupt sleeps and backoff loops.
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 func NewBaseTransport(config TransportConfig) *BaseTransport {
 	return &BaseTransport{
 		config:    config,
 		startTime: time.Now(),
+		done:      make(chan struct{}),
 	}
 }
 
 func (b *BaseTransport) Start() error {
+	b.doneOnce = sync.Once{}
+	b.done = make(chan struct{})
 	b.running.Store(1)
 	b.startTime = time.Now()
 	return nil
@@ -73,7 +97,23 @@ func (b *BaseTransport) Start() error {
 func (b *BaseTransport) Stop() error {
 	b.running.Store(0)
 	b.connected.Store(0)
+	if b.done != nil {
+		b.doneOnce.Do(func() { close(b.done) })
+	}
 	return nil
+}
+
+// Done returns a channel that closes when the transport is stopped.
+// Subclasses and callers can select on it to interrupt sleeps.
+func (b *BaseTransport) Done() <-chan struct{} {
+	b.Mu.RLock()
+	d := b.done
+	b.Mu.RUnlock()
+	if d == nil {
+		// Never started; return a channel that blocks forever.
+		return make(chan struct{})
+	}
+	return d
 }
 
 func (b *BaseTransport) IsRunning() bool {
@@ -128,15 +168,6 @@ func (b *BaseTransport) Stats() TransportStats {
 func (b *BaseTransport) RecordSend(bytes int) {
 	atomic.AddUint64(&b.stats.BytesSent, uint64(bytes))
 	atomic.AddUint64(&b.stats.PacketsSent, 1)
-	b.lastSend.Store(time.Now().UnixNano())
-}
-
-func (b *BaseTransport) LastSendTime() time.Time {
-	ns := b.lastSend.Load()
-	if ns == 0 {
-		return time.Time{}
-	}
-	return time.Unix(0, ns)
 }
 
 func (b *BaseTransport) RecordReceive(bytes int) {
@@ -147,7 +178,6 @@ func (b *BaseTransport) RecordReceive(bytes int) {
 func (b *BaseTransport) RecordReconnect() {
 	b.reconnectAttempts.Add(1)
 }
-
 
 func (b *BaseTransport) GetConfig() TransportConfig {
 	return b.config

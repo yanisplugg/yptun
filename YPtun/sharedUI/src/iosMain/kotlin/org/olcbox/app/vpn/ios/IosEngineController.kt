@@ -6,6 +6,7 @@ import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.MasterDnsConfig
+import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.ProxyCore
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.data.model.RoutingProfile
@@ -576,15 +577,17 @@ internal class IosEngineController(
         }
 
         val openFluxAddr = "$LISTEN_HOST:$openFluxPort"
-        log("Starting OpenFlux (${openFlux.summary()}) on $openFluxAddr, dns=${openFlux.dnsServer.ifBlank { "device" }}")
+        log("Starting OpenFlux (${openFlux.summary()}) on $openFluxAddr")
         runCatching { core.openfluxStop() }
         core.openfluxStart(
             transport = openFlux.transport,
             url = openFlux.docUrl,
+            secret = openFlux.secret,
             maxToken = openFlux.maxToken,
             maxUid = openFlux.maxUid,
+            avitoCookies = openFlux.avitoCookies,
+            sessionSpecsJson = openFluxSessionSpecs(openFlux),
             listenAddr = openFluxAddr,
-            dnsServer = openFlux.dnsServer,
             // The chain detour dials the internal port without credentials, so it must run no-auth.
             socksUser = if (useProxy) "" else socksUsername,
             socksPass = if (useProxy) "" else socksPassword,
@@ -601,6 +604,30 @@ internal class IosEngineController(
         startProxyOverTunnel("OpenFlux", config, proxy, openFluxPort, listenPort, socksUsername, socksPassword) { p, g ->
             openFlux.resolvedProxyCore(p, g)
         }
+    }
+
+    /**
+     * The `--transports` session of [OpenFluxConfig.carriers] as openflux/mobile's specs JSON (empty for a
+     * single carrier): one spec per carrier, named by type, a direct one dialling [OpenFluxCarrier.dial].
+     */
+    private fun openFluxSessionSpecs(cfg: OpenFluxConfig): String {
+        if (!cfg.isSession()) return ""
+        return kotlinx.serialization.json.buildJsonObject {
+            if (cfg.context.isNotBlank()) put("context", kotlinx.serialization.json.JsonPrimitive(cfg.context))
+            put("transports", kotlinx.serialization.json.buildJsonArray {
+                cfg.carriers.forEach { c ->
+                    add(kotlinx.serialization.json.buildJsonObject {
+                        put("name", kotlinx.serialization.json.JsonPrimitive(c.type))
+                        put("type", kotlinx.serialization.json.JsonPrimitive(c.type))
+                        put("url", kotlinx.serialization.json.JsonPrimitive(c.url))
+                        put("priority", kotlinx.serialization.json.JsonPrimitive(c.priority))
+                        put("params", kotlinx.serialization.json.buildJsonObject {
+                            if (c.dial.isNotBlank()) put("dial", kotlinx.serialization.json.JsonPrimitive(c.dial))
+                        })
+                    })
+                }
+            })
+        }.toString()
     }
 
     private suspend fun startSnolc(

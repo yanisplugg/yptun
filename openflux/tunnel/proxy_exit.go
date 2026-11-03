@@ -1,6 +1,6 @@
 package tunnel
 
-import "openflux/transport"
+import "github.com/p1neappleXpress/OpenFlux/transport"
 
 type proxyExit struct {
 	trans transport.Transport
@@ -15,7 +15,12 @@ func (p *proxyExit) Mode() string { return "proxy" }
 
 func (p *proxyExit) Start() error {
 	p.tun = NewTCPTunnelMode(p.trans, true, ExitModeL4)
-	return nil
+	return p.tun.Err()
 }
 
-func (p *proxyExit) Stop() error { return nil }
+func (p *proxyExit) Stop() error {
+	if p.tun != nil {
+		p.tun.Close()
+	}
+	return nil
+}

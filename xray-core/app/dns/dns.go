@@ -31,6 +31,8 @@ type DNS struct {
 	domainMatcher          geodata.DomainMatcher
 	matcherInfos           []*DomainMatcherInfo
 	checkSystem            bool
+	script                 *scriptEngine
+	scriptPath             string
 }
 
 // DomainMatcherInfo contains information attached to index returned by Server.domainMatcher.
@@ -180,6 +182,7 @@ func New(ctx context.Context, config *Config) (*DNS, error) {
 		disableFallbackIfMatch: config.DisableFallbackIfMatch,
 		enableParallelQuery:    config.EnableParallelQuery,
 		checkSystem:            checkSystem,
+		scriptPath:             config.Script,
 	}, nil
 }
 
@@ -190,11 +193,21 @@ func (*DNS) Type() interface{} {
 
 // Start implements common.Runnable.
 func (s *DNS) Start() error {
+	if s.scriptPath != "" {
+		engine, err := newScriptEngine(s.scriptPath, s)
+		if err != nil {
+			return errors.New("failed to initialize DNS script").Base(err)
+		}
+		s.script = engine
+	}
 	return nil
 }
 
 // Close implements common.Closable.
 func (s *DNS) Close() error {
+	if s.script != nil {
+		s.script.close()
+	}
 	return nil
 }
 
@@ -206,6 +219,28 @@ func (s *DNS) IsOwnLink(ctx context.Context) bool {
 	}
 	for _, client := range s.clients {
 		if client.tag == inbound.Tag {
+			return true
+		}
+	}
+	return false
+}
+
+// MayUseSystemResolver reports whether any name server configured here could
+// still resolve through the system resolver. That is what happens when no name
+// server is configured at all, and it is also what a name server pointed at
+// "localhost" does. Callers that are about to redirect the system resolver need
+// to know, because a resolution path that reaches it would then loop back to
+// them.
+//
+// Any such server is enough: name servers can be selected per domain, so a
+// single local one makes some query reach the system resolver even when
+// independent upstreams are configured alongside it.
+func (s *DNS) MayUseSystemResolver() bool {
+	if len(s.clients) == 0 {
+		return true
+	}
+	for _, client := range s.clients {
+		if _, isLocal := client.server.(*LocalNameServer); isLocal {
 			return true
 		}
 	}
@@ -257,6 +292,9 @@ func (s *DNS) LookupIP(domain string, option dns.IPOption) ([]net.IP, uint32, er
 	}
 
 	// Name servers lookup
+	if s.script != nil {
+		return s.script.query(domain, option)
+	}
 	if s.enableParallelQuery {
 		return s.parallelQuery(domain, option)
 	} else {

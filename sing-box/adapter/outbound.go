@@ -47,6 +47,14 @@ type OutboundManager interface {
 	Outbounds() []Outbound
 	Outbound(tag string) (Outbound, bool)
 	Default() Outbound
-	Remove(tag string) error
 	Create(ctx context.Context, router Router, logger log.ContextLogger, tag string, outboundType string, options any) error
+}
+
+type IdleConnectionKeeper interface {
+	SetKeepIdleConnections(keep bool)
+	CloseIdleConnections()
+}
+
+type Referrer interface {
+	References() []string
 }

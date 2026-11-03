@@ -33,8 +33,7 @@ import (
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"masterdnsvpn-go/mdnsmobile"
-	"openflux/ofclient"
-	ofutils "openflux/utils"
+	ofmobile "openflux-mobile"
 	"wg-turn-client/wdttmobile"
 
 	xnet "github.com/xtls/xray-core/common/net"
@@ -69,9 +68,6 @@ func (wdttLogBridge) Write(p []byte) (int, error) {
 
 func init() {
 	log.SetOutput(wdttLogBridge{})
-	ofutils.SetLogCallback(func(line string) {
-		PushLog("openflux", line)
-	})
 	mdnsmobile.SetGlobalLogCallback(func(line string) {
 		PushLog("masterdns", line)
 	})
@@ -506,65 +502,108 @@ func MasterDnsVersion() string { return mdnsmobile.Version() }
 
 // ---------------------------------------------------------------------------
 // OpenFlux
+//
+// In-process through the upstream gomobile package (openflux/mobile): the Network Extension cannot
+// spawn the CLI the desktop and Android run. StartProxy / StartSessionProxy serve a local SOCKS5 over
+// the carrier; SetLowMemory picks the phone resource profile the extension's memory limit needs.
 
 var (
-	ofMu     sync.Mutex
-	ofClient *ofclient.Client
+	ofMu      sync.Mutex
+	ofRunning bool
+	ofLastErr string
+	ofLogStop chan struct{}
 )
 
-func OpenFluxVersion() string { return "1.0.0" }
+func OpenFluxVersion() string { return "0.13.0" }
 
-func OpenFluxStart(transportType, docUrl, maxToken, maxUid, socksAddr, dnsServer, socksUser, socksPass string, debug bool) error {
+// OpenFluxStart starts the OpenFlux client. sessionSpecsJson non-empty = multi-transport session
+// (`{"context":…,"transports":[{"name","type","url","priority","params":{"dial":…}}]}`, needs secret);
+// otherwise one carrier transportType/docUrl (maxToken/maxUid for MAX). secret = the exit's
+// encryption key ("" = unencrypted classic). avitoCookies = code.avito.ru Cookie header for Avito.
+func OpenFluxStart(transportType, docUrl, secret, maxToken, maxUid, avitoCookies, sessionSpecsJson, socksAddr, socksUser, socksPass string, debug bool) error {
 	ofMu.Lock()
 	defer ofMu.Unlock()
-	if ofClient != nil && ofClient.IsRunning() {
+	if ofRunning && ofmobile.ProxyIsRunning() {
 		return errors.New("openflux already running")
 	}
-	c, err := ofclient.NewClient(ofclient.Config{
-		Transport: transportType,
-		DocURL:    docUrl,
-		MaxToken:  maxToken,
-		MaxUID:    maxUid,
-		SocksAddr: socksAddr,
-		DNSServer: dnsServer,
-		SocksUser: socksUser,
-		SocksPass: socksPass,
-		Debug:     debug,
-	})
-	if err != nil {
-		return err
+	level := 0
+	if debug {
+		level = 2
 	}
-	if err := c.Start(); err != nil {
-		return err
+	ofmobile.SetDebugLevel(level)
+	ofmobile.SetLowMemory(runtime.GOOS == "ios")
+	ofmobile.SetAvitoCookies(avitoCookies)
+	var msg string
+	if strings.TrimSpace(sessionSpecsJson) != "" {
+		msg = ofmobile.StartSessionProxy(sessionSpecsJson, secret, socksAddr, socksUser, socksPass, "")
+	} else {
+		msg = ofmobile.StartProxy(transportType, docUrl, secret, "batched", maxToken, maxUid, socksAddr, socksUser, socksPass, "")
 	}
-	ofClient = c
+	drainOpenFluxLogs()
+	if msg != "" {
+		ofLastErr = msg
+		return errors.New(msg)
+	}
+	ofLastErr = ""
+	ofRunning = true
+	stop := make(chan struct{})
+	ofLogStop = stop
+	go func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				drainOpenFluxLogs()
+				return
+			case <-t.C:
+				drainOpenFluxLogs()
+			}
+		}
+	}()
 	PushLog("openflux", "OpenFlux started on "+socksAddr)
 	return nil
+}
+
+func drainOpenFluxLogs() {
+	for _, line := range strings.Split(ofmobile.ReadLogs(), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			if strings.HasPrefix(line, "[ERROR]") {
+				ofLastErr = line
+			}
+			PushLog("openflux", line)
+		}
+	}
 }
 
 func OpenFluxStop() {
 	ofMu.Lock()
 	defer ofMu.Unlock()
-	if ofClient != nil {
-		ofClient.Stop()
-		ofClient = nil
-		PushLog("openflux", "OpenFlux stopped")
+	if !ofRunning {
+		return
 	}
+	ofmobile.StopProxy()
+	ofRunning = false
+	if ofLogStop != nil {
+		close(ofLogStop)
+		ofLogStop = nil
+	}
+	PushLog("openflux", "OpenFlux stopped")
 }
 
 func OpenFluxRunning() bool {
 	ofMu.Lock()
 	defer ofMu.Unlock()
-	return ofClient != nil && ofClient.IsRunning()
+	return ofRunning && ofmobile.ProxyIsRunning()
 }
+
+// OpenFluxConnected reports whether the carrier has reached the exit (the SOCKS port opens earlier).
+func OpenFluxConnected() bool { return ofmobile.ProxyIsConnected() }
 
 func OpenFluxLastError() string {
 	ofMu.Lock()
 	defer ofMu.Unlock()
-	if ofClient == nil {
-		return ""
-	}
-	return ofClient.LastError()
+	return ofLastErr
 }
 
 // ---------------------------------------------------------------------------

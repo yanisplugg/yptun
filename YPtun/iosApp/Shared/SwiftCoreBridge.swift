@@ -141,10 +141,12 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
     func openfluxStart(
         transport: String,
         url: String,
+        secret: String,
         maxToken: String,
         maxUid: String,
+        avitoCookies: String,
+        sessionSpecsJson: String,
         listenAddr: String,
-        dnsServer: String,
         socksUser: String,
         socksPass: String,
         debug: Bool
@@ -153,10 +155,12 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
             CoreapiOpenFluxStart(
                 transport,
                 url,
+                secret,
                 maxToken,
                 maxUid,
+                avitoCookies,
+                sessionSpecsJson,
                 listenAddr,
-                dnsServer,
                 socksUser,
                 socksPass,
                 debug,

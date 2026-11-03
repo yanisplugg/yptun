@@ -14,6 +14,9 @@ func decodeCallDetails(vcp string) (string, error) {
 	}
 	var size int
 	fmt.Sscanf(vcp[:3], "%d", &size)
+	if size <= 0 {
+		return "", fmt.Errorf("invalid vcp size prefix %q", vcp[:3])
+	}
 	decoded, err := base64.StdEncoding.DecodeString(vcp[4:])
 	if err != nil {
 		return "", err
@@ -24,6 +27,25 @@ func decodeCallDetails(vcp string) (string, error) {
 		return "", err
 	}
 	return string(decompressed[:n]), nil
+}
+
+func parseCallerParams(raw json.RawMessage) (InternalCallerParams, error) {
+	var params InternalCallerParams
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return params, fmt.Errorf("decode start-call payload: %w", err)
+	}
+	paramsStr, _ := payload["internalCallerParams"].(string)
+	if paramsStr == "" {
+		return params, fmt.Errorf("start-call response has no internalCallerParams")
+	}
+	if err := json.Unmarshal([]byte(paramsStr), &params); err != nil {
+		return params, fmt.Errorf("decode internalCallerParams: %w", err)
+	}
+	if params.Endpoint == "" {
+		return params, fmt.Errorf("start-call response has empty endpoint")
+	}
+	return params, nil
 }
 
 func craftEndpoint(convID, jsonConfig string) string {
