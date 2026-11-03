@@ -27,6 +27,8 @@ internal object SubscriptionDecoder {
         extractJsonLinks(trimmed)?.let { return it.joinToString(separator = "\n") }
         val decoded = maybeBase64Decode(trimmed)
         if (decoded != null) return decoded
+        // A JSON config (sing-box / Xray) is never a list of base64 lines: leave it exactly as it is.
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) return body
         // Per-line base64 chunks (one encoded link per line) are decoded IN PLACE; every other line —
         // links and the panel's `#desc:` / `#order:` / olcRTC `#refresh:` metadata — stays where it is.
         // Rebuilding the text from links only dropped those lines (descriptions, panel order, olcRTC headers).

@@ -1465,11 +1465,11 @@ class LocationsRepositoryImpl(
         // VK-TURN csqtt connection links (csqtt://connect?v=2&...):
         parseCsqttText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
-        // snolc share links (snolc://):
-        parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
-
         // MasterDNS links (masterdns://v1?…) from the panel's personal subscription:
         parseMasterDnsText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
+        // snolc share links (snolc://):
+        parseSnolcText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
         // OpenFlux share links (openflux://):
         parseOpenFluxText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
