@@ -4,7 +4,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
 import io.ktor.client.plugins.HttpTimeout
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
-import platform.Foundation.NSHTTPCookieAcceptPolicyNever
 import platform.Foundation.NSURLRequestReloadIgnoringLocalCacheData
 
 internal actual fun createProxyHttpClient(
@@ -23,7 +22,6 @@ internal actual fun createProxyHttpClient(
                 // session cookie (the subscription page / logo lookup is fetched with a browser UA), every
                 // later request carried it and the panel answered all of them with its HTML page.
                 setHTTPShouldSetCookies(false)
-                setHTTPCookieAcceptPolicy(NSHTTPCookieAcceptPolicyNever)
                 setHTTPCookieStorage(null)
                 setURLCache(null)
                 setRequestCachePolicy(NSURLRequestReloadIgnoringLocalCacheData)
