@@ -45,7 +45,9 @@ object ImportDiagnostics {
         val head = body.trimStart().take(1)
         val kind = when {
             schemes.isNotEmpty() -> (if (decoded != null) "base64, " else "") + "ссылки: " + schemes.entries.joinToString { "${it.key}×${it.value}" }
-            head == "<" -> "HTML-страница вместо подписки"
+            head == "<" -> "HTML-страница вместо подписки" +
+                (Regex("<title[^>]*>([^<]{1,80})</title>", RegexOption.IGNORE_CASE).find(body)
+                    ?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { " «$it»" } ?: "")
             head == "{" || head == "[" -> "JSON"
             else -> "без ссылок (возможно base64)"
         }
