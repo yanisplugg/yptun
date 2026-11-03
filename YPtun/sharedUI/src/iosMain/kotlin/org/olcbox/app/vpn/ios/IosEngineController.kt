@@ -200,7 +200,9 @@ internal class IosEngineController(
             }
         }
         if (config.usesMultiRoom()) {
-            val specs = config.multiRoomSpecs()
+            // Every room is its own WebRTC peer connection (buffers, SRTP, pion goroutines): the 5 rooms the
+            // desktop allows do not fit the packet-tunnel extension's ~50 MB, so iOS runs at most two.
+            val specs = config.multiRoomSpecs().take(IOS_MAX_ROOMS)
             val roomsJson = kotlinx.serialization.json.buildJsonArray {
                 specs.forEach { r ->
                     add(kotlinx.serialization.json.buildJsonObject {
@@ -1308,6 +1310,9 @@ internal class IosEngineController(
     private companion object {
         const val LISTEN_HOST = "127.0.0.1"
         const val MOBILE_READY_TIMEOUT_MS = 25_000
+
+        /** olcRTC multi-room on iOS: main room + one extra (see startOlcRtc). */
+        const val IOS_MAX_ROOMS = 2
         const val VKTURN_RELAY_READY_TIMEOUT_MS = 20_000
         const val RTC_DNS = "1.1.1.1:53"
         const val SINGBOX_CACHE_FILE = "singbox-cache.db"
