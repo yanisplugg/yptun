@@ -1026,3 +1026,64 @@ impl LocationBundleV4 {
         Self { version: BUNDLE_VERSION, active_location_id: active, locations }
     }
 }
+
+// ---------------- LocationViewIndex ----------------
+
+/// One row of the list as the cold start paints it: names, grouping and labels only — no keys,
+/// raw configs or other connection payloads (port of `LocationViewIndex.Item`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LocationViewItem {
+    #[serde(rename = "storage_id")]
+    pub storage_id: String,
+    pub name: String,
+    pub description: String,
+    #[serde(rename = "subscription_url")]
+    pub subscription_url: Option<String>,
+    pub engine: EngineType,
+    #[serde(rename = "auth_provider")]
+    pub auth_provider: String,
+    pub transport: String,
+    #[serde(rename = "proxy_type")]
+    pub proxy_type: String,
+    #[serde(rename = "proxy_server")]
+    pub proxy_server: String,
+    pub metadata: Option<LocationMetadata>,
+}
+
+/// A tiny projection of the bundle that decodes in milliseconds, so the list paints instantly while
+/// the full bundle loads (port of `LocationViewIndex`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LocationViewIndex {
+    #[serde(rename = "active_location_id")]
+    pub active_location_id: Option<String>,
+    pub items: Vec<LocationViewItem>,
+}
+
+impl LocationViewIndex {
+    pub fn from_bundle(bundle: &LocationBundleV4) -> Self {
+        Self {
+            active_location_id: bundle.active_location_id.clone(),
+            items: bundle
+                .locations
+                .iter()
+                .map(|e| {
+                    let proxy = e.location().proxy;
+                    LocationViewItem {
+                        storage_id: e.storage_id.clone(),
+                        name: e.name.clone(),
+                        description: e.description.clone(),
+                        subscription_url: e.subscription_url.clone().or_else(|| e.legacy_subscription_url.clone()),
+                        engine: e.engine.unwrap_or_default(),
+                        auth_provider: e.auth_provider.clone().unwrap_or_default(),
+                        transport: e.transport.as_ref().map(|t| t.kind.clone()).unwrap_or_default(),
+                        proxy_type: proxy.as_ref().map(|p| p.kind.clone()).unwrap_or_default(),
+                        proxy_server: proxy.as_ref().map(crate::share_link::display_server).unwrap_or_default(),
+                        metadata: e.metadata.clone(),
+                    }
+                })
+                .collect(),
+        }
+    }
+}

@@ -8,6 +8,7 @@ pub mod location;
 pub mod model;
 pub mod panel;
 pub mod routing;
+pub mod settings;
 pub mod share;
 pub mod share_link;
 pub mod subscription;

@@ -259,3 +259,26 @@ fn metadata_cleanup() {
     assert_eq!(s.update_interval_hours, Some(MAX_UPDATE_INTERVAL_HOURS));
     assert!(LocationMetadata::default().normalized().is_empty());
 }
+
+#[test]
+fn view_index_projects_rows_without_payloads() {
+    let cfg = LocationConfig {
+        name: "VL".into(),
+        engine: EngineType::Standard,
+        proxy: Some(ProxyProfile { kind: TYPE_VLESS.into(), server: "h.example".into(), server_port: 443, uuid: "secret-uuid".into(), ..Default::default() }),
+        ..Default::default()
+    };
+    let bundle = LocationBundleV4 {
+        active_location_id: Some("a".into()),
+        locations: vec![LocationEntry::from("a", &cfg, Some("https://sub.example/x".into()), None)],
+        ..Default::default()
+    };
+    let idx = LocationViewIndex::from_bundle(&bundle);
+    let item = &idx.items[0];
+    assert_eq!((item.storage_id.as_str(), item.name.as_str(), item.proxy_type.as_str()), ("a", "VL", TYPE_VLESS));
+    assert_eq!(item.engine, EngineType::Standard);
+    assert!(item.proxy_server.contains("h.example"));
+    assert_eq!(item.subscription_url.as_deref(), Some("https://sub.example/x"));
+    let json = serde_json::to_string(&idx).unwrap();
+    assert!(!json.contains("secret-uuid") && json.contains("\"storage_id\":\"a\""), "{json}");
+}
