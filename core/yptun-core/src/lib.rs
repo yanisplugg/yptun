@@ -6,6 +6,7 @@ pub mod crypto;
 pub mod location;
 pub mod model;
 pub mod panel;
+pub mod share;
 pub mod share_link;
 pub mod subscription;
 pub mod transports;
