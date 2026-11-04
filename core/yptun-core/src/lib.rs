@@ -2,10 +2,12 @@
 //! panel link families, config generation. Each platform app (Kotlin on Android, Swift on
 //! iOS/macOS, Rust on Windows/Linux) is a thin UI over this crate.
 
+pub mod awg;
 pub mod crypto;
 pub mod location;
 pub mod model;
 pub mod panel;
+pub mod routing;
 pub mod share;
 pub mod share_link;
 pub mod subscription;
