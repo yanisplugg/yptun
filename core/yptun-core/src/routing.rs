@@ -283,22 +283,18 @@ impl RoutingProfile {
         }
     }
 
-    /// Buckets in `route_order` (unknown tokens ignored).
+    /// Buckets in `route_order` (unknown tokens ignored; none known → block, direct, proxy).
     pub fn ordered_buckets(&self) -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
-        for t in self.route_order.split('-').map(|t| t.trim().to_ascii_lowercase()) {
-            if let Some(b) = ["block", "direct", "proxy"].into_iter().find(|b| *b == t) {
-                if !out.contains(&b) {
-                    out.push(b);
-                }
-            }
+        let out: Vec<&'static str> = self
+            .route_order
+            .split('-')
+            .filter_map(|t| ["block", "direct", "proxy"].into_iter().find(|b| t.trim().eq_ignore_ascii_case(b)))
+            .collect();
+        if out.is_empty() {
+            vec!["block", "direct", "proxy"]
+        } else {
+            out
         }
-        for b in ["block", "direct", "proxy"] {
-            if !out.contains(&b) {
-                out.push(b);
-            }
-        }
-        out
     }
 }
 
