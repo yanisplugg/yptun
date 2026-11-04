@@ -13,3 +13,4 @@ pub mod share_link;
 pub mod subscription;
 pub mod transports;
 pub mod uri;
+pub mod vkturn;
