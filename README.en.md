@@ -18,6 +18,9 @@
 UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 ```
 
+🌐 **Try our VPN** — Telegram bot:<br>
+[![Quofortpost VPN](https://img.shields.io/badge/Telegram-%40quofortpostbot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/quofortpostbot)
+
 ![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
@@ -58,6 +61,26 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 | **Routing and cores** | `geosite:telegram` includes Telegram data-center addresses (#68); OpenFlux 0.13.0 (Avito, several transports per session, #66); clearer csqtt errors (#67); SOCKS5 port can be changed on desktop. |
 | **Lighter on the phone** | Free-server auto-refresh only while the window is open, soft memory limit for Go cores, VPN worker threads pinned to the slower CPU cores. |
 | **Fixes** | Mirror when the Cloudflare WARP API is down; server-side WARP AmneziaWG without I1–I5 packets; delta update on desktop; lists no longer jump to the top. |
+
+---
+
+## Cores we use
+
+| Core | Version | Purpose |
+|---|---|---|
+| [Xray-core](https://github.com/XTLS/Xray-core) | 26.9.30 (local patches) | VLESS · Reality · XHTTP |
+| [sing-box](https://github.com/SagerNet/sing-box) | 1.14.1 | Hysteria2, TUN, routing |
+| [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) | amneziawg-go | obfuscated WireGuard |
+| [olcRTC](https://github.com/ghostlane-project/olcrtc) | ghostlane fork | traffic over video calls |
+| [free-turn-proxy (VK-TURN)](https://github.com/samosvalishe/free-turn-proxy) | 1.3.2 | tunnel over VK calls |
+| [qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) | 1.4.4 | TURN tunnel variant |
+| [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) | — | DNS tunnel |
+| [OpenFlux](https://github.com/p1neappleXpress/OpenFlux) | 0.13.0 (4f9c786) | transport via Yandex Docs / MAX |
+| [TrustTunnel](https://github.com/TrustTunnel/TrustTunnelClient) | 1.1.11 | Trust Tunnel protocol |
+| [csqtt](https://github.com/yanisplugg/yptun/tree/main/csqtt) | 2.5.0 (fd936ef) | third VK-TURN core |
+| [snolc](https://github.com/yanisplugg/yptun/tree/main/snolc) | 0.0.4 | Rust engine |
+| [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | — | TUN → SOCKS5 (Android) |
+| [tun2socks](https://github.com/xjasonlyu/tun2socks) | — | TUN → SOCKS5 (desktop) |
 
 ---
 

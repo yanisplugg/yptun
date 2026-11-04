@@ -21,6 +21,9 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 🇷🇺 **Поддержать из России** — через DonationAlerts:<br>
 [![DonationAlerts](https://img.shields.io/badge/DonationAlerts-%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C-F57D07?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://www.donationalerts.com/r/yanisplugg)
 
+🌐 **Попробовать наш VPN** — Telegram-бот:<br>
+[![Quofortpost VPN](https://img.shields.io/badge/Telegram-%40quofortpostbot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/quofortpostbot)
+
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
 ![Платформа](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
@@ -61,6 +64,26 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 | **Маршрутизация и ядра** | `geosite:telegram` включает адреса дата-центров Telegram (#68); OpenFlux 0.13.0 (Avito, несколько транспортов в сессии, #66); понятнее ошибки csqtt (#67); на ПК можно сменить порт SOCKS5. |
 | **Меньше нагрузки** | Автообновление бесплатных серверов только при открытом окне, мягкий лимит памяти ядер Go, рабочие потоки VPN — на менее мощных ядрах CPU. |
 | **Исправления** | Зеркало при недоступном API Cloudflare WARP; серверный WARP AmneziaWG без пакетов I1–I5; обновление по дельте на ПК; списки больше не прыгают в начало. |
+
+---
+
+## Ядра, которые мы используем
+
+| Ядро | Версия | Для чего |
+|---|---|---|
+| [Xray-core](https://github.com/XTLS/Xray-core) | 26.9.30 (локальные патчи) | VLESS · Reality · XHTTP |
+| [sing-box](https://github.com/SagerNet/sing-box) | 1.14.1 | Hysteria2, TUN, маршрутизация |
+| [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) | amneziawg-go | обфусцированный WireGuard |
+| [olcRTC](https://github.com/ghostlane-project/olcrtc) | форк ghostlane | трафик поверх видеозвонков |
+| [free-turn-proxy (VK-TURN)](https://github.com/samosvalishe/free-turn-proxy) | 1.3.2 | туннель через звонки VK |
+| [qWDTT](https://github.com/SpaceNeuroX/proxy-turn-vk-android) | 1.4.4 | вариант TURN-туннеля |
+| [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) | — | DNS-туннель |
+| [OpenFlux](https://github.com/p1neappleXpress/OpenFlux) | 0.13.0 (4f9c786) | транспорт через Яндекс Документы / MAX |
+| [TrustTunnel](https://github.com/TrustTunnel/TrustTunnelClient) | 1.1.11 | протокол Trust Tunnel |
+| [csqtt](https://github.com/yanisplugg/yptun/tree/main/csqtt) | 2.5.0 (fd936ef) | третье ядро VK-TURN |
+| [snolc](https://github.com/yanisplugg/yptun/tree/main/snolc) | 0.0.4 | Rust-движок |
+| [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | — | TUN → SOCKS5 (Android) |
+| [tun2socks](https://github.com/xjasonlyu/tun2socks) | — | TUN → SOCKS5 (ПК) |
 
 ---
 
