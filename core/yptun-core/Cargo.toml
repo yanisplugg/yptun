@@ -1,0 +1,12 @@
+[package]
+name = "yptun-core"
+version = "0.1.0"
+description = "YPtun client core: share links, subscriptions, configs — shared by every platform app"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

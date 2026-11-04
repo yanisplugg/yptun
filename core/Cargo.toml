@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["yptun-core"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-only"
+repository = "https://github.com/yanisplugg/yptun"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"
