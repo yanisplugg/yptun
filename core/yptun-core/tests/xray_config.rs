@@ -412,7 +412,7 @@ fn wireguard_balancer() {
     assert_eq!(root["routing"]["balancers"][0]["strategy"]["settings"]["expected"], 2);
     assert_eq!(root["routing"]["balancers"][0]["fallbackTag"], "wg-bal-0");
     assert!(root.get("burstObservatory").is_some());
-    let last = list(&root["routing"], "rules").last().unwrap().clone();
+    let last = (*list(&root["routing"], "rules").last().unwrap()).clone();
     assert_eq!(last["balancerTag"], "vk-bal");
     let one = parse(&build_wireguard_balancer(&[wg(9101)], 10808, "127.0.0.1", "", "", "warning", &TrafficSettings::default(), false));
     assert!(one.get("burstObservatory").is_none());
