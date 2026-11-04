@@ -18,9 +18,6 @@
 UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 ```
 
-🌐 **Try our VPN** — Telegram bot:<br>
-[![Quofortpost VPN](https://img.shields.io/badge/Telegram-%40quofortpostbot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/quofortpostbot)
-
 ![Platform](https://img.shields.io/badge/platform-Android%206.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078d4?style=flat-square&logo=windows&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux%20.deb-fcc624?style=flat-square&logo=linux&logoColor=black)
