@@ -86,6 +86,10 @@ pub mod asn {
 
 pub const NONE_ID: &str = "__none__";
 pub const DEFAULT_RU_DIRECT_ID: &str = "default-ru-direct";
+/// Stable id of the "China direct" preset, so adding it twice replaces rather than duplicates it.
+pub const PRESET_CN_DIRECT_ID: &str = "preset-cn-direct";
+/// Name of the "China direct" preset when the UI passes no localized one.
+pub const CHINA_DIRECT_DEFAULT_NAME: &str = "China direct";
 pub const DEFAULT_GEOIP_URL: &str = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat";
 pub const DEFAULT_GEOSITE_URL: &str = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat";
 pub const ROUTE_ORDERS: [&str; 4] = ["block-direct-proxy", "block-proxy-direct", "direct-block-proxy", "proxy-block-direct"];
@@ -192,6 +196,22 @@ impl Default for RoutingProfile {
     }
 }
 
+/// Kotlin `RoutingProfile.dnsAddress`: a DoH type with a domain → that URL (a bare host gets the
+/// standard `/dns-query` path); otherwise the IP field, then the domain field, else `None`.
+fn dns_address(kind: &str, domain: &str, ip: &str) -> Option<String> {
+    let d = domain.trim();
+    let i = ip.trim();
+    if kind.eq_ignore_ascii_case("DoH") && !d.is_empty() {
+        Some(if d.contains("://") { d.to_string() } else { format!("https://{d}/dns-query") })
+    } else if !i.is_empty() {
+        Some(i.to_string())
+    } else if !d.is_empty() {
+        Some(d.to_string())
+    } else {
+        None
+    }
+}
+
 fn starts_ci(s: &str, prefix: &str) -> bool {
     s.len() >= prefix.len() && s.is_char_boundary(prefix.len()) && s[..prefix.len()].eq_ignore_ascii_case(prefix)
 }
@@ -272,6 +292,44 @@ impl RoutingProfile {
         format!("{HAPP_SCHEME}{}", URL_SAFE_NO_PAD.encode(json))
     }
 
+    /// The through-the-proxy resolver this profile asks for, as an address the config builders take
+    /// (`1.1.1.1`, `https://…/dns-query`, `tls://…`), or `None` to keep the app's own setting. Happ puts
+    /// a DoH resolver in the `*dnsdomain` field and a plain one in `*dnsip`; both are understood.
+    pub fn remote_dns_address(&self) -> Option<String> {
+        dns_address(&self.remote_dns_type, &self.remote_dns_domain, &self.remote_dns_ip)
+    }
+
+    /// The resolver for direct (not proxied) lookups this profile asks for, or `None` to keep the app's setting.
+    pub fn domestic_dns_address(&self) -> Option<String> {
+        dns_address(&self.domestic_dns_type, &self.domestic_dns_domain, &self.domestic_dns_ip)
+    }
+
+    /// A copy whose remote resolver is `address` (blank = defer to the app). An unchanged value is left as stored.
+    pub fn with_remote_dns(&self, address: &str) -> Self {
+        let a = address.trim();
+        if a == self.remote_dns_address().unwrap_or_default() {
+            return self.clone();
+        }
+        if starts_ci(a, "https://") {
+            Self { remote_dns_type: "DoH".into(), remote_dns_domain: a.into(), remote_dns_ip: String::new(), ..self.clone() }
+        } else {
+            Self { remote_dns_type: String::new(), remote_dns_domain: String::new(), remote_dns_ip: a.into(), ..self.clone() }
+        }
+    }
+
+    /// A copy whose direct resolver is `address` (blank = defer to the app). An unchanged value is left as stored.
+    pub fn with_domestic_dns(&self, address: &str) -> Self {
+        let a = address.trim();
+        if a == self.domestic_dns_address().unwrap_or_default() {
+            return self.clone();
+        }
+        if starts_ci(a, "https://") {
+            Self { domestic_dns_type: "DoH".into(), domestic_dns_domain: a.into(), domestic_dns_ip: String::new(), ..self.clone() }
+        } else {
+            Self { domestic_dns_type: String::new(), domestic_dns_domain: String::new(), domestic_dns_ip: a.into(), ..self.clone() }
+        }
+    }
+
     /// The built-in "Russia direct" profile seeded on first run.
     pub fn russia_direct() -> Self {
         Self {
@@ -279,6 +337,50 @@ impl RoutingProfile {
             direct_sites: vec!["domain:ru".into()],
             direct_ip: vec!["geoip:ru".into()],
             id: DEFAULT_RU_DIRECT_ID.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The "China direct" preset under its default (English) name; see [`RoutingProfile::china_direct_named`].
+    pub fn china_direct() -> Self {
+        Self::china_direct_named(CHINA_DIRECT_DEFAULT_NAME)
+    }
+
+    /// Preset: Chinese sites and IPs go direct, everything else through the proxy.
+    ///
+    /// Only categories present in the default runetfreedom `geosite.dat` (and in SagerNet's sing-box
+    /// rule-sets) are used: `cn`, `geolocation-cn`, `geoip:cn` — an unknown category would make Xray
+    /// refuse the whole config / sing-box fail its rule-set fetch. `IPIfNonMatch` resolves a domain
+    /// no list knows and sends it direct when it lands on a Chinese IP. The plain `domain:` / CIDR
+    /// entries are the fallback that still works when the geo files could not be downloaded
+    /// ([`RoutingProfile::without_geo_selectors`] keeps them): the biggest Chinese services and
+    /// domestic DNS resolvers.
+    pub fn china_direct_named(name: &str) -> Self {
+        let list = |items: &[&str]| -> Vec<String> { items.iter().map(|s| s.to_string()).collect() };
+        Self {
+            name: name.into(),
+            direct_sites: list(&[
+                "geosite:cn", "geosite:geolocation-cn", "domain:cn",
+                "domain:qq.com", "domain:wechat.com", "domain:baidu.com", "domain:bdstatic.com",
+                "domain:taobao.com", "domain:tmall.com", "domain:alipay.com", "domain:alicdn.com",
+                "domain:aliyun.com", "domain:aliyuncs.com", "domain:jd.com", "domain:bilibili.com",
+                "domain:hdslb.com", "domain:douyin.com", "domain:bytedance.com", "domain:zhihu.com",
+                "domain:weibo.com", "domain:163.com", "domain:126.net", "domain:xiaohongshu.com",
+                "domain:meituan.com", "domain:pinduoduo.com", "domain:huawei.com", "domain:xiaomi.com",
+                "domain:mi.com", "domain:iqiyi.com", "domain:youku.com", "domain:sohu.com",
+            ]),
+            direct_ip: list(&["geoip:cn", "223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "114.114.114.114/32"]),
+            // Names resolved for proxied traffic go out through the VPN to Cloudflare; everything direct
+            // (and the proxy server's own hostname) uses AliDNS, which answers Chinese names correctly
+            // and is not poisoned. Read by `TrafficSettings::with_profile_dns`; other profiles leave these blank.
+            remote_dns_type: "DoU".into(),
+            remote_dns_ip: "1.1.1.1".into(),
+            domestic_dns_type: "DoU".into(),
+            domestic_dns_ip: "223.5.5.5".into(),
+            domain_strategy: "IPIfNonMatch".into(),
+            global_proxy: true,
+            route_order: "block-direct-proxy".into(),
+            id: PRESET_CN_DIRECT_ID.into(),
             ..Default::default()
         }
     }
@@ -701,6 +803,24 @@ impl TrafficSettings {
             fragment_length: or_default(&self.fragment_length, "50-100"),
             fragment_interval: or_default(&self.fragment_interval, "10-20"),
             mtu: self.mtu.clamp(1280, 9000),
+            ..self.clone()
+        }
+    }
+
+    /// These settings with the DNS the active routing `profile` asks for laid over them: its remote
+    /// resolver replaces `remote_dns`, its domestic one replaces `direct_dns`. A profile that sets
+    /// neither (every profile but a preset like «China direct») returns this unchanged. Applied when
+    /// the core config is built, so the user's saved settings are never rewritten and switching
+    /// profile switches DNS.
+    pub fn with_profile_dns(&self, profile: Option<&RoutingProfile>) -> Self {
+        let remote = profile.and_then(RoutingProfile::remote_dns_address);
+        let direct = profile.and_then(RoutingProfile::domestic_dns_address);
+        if remote.is_none() && direct.is_none() {
+            return self.clone();
+        }
+        Self {
+            remote_dns: remote.unwrap_or_else(|| self.remote_dns.clone()),
+            direct_dns: direct.unwrap_or_else(|| self.direct_dns.clone()),
             ..self.clone()
         }
     }
