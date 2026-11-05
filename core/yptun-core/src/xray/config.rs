@@ -315,7 +315,8 @@ pub fn build(profile: &ProxyProfile, o: &XrayOptions) -> String {
 }
 
 pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
-    let traffic = &o.traffic;
+    // The routing profile may carry its own DNS (e.g. the China preset); see `with_profile_dns`.
+    let traffic = &o.traffic.with_profile_dns(o.routing_profile.as_ref());
     let rp = o.routing_profile.as_ref();
     let fake_enabled = traffic.fake_dns_enabled || o.fake_dns_spec.is_some();
     let fake_block: Vec<String> = o.fake_dns_spec.as_ref().map(|s| s.block_regex.iter().filter(|r| not_blank(r)).cloned().collect()).unwrap_or_default();
