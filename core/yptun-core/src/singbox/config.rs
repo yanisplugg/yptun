@@ -182,7 +182,8 @@ pub fn build(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<String, Confi
 }
 
 pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, ConfigError> {
-    let traffic = &o.traffic;
+    // The routing profile may carry its own DNS (e.g. the China preset); see `with_profile_dns`.
+    let traffic = &o.traffic.with_profile_dns(o.routing_profile.as_ref());
     let routing = &o.routing;
     let effective_strategy = o.dns_strategy_override.clone().unwrap_or_else(|| traffic.domain_strategy.clone());
     let base_exit_tag = if o.wireguard_base.is_some() {
