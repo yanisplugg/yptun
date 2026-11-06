@@ -38,6 +38,71 @@ pub fn is_blank(s: &str) -> bool {
     s.chars().all(char::is_whitespace)
 }
 
+/// First code point of every run of ten decimal digits in the Basic Multilingual Plane (Unicode
+/// `Nd`): ASCII, Arabic-Indic, Persian, Devanagari, … fullwidth. Kotlin's `Char.isDigit()` and
+/// `toIntOrNull()` take all of them; a Persian keyboard types `۴۴۳` into a port field.
+const DECIMAL_ZEROS: [u32; 37] = [
+    0x0030, 0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6,
+    0x0D66, 0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80,
+    0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
+    0xFF10,
+];
+
+/// The value of the decimal digit `c` of any script (Kotlin `Char.digitToIntOrNull()`); `None` for
+/// everything else, digits outside the BMP included (Kotlin sees those as two surrogates).
+pub fn digit_value(c: char) -> Option<u32> {
+    let cp = u32::from(c);
+    DECIMAL_ZEROS
+        .iter()
+        .find(|&&zero| (zero..zero + 10).contains(&cp))
+        .map(|&zero| cp - zero)
+}
+
+/// Kotlin `Char.isDigit()`.
+pub fn is_digit(c: char) -> bool {
+    digit_value(c).is_some()
+}
+
+/// Kotlin `filter(Char::isDigit)`: the digits of `s`, as typed (other scripts are kept as they are).
+pub fn filter_digits(s: &str) -> String {
+    s.chars().filter(|&c| is_digit(c)).collect()
+}
+
+/// Kotlin `String.toIntOrNull()`: an optional `+`/`-` and decimal digits of any script; `None`
+/// for anything else and on overflow.
+pub fn to_int_or_null(s: &str) -> Option<i32> {
+    let mut chars = s.chars().peekable();
+    let first = *chars.peek()?;
+    let negative = if first < '0' {
+        chars.next();
+        match first {
+            '-' => true,
+            '+' => false,
+            _ => return None,
+        }
+    } else {
+        false
+    };
+    let mut value: i64 = 0;
+    let mut any = false;
+    for c in chars {
+        value = value * 10 + i64::from(digit_value(c)?);
+        if value > i64::from(i32::MAX) + 1 {
+            return None;
+        }
+        any = true;
+    }
+    if !any {
+        return None;
+    }
+    i32::try_from(if negative { -value } else { value }).ok()
+}
+
+/// Kotlin `String.length`: UTF-16 code units, what the app's length limits count.
+pub fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
 /// Kotlin `String.trimIndent()`: removes the common minimal indent of the non-blank lines from every
 /// line and drops the first and the last line when they are blank. Lines are re-joined with `\n`.
 pub fn trim_indent(s: &str) -> String {
