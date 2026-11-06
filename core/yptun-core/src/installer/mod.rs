@@ -10,14 +10,17 @@
 //! Every call blocks until the install is done (minutes on a slow link): run it off the UI thread.
 
 use std::io::Write;
+use std::sync::LazyLock;
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use regex_lite::Regex;
 
 pub mod freeturn;
 pub mod masterdns;
 pub mod olcrtc;
 pub mod ssh;
+pub mod wdtt;
 
 use ssh::{one_shot, Ssh, SshTarget};
 
@@ -161,6 +164,77 @@ pub(crate) fn random_below(n: usize) -> usize {
             return (x % n) as usize;
         }
     }
+}
+
+static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new("\u{1B}\\[[0-9;]*[A-Za-z]").unwrap());
+
+/// What a bundled `deploy.sh` (qWDTT, csqtt) reported, for the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployReport {
+    /// Its own `<TAG>_DEPLOY_OK` marker AND exit code 0.
+    pub ok: bool,
+    pub exit_code: Option<i32>,
+    pub lines: Vec<String>,
+}
+
+/// Reads a deploy.sh transcript: colours stripped, `<TAG>_DEPLOY_EXIT=<n>` and `<TAG>_DEPLOY_OK`
+/// picked up, `<TAG>_PROGRESS|x|step` turned into "• step", apt/dpkg noise dropped. `special` sees
+/// the remaining lines first: `Some(None)` drops one, `Some(Some(text))` logs `text` instead.
+pub(crate) fn read_deploy_output(
+    output: &str,
+    tag: &str,
+    special: impl Fn(&str) -> Option<Option<String>>,
+) -> DeployReport {
+    let (exit_marker, ok_marker, progress) = (
+        format!("{tag}_DEPLOY_EXIT="),
+        format!("{tag}_DEPLOY_OK"),
+        format!("{tag}_PROGRESS|"),
+    );
+    let mut exit_code = None;
+    let mut ok = false;
+    let mut lines = Vec::new();
+    for raw in crate::util::kotlin_lines(output) {
+        let line = ANSI.replace_all(raw, "");
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        } else if line.starts_with(&exit_marker) {
+            exit_code = line.split_once('=').and_then(|(_, c)| c.parse().ok());
+        } else if line == ok_marker {
+            ok = true;
+        } else if line.starts_with(&progress) {
+            if let Some(step) = line.split('|').nth(2).filter(|s| !is_blank(s)) {
+                lines.push(format!("• {step}"));
+            }
+        } else if let Some(replacement) = special(line) {
+            lines.extend(replacement);
+        } else if !is_apt_noise(line) {
+            lines.push(line.to_string());
+        }
+    }
+    DeployReport {
+        ok: ok && exit_code == Some(0),
+        exit_code,
+        lines,
+    }
+}
+
+/// apt/dpkg progress lines deploy.sh passes through.
+fn is_apt_noise(line: &str) -> bool {
+    [
+        "Get:",
+        "Hit:",
+        "Ign:",
+        "Reading ",
+        "Selecting ",
+        "Preparing ",
+        "Unpacking ",
+        "Setting up ",
+        "Processing ",
+        "(Reading database",
+    ]
+    .iter()
+    .any(|p| line.starts_with(p))
 }
 
 /// Kotlin `output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && keep(it) }`.
