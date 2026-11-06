@@ -15,6 +15,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 pub mod freeturn;
+pub mod olcrtc;
 pub mod ssh;
 
 use ssh::{one_shot, Ssh, SshTarget};
@@ -141,6 +142,26 @@ pub(crate) fn detect_arch(
     Ok(arch)
 }
 
+/// `len` bytes from the OS CSPRNG.
+pub(crate) fn random_bytes(len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    getrandom::getrandom(&mut buf).expect("the OS random source is unavailable");
+    buf
+}
+
+/// A uniformly random number in `0..n` (Kotlin `Random.nextInt(n)`), without modulo bias.
+pub(crate) fn random_below(n: usize) -> usize {
+    let n = u32::try_from(n).expect("range fits u32");
+    assert!(n > 0, "empty range");
+    let zone = u32::MAX / n * n;
+    loop {
+        let x = u32::from_le_bytes(random_bytes(4).try_into().unwrap());
+        if x < zone {
+            return (x % n) as usize;
+        }
+    }
+}
+
 /// Kotlin `output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && keep(it) }`.
 pub(crate) fn output_lines<'a>(
     output: &'a str,
@@ -175,6 +196,17 @@ mod tests {
             load_server_binary_gz(&none, "x/bin").unwrap_err().message(),
             "В сборке нет бинарника сервера (x/bin[.gz])"
         );
+    }
+
+    #[test]
+    fn random_numbers_stay_in_range() {
+        assert_eq!(random_bytes(24).len(), 24);
+        let mut seen = [false; 3];
+        for _ in 0..300 {
+            seen[random_below(3)] = true;
+        }
+        assert_eq!(seen, [true; 3]);
+        assert_eq!(random_below(1), 0);
     }
 
     #[test]
