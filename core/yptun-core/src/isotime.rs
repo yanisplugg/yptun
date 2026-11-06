@@ -75,6 +75,18 @@ pub fn format_date_time(epoch_ms: i64) -> String {
     format!("{} {:02}:{:02}:{:02}", format_date(epoch_ms), sec / 3600, (sec % 3600) / 60, sec % 60)
 }
 
+/// `DD.MM.YYYY HH:MM:SS` in the device's time zone, so subscription dates match the rest of the app
+/// (the panel sends an absolute instant; UTC was 3 h off for MSK users). `utc_offset_seconds` is the
+/// zone's offset AT `epoch_ms` (Swift `TimeZone.current.secondsFromGMT(for:)`).
+pub fn format_local_date_time(epoch_ms: i64, utc_offset_seconds: i32) -> String {
+    format_date_time(epoch_ms + utc_offset_seconds as i64 * 1000)
+}
+
+/// [`format_date`] in the device's time zone (matches [`format_local_date_time`]).
+pub fn format_local_date(epoch_ms: i64, utc_offset_seconds: i32) -> String {
+    format_date(epoch_ms + utc_offset_seconds as i64 * 1000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

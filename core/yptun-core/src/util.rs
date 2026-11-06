@@ -63,6 +63,50 @@ pub fn shell_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Splits a leading emoji (if any) off a name: `("🇫🇮", "Helsinki")` for `"🇫🇮 Helsinki"`. Keeps
+/// multi-codepoint glyphs whole: flags (regional-indicator pairs), ZWJ sequences, variation
+/// selectors, skin tones and keycaps. Without a leading emoji: `(default_emoji, "")`.
+pub fn parse_emoji_and_name(raw_name: &str, default_emoji: &str) -> (String, String) {
+    let trimmed = raw_name.trim();
+    match trimmed.chars().next() {
+        Some(first) if is_emoji_code_point(first) => {}
+        _ => return (default_emoji.to_string(), String::new()),
+    }
+    let end = trimmed
+        .char_indices()
+        .find(|(_, c)| !is_emoji_code_point(*c) && !is_emoji_joiner(*c))
+        .map_or(trimmed.len(), |(index, _)| index);
+    (
+        trimmed[..end].to_string(),
+        trimmed[end..].trim().to_string(),
+    )
+}
+
+fn is_emoji_code_point(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x1F1E6..=0x1F1FF // regional indicators (flags)
+            | 0x1F300..=0x1FAFF // main emoji blocks
+            | 0x2600..=0x27BF // misc symbols + dingbats
+            | 0x2B00..=0x2BFF // stars, arrows
+            | 0x1F000..=0x1F0FF // mahjong, dominoes, cards
+            | 0x2122
+            | 0x2139
+            | 0x2190..=0x21FF // arrows
+            | 0x2300..=0x23FF // technical (⌚⏰ etc.)
+    )
+}
+
+fn is_emoji_joiner(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x200D // zero-width joiner
+            | 0xFE0F | 0xFE0E // variation selectors
+            | 0x20E3 // combining keycap
+            | 0x1F3FB..=0x1F3FF // skin-tone modifiers
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,7 @@
 //! iOS/macOS, Rust on Windows/Linux) is a thin UI over this crate.
 
 pub mod awg;
+pub mod core_versions;
 pub mod crypto;
 pub mod identity;
 pub mod importer;
@@ -22,6 +23,7 @@ pub mod share_link;
 pub mod subscription;
 pub mod transports;
 pub mod update;
+pub mod upstream;
 pub mod uri;
 pub mod util;
 pub mod vkturn;
