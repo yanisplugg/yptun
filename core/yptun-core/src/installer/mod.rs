@@ -15,6 +15,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 pub mod freeturn;
+pub mod masterdns;
 pub mod olcrtc;
 pub mod ssh;
 
