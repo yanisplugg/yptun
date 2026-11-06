@@ -20,6 +20,8 @@ pub mod csqtt;
 pub mod freeturn;
 pub mod masterdns;
 pub mod olcrtc;
+pub mod openflux;
+pub mod snolc;
 pub mod ssh;
 pub mod wdtt;
 

@@ -1,4 +1,5 @@
-//! Ported from SnolcFilesTest (the config half; the install script is covered in tests/installer.rs).
+//! Ported from SnolcFilesTest (the config half; the install script is covered in
+//! tests/snolc_install_script.rs).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
