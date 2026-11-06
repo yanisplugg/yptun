@@ -12,6 +12,7 @@ pub mod model;
 pub mod panel;
 pub mod repository;
 pub mod routing;
+pub mod session;
 pub mod settings;
 pub mod singbox;
 pub mod snolc;
