@@ -5,6 +5,7 @@
 pub mod awg;
 pub mod core_versions;
 pub mod crypto;
+pub mod home;
 pub mod identity;
 pub mod importer;
 pub mod installer;
