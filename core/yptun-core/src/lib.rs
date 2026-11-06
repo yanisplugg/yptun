@@ -4,6 +4,7 @@
 
 pub mod awg;
 pub mod crypto;
+pub mod identity;
 pub mod importer;
 pub mod installer;
 pub mod isotime;
