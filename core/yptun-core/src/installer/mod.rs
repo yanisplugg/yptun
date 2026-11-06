@@ -14,7 +14,12 @@ use std::io::Write;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+pub mod freeturn;
 pub mod ssh;
+
+use ssh::{one_shot, Ssh, SshTarget};
+
+use crate::util::is_blank;
 
 /// Why an install did not finish. The message is written for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +46,27 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
+/// Kotlin `require(condition) { message }`.
+pub(crate) fn require(condition: bool, message: &str) -> Result<(), InstallError> {
+    if condition {
+        Ok(())
+    } else {
+        Err(InstallError::InvalidInput(message.to_string()))
+    }
+}
+
 /// Kotlin `error(message)`.
 pub(crate) fn fail<T>(message: impl Into<String>) -> Result<T, InstallError> {
     Err(InstallError::Failed(message.into()))
+}
+
+/// The checks every installer starts with: a host, and a password or a key.
+pub(crate) fn require_ssh(target: &SshTarget) -> Result<(), InstallError> {
+    require(!is_blank(&target.host), "Не указан IP/хост VPS")?;
+    require(
+        !is_blank(&target.private_key) || !is_blank(&target.password),
+        "Укажи пароль SSH или SSH-ключ",
+    )
 }
 
 /// Where the bundled server binaries come from: Android reads them out of its assets, the other apps
@@ -95,6 +118,38 @@ pub fn go_arch(machine: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// The first step of every install: `uname -m` on the first (verbose) connection, mapped through
+/// `arch` (None = unsupported, reported with `wanted`, e.g. "x86_64 или aarch64").
+pub(crate) fn detect_arch(
+    ssh: &dyn Ssh,
+    target: &SshTarget,
+    on_log: &dyn Fn(&str),
+    arch: fn(&str) -> Option<&'static str>,
+    wanted: &str,
+) -> Result<&'static str, InstallError> {
+    on_log("Определяю архитектуру VPS…");
+    let machine = one_shot(ssh, target, "uname -m", on_log, true)?;
+    let machine = machine.trim();
+    let Some(arch) = arch(machine) else {
+        return fail(format!(
+            "Неподдерживаемая архитектура VPS: '{machine}' (нужен {wanted})"
+        ));
+    };
+    on_log(&format!("Архитектура VPS: {machine} → {arch}"));
+    Ok(arch)
+}
+
+/// Kotlin `output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && keep(it) }`.
+pub(crate) fn output_lines<'a>(
+    output: &'a str,
+    keep: impl Fn(&str) -> bool + 'a,
+) -> impl Iterator<Item = &'a str> + 'a {
+    crate::util::kotlin_lines(output)
+        .into_iter()
+        .map(str::trim)
+        .filter(move |l| !l.is_empty() && keep(l))
 }
 
 #[cfg(test)]
