@@ -105,6 +105,14 @@ impl FakeVps {
             .collect()
     }
 
+    /// [`commands`](Self::commands) with every `as_root` wrapper (csqtt) replaced by the script it runs.
+    pub fn scripts(&self) -> Vec<String> {
+        self.commands()
+            .into_iter()
+            .map(|c| as_root_script(&c).unwrap_or(c))
+            .collect()
+    }
+
     pub fn file(&self, path: &str) -> Option<Vec<u8>> {
         self.0.borrow().files.get(path).cloned()
     }
@@ -142,6 +150,15 @@ fn quoted(cmd: &str, after: &str) -> String {
             None => return out,
         }
     }
+}
+
+/// The script inside a csqtt `as_root` wrapper (`printf '%s' '<base64>' | base64 -d > /tmp/.csqtt-step.sh; …`).
+pub fn as_root_script(command: &str) -> Option<String> {
+    let b64 = command
+        .strip_prefix("printf '%s' '")?
+        .split_once("' | base64 -d > /tmp/.csqtt-step.sh; ")?
+        .0;
+    Some(String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b64).ok()?).unwrap())
 }
 
 impl Ssh for FakeVps {
@@ -196,6 +213,8 @@ impl Ssh for FakeVps {
             st.files.insert(quoted(command, ": > '"), Vec::new());
             return ok(String::new());
         }
+        let script = as_root_script(command);
+        let command = script.as_deref().unwrap_or(command);
         for (needle, code, output) in &st.rules {
             if command.contains(needle.as_str()) {
                 return Ok(SshOutput {

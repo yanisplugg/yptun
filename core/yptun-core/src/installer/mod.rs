@@ -16,6 +16,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use regex_lite::Regex;
 
+pub mod csqtt;
 pub mod freeturn;
 pub mod masterdns;
 pub mod olcrtc;
