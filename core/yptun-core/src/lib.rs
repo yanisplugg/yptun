@@ -25,6 +25,7 @@ pub mod desktop_vpn_probe;
 pub mod desktop_app;
 pub mod portable_data;
 pub mod desktop_uri_launcher;
+pub mod desktop_engine;
 pub mod engine;
 pub mod geo_assets;
 pub mod home;
