@@ -3,9 +3,11 @@
 //! iOS/macOS, Rust on Windows/Linux) is a thin UI over this crate.
 
 pub mod awg;
+pub mod conflicting_vpn;
 pub mod core_versions;
 pub mod crypto;
 pub mod delta_bundle;
+pub mod desktop_net;
 pub mod engine;
 pub mod geo_assets;
 pub mod home;
@@ -35,6 +37,8 @@ pub mod snolc;
 pub mod share;
 pub mod share_link;
 pub mod subscription;
+pub mod telegram_proxy;
+pub mod tiling_compositor;
 pub mod transports;
 pub mod update;
 pub mod upstream;
