@@ -1,4 +1,4 @@
-use yptun_core::emoji::parse_emoji_and_name;
+use yptun_core::util::parse_emoji_and_name;
 
 fn p(raw: &str, default: &str) -> (String, String) {
     parse_emoji_and_name(raw, default)
