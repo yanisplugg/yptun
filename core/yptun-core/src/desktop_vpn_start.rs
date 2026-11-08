@@ -32,6 +32,7 @@ pub enum DesktopVpnStatus {
     Connecting,
     Reconnecting,
     Connected,
+    Stopping,
     Error(String),
 }
 
