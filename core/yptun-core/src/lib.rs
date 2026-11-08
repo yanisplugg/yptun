@@ -18,6 +18,7 @@ pub mod desktop_self_update;
 pub mod desktop_settings;
 pub mod desktop_socks_settings;
 pub mod desktop_stores;
+pub mod desktop_vpn_manager;
 pub mod engine;
 pub mod geo_assets;
 pub mod home;
