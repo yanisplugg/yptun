@@ -17,3 +17,4 @@ serde_json = { version = "1", features = ["preserve_order"] }
 regex-lite = "0.1"
 sha2 = "0.10"
 getrandom = "0.2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
