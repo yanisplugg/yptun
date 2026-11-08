@@ -21,6 +21,7 @@ pub mod desktop_stores;
 pub mod desktop_vpn_manager;
 pub mod desktop_vpn_start;
 pub mod desktop_vpn_runtime;
+pub mod desktop_vpn_probe;
 pub mod engine;
 pub mod geo_assets;
 pub mod home;
