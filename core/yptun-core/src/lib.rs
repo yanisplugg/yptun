@@ -59,3 +59,5 @@ pub mod warp_account;
 pub mod windows_tun;
 pub mod xray;
 pub mod yptun_core;
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+pub mod yptun_core_native;

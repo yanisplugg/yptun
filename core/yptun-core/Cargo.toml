@@ -18,3 +18,7 @@ regex-lite = "0.1"
 sha2 = "0.10"
 getrandom = "0.2"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+# Desktop only: loads the Go c-shared yptuncore (see src/yptun_core_native.rs).
+[target.'cfg(any(windows, target_os = "linux", target_os = "macos"))'.dependencies]
+libloading = "0.8"
