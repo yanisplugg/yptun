@@ -7,6 +7,8 @@ pub mod core_versions;
 pub mod crypto;
 pub mod engine;
 pub mod home;
+pub mod i18n;
+pub mod i18n_dynamic;
 pub mod identity;
 pub mod importer;
 pub mod installer;
