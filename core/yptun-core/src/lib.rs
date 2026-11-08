@@ -19,6 +19,7 @@ pub mod desktop_settings;
 pub mod desktop_socks_settings;
 pub mod desktop_stores;
 pub mod desktop_vpn_manager;
+pub mod desktop_vpn_start;
 pub mod engine;
 pub mod geo_assets;
 pub mod home;
