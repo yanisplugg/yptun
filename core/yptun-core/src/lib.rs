@@ -6,6 +6,7 @@ pub mod awg;
 pub mod core_versions;
 pub mod crypto;
 pub mod engine;
+pub mod geo_assets;
 pub mod home;
 pub mod i18n;
 pub mod i18n_dynamic;
