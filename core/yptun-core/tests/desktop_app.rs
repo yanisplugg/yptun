@@ -56,10 +56,31 @@ fn legacy_dir_is_migrated_once() {
 
 #[test]
 fn timestamps() {
-    assert_eq!(format_timestamp(0), "1970-01-01 00:00:00.000");
-    assert_eq!(format_timestamp(1_700_000_000_123), "2023-11-14 22:13:20.123");
-    assert_eq!(format_timestamp(951_782_400_000), "2000-02-29 00:00:00.000");
-    assert_eq!(format_timestamp(4_102_444_799_999), "2099-12-31 23:59:59.999");
+    assert_eq!(format_timestamp_with_offset(0, 0), "1970-01-01 00:00:00.000");
+    assert_eq!(format_timestamp_with_offset(1_700_000_000_123, 0), "2023-11-14 22:13:20.123");
+    assert_eq!(format_timestamp_with_offset(951_782_400_000, 0), "2000-02-29 00:00:00.000");
+    assert_eq!(format_timestamp_with_offset(4_102_444_799_999, 0), "2099-12-31 23:59:59.999");
+    assert_eq!(format_timestamp_with_offset(0, 3 * 3600), "1970-01-01 03:00:00.000");
+    assert_eq!(format_timestamp_with_offset(0, -3600), "1969-12-31 23:00:00.000");
+    assert_eq!(format_timestamp_with_offset(1_700_000_000_123, 5 * 3600 + 1800), "2023-11-15 03:43:20.123");
+}
+
+#[test]
+fn civil_days_round_trip() {
+    assert_eq!(days_from_civil(1970, 1, 1), 0);
+    assert_eq!(days_from_civil(2000, 2, 29), 11_016);
+    assert_eq!(days_from_civil(1969, 12, 31), -1);
+    assert_eq!(days_from_civil(2099, 12, 31), 47_481);
+}
+
+#[test]
+fn local_time_comes_from_the_os() {
+    let now = 1_700_000_000_123u64;
+    let off = local_offset_seconds(1_700_000_000);
+    assert!(off.abs() <= 18 * 3600);
+    assert_eq!(format_timestamp(now), format_timestamp_with_offset(now as i64, off));
+    let summer = local_offset_seconds(1_689_000_000);
+    assert!(summer.abs() <= 18 * 3600);
 }
 
 #[test]

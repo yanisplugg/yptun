@@ -132,13 +132,135 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// `yyyy-MM-dd HH:mm:ss.SSS` for a unix time in ms (UTC; Kotlin used local time).
-pub fn format_timestamp(unix_ms: u64) -> String {
-    let secs = (unix_ms / 1000) as i64;
-    let ms = unix_ms % 1000;
+/// Days since 1970-01-01 for a proleptic Gregorian date (inverse of civil_from_days).
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = (if m > 2 { m - 3 } else { m + 9 }) as u64;
+    let doy = (153 * mp + 2) / 5 + d as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
+}
+
+/// `yyyy-MM-dd HH:mm:ss.SSS` for a unix time in ms shifted by `offset_secs`.
+pub fn format_timestamp_with_offset(unix_ms: i64, offset_secs: i64) -> String {
+    let local_ms = unix_ms + offset_secs * 1000;
+    let secs = local_ms.div_euclid(1000);
+    let ms = local_ms.rem_euclid(1000);
     let (y, mo, d) = civil_from_days(secs.div_euclid(86_400));
     let sod = secs.rem_euclid(86_400);
     format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}", y, mo, d, sod / 3600, (sod / 60) % 60, sod % 60, ms)
+}
+
+/// Offset of the local zone from UTC in seconds at `unix_secs`, asked from the OS
+/// (DST included). 0 when the OS cannot tell.
+pub fn local_offset_seconds(unix_secs: i64) -> i64 {
+    os_local_offset(unix_secs).filter(|o| o.abs() <= 18 * 3600).unwrap_or(0)
+}
+
+/// `yyyy-MM-dd HH:mm:ss.SSS` in local time, like Kotlin's SimpleDateFormat in the default zone.
+pub fn format_timestamp(unix_ms: u64) -> String {
+    let ms = unix_ms as i64;
+    format_timestamp_with_offset(ms, local_offset_seconds(ms.div_euclid(1000)))
+}
+
+#[cfg(windows)]
+fn os_local_offset(unix_secs: i64) -> Option<i64> {
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    #[allow(dead_code)]
+    struct WinSystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SystemTimeToTzSpecificLocalTime(
+            zone: *const std::ffi::c_void,
+            utc: *const WinSystemTime,
+            local: *mut WinSystemTime,
+        ) -> i32;
+    }
+    let (y, mo, d) = civil_from_days(unix_secs.div_euclid(86_400));
+    if !(1601..=30827).contains(&y) {
+        return None;
+    }
+    let sod = unix_secs.rem_euclid(86_400);
+    let utc = WinSystemTime {
+        year: y as u16,
+        month: mo as u16,
+        day_of_week: 0,
+        day: d as u16,
+        hour: (sod / 3600) as u16,
+        minute: ((sod / 60) % 60) as u16,
+        second: (sod % 60) as u16,
+        milliseconds: 0,
+    };
+    let mut local = WinSystemTime::default();
+    let ok = unsafe { SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) };
+    if ok == 0 {
+        return None;
+    }
+    let local_secs = days_from_civil(local.year as i64, local.month as u32, local.day as u32) * 86_400
+        + local.hour as i64 * 3600
+        + local.minute as i64 * 60
+        + local.second as i64;
+    Some(local_secs - unix_secs)
+}
+
+#[cfg(unix)]
+fn os_local_offset(unix_secs: i64) -> Option<i64> {
+    use std::os::raw::{c_char, c_int, c_long};
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct Tm {
+        tm_sec: c_int,
+        tm_min: c_int,
+        tm_hour: c_int,
+        tm_mday: c_int,
+        tm_mon: c_int,
+        tm_year: c_int,
+        tm_wday: c_int,
+        tm_yday: c_int,
+        tm_isdst: c_int,
+        tm_gmtoff: c_long,
+        tm_zone: *const c_char,
+    }
+    unsafe extern "C" {
+        fn localtime_r(time: *const c_long, out: *mut Tm) -> *mut Tm;
+    }
+    let t = c_long::try_from(unix_secs).ok()?;
+    let mut tm = Tm {
+        tm_sec: 0,
+        tm_min: 0,
+        tm_hour: 0,
+        tm_mday: 0,
+        tm_mon: 0,
+        tm_year: 0,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null(),
+    };
+    let res = unsafe { localtime_r(&t, &mut tm) };
+    if res.is_null() {
+        None
+    } else {
+        Some(tm.tm_gmtoff as i64)
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn os_local_offset(_unix_secs: i64) -> Option<i64> {
+    None
 }
 
 pub fn now_ms() -> u64 {
