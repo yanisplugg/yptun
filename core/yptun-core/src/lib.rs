@@ -2,11 +2,13 @@
 //! panel link families, config generation. Each platform app (Kotlin on Android, Swift on
 //! iOS/macOS, Rust on Windows/Linux) is a thin UI over this crate.
 
+pub mod asn_resolver;
 pub mod awg;
 pub mod conflicting_vpn;
 pub mod core_versions;
 pub mod crypto;
 pub mod delta_bundle;
+pub mod desktop_cores;
 pub mod desktop_net;
 pub mod engine;
 pub mod geo_assets;
@@ -46,6 +48,7 @@ pub mod uri;
 pub mod util;
 pub mod vkturn;
 pub mod vless_form;
+pub mod vpn_settings;
 pub mod warp;
 pub mod warp_account;
 pub mod xray;
