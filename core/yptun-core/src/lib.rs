@@ -5,6 +5,7 @@
 pub mod awg;
 pub mod core_versions;
 pub mod crypto;
+pub mod delta_bundle;
 pub mod engine;
 pub mod geo_assets;
 pub mod home;
