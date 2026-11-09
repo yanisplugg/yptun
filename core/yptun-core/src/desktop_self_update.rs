@@ -283,7 +283,9 @@ pub fn start_command(os: DesktopOs, script: &Path, needs_elevation: bool) -> Vec
             ps,
         ]
     } else if os == DesktopOs::Windows {
-        vec!["cmd.exe".into(), "/c".into(), "start".into(), "/min".into(), String::new(), s]
+        // `start "" x.cmd` runs the script under `cmd /K`, so its console window stayed open after the
+        // update. An explicit inner `cmd /c` exits with the script; /b keeps it hidden.
+        ["cmd.exe", "/c", "start", "", "/b", "cmd.exe", "/c"].into_iter().map(String::from).chain([s]).collect()
     } else if needs_elevation {
         vec!["pkexec".into(), "sh".into(), s]
     } else {
