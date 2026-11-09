@@ -149,7 +149,8 @@ fn binary_fallback() {
 fn wait_for_ready_cases() {
     let stopped = Arc::new(AtomicBool::new(false));
     let mk = |ready_after: Option<u64>, alive: bool| FakeProc { created: Instant::now(), ready_after: ready_after.map(Duration::from_millis), alive, stopped: stopped.clone() };
-    let free = oc::allocate_local_port().unwrap();
+    // Port 0 never accepts a connection; a released "free" port could be taken by a parallel test.
+    let free = 0;
     assert_eq!(oc::wait_for_ready(&mut mk(Some(0), true), free, 1000), Ok(()));
     assert_eq!(oc::wait_for_ready(&mut mk(None, false), free, 1000), Err("olcRTC exited before SOCKS5 was ready".to_string()));
     assert_eq!(oc::wait_for_ready(&mut mk(None, true), free, 300), Err("olcRTC start timed out".to_string()));
