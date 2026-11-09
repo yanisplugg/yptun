@@ -185,7 +185,7 @@ pub trait YpTunCoreLib: Send + Sync {
     ) -> i64;
 }
 
-/// The bundled library for a JVM-style `os.name` / `os.arch` pair (checked in the Kotlin order).
+/// The bundled library for a JVM-style `os.name` / `os.arch` pair (macOS is checked first).
 pub fn library_file_name(os_name: &str, os_arch: &str) -> Option<String> {
     let os = os_name.to_lowercase();
     let arch = match os_arch.to_lowercase().as_str() {
@@ -193,12 +193,13 @@ pub fn library_file_name(os_name: &str, os_arch: &str) -> Option<String> {
         "x86_64" | "amd64" => "amd64",
         _ => return None,
     };
-    if os.contains("win") {
+    // macOS first: "darwin" contains "win".
+    if os.contains("mac") || os.contains("darwin") {
+        Some(format!("yptuncore-darwin-{arch}.dylib"))
+    } else if os.contains("win") {
         Some(format!("yptuncore-windows-{arch}.dll"))
     } else if os.contains("linux") {
         Some(format!("yptuncore-linux-{arch}.so"))
-    } else if os.contains("mac") || os.contains("darwin") {
-        Some(format!("yptuncore-darwin-{arch}.dylib"))
     } else {
         None
     }
