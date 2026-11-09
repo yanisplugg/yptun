@@ -128,6 +128,7 @@ fn library_file_names() {
     assert_eq!(library_file_name("Linux", "aarch64").as_deref(), Some("yptuncore-linux-arm64.so"));
     assert_eq!(library_file_name("Mac OS X", "x86_64").as_deref(), Some("yptuncore-darwin-amd64.dylib"));
     assert_eq!(library_file_name("Mac OS X", "ARM64").as_deref(), Some("yptuncore-darwin-arm64.dylib"));
+    assert_eq!(library_file_name("Darwin", "arm64").as_deref(), Some("yptuncore-darwin-arm64.dylib"));
     assert_eq!(library_file_name("Linux", "x86"), None);
     assert_eq!(library_file_name("FreeBSD", "amd64"), None);
     assert_eq!(resource_path("yptuncore-linux-amd64.so"), "native/yptuncore-linux-amd64.so");

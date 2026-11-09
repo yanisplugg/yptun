@@ -402,8 +402,9 @@ impl MacOsProxyController {
 
 // ---------------- Windows ----------------
 
-/// Kept verbatim from the Kotlin side (used with HKEY_CURRENT_USER).
-pub const REGISTRY_KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+/// Subkey under HKEY_CURRENT_USER. The Kotlin side also prefixed "HKCU\\", which pointed the
+/// registry API at a non-existent HKCU\HKCU\... key.
+pub const REGISTRY_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 /// What never goes through the proxy (v2rayN's default bypass list).
 pub const PROXY_BYPASS: &str = "<local>;localhost;127.*;10.*;172.16.*;192.168.*";
 pub const INTERNET_OPTION_PER_CONNECTION_OPTION: i32 = 75;
