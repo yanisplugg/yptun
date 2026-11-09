@@ -1,0 +1,306 @@
+{
+    "log": {
+        "loglevel": "debug"
+    },
+    "dns": {
+        "hosts": {
+            "regexp:(^|\\.)gov\\.ru$": "0.0.0.0",
+            "regexp:(^|\\.)mail\\.ru$": "0.0.0.0",
+            "regexp:(^|\\.)rc\\.company$": "0.0.0.0",
+            "regexp:(^|\\.)government\\.ru$": "0.0.0.0",
+            "regexp:(^|\\.)av\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)er\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)hh\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)kp\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)my\\.(games|com)$": "0.0.0.0",
+            "regexp:(^|\\.)o3\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ok\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rt\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)t2\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)wb\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)x5\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ya\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)5ka\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)max\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mts\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)o3t\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rbc\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rwb\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rzd\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vtb\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)wmj\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)2gis\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)cdek\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)cups\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)dgis\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)dzen\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)odkl\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)okko\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ozon\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)quto\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sbdv\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sber\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)t-ru\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tutu\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkcs\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)apiok\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)armgs\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)avito\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)cxhub\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ferra\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)gu-st\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)kuper\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)lenta\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)motor\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mradx\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mycdn\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)nalog\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)okcdn\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)oneme\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ozone\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)paywb\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rutor\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)setka\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tbank\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tmiaf\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)urent\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkcdn\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkpay\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)wibes\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)afisha\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)cdn-vk\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)dodois\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)fssoft\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)gazeta\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)goskey\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)lamoda\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)magnit\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mailru\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mossru\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)o3team\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rutube\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)t-tech\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tamtam\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tander\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk-cdn\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkplay\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkuser\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)whoosh\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)x5club\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yandex\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)[a-z0-9-]+\\.xn--p1ai$": "0.0.0.0",
+            "regexp:(^|\\.)ad-cdek\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)adriver\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)dolyame\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ffinpay\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)kremlin\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)letidor\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mindbox\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)multiqr\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)passion\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)platiqr\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rambler\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rostics\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)rustore\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)samokat\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sberpay\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)smailru\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tcsbank\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tinkoff\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)userapi\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk-apps\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkmusic\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkvideo\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vmailru\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)x5media\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yaklass\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)alfabank\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)apiblink\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)appsmail\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)gamescup\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)hexawall\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)moslenta\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mts-link\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sberbank\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)talantix\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)umschool\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk-music\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)x5static\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yastatic\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ydstatic\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yotaplay\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)alfa-bank\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)apptracer\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)dodopizza\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)dzeninfra\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)geobasket\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)gosuslugi\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)kaspersky\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)kinopoisk\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)secretmag\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)taximaxim\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tech-mail\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tvgateway\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk-portal\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkontakte\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)blink-maps\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)championat\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)code-class\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)inappstory\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)megamarket\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)multiqrpay\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)mysbertips\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)playfamily\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sbermarket\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sferum-dev\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)t-bank-app\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tinsurance\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tokyo-city\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)uxfeedback\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk-stadium\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)algoritmika\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)azbukavkusa\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)livejournal\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)perekrestok\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sblogistica\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)summerstage\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)wildberries\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yandex-team\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yandexcloud\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ozonpartners\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)platimultiqr\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tbank-online\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vk-analytics\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)burgerkingrus\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)finance\\.ozon\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)odnoklassniki\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)ozon-dostavka\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)restnproducts\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sberbank-tele\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sberlogistics\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkusnoitochka\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)kaspersky-labs\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sbermegamarket\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tetrika-school\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)sber-megamarket\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)tinkoffinsurance\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)lentatest.servicecdn\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)yoo(money|kassa|business)\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)vkuser(audio|video|live|photo)?\\.[a-z0-9.-]+$": "0.0.0.0",
+            "regexp:(^|\\.)wb(-bank|basket|wh|held|static|content|x|pay)\\.[a-z0-9.-]+$": "0.0.0.0"
+        },
+        "servers": [
+            "https://8.8.8.8/dns-query",
+            "77.88.8.8"
+        ],
+        "queryStrategy": "UseIPv4"
+    },
+    "inbounds": [
+        {
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "port": 10808,
+            "protocol": "socks",
+            "settings": {
+                "udp": true,
+                "auth": "noauth"
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls",
+                    "quic"
+                ]
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "vless.example.com",
+                        "port": 443,
+                        "users": [
+                            {
+                                "id": "11111111-1111-1111-1111-111111111111",
+                                "encryption": "none"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "vless.example.com",
+                    "allowInsecure": false,
+                    "fingerprint": "chrome",
+                    "alpn": [
+                        "h2",
+                        "http/1.1"
+                    ]
+                }
+            }
+        },
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "ForceIPv4"
+            }
+        },
+        {
+            "tag": "block",
+            "protocol": "blackhole"
+        }
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "ip": [
+                    "8.8.8.8"
+                ],
+                "outboundTag": "proxy"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "10.0.0.0/8",
+                    "172.16.0.0/12",
+                    "192.168.0.0/16",
+                    "127.0.0.0/8",
+                    "169.254.0.0/16"
+                ],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "network": "udp",
+                "port": 443,
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "::/0"
+                ],
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "0.0.0.0"
+                ],
+                "outboundTag": "block"
+            }
+        ]
+    }
+}

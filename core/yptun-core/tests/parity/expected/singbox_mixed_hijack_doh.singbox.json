@@ -1,0 +1,126 @@
+{
+    "log": {
+        "level": "debug",
+        "timestamp": true
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "remote",
+                "type": "https",
+                "server": "8.8.8.8",
+                "detour": "proxy"
+            },
+            {
+                "tag": "direct",
+                "type": "udp",
+                "server": "77.88.8.8"
+            }
+        ],
+        "rules": [],
+        "final": "remote",
+        "strategy": "ipv4_only"
+    },
+    "inbounds": [
+        {
+            "type": "mixed",
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "listen_port": 10808
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "proxy",
+            "server": "vless.example.com",
+            "server_port": 443,
+            "uuid": "11111111-1111-1111-1111-111111111111",
+            "packet_encoding": "xudp",
+            "tls": {
+                "enabled": true,
+                "server_name": "vless.example.com",
+                "insecure": false,
+                "alpn": [
+                    "h2",
+                    "http/1.1"
+                ],
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                }
+            }
+        },
+        {
+            "type": "direct",
+            "tag": "direct"
+        }
+    ],
+    "route": {
+        "final": "proxy",
+        "auto_detect_interface": false,
+        "default_domain_resolver": {
+            "server": "direct"
+        },
+        "rules": [
+            {
+                "action": "sniff"
+            },
+            {
+                "protocol": [
+                    "dns"
+                ],
+                "action": "hijack-dns"
+            },
+            {
+                "protocol": [
+                    "quic"
+                ],
+                "action": "reject"
+            },
+            {
+                "network": "udp",
+                "port": [
+                    443
+                ],
+                "action": "reject"
+            },
+            {
+                "domain_suffix": [
+                    "cloudflare-dns.com",
+                    "dns.google",
+                    "dns.google.com",
+                    "one.one.one.one",
+                    "dns.quad9.net",
+                    "doh.opendns.com",
+                    "dns.nextdns.io",
+                    "doh.cleanbrowsing.org",
+                    "dns.adguard.com",
+                    "dns.adguard-dns.com"
+                ],
+                "action": "reject"
+            },
+            {
+                "domain": [
+                    "use-application-dns.net"
+                ],
+                "action": "reject"
+            },
+            {
+                "ip_is_private": true,
+                "outbound": "direct"
+            },
+            {
+                "action": "resolve",
+                "strategy": "ipv4_only"
+            },
+            {
+                "ip_cidr": [
+                    "::/0"
+                ],
+                "action": "reject",
+                "method": "drop"
+            }
+        ]
+    }
+}

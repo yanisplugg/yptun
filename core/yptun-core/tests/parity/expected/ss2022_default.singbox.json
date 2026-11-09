@@ -1,0 +1,107 @@
+{
+    "log": {
+        "level": "debug",
+        "timestamp": true
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "remote",
+                "type": "udp",
+                "server": "8.8.8.8",
+                "detour": "proxy"
+            },
+            {
+                "tag": "direct",
+                "type": "udp",
+                "server": "77.88.8.8"
+            }
+        ],
+        "rules": [],
+        "final": "remote",
+        "strategy": "ipv4_only"
+    },
+    "inbounds": [
+        {
+            "type": "socks",
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "listen_port": 10808
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "shadowsocks",
+            "tag": "proxy",
+            "server": "ss22.example.com",
+            "server_port": 8443,
+            "method": "2022-blake3-aes-128-gcm",
+            "password": "a2V5a2V5a2V5a2V5a2V5aw%3D%3D"
+        },
+        {
+            "type": "direct",
+            "tag": "direct"
+        }
+    ],
+    "route": {
+        "final": "proxy",
+        "auto_detect_interface": false,
+        "default_domain_resolver": {
+            "server": "direct"
+        },
+        "rules": [
+            {
+                "action": "sniff"
+            },
+            {
+                "protocol": [
+                    "quic"
+                ],
+                "action": "reject"
+            },
+            {
+                "network": "udp",
+                "port": [
+                    443
+                ],
+                "action": "reject"
+            },
+            {
+                "domain_suffix": [
+                    "cloudflare-dns.com",
+                    "dns.google",
+                    "dns.google.com",
+                    "one.one.one.one",
+                    "dns.quad9.net",
+                    "doh.opendns.com",
+                    "dns.nextdns.io",
+                    "doh.cleanbrowsing.org",
+                    "dns.adguard.com",
+                    "dns.adguard-dns.com"
+                ],
+                "action": "reject"
+            },
+            {
+                "domain": [
+                    "use-application-dns.net"
+                ],
+                "action": "reject"
+            },
+            {
+                "ip_is_private": true,
+                "outbound": "direct"
+            },
+            {
+                "action": "resolve",
+                "strategy": "ipv4_only"
+            },
+            {
+                "ip_cidr": [
+                    "::/0"
+                ],
+                "action": "reject",
+                "method": "drop"
+            }
+        ]
+    }
+}

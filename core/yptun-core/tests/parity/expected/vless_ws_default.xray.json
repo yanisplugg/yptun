@@ -1,0 +1,113 @@
+{
+    "log": {
+        "loglevel": "debug"
+    },
+    "dns": {
+        "servers": [
+            "https://8.8.8.8/dns-query",
+            "77.88.8.8"
+        ],
+        "queryStrategy": "UseIPv4"
+    },
+    "inbounds": [
+        {
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "port": 10808,
+            "protocol": "socks",
+            "settings": {
+                "udp": true,
+                "auth": "noauth"
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls",
+                    "quic"
+                ]
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "cdn.example.com",
+                        "port": 443,
+                        "users": [
+                            {
+                                "id": "33333333-3333-3333-3333-333333333333",
+                                "encryption": "none"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": "ws.example.com",
+                    "allowInsecure": false
+                },
+                "wsSettings": {
+                    "path": "/ws?ed=2048",
+                    "headers": {
+                        "Host": "ws.example.com"
+                    }
+                }
+            }
+        },
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "ForceIPv4"
+            }
+        },
+        {
+            "tag": "block",
+            "protocol": "blackhole"
+        }
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "ip": [
+                    "8.8.8.8"
+                ],
+                "outboundTag": "proxy"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "10.0.0.0/8",
+                    "172.16.0.0/12",
+                    "192.168.0.0/16",
+                    "127.0.0.0/8",
+                    "169.254.0.0/16"
+                ],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "network": "udp",
+                "port": 443,
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "::/0"
+                ],
+                "outboundTag": "block"
+            }
+        ]
+    }
+}

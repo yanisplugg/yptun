@@ -1,0 +1,158 @@
+{
+    "log": {
+        "loglevel": "debug"
+    },
+    "dns": {
+        "servers": [
+            "https://1.1.1.1/dns-query",
+            "223.5.5.5"
+        ],
+        "queryStrategy": "UseIPv4"
+    },
+    "inbounds": [
+        {
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "port": 10808,
+            "protocol": "socks",
+            "settings": {
+                "udp": true,
+                "auth": "noauth"
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls",
+                    "quic"
+                ]
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "203.0.113.10",
+                        "port": 443,
+                        "users": [
+                            {
+                                "id": "22222222-2222-2222-2222-222222222222",
+                                "encryption": "none",
+                                "flow": "xtls-rprx-vision"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "serverName": "www.microsoft.com",
+                    "fingerprint": "chrome",
+                    "publicKey": "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBLKc1QE",
+                    "shortId": "6ba85179e30d4fc2"
+                }
+            }
+        },
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "ForceIPv4"
+            }
+        },
+        {
+            "tag": "block",
+            "protocol": "blackhole"
+        }
+    ],
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": [
+            {
+                "type": "field",
+                "ip": [
+                    "1.1.1.1"
+                ],
+                "outboundTag": "proxy"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "10.0.0.0/8",
+                    "172.16.0.0/12",
+                    "192.168.0.0/16",
+                    "127.0.0.0/8",
+                    "169.254.0.0/16"
+                ],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "network": "udp",
+                "port": 443,
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "::/0"
+                ],
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "domain": [
+                    "geosite:cn",
+                    "geosite:geolocation-cn",
+                    "domain:cn",
+                    "domain:qq.com",
+                    "domain:wechat.com",
+                    "domain:baidu.com",
+                    "domain:bdstatic.com",
+                    "domain:taobao.com",
+                    "domain:tmall.com",
+                    "domain:alipay.com",
+                    "domain:alicdn.com",
+                    "domain:aliyun.com",
+                    "domain:aliyuncs.com",
+                    "domain:jd.com",
+                    "domain:bilibili.com",
+                    "domain:hdslb.com",
+                    "domain:douyin.com",
+                    "domain:bytedance.com",
+                    "domain:zhihu.com",
+                    "domain:weibo.com",
+                    "domain:163.com",
+                    "domain:126.net",
+                    "domain:xiaohongshu.com",
+                    "domain:meituan.com",
+                    "domain:pinduoduo.com",
+                    "domain:huawei.com",
+                    "domain:xiaomi.com",
+                    "domain:mi.com",
+                    "domain:iqiyi.com",
+                    "domain:youku.com",
+                    "domain:sohu.com"
+                ],
+                "outboundTag": "direct"
+            },
+            {
+                "type": "field",
+                "ip": [
+                    "geoip:cn",
+                    "223.5.5.5/32",
+                    "223.6.6.6/32",
+                    "119.29.29.29/32",
+                    "114.114.114.114/32"
+                ],
+                "outboundTag": "direct"
+            }
+        ]
+    }
+}
