@@ -5,8 +5,10 @@ package org.olcbox.app.vpn.snolc
  * see olcvpn-client/snolc/YPTUN.md). Relative paths resolve against the file that holds them.
  *
  * Limits are raised from upstream's 256 MiB "low-memory" template (2 sessions, 16 flows per client), which
- * would choke a phone browser: 64 flows per client, 4 clients. Yamux's window must be at least
- * streams × 256 KiB, hence 65 × 262144.
+ * would choke a phone browser: 128 flows per client, 4 clients (a phone easily holds 64+ at once - every
+ * UDP/DNS flow and keep-alive connection takes one - and the old 64 reset the whole tunnel when crossed).
+ * Yamux's window must be at least streams × 256 KiB, hence 129 × 262144; max_flows must cover
+ * max_sessions × (streams - 1).
  */
 object SnolcFiles {
     private const val MODULE_VERSION = "0.0.4"
@@ -22,7 +24,7 @@ object SnolcFiles {
 
         [engine]
         max_sessions = 4
-        max_flows = 256
+        max_flows = 512
         max_pending_sessions = 4
         max_pending_opens = 64
         max_managed_bytes = 268435456
@@ -49,8 +51,8 @@ object SnolcFiles {
         reassembly_timeout_ms = 15000
 
         [yamux]
-        max_streams_per_session = 65
-        receive_window_bytes = 17039360
+        max_streams_per_session = 129
+        receive_window_bytes = 33816576
         split_send_size = 16384
         read_after_close = true
 

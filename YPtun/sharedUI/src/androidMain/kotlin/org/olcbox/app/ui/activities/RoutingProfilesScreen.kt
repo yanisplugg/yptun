@@ -304,6 +304,28 @@ internal fun RoutingProfilesContent(
             title = { Text(s.routingProfileAdd) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Ready-made profiles; hidden once added (it is in the list, and re-adding would reset edits).
+                    if (state.profiles.none { it.id == RoutingProfile.PRESET_CN_DIRECT_ID }) {
+                        Text(
+                            s.routingPresets,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                onSaveProfile(RoutingProfile.chinaDirect(s.routingPresetChina))
+                                showAddDialog = false
+                                importError = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(s.routingPresetChina) }
+                        Text(
+                            s.routingPresetChinaDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
                     OutlinedTextField(
                         value = link,
                         onValueChange = { link = it; importError = null },
@@ -371,6 +393,8 @@ private fun RoutingProfileEditor(
     var singboxDomainStrategy by remember { mutableStateOf(profile.singboxDomainStrategy) }
     var singboxSniff by remember { mutableStateOf(profile.singboxSniff) }
     var singboxResolve by remember { mutableStateOf(profile.singboxResolve) }
+    var remoteDns by remember { mutableStateOf(profile.remoteDnsAddress().orEmpty()) }
+    var directDns by remember { mutableStateOf(profile.domesticDnsAddress().orEmpty()) }
 
     fun assemble(): RoutingProfile = profile.copy(
         name = name.trim(),
@@ -392,7 +416,7 @@ private fun RoutingProfileEditor(
         singboxDomainStrategy = singboxDomainStrategy,
         singboxSniff = singboxSniff,
         singboxResolve = singboxResolve,
-    )
+    ).withRemoteDns(remoteDns).withDomesticDns(directDns)
 
     Column(
         modifier = Modifier
@@ -447,6 +471,24 @@ private fun RoutingProfileEditor(
                 DropdownMenuItem(text = { Text(st) }, onClick = { domainStrategy = st; dismiss() })
             }
         }
+
+        SectionLabel(s.routingProfileDnsHint)
+        OutlinedTextField(
+            value = remoteDns,
+            onValueChange = { remoteDns = it },
+            label = { Text(s.remoteDnsLabel) },
+            placeholder = { Text("1.1.1.1") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = directDns,
+            onValueChange = { directDns = it },
+            label = { Text(s.directDnsLabel) },
+            placeholder = { Text("223.5.5.5") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         BucketField(s.routingProxySites, s.routingSelectorsHint, proxySites) { proxySites = it }
         BucketField(s.routingProxyIp, s.routingIpSelectorsHint, proxyIp, asnPresets = true) { proxyIp = it }
