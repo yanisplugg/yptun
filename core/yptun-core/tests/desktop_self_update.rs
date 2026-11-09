@@ -140,7 +140,7 @@ fn start_commands() {
     );
     assert_eq!(
         start_command(DesktopOs::Windows, &script, false),
-        vec!["cmd.exe", "/c", "start", "/min", "", s.as_str()]
+        vec!["cmd.exe", "/c", "start", "", "/b", "cmd.exe", "/c", s.as_str()]
             .into_iter()
             .map(String::from)
             .collect::<Vec<_>>()
