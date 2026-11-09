@@ -349,6 +349,12 @@ interface Strings {
     val routingProfileNone: String
     val routingProfileGlobalHint: String
     val routingProfileAdd: String
+    // Ready-made profiles in the "add profile" dialog. Defaulted so a locale without a translation
+    // falls back to English instead of failing the build.
+    val routingPresets: String get() = "Presets"
+    val routingPresetChina: String get() = "China direct"
+    val routingPresetChinaDesc: String get() = "Chinese sites and IPs go direct, everything else through the proxy"
+    val routingProfileDnsHint: String get() = "DNS of this profile (empty — use the traffic settings)"
     val routingProfileImportLink: String
     val routingProfilePasteHint: String
     val routingProfileNewName: String
@@ -1249,6 +1255,10 @@ object RuStrings : Strings {
     override val routingProfileNone = "Без профиля"
     override val routingProfileGlobalHint = "Применяется ко всем подключениям, если у локации не задан свой профиль"
     override val routingProfileAdd = "Создать профиль"
+    override val routingPresets = "Готовые пресеты"
+    override val routingPresetChina = "Китай напрямую"
+    override val routingPresetChinaDesc = "Сайты и IP Китая — напрямую, всё остальное через прокси"
+    override val routingProfileDnsHint = "DNS профиля (пусто — как в настройках трафика)"
     override val routingProfileImportLink = "Импорт по ссылке happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "Новый профиль"
@@ -2977,6 +2987,10 @@ object FaStrings : Strings {
     override val routingProfileNone = "بدون نمایه"
     override val routingProfileGlobalHint = "برای همهٔ اتصال‌ها اعمال می‌شود مگر موقعیت نمایهٔ خود را داشته باشد"
     override val routingProfileAdd = "ساخت نمایه"
+    override val routingPresets = "پیش‌تنظیم‌ها"
+    override val routingPresetChina = "چین مستقیم"
+    override val routingPresetChinaDesc = "سایت‌ها و IPهای چین مستقیم، بقیه از طریق پراکسی"
+    override val routingProfileDnsHint = "DNS این نمایه (خالی — مطابق تنظیمات ترافیک)"
     override val routingProfileImportLink = "درون‌ریزی پیوند ‎happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "نمایهٔ جدید"
@@ -3841,6 +3855,10 @@ object ZhStrings : Strings {
     override val routingProfileNone = "无方案"
     override val routingProfileGlobalHint = "除非某节点设置了自己的方案，否则应用于每个连接"
     override val routingProfileAdd = "创建方案"
+    override val routingPresets = "预设"
+    override val routingPresetChina = "中国直连"
+    override val routingPresetChinaDesc = "中国大陆网站和 IP 直连，其余走代理"
+    override val routingProfileDnsHint = "此方案的 DNS（留空则使用流量设置）"
     override val routingProfileImportLink = "导入 happ:// 链接"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "新方案"

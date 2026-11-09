@@ -220,6 +220,8 @@ object SingBoxConfig {
         // Null (or FakeDNS off) → no `experimental` block at all, i.e. unchanged behaviour.
         cacheFilePath: String? = null,
     ): String {
+        // The routing profile may carry its own DNS (e.g. the China preset); see withProfileDns.
+        val traffic = traffic.withProfileDns(routingProfile)
         // Effective DNS/resolve strategy (per-tunnel override → global traffic setting). Hoisted so
         // both the inbound sniff-override and the route resolve/family rules use the same value.
         val effectiveStrategy = dnsStrategyOverride ?: traffic.domainStrategy

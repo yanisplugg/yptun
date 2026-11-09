@@ -17,3 +17,12 @@ Static musl has no dlopen at all — never use `Library::this()`.
 Cascade (YPtun 25.10.2026): `adapter-direct` option `upstream = "127.0.0.1:PORT"` sends every TCP/UDP flow through a local
 SOCKS5 (a snolc client to the exit node) instead of dialing directly; domain names are passed to the exit as-is (no local DNS).
 If the upstream is down flows fail — nothing leaves directly. Panel side: node param `exit_node` on a snolc node.
+
+Stream slots (YPtun 02.11.2026): every flow (TCP connection, UDP flow) holds one yamux user stream; the limit is
+`yamux.max_streams_per_session - 1`. Two bugs reset the whole tunnel ("yamux user stream limit is exhausted") ~100x/day:
+(1) `reap_closed` released slots only while the session still owned its `mux` - on the server it sits inside the pending
+accept almost always, so closed flows leaked their slots (now released via the shared `UserStreamSlots` handle);
+(2) `accept_flow` reserved a slot BEFORE waiting and a full session returned a session error - now a flow takes a slot only
+once it arrives, and a full session (client: before taking the flow off the adapter) refuses just that flow with
+`ResourceLimit`. Check: `scripts/stream_limit_check.py <binary> <streams> <flows>` (burst) and `CHURN=1 CHURN_THREADS=8` (leak).
+YPtun configs now use 129 streams (SnolcFiles.kt, panel recipes.py).

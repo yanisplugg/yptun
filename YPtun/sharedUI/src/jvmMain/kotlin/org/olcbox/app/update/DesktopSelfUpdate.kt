@@ -215,8 +215,10 @@ internal object DesktopSelfUpdate {
                 "try { Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','\"${script.toAbsolutePath()}\"' " +
                     "-Verb RunAs -WindowStyle Hidden -ErrorAction Stop } catch { exit 1 }"
             )
+            // `start "" x.cmd` runs the script under `cmd /K`, so its console window stayed open for good
+            // after the update. An explicit inner `cmd /c` exits with the script; /b keeps it hidden.
             DesktopPaths.os == DesktopOs.Windows -> listOf(
-                "cmd.exe", "/c", "start", "/min", "", script.toAbsolutePath().toString()
+                "cmd.exe", "/c", "start", "", "/b", "cmd.exe", "/c", script.toAbsolutePath().toString()
             )
             needsElevation -> listOf("pkexec", "sh", script.toAbsolutePath().toString())
             else -> listOf("sh", script.toAbsolutePath().toString())
