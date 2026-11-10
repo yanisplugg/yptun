@@ -3816,6 +3816,8 @@ private fun AboutContent(
             "Trust Tunnel" to org.olcbox.app.vpn.CoreVersions.TRUSTTUNNEL_ANDROID,
             "Snolc" to org.olcbox.app.vpn.CoreVersions.SNOLC,
             "csqtt" to org.olcbox.app.vpn.CoreVersions.CSQTT,
+            "Mieru" to org.olcbox.app.vpn.CoreVersions.MIERU,
+            "Turnable" to org.olcbox.app.vpn.CoreVersions.TURNABLE,
         )
         SettingsCard {
             cores.forEachIndexed { index, (name, version) ->

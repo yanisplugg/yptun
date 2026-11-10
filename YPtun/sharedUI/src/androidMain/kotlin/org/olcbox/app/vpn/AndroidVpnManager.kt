@@ -805,6 +805,13 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             ?.let { TrustTunnelParser.endpoints(it.ttConfig).firstOrNull() }
         val server = ttEndpoint?.first ?: locationConfig.proxy?.server
         val serverPort = ttEndpoint?.second ?: locationConfig.proxy?.serverPort
+        // Mieru is a standalone subprocess rather than an Xray/sing-box outbound. While connected,
+        // probe it end-to-end through its live SOCKS; before connecting, a simple mierus:// link can
+        // still use the displayed server/port (opaque mieru:// links intentionally return unknown).
+        if (locationConfig.proxy?.type == ProxyProfile.TYPE_MIERU) {
+            return if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
+            else if (server == "mieru-config") null else tcpPing(server, serverPort)
+        }
         // olcRTC/Stealth (and other provider engines) carry no vless/proxy profile, so the proxy
         // GET/HEAD probe can't build a throwaway outbound for them. When proxy mode is selected (it's
         // now the default) but this location has no proxy, fall through to the engine-default probe

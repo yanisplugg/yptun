@@ -1,0 +1,42 @@
+{
+    "portBindings": [
+        {
+            "port": 3000,
+            "protocol": "TCP"
+        },
+        {
+            "port": 3000,
+            "protocol": "UDP"
+        }
+    ],
+    "users": [
+        {
+            "name": "ducaiguozei",
+            "password": "xijinping",
+            "allowLoopbackIP": true
+        }
+    ],
+    "loggingLevel": "INFO",
+    "egress": {
+        "proxies": [
+            {
+                "name": "client2",
+                "protocol": "SOCKS5_PROXY_PROTOCOL",
+                "host": "127.0.0.1",
+                "port": 4000,
+                "socks5Authentication": {
+                    "user": "shilishanlu",
+                    "password": "buhuanjian"
+                }
+            }
+        ],
+        "rules": [
+            {
+                "ipRanges": ["*"],
+                "domainNames": ["*"],
+                "action": "PROXY",
+                "proxyNames": ["client2"]
+            }
+        ]
+    }
+}

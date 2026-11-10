@@ -15,4 +15,8 @@ object CoreVersions {
     const val TRUSTTUNNEL_ANDROID = "1.1.11"
     /** Desktop: `trustTunnelVersion` in desktopApp/build.gradle.kts. */
     const val TRUSTTUNNEL_DESKTOP = "1.1.11"
+    /** mieru/UPSTREAM_COMMIT; upstream release containing this revision. */
+    const val MIERU = "3.39.0 (1367cf2)"
+    /** turnable/UPSTREAM_COMMIT (upstream currently has no semantic release tag). */
+    const val TURNABLE = "c7b9b92"
 }

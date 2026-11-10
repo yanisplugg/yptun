@@ -1,0 +1,149 @@
+// Copyright (C) 2021  mieru authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+syntax = "proto3";
+
+package mieru.appctl;
+
+import "appctl/proto/base.proto";
+
+option go_package = "github.com/enfein/mieru/v3/pkg/appctl/appctlpb";
+
+message ClientConfig {
+    // A list of known client profiles.
+    repeated ClientProfile profiles = 1;
+
+    // The active profile name.
+    optional string activeProfile = 2;
+
+    // The management RPC port that client is listening in localhost.
+    optional int32 rpcPort = 3;
+
+    // The socks5 port that mieru is listening.
+    optional int32 socks5Port = 4;
+
+    // Client advanced settings.
+    optional ClientAdvancedSettings advancedSettings = 5;
+
+    // Client logging level.
+    optional LoggingLevel loggingLevel = 6;
+
+    // If set, the socks5 port listens to LAN rather than localhost.
+    optional bool socks5ListenLAN = 7;
+
+    // The port mieru is listening to provide HTTP / HTTPS proxy.
+    optional int32 httpProxyPort = 8;
+
+    // If set, the HTTP proxy port listens to LAN rather than localhost.
+    optional bool httpProxyListenLAN = 9;
+
+    // A list of accounts that can authenticate mieru socks5 proxy service.
+    // If the list is empty, authentication is not required.
+    repeated Auth socks5Authentication = 10;
+}
+
+message ClientProfile {
+    // Client profile name.
+    optional string profileName = 1;
+
+    // User information.
+    optional User user = 2;
+
+    // A list of servers to connect.
+    repeated ServerEndpoint servers = 3;
+
+    // Maximum transmission unit of L2 payload.
+    // This setting only applies to UDP protocol egress traffic.
+    optional int32 mtu = 4;
+
+    // Multiplexing behaviors.
+    optional MultiplexingConfig multiplexing = 5;
+
+    // Handshake mode when client open a connection.
+    optional HandshakeMode handshakeMode = 6;
+
+    // Fine tune traffic behaviors.
+    optional TrafficPattern trafficPattern = 7;
+
+    // Optional proxy dialer used by the client to connect to mita.
+    optional ClientDialer dialer = 8;
+}
+
+message ClientDialer {
+    // Dialer proxy protocol.
+    optional ProxyProtocol protocol = 1;
+
+    // Dialer proxy IP address or domain name.
+    optional string host = 2;
+
+    // Dialer proxy port number.
+    optional int32 port = 3;
+
+    // Use socks5 UDP ASSOCIATE for UDP underlays.
+    optional bool socks5UDPAssociate = 4;
+
+    // Credential to authenticate socks5 proxy.
+    optional Auth socks5Authentication = 5;
+}
+
+message ServerEndpoint {
+    // String representation of IP address.
+    // It can be either IPv4 or IPv6.
+    optional string ipAddress = 1;
+
+    // Server's full qualified domain name.
+    // When this is set, the `ipAddress` field is ignored.
+    optional string domainName = 2;
+
+    // Server's port-protocol bindings.
+    repeated PortBinding portBindings = 3;
+}
+
+message MultiplexingConfig {
+    // How frequent a network connection is reused.
+    optional MultiplexingLevel level = 1;
+}
+
+enum MultiplexingLevel {
+    MULTIPLEXING_DEFAULT = 0;
+    MULTIPLEXING_OFF = 1;
+    MULTIPLEXING_LOW = 2;
+    MULTIPLEXING_MIDDLE = 3;
+    MULTIPLEXING_HIGH = 4;
+}
+
+enum HandshakeMode {
+    HANDSHAKE_DEFAULT = 0;
+
+    // Client wait for proxy server to establish connection to the destination
+    // before sending the payload.
+    // Also known as 1-RTT.
+    HANDSHAKE_STANDARD = 1;
+
+    // Client send payload at the same time when connecting to the proxy server.
+    // Also known as 0-RTT.
+    HANDSHAKE_NO_WAIT = 2;
+}
+
+message ClientAdvancedSettings {
+    // Do not check update when client is started.
+    optional bool noCheckUpdate = 1;
+
+    // The interval to log metrics.
+    // Examples: 30s, 5m, 2h.
+    // Minimum value: 1s.
+    // If empty, the default interval is used.
+    optional string metricsLoggingInterval = 2;
+}

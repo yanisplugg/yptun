@@ -107,9 +107,14 @@ data class VkTurnConfig(
      * - [CORE_WDTT]: the WDTT (wg-turn-client) core — chunk-affinity dispatch across VK call-links so a
      *   single WG flow actually aggregates. Driven by [wdttPeer]/[wdttPassword]/[vkLink] (call links =
      *   the VK hashes); the wg= keys still come from [LocationConfig.proxy] (or the server's GETCONF).
+     * - [CORE_TURNABLE]: TheAirBlow/Turnable subprocess. [turnableConfig] carries its complete client
+     *   URL/JSON (including the VK call id); WireGuard dials the subprocess's local UDP listener.
      */
     @SerialName("core")
     val core: String = CORE_FREETURN,
+    /** Turnable client JSON or `turnable://` URL. Used only when [core] == [CORE_TURNABLE]. */
+    @SerialName("turnable_config")
+    val turnableConfig: String = "",
     /** WDTT server IP (or host) the core dials over VK TURN (the wdtt-server / Peer). Port = [wdttPort]. */
     @SerialName("wdtt_peer")
     val wdttPeer: String = "",
@@ -193,6 +198,9 @@ data class VkTurnConfig(
     /** True when the csqtt transport core is selected. */
     fun usesCsqtt(): Boolean = core.equals(CORE_CSQTT, ignoreCase = true)
 
+    /** True when the standalone Turnable client subprocess is selected. */
+    fun usesTurnable(): Boolean = core.equals(CORE_TURNABLE, ignoreCase = true)
+
     /** The csqtt server "host:port": [csqttPeer] verbatim if it already has a port, else + [csqttPort]. */
     fun csqttPeerAddr(): String {
         val host = csqttPeer.trim()
@@ -207,7 +215,7 @@ data class VkTurnConfig(
     }
 
     fun isComplete(): Boolean =
-        isStorable() && vkLink.isNotBlank()
+        isStorable() && (usesTurnable() || vkLink.isNotBlank())
 
     /** UDP payload (WireGuard/AmneziaWG) needs udprelay; TCP proxy needs tcpfwd. */
     fun requiredMode(): String = if (outbound == OUTBOUND_PROXY) "tcp" else "udp"
@@ -234,6 +242,7 @@ data class VkTurnConfig(
         const val CORE_FREETURN = "freeturn"
         const val CORE_WDTT = "wdtt"
         const val CORE_CSQTT = "csqtt"
+        const val CORE_TURNABLE = "turnable"
         /** Worker cap of the csqtt client since 2.5.0 (`MAX_WORKERS` in rust-client/main.rs). */
         const val CSQTT_MAX_WORKERS = 100
 
@@ -253,6 +262,9 @@ data class VkTurnConfig(
     fun isStorable(): Boolean = listenPort in 1..65535 && when {
         usesWdtt() -> wdttPeer.isNotBlank()
         usesCsqtt() -> csqttPeer.isNotBlank()
+        usesTurnable() -> turnableConfig.trim().let {
+            it.startsWith("turnable://", ignoreCase = true) || (it.startsWith("{") && it.endsWith("}"))
+        }
         else -> uri.startsWith("freeturn://")
     }
 
@@ -1031,7 +1043,7 @@ data class LocationConfig(
      */
     /** A VK-TURN location that lacks nothing but the user's VK call link (the panel may leave it out): connecting asks for it. */
     fun needsVkLink(): Boolean = engine == EngineType.VkTurn &&
-        vkturn?.let { it.isStorable() && it.vkLink.isBlank() } == true && vkTurnExitPresent()
+        vkturn?.let { it.isStorable() && !it.usesTurnable() && it.vkLink.isBlank() } == true && vkTurnExitPresent()
 
     private fun vkTurnExitPresent(): Boolean = when {
         // WDTT connects purely by the wdtt-server IP[:port]; the WireGuard config is fetched FROM the

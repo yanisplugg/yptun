@@ -1,0 +1,20 @@
+{
+    "portBindings": [
+        {
+            "port": 5000,
+            "protocol": "TCP"
+        },
+        {
+            "port": 5000,
+            "protocol": "UDP"
+        }
+    ],
+    "users": [
+        {
+            "name": "meiyougongchandang",
+            "password": "caiyouxinzhongguo",
+            "allowLoopbackIP": true
+        }
+    ],
+    "loggingLevel": "INFO"
+}

@@ -28,6 +28,9 @@ object ShareLinkComposer {
         if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
             return profile.ttConfig.takeIf { it.isNotBlank() }
         }
+        if (profile.type == ProxyProfile.TYPE_MIERU) {
+            return profile.mieruConfig.takeIf { it.isNotBlank() }
+        }
         // A full raw Xray config or a verbatim sing-box outbound: share the JSON as-is.
         profile.rawXrayConfig?.takeIf { it.isNotBlank() }?.let { return it }
 
