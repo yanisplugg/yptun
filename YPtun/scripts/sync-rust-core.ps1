@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $binding)) {
 $bindingTarget = Join-Path $appRoot "sharedUI\src\androidMain\kotlin\org\olcbox\app\core\yptun_ffi.kt"
 New-Item -ItemType Directory -Path (Split-Path -Parent $bindingTarget) -Force | Out-Null
 Copy-Item -LiteralPath $binding -Destination $bindingTarget -Force
-# UniFFI 0.29 emits trailing spaces when ktlint is unavailable. Normalize only line endings/whitespace;
+# UniFFI output can contain trailing spaces when ktlint is unavailable. Normalize only line endings/whitespace;
 # this keeps generated commits reviewable and makes `git diff --check` useful.
 $bindingLines = [IO.File]::ReadAllLines($bindingTarget) | ForEach-Object { $_.TrimEnd() }
 $normalizedBinding = ($bindingLines -join "`n").TrimEnd() + "`n"

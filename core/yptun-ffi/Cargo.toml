@@ -19,4 +19,5 @@ path = "uniffi-bindgen.rs"
 yptun-core = { path = "../yptun-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-uniffi = { version = "0.29", features = ["cli"] }
+# The generated Kotlin file is committed, so runtime/macros/bindgen must stay on this exact release.
+uniffi = { version = "=0.32.2", features = ["cli"] }
