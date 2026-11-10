@@ -14,7 +14,8 @@ import Testing
 
     try AtomicFileIO.writeBytesAtomically(second, to: url)
     #expect(try AtomicFileIO.readBytes(at: url) == second)
-    let snapshot = try #require(AtomicFileIO.snapshot(at: url))
+    let optionalSnapshot = try AtomicFileIO.snapshot(at: url)
+    let snapshot = try #require(optionalSnapshot)
     #expect(snapshot.byteCount == second.count)
     #expect(snapshot.sha256 == AtomicFileIO.sha256(of: second))
 }

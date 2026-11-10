@@ -11,7 +11,9 @@ import Testing
     #expect(paths.nativeYPtunDirectory.lastPathComponent == "YPtun")
     #expect(paths.appGroupYPtunDirectory?.lastPathComponent == "yptun")
     #expect(paths.destination(for: .locationsV4).path.hasSuffix("YPtun/locations_v4.json"))
+    #expect(paths.destination(for: .deviceIdentity).path.hasSuffix("YPtun/device_identity"))
     #expect(paths.destination(for: .traffic).path.hasSuffix("yptun/traffic.json"))
+    #expect(paths.destination(for: .routingProfiles).path.hasSuffix("yptun/routing_profiles.json"))
     #expect(paths.migrationBackupDirectory.path.hasSuffix("YPtun/MigrationBackups/KotlinApple"))
 }
 

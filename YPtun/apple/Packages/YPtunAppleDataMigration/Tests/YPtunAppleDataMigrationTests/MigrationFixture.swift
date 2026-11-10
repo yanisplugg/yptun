@@ -1,4 +1,5 @@
 import Foundation
+@testable import YPtunAppleDataMigration
 
 struct MigrationFixture {
     let root: URL

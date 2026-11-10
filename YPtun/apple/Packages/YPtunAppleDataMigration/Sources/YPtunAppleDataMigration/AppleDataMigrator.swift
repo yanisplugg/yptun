@@ -340,7 +340,7 @@ public actor AppleDataMigrator {
     }
 
     private func candidates(for artifact: MigrationArtifact) -> [Candidate] {
-        if artifact.isLocationBundle {
+        if artifact.isNativeApplicationSupport {
             return [
                 Candidate(
                     origin: .applicationSupportOlcbox,
@@ -387,7 +387,7 @@ public actor AppleDataMigrator {
         _ origin: MigrationOrigin,
         for artifact: MigrationArtifact
     ) -> Int {
-        if artifact.isLocationBundle {
+        if artifact.isNativeApplicationSupport {
             return switch origin {
             case .applicationSupportOlcbox: 0
             case .applicationSupportYPtun: 1

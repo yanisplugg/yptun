@@ -156,6 +156,36 @@ func everySharedSettingsFileMigratesFromTheHistoricalFallback(
     #expect(record.sourceBackup == nil)
 }
 
+@Test func migrationPreservesRoutingProfilesAndDeviceIdentityBytes() async throws {
+    let fixture = try MigrationFixture()
+    defer { fixture.remove() }
+    let routingProfiles = Data(#"{"globalProfileId":"main","profiles":[]}"#.utf8)
+    let identity = Data("legacy-device-id\n".utf8)
+    let appGroupDirectory = try #require(fixture.paths.appGroupYPtunDirectory)
+    try fixture.write(
+        routingProfiles,
+        to: appGroupDirectory
+            .appendingPathComponent(MigrationArtifact.routingProfiles.fileName)
+    )
+    try fixture.write(
+        identity,
+        to: fixture.paths.legacyOlcboxDirectory
+            .appendingPathComponent(MigrationArtifact.deviceIdentity.fileName)
+    )
+
+    let report = await AppleDataMigrator(paths: fixture.paths).migrate()
+
+    #expect(!report.hasFailures)
+    #expect(
+        try AtomicFileIO.readBytes(at: fixture.paths.destination(for: .routingProfiles))
+            == routingProfiles
+    )
+    #expect(
+        try AtomicFileIO.readBytes(at: fixture.paths.destination(for: .deviceIdentity))
+            == identity
+    )
+}
+
 private struct RejectingValidator: MigrationPayloadValidating {
     struct Rejected: Error {}
 

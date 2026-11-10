@@ -5,7 +5,9 @@ public enum MigrationArtifact: String, CaseIterable, Hashable, Sendable {
     case locationsV3
     case traffic
     case routing
+    case routingProfiles
     case appBehavior
+    case deviceIdentity
 
     public var fileName: String {
         switch self {
@@ -13,15 +15,21 @@ public enum MigrationArtifact: String, CaseIterable, Hashable, Sendable {
         case .locationsV3: "locations_v3.json"
         case .traffic: "traffic.json"
         case .routing: "routing.json"
+        case .routingProfiles: "routing_profiles.json"
         case .appBehavior: "app_behavior.json"
+        case .deviceIdentity: "device_identity"
         }
     }
 
     public var isLocationBundle: Bool {
         switch self {
         case .locationsV4, .locationsV3: true
-        case .traffic, .routing, .appBehavior: false
+        case .traffic, .routing, .routingProfiles, .appBehavior, .deviceIdentity: false
         }
+    }
+
+    public var isNativeApplicationSupport: Bool {
+        isLocationBundle || self == .deviceIdentity
     }
 }
 

@@ -81,7 +81,7 @@ public struct AppleDataPaths: Hashable, Sendable {
     }
 
     public func destination(for artifact: MigrationArtifact) -> URL {
-        let directory = artifact.isLocationBundle
+        let directory = artifact.isNativeApplicationSupport
             ? nativeYPtunDirectory
             : sharedSettingsDirectory
         return directory.appendingPathComponent(artifact.fileName, isDirectory: false)
