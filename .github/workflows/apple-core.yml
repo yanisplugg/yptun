@@ -7,12 +7,12 @@ on:
       - feat/testflight-deploy
     paths:
       - "core/**"
-      - "YPtun/apple/Packages/YPtunRustBridge/**"
+      - "YPtun/apple/**"
       - ".github/workflows/apple-core.yml"
   pull_request:
     paths:
       - "core/**"
-      - "YPtun/apple/Packages/YPtunRustBridge/**"
+      - "YPtun/apple/**"
       - ".github/workflows/apple-core.yml"
 
 permissions:
@@ -53,6 +53,30 @@ jobs:
       - name: Verify Swift package
         working-directory: YPtun/apple/Packages/YPtunRustBridge
         run: swift build
+      - name: Test migration foundation
+        working-directory: YPtun/apple/Packages/YPtunAppleDataMigration
+        run: swift test
+      - name: Build shared Apple packages
+        working-directory: YPtun/apple/Packages/YPtunAppleKit
+        run: swift build
+      - name: Generate native Apple project
+        working-directory: YPtun/apple
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+          xcodegen generate
+      - name: Smoke-build native iOS shell
+        working-directory: YPtun/apple
+        run: |
+          xcodebuild -project YPtunApple.xcodeproj -scheme "YPtun iOS" \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build/ios-smoke \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Smoke-build native macOS shell
+        working-directory: YPtun/apple
+        run: |
+          xcodebuild -project YPtunApple.xcodeproj -scheme "YPtun macOS" \
+            -derivedDataPath build/macos-smoke \
+            CODE_SIGNING_ALLOWED=NO build
       - name: Verify generated artifacts
         run: |
           test -d YPtun/apple/Packages/YPtunRustBridge/Artifacts/yptun_ffiFFI.xcframework

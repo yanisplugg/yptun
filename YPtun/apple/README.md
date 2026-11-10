@@ -26,6 +26,8 @@ entitlement; that distribution-specific target is intentionally outside this ini
 - `YPtunShared` contains cross-target identity and state values.
 - `YPtunTunnelSupport` contains tunnel bootstrap/error surfaces and depends on the local
   `Packages/YPtunRustBridge` package.
+- `YPtunMigrationSupport` validates Kotlin-era location/settings payloads with Rust before the
+  byte-preserving migration package copies them into native storage.
 
 The views and packet tunnel provider are intentionally structural placeholders. In particular,
 `startTunnel` returns an implementation-pending error until the Rust session and packet flow are

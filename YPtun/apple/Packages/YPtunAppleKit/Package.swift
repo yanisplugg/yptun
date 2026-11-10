@@ -10,9 +10,11 @@ let package = Package(
     products: [
         .library(name: "YPtunShared", targets: ["YPtunShared"]),
         .library(name: "YPtunTunnelSupport", targets: ["YPtunTunnelSupport"]),
+        .library(name: "YPtunMigrationSupport", targets: ["YPtunMigrationSupport"]),
     ],
     dependencies: [
         .package(path: "../YPtunRustBridge"),
+        .package(path: "../YPtunAppleDataMigration"),
     ],
     targets: [
         .target(name: "YPtunShared"),
@@ -21,6 +23,13 @@ let package = Package(
             dependencies: [
                 "YPtunShared",
                 .product(name: "YPtunRustBridge", package: "YPtunRustBridge"),
+            ]
+        ),
+        .target(
+            name: "YPtunMigrationSupport",
+            dependencies: [
+                .product(name: "YPtunRustBridge", package: "YPtunRustBridge"),
+                .product(name: "YPtunAppleDataMigration", package: "YPtunAppleDataMigration"),
             ]
         ),
     ],

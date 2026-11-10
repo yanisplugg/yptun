@@ -43,6 +43,8 @@ targets:
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
+      - package: YPtunAppleKit
+        product: YPtunMigrationSupport
       - package: YPtunRustBridge
         product: YPtunRustBridge
       - target: YPtunPacketTunnelIOS
@@ -108,6 +110,8 @@ targets:
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
+      - package: YPtunAppleKit
+        product: YPtunMigrationSupport
       - package: YPtunRustBridge
         product: YPtunRustBridge
       - target: YPtunPacketTunnelMac
