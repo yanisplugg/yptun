@@ -821,6 +821,16 @@ object XrayConfig {
             it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
         }
         val mainProxyTag = mainProxyOutbound?.get("tag")?.jsonPrimitive?.contentOrNull
+        val proxyOutboundTags = userOutbounds.mapNotNull { outbound ->
+            outbound["tag"]?.jsonPrimitive?.contentOrNull?.takeIf {
+                outbound["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
+            }
+        }
+        // Full JSON subscriptions commonly route a group of proxy outbounds through `balancerTag`
+        // instead of naming one `outboundTag`. Keep that topology visible to the WARP rewrite: the
+        // client side must not let an injected helper outbound join a broad selector, while the server
+        // side must send app traffic to WARP but send WARP's own UDP through the original balancer.
+        val proxyBalancerPlan = rawProxyBalancerPlan(userRouting, proxyOutboundTags)
         // An xhttp/splithttp MAIN can't serve as an intermediate hop: Xray's splithttp transport can be
         // NEITHER a proxySettings target NOR a sockopt.dialerProxy sub-dialer, so a 2nd proxy chained
         // "through" it (either mechanism) gets NO connection — the long-standing "xhttp + 2nd tcp proxy
@@ -950,7 +960,16 @@ object XrayConfig {
         // the exit (which dials through the main) becomes the real exit. Default fall-through is also
         // covered by emitting CASCADE_EXIT_TAG as the FIRST outbound below.
         val routingAfterCascade = if (cascadeOutbound != null && mainProxyTag != null) {
-            rewriteOutboundTag(geoStrippedRouting, mainProxyTag, CASCADE_EXIT_TAG)
+            if (warpServerActive) {
+                rewriteRawExitRoutes(
+                    routing = geoStrippedRouting,
+                    fromOutbound = mainProxyTag,
+                    fromBalancers = proxyBalancerPlan.selections.keys,
+                    to = CASCADE_EXIT_TAG,
+                )
+            } else {
+                rewriteOutboundTag(geoStrippedRouting, mainProxyTag, CASCADE_EXIT_TAG)
+            }
         } else geoStrippedRouting
         // Loopback chaining: the relay inbound the exit dials through MUST exit via the real xhttp main —
         // NOT direct/geo, and NOT the rewritten cascade-exit (that would loop forever). Prepend a
@@ -973,7 +992,12 @@ object XrayConfig {
             val relayRule = buildJsonObject {
                 put("type", "field")
                 putJsonArray("inboundTag") { add(WARP_RELAY_IN_TAG) }
-                put("outboundTag", mainProxyTag)
+                // A balanced JSON config has no single "main" path: preserve its load balancer for
+                // the encapsulated WARP UDP. Falling back to the first proxy keeps old single-node
+                // configs byte-for-byte compatible.
+                val balancerTag = proxyBalancerPlan.primaryTag
+                if (balancerTag != null) put("balancerTag", balancerTag)
+                else put("outboundTag", mainProxyTag)
             }
             val existingRules = (routingToWrite?.get("rules") as? JsonArray)?.toList() ?: emptyList()
             buildJsonObject {
@@ -981,6 +1005,15 @@ object XrayConfig {
                 putJsonArray("rules") { add(relayRule); existingRules.forEach { add(it) } }
             }
         } else routingToWrite
+        val routingWithSafeBalancers = if (
+            (warpClientActive || warpServerActive) && proxyBalancerPlan.selections.isNotEmpty()
+        ) {
+            freezeRawProxyBalancerSelectors(
+                routing = routingFinal,
+                plan = proxyBalancerPlan,
+                hasObservatory = root["observatory"] != null || root["burstObservatory"] != null,
+            )
+        } else routingFinal
 
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
@@ -1046,7 +1079,7 @@ object XrayConfig {
                 // FakeDNS dns outbound for the hijacked queries.
                 if (injectFake && "dns-out" !in userOutboundTags) add(dnsOutOutbound())
             }
-            if (routingFinal != null) put("routing", routingFinal)
+            if (routingWithSafeBalancers != null) put("routing", routingWithSafeBalancers)
         }
         return json.encodeToString(newRoot)
     }
@@ -1123,6 +1156,108 @@ object XrayConfig {
         return buildJsonObject {
             routing.forEach { (k, v) -> if (k != "rules") put(k, v) }
             put("rules", JsonArray(rewritten))
+        }
+    }
+
+    /** Original proxy members selected by each raw-config balancer, plus the catch-all/main balancer. */
+    private data class RawProxyBalancerPlan(
+        val selections: Map<String, List<String>>,
+        val primaryTag: String?,
+    )
+
+    private fun rawProxyBalancerPlan(
+        routing: JsonObject?,
+        proxyOutboundTags: List<String>,
+    ): RawProxyBalancerPlan {
+        if (routing == null || proxyOutboundTags.isEmpty()) return RawProxyBalancerPlan(emptyMap(), null)
+        val selections = linkedMapOf<String, List<String>>()
+        (routing["balancers"] as? JsonArray)?.forEach { element ->
+            val balancer = element as? JsonObject ?: return@forEach
+            val tag = balancer["tag"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+            val selectors = (balancer["selector"] as? JsonArray)
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                .orEmpty()
+            val selected = proxyOutboundTags.filter { outboundTag ->
+                selectors.any { selector -> outboundTag.startsWith(selector) }
+            }
+            if (selected.isNotEmpty()) selections[tag] = selected
+        }
+        val primary = (routing["rules"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonObject)?.get("balancerTag")?.jsonPrimitive?.contentOrNull }
+            ?.lastOrNull { it in selections }
+            ?: selections.keys.firstOrNull()
+        return RawProxyBalancerPlan(selections, primary)
+    }
+
+    /**
+     * Server-side WARP replaces routes to either the old main outbound OR one of its proxy balancers
+     * with the local WARP SOCKS exit. Direct/block/DNS rules stay untouched. A balancer rule must lose
+     * `balancerTag` when `outboundTag` is inserted: Xray rejects/ambiguously handles a rule carrying both.
+     */
+    private fun rewriteRawExitRoutes(
+        routing: JsonObject?,
+        fromOutbound: String,
+        fromBalancers: Set<String>,
+        to: String,
+    ): JsonObject? {
+        if (routing == null) return null
+        val rules = routing["rules"] as? JsonArray ?: return routing
+        val rewritten = rules.map { element ->
+            val rule = element as? JsonObject ?: return@map element
+            val outboundMatch = rule["outboundTag"]?.jsonPrimitive?.contentOrNull == fromOutbound
+            val balancerMatch = rule["balancerTag"]?.jsonPrimitive?.contentOrNull in fromBalancers
+            if (!outboundMatch && !balancerMatch) return@map element
+            buildJsonObject {
+                rule.forEach { (key, value) ->
+                    if (key != "outboundTag" && key != "balancerTag") put(key, value)
+                }
+                put("outboundTag", to)
+            }
+        }
+        return buildJsonObject {
+            routing.forEach { (key, value) -> if (key != "rules") put(key, value) }
+            put("rules", JsonArray(rewritten))
+        }
+    }
+
+    /**
+     * Freeze broad prefix selectors to the ORIGINAL proxy tags before helper outbounds (`warp-out`,
+     * `cascade-exit`) are inserted. A selector such as `""` otherwise starts selecting the helper too:
+     * client mode may bypass every real node, and server mode can route WARP's UDP back into itself.
+     */
+    private fun freezeRawProxyBalancerSelectors(
+        routing: JsonObject?,
+        plan: RawProxyBalancerPlan,
+        hasObservatory: Boolean,
+    ): JsonObject? {
+        if (routing == null || plan.selections.isEmpty()) return routing
+        val balancers = routing["balancers"] as? JsonArray ?: return routing
+        return buildJsonObject {
+            routing.forEach { (key, value) -> if (key != "balancers") put(key, value) }
+            putJsonArray("balancers") {
+                balancers.forEach { element ->
+                    val balancer = element as? JsonObject
+                    val selected = balancer?.get("tag")?.jsonPrimitive?.contentOrNull
+                        ?.let(plan.selections::get)
+                    if (balancer == null || selected == null) {
+                        add(element)
+                    } else {
+                        addJsonObject {
+                            val strategy = (balancer["strategy"] as? JsonObject)
+                                ?.get("type")?.jsonPrimitive?.contentOrNull?.lowercase()
+                                ?: "random"
+                            // Xray's random/roundRobin implementation treats a non-empty fallbackTag
+                            // as a request for an Observatory feature. With no observatory block the
+                            // otherwise valid config aborts at startup: "not all dependencies resolved".
+                            val dropFallback = !hasObservatory && strategy in setOf("random", "roundrobin")
+                            balancer.forEach { (key, value) ->
+                                if (key != "selector" && !(dropFallback && key == "fallbackTag")) put(key, value)
+                            }
+                            putJsonArray("selector") { selected.forEach { add(it) } }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1433,7 +1568,6 @@ object XrayConfig {
                         // candidates and fallbackTag pinned ALL traffic to wg-bal-0 forever. Round-robin
                         // is deterministic, needs no observatory, and actually aggregates multi-stream
                         // traffic across every configured server.
-                        put("fallbackTag", "$WG_BAL_PREFIX${'0'}")
                         putJsonObject("strategy") { put("type", "roundRobin") }
                     }
                 }

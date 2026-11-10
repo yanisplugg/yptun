@@ -33,6 +33,35 @@ class WarpRawConfigTest {
         }
     """.trimIndent()
 
+    /** Remnawave/Happ-style full config: several proxy outbounds behind one routing balancer. */
+    private fun balancedRaw() = """
+        {
+          "inbounds": [{ "tag": "socks", "port": 10808, "protocol": "socks", "settings": { "udp": true } }],
+          "outbounds": [
+            { "tag": "proxy-a", "protocol": "vless",
+              "settings": { "vnext": [{ "address": "a.example", "port": 443,
+                "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+              "streamSettings": { "network": "tcp", "security": "tls" } },
+            { "tag": "proxy-b", "protocol": "trojan",
+              "settings": { "servers": [{ "address": "b.example", "port": 443, "password": "secret" }] },
+              "streamSettings": { "network": "tcp", "security": "tls" } },
+            { "tag": "direct", "protocol": "freedom" },
+            { "tag": "block", "protocol": "blackhole" }
+          ],
+          "routing": {
+            "domainStrategy": "AsIs",
+            "balancers": [{
+              "tag": "proxy-balance", "selector": [""], "fallbackTag": "proxy-a",
+              "strategy": { "type": "roundRobin" }
+            }],
+            "rules": [
+              { "type": "field", "domain": ["domain:ru"], "outboundTag": "direct" },
+              { "type": "field", "network": "tcp,udp", "balancerTag": "proxy-balance" }
+            ]
+          }
+        }
+    """.trimIndent()
+
     private val dir: File? = System.getenv("WARP_DUMP_DIR")?.let { File(it).apply { mkdirs() } }
 
     private fun JsonObject.outbound(tag: String) =
@@ -76,5 +105,51 @@ class WarpRawConfigTest {
         val catchAll = rules.last()
         assertEquals("cascade-exit", catchAll["outboundTag"]!!.jsonPrimitive.content, "everything else leaves through WARP")
         assertEquals("direct", rules[1]["outboundTag"]!!.jsonPrimitive.content, "the config's direct rule stays")
+    }
+
+    @Test
+    fun clientSideWarpKeepsInjectedOutboundOutOfRawBalancer() {
+        val json = XrayConfig.prepareRaw(
+            rawConfigJson = balancedRaw(),
+            listenPort = 18081,
+            warpChainPort = 18900,
+        )
+        dir?.resolve("raw-balanced-client.json")?.writeText(json)
+        val root = Json.parseToJsonElement(json).jsonObject
+        assertEquals("warp-out", root.outbound("proxy-a")["streamSettings"]!!.jsonObject
+            ["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content)
+        assertEquals("warp-out", root.outbound("proxy-b")["streamSettings"]!!.jsonObject
+            ["sockopt"]!!.jsonObject["dialerProxy"]!!.jsonPrimitive.content)
+        val selector = root["routing"]!!.jsonObject["balancers"]!!.jsonArray.single().jsonObject
+            .get("selector")!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("proxy-a", "proxy-b"), selector, "the balancer must never select the injected WARP SOCKS")
+        assertTrue(root["routing"]!!.jsonObject["balancers"]!!.jsonArray.single().jsonObject["fallbackTag"] == null,
+            "fallbackTag requires an observatory and otherwise prevents Xray from starting")
+    }
+
+    @Test
+    fun serverSideWarpRedirectsBalancedTrafficButRelaysThroughTheBalancer() {
+        val json = XrayConfig.prepareRaw(
+            rawConfigJson = balancedRaw(),
+            listenPort = 18081,
+            warpExitPort = 18900,
+            warpRelay = WarpRelay(18993, "162.159.192.1", 2408),
+        )
+        dir?.resolve("raw-balanced-server.json")?.writeText(json)
+        val root = Json.parseToJsonElement(json).jsonObject
+        val routing = root["routing"]!!.jsonObject
+        val rules = routing["rules"]!!.jsonArray.map { it.jsonObject }
+        val relay = rules.first()
+        assertEquals("proxy-balance", relay["balancerTag"]!!.jsonPrimitive.content,
+            "WARP UDP must retain the JSON config's load balancer")
+        assertTrue(relay["outboundTag"] == null)
+        assertEquals("cascade-exit", rules.last()["outboundTag"]!!.jsonPrimitive.content,
+            "balanced application traffic must exit through WARP")
+        assertTrue(rules.last()["balancerTag"] == null)
+        assertEquals("direct", rules[1]["outboundTag"]!!.jsonPrimitive.content)
+        val selector = routing["balancers"]!!.jsonArray.single().jsonObject["selector"]!!.jsonArray
+            .map { it.jsonPrimitive.content }
+        assertEquals(listOf("proxy-a", "proxy-b"), selector)
+        assertTrue(routing["balancers"]!!.jsonArray.single().jsonObject["fallbackTag"] == null)
     }
 }

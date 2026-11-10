@@ -41,7 +41,7 @@ class XrayWireguardBalancerTest {
         assertEquals(listOf("wg-bal-0", "wg-bal-1", "direct", "block"), tags)
         val balancer = root["routing"]!!.jsonObject["balancers"]!!.jsonArray.single().jsonObject
         assertEquals("vk-bal", balancer["tag"]!!.jsonPrimitive.content)
-        assertEquals("wg-bal-0", balancer["fallbackTag"]!!.jsonPrimitive.content)
+        assertNull(balancer["fallbackTag"], "roundRobin without an observatory must not declare fallbackTag")
         assertEquals("roundRobin", balancer["strategy"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertNull(root["burstObservatory"], "HTTP probe failures must not pin all traffic to the fallback")
         val catchAll = root["routing"]!!.jsonObject["rules"]!!.jsonArray.last().jsonObject
