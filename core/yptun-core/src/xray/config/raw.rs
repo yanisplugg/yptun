@@ -61,6 +61,11 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
     let cascade_second = o.second_profile.as_ref().filter(|s| s.is_complete() && cascade_types.contains(&s.kind.as_str()));
     let main = user_outbounds.iter().find(|ob| str_of(ob, "protocol").is_some_and(|p| cascade_types.contains(&p.to_lowercase().as_str())));
     let main_tag: Option<String> = main.and_then(|m| str_of(m, "tag")).map(str::to_string);
+    let proxy_tags: Vec<String> = user_outbounds
+        .iter()
+        .filter(|ob| str_of(ob, "protocol").is_some_and(|p| cascade_types.contains(&p.to_lowercase().as_str())))
+        .filter_map(|ob| str_of(ob, "tag").map(str::to_string))
+        .collect();
     let main_network = main.and_then(|m| m.get("streamSettings")).and_then(|s| s.get("network")).and_then(Value::as_str).map(str::to_lowercase);
     let main_is_xhttp = matches!(main_network.as_deref(), Some("xhttp") | Some("splithttp"));
     let loop_port = o.listen_port + 1;
@@ -82,6 +87,7 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
 
     // The config's own routing wins; the profile is merged only into configs without one.
     let user_routing = config_routing;
+    let proxy_balancers = raw_proxy_balancer_plan(user_routing.as_ref(), &proxy_tags);
     let user_has_routing = user_routing.as_ref().and_then(|r| r.get("rules")).and_then(Value::as_array).is_some_and(|a| !a.is_empty());
     let merged_routing: Option<Obj> = if user_has_routing {
         None
@@ -156,6 +162,7 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
     };
     let geo_stripped = if o.strip_geo_selectors && user_has_routing { strip_geo_from_routing(final_routing) } else { final_routing };
     let after_cascade = match (&cascade_outbound, &main_tag) {
+        (Some(_), Some(mt)) if warp_server => rewrite_raw_exit_routes(geo_stripped, mt, &proxy_balancers, CASCADE_EXIT_TAG),
         (Some(_), Some(mt)) => rewrite_outbound_tag(geo_stripped, mt, CASCADE_EXIT_TAG),
         _ => geo_stripped,
     };
@@ -181,9 +188,26 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
         after_cascade
     };
     let routing_final = if warp_server {
-        prepend(to_write, json!({ "type": "field", "inboundTag": [WARP_RELAY_IN_TAG], "outboundTag": main_tag }))
+        let mut relay_rule = Obj::new();
+        relay_rule.insert("type".into(), json!("field"));
+        relay_rule.insert("inboundTag".into(), json!([WARP_RELAY_IN_TAG]));
+        if let Some(tag) = proxy_balancers.primary_tag.as_deref() {
+            relay_rule.insert("balancerTag".into(), json!(tag));
+        } else {
+            relay_rule.insert("outboundTag".into(), json!(main_tag));
+        }
+        prepend(to_write, Value::Object(relay_rule))
     } else {
         to_write
+    };
+    let routing_final = if (warp_client || warp_server) && !proxy_balancers.selections.is_empty() {
+        freeze_raw_proxy_balancer_selectors(
+            routing_final,
+            &proxy_balancers,
+            root.contains_key("observatory") || root.contains_key("burstObservatory"),
+        )
+    } else {
+        routing_final
     };
 
     let mut new_root = Obj::new();
@@ -271,6 +295,105 @@ fn rewrite_outbound_tag(routing: Option<Obj>, from: &str, to: &str) -> Option<Ob
                 if r.get("outboundTag").and_then(Value::as_str) == Some(from) {
                     r.insert("outboundTag".into(), json!(to));
                 }
+            }
+        }
+    }
+    Some(routing)
+}
+
+#[derive(Debug, Clone, Default)]
+struct RawProxyBalancerPlan {
+    /// `(balancer tag, original proxy outbound tags selected by it)`, in config order.
+    selections: Vec<(String, Vec<String>)>,
+    /// Last proxy balancer referenced by routing rules (normally the catch-all), else the first.
+    primary_tag: Option<String>,
+}
+
+impl RawProxyBalancerPlan {
+    fn selection(&self, tag: &str) -> Option<&Vec<String>> {
+        self.selections.iter().find(|(candidate, _)| candidate == tag).map(|(_, selected)| selected)
+    }
+
+    fn contains(&self, tag: &str) -> bool {
+        self.selection(tag).is_some()
+    }
+}
+
+fn raw_proxy_balancer_plan(routing: Option<&Obj>, proxy_tags: &[String]) -> RawProxyBalancerPlan {
+    let Some(routing) = routing else { return RawProxyBalancerPlan::default() };
+    if proxy_tags.is_empty() {
+        return RawProxyBalancerPlan::default();
+    }
+    let mut selections: Vec<(String, Vec<String>)> = Vec::new();
+    if let Some(balancers) = routing.get("balancers").and_then(Value::as_array) {
+        for balancer in balancers.iter().filter_map(Value::as_object) {
+            let Some(tag) = str_of(balancer, "tag") else { continue };
+            let selectors: Vec<&str> = balancer
+                .get("selector")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let selected: Vec<String> = proxy_tags
+                .iter()
+                .filter(|outbound| selectors.iter().any(|selector| outbound.starts_with(selector)))
+                .cloned()
+                .collect();
+            if !selected.is_empty() {
+                selections.push((tag.to_string(), selected));
+            }
+        }
+    }
+    let primary_tag = routing
+        .get("rules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter_map(|rule| rule.get("balancerTag").and_then(Value::as_str))
+        .filter(|tag| selections.iter().any(|(candidate, _)| candidate == tag))
+        .last()
+        .map(str::to_string)
+        .or_else(|| selections.first().map(|(tag, _)| tag.clone()));
+    RawProxyBalancerPlan { selections, primary_tag }
+}
+
+/// Redirect app traffic that used either the old main outbound or one of its balancers to WARP.
+fn rewrite_raw_exit_routes(routing: Option<Obj>, from_outbound: &str, plan: &RawProxyBalancerPlan, to: &str) -> Option<Obj> {
+    let mut routing = routing?;
+    if let Some(Value::Array(rules)) = routing.get_mut("rules") {
+        for rule in rules.iter_mut().filter_map(Value::as_object_mut) {
+            let outbound_match = rule.get("outboundTag").and_then(Value::as_str) == Some(from_outbound);
+            let balancer_match = rule.get("balancerTag").and_then(Value::as_str).is_some_and(|tag| plan.contains(tag));
+            if outbound_match || balancer_match {
+                rule.remove("outboundTag");
+                rule.remove("balancerTag");
+                rule.insert("outboundTag".into(), json!(to));
+            }
+        }
+    }
+    Some(routing)
+}
+
+/// Keep broad prefix selectors from selecting helper outbounds injected after the raw config was read.
+fn freeze_raw_proxy_balancer_selectors(routing: Option<Obj>, plan: &RawProxyBalancerPlan, has_observatory: bool) -> Option<Obj> {
+    let mut routing = routing?;
+    if let Some(Value::Array(balancers)) = routing.get_mut("balancers") {
+        for balancer in balancers.iter_mut().filter_map(Value::as_object_mut) {
+            let selected = str_of(balancer, "tag").and_then(|tag| plan.selection(tag)).cloned();
+            if let Some(selected) = selected {
+                let strategy = balancer
+                    .get("strategy")
+                    .and_then(Value::as_object)
+                    .and_then(|strategy| strategy.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("random")
+                    .to_lowercase();
+                if !has_observatory && matches!(strategy.as_str(), "random" | "roundrobin") {
+                    // Xray makes fallbackTag on these strategies depend on an Observatory feature;
+                    // without one the config aborts with "not all dependencies are resolved".
+                    balancer.remove("fallbackTag");
+                }
+                balancer.insert("selector".into(), json!(selected));
             }
         }
     }

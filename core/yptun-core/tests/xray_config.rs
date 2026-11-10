@@ -411,7 +411,7 @@ fn wireguard_balancer() {
     assert_eq!(list(&root, "outbounds")[1]["tag"], "wg-bal-1");
     assert_eq!(root["routing"]["balancers"][0]["strategy"]["type"], "roundRobin");
     assert!(root["routing"]["balancers"][0]["strategy"].get("settings").is_none());
-    assert_eq!(root["routing"]["balancers"][0]["fallbackTag"], "wg-bal-0");
+    assert!(root["routing"]["balancers"][0].get("fallbackTag").is_none());
     assert!(root.get("burstObservatory").is_none());
     let last = (*list(&root["routing"], "rules").last().unwrap()).clone();
     assert_eq!(last["balancerTag"], "vk-bal");

@@ -579,7 +579,7 @@ pub fn build_wireguard_balancer(wg_profiles: &[ProxyProfile], listen_port: i32, 
         "routing".into(),
         json!({
             "domainStrategy": "AsIs",
-            "balancers": [{ "tag": WG_BALANCER_TAG, "selector": [WG_BAL_PREFIX], "fallbackTag": format!("{WG_BAL_PREFIX}0"),
+            "balancers": [{ "tag": WG_BALANCER_TAG, "selector": [WG_BAL_PREFIX],
                 // Do not gate balancing on an HTTP probe: its host or DNS can fail while every
                 // WG-over-VK exit is healthy, which made fallbackTag pin all traffic to wg-bal-0.
                 "strategy": { "type": "roundRobin" } }],

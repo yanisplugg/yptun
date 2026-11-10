@@ -223,6 +223,32 @@ fn raw(server: &str, port: i32, flow: &str) -> String {
     .replace("$FLOW", flow)
 }
 
+fn balanced_raw() -> &'static str {
+    r#"{
+  "inbounds": [{ "tag": "socks", "port": 10808, "protocol": "socks", "settings": { "udp": true } }],
+  "outbounds": [
+    { "tag": "proxy-a", "protocol": "vless",
+      "settings": { "vnext": [{ "address": "a.example", "port": 443,
+        "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+      "streamSettings": { "network": "tcp", "security": "tls" } },
+    { "tag": "proxy-b", "protocol": "trojan",
+      "settings": { "servers": [{ "address": "b.example", "port": 443, "password": "secret" }] },
+      "streamSettings": { "network": "tcp", "security": "tls" } },
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "block", "protocol": "blackhole" }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "balancers": [{ "tag": "proxy-balance", "selector": [""], "fallbackTag": "proxy-a",
+      "strategy": { "type": "roundRobin" } }],
+    "rules": [
+      { "type": "field", "domain": ["domain:ru"], "outboundTag": "direct" },
+      { "type": "field", "network": "tcp,udp", "balancerTag": "proxy-balance" }
+    ]
+  }
+}"#
+}
+
 #[test]
 fn client_side_every_proxy_outbound_dials_through_the_warp_socks() {
     let json = xray::prepare_raw(
@@ -284,4 +310,38 @@ fn server_side_awgproxy_is_the_exit_and_its_udp_rides_the_main_proxy() {
         rules[1]["outboundTag"], "direct",
         "the config's direct rule stays"
     );
+}
+
+#[test]
+fn client_side_warp_keeps_injected_outbound_out_of_raw_balancer() {
+    let json = xray::prepare_raw(
+        balanced_raw(),
+        &RawOptions { warp_chain_port: Some(18900), ..RawOptions::new(18081) },
+    );
+    let o = dump("raw-balanced-client", &json);
+    assert_eq!(tagged(&o, "outbounds", "proxy-a")["streamSettings"]["sockopt"]["dialerProxy"], "warp-out");
+    assert_eq!(tagged(&o, "outbounds", "proxy-b")["streamSettings"]["sockopt"]["dialerProxy"], "warp-out");
+    assert_eq!(o["routing"]["balancers"][0]["selector"], serde_json::json!(["proxy-a", "proxy-b"]));
+    assert!(o["routing"]["balancers"][0].get("fallbackTag").is_none());
+}
+
+#[test]
+fn server_side_warp_redirects_balanced_traffic_but_relays_through_balancer() {
+    let json = xray::prepare_raw(
+        balanced_raw(),
+        &RawOptions {
+            warp_exit_port: Some(18900),
+            warp_relay: Some(relay("162.159.192.1")),
+            ..RawOptions::new(18081)
+        },
+    );
+    let o = dump("raw-balanced-server", &json);
+    let rules = o["routing"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0]["balancerTag"], "proxy-balance");
+    assert!(rules[0].get("outboundTag").is_none());
+    assert_eq!(rules.last().unwrap()["outboundTag"], "cascade-exit");
+    assert!(rules.last().unwrap().get("balancerTag").is_none());
+    assert_eq!(rules[1]["outboundTag"], "direct");
+    assert_eq!(o["routing"]["balancers"][0]["selector"], serde_json::json!(["proxy-a", "proxy-b"]));
+    assert!(o["routing"]["balancers"][0].get("fallbackTag").is_none());
 }
