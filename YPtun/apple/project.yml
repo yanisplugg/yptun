@@ -1,0 +1,155 @@
+name: YPtunApple
+
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+
+settings:
+  base:
+    MARKETING_VERSION: "3.5.0"
+    CURRENT_PROJECT_VERSION: "353"
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    GENERATE_INFOPLIST_FILE: NO
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+
+packages:
+  YPtunAppleKit:
+    path: Packages/YPtunAppleKit
+  YPtunRustBridge:
+    path: Packages/YPtunRustBridge
+
+targets:
+  YPtunIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/iOSApp
+    settings:
+      base:
+        PRODUCT_NAME: YPtun
+        PRODUCT_MODULE_NAME: YPtunIOS
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app
+        INFOPLIST_FILE: Configuration/iOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/iOS/YPtun.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+    dependencies:
+      - package: YPtunAppleKit
+        product: YPtunShared
+      - package: YPtunRustBridge
+        product: YPtunRustBridge
+      - target: YPtunPacketTunnelIOS
+        embed: true
+      - target: YPtunWidget
+        embed: true
+
+  YPtunPacketTunnelIOS:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/PacketTunnel
+    settings:
+      base:
+        PRODUCT_NAME: YPtunPacketTunnel
+        PRODUCT_MODULE_NAME: YPtunPacketTunnelIOS
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.tunnel
+        INFOPLIST_FILE: Configuration/iOS/PacketTunnel-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/iOS/PacketTunnel.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: YPtunAppleKit
+        product: YPtunShared
+      - package: YPtunAppleKit
+        product: YPtunTunnelSupport
+      - package: YPtunRustBridge
+        product: YPtunRustBridge
+
+  YPtunWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Widget
+    settings:
+      base:
+        PRODUCT_NAME: YPtunWidget
+        PRODUCT_MODULE_NAME: YPtunWidget
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.widget
+        INFOPLIST_FILE: Configuration/iOS/Widget-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/iOS/Widget.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: YPtunAppleKit
+        product: YPtunShared
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+
+  YPtunMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/macOSApp
+    settings:
+      base:
+        PRODUCT_NAME: YPtun
+        PRODUCT_MODULE_NAME: YPtunMac
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.macos
+        INFOPLIST_FILE: Configuration/macOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/macOS/YPtun.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+    dependencies:
+      - package: YPtunAppleKit
+        product: YPtunShared
+      - package: YPtunRustBridge
+        product: YPtunRustBridge
+      - target: YPtunPacketTunnelMac
+        embed: true
+
+  YPtunPacketTunnelMac:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/PacketTunnel
+    settings:
+      base:
+        PRODUCT_NAME: YPtunPacketTunnel
+        PRODUCT_MODULE_NAME: YPtunPacketTunnelMac
+        PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.macos.tunnel
+        INFOPLIST_FILE: Configuration/macOS/PacketTunnel-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Configuration/macOS/PacketTunnel.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: YPtunAppleKit
+        product: YPtunShared
+      - package: YPtunAppleKit
+        product: YPtunTunnelSupport
+      - package: YPtunRustBridge
+        product: YPtunRustBridge
+
+schemes:
+  YPtun iOS:
+    build:
+      targets:
+        YPtunIOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  YPtun macOS:
+    build:
+      targets:
+        YPtunMac: all
+    run:
+      config: Debug
+    archive:
+      config: Release
