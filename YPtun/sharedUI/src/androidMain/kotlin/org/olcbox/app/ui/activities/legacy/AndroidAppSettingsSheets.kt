@@ -973,6 +973,20 @@ private fun AppSettingsHubContent(
             )
             SettingsGroupDivider()
             SettingsGroupRow(
+                title = s.coreVersion("Mieru", org.olcbox.app.vpn.CoreVersions.MIERU),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
+                title = s.coreVersion("Turnable", org.olcbox.app.vpn.CoreVersions.TURNABLE),
+                icon = Icons.Outlined.Tune,
+                enabled = true,
+                showChevron = false
+            )
+            SettingsGroupDivider()
+            SettingsGroupRow(
                 title = s.hwid(hwid.ifBlank { "—" }),
                 icon = Icons.Rounded.Key,
                 enabled = hwid.isNotBlank(),

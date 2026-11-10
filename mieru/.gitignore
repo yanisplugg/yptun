@@ -1,0 +1,40 @@
+# third party source code
+/vendor
+
+# binaries
+/bin
+/release
+*.exe
+*.dll
+*.so
+*.dylib
+__pycache__/
+
+# deb and rpm packages
+*.deb
+*.rpm
+/build/package/mieru/amd64/debian/usr/bin/
+/build/package/mieru/amd64/rpm/**
+!/build/package/mieru/amd64/rpm/mieru.spec
+/build/package/mieru/arm64/debian/usr/bin/
+/build/package/mieru/arm64/rpm/**
+!/build/package/mieru/arm64/rpm/mieru.spec
+/build/package/mita/amd64/debian/usr/bin/
+/build/package/mita/amd64/rpm/**
+!/build/package/mita/amd64/rpm/mita.service
+!/build/package/mita/amd64/rpm/mita.spec
+/build/package/mita/arm64/debian/usr/bin/
+/build/package/mita/arm64/rpm/**
+!/build/package/mita/arm64/rpm/mita.service
+!/build/package/mita/arm64/rpm/mita.spec
+
+# build tools
+/tools/build/**
+!/tools/build/README.md
+
+# code editors
+/.vscode/
+
+# code coverage
+/coverage.out
+/coverage.html

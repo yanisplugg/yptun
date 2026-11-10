@@ -1,0 +1,480 @@
+syntax = "proto3";
+
+package turnable.service.v1;
+
+option go_package = "github.com/theairblow/turnable/pkg/service/proto;servicepb";
+
+// InstanceType identifies whether a managed instance is a server or client
+enum InstanceType {
+  INSTANCE_TYPE_UNSPECIFIED = 0;
+  INSTANCE_TYPE_SERVER = 1;
+  INSTANCE_TYPE_CLIENT = 2;
+}
+
+// InstanceEventType describes what happened to an instance.
+// UPDATED is also sent when a client instance loses its connection and starts reconnecting.
+enum InstanceEventType {
+  INSTANCE_EVENT_TYPE_UNSPECIFIED = 0;
+  INSTANCE_EVENT_TYPE_CREATED = 1;
+  INSTANCE_EVENT_TYPE_FAILED = 2;
+  INSTANCE_EVENT_TYPE_STARTED = 3;
+  INSTANCE_EVENT_TYPE_STOPPED = 4;
+  INSTANCE_EVENT_TYPE_UPDATED = 5;
+}
+
+// InstanceStatus describes an instance's current state.
+// Client instances are STARTED only while the tunnel is connected and fall back to STARTING while reconnecting.
+enum InstanceStatus {
+  INSTANCE_STATUS_UNSPECIFIED = 0;
+  INSTANCE_STATUS_STARTING = 1;
+  INSTANCE_STATUS_STARTED = 2;
+  INSTANCE_STATUS_STOPPED = 3;
+  INSTANCE_STATUS_FAILED = 4;
+}
+
+// InstanceInfo describes a managed instance
+message InstanceInfo {
+  string id = 1;
+  InstanceType type = 2;
+  InstanceStatus status = 3;
+  string name = 4;
+  bool autostart = 5;
+}
+
+// InstanceEvent is broadcast message about a change to a managed instance's state or config
+message InstanceEvent {
+  string instance_id = 1;
+  string name = 2;
+  InstanceType instance_type = 3;
+  InstanceEventType event_type = 4;
+}
+
+// LogAttr is a single structured log attribute key/value pair
+message LogAttr {
+  string key = 1;
+  string value = 2;
+}
+
+// LogRecord represents a structured log entry emitted by the service or an instance
+message LogRecord {
+  int64 time = 1;
+  int32 level = 2;
+  string message = 3;
+  repeated LogAttr attrs = 4;
+}
+
+// ServerHello is the first message sent by the service on every new connection
+message ServerHello {
+  string magic = 1;
+  uint32 version = 2;
+  bool auth_required = 3;
+  bytes public_key = 4;
+}
+
+// ClientHello is sent by the client in response if auth is required
+message ClientHello {
+  bytes ciphertext = 1;
+  bytes public_key = 2;
+}
+
+// StartServerRequest starts a new Turnable server instance
+message StartServerRequest {
+  string config = 1;
+  string instance_id = 2;
+  string name = 3;
+  bool autostart = 4;
+  string provider_uuid = 5;
+}
+
+// StartServerResponse carries the new server instance ID or an error
+message StartServerResponse {
+  string instance_id = 1;
+  string error = 2;
+}
+
+// StartClientRequest starts a new Turnable client instance
+message StartClientRequest {
+  string config = 1;
+  repeated string listen_addrs = 2;
+  string instance_id = 3;
+  string name = 4;
+  bool autostart = 5;
+}
+
+// StartClientResponse carries the new client instance ID or an error
+message StartClientResponse {
+  string instance_id = 1;
+  string error = 2;
+}
+
+// StopInstanceRequest stops the specified managed instance
+message StopInstanceRequest {
+  string instance_id = 1;
+}
+
+// StopInstanceResponse is sent in reply to StopInstanceRequest
+message StopInstanceResponse {
+  string error = 1;
+}
+
+// ListInstancesRequest requests the list of all managed instances
+message ListInstancesRequest {}
+
+// ListInstancesResponse carries the list of all managed instances
+message ListInstancesResponse {
+  repeated InstanceInfo instances = 1;
+}
+
+// ValidateServerConfigRequest validates a server config
+message ValidateServerConfigRequest {
+  string config = 1;
+}
+
+// ValidateServerConfigResponse reports whether the server config is valid
+message ValidateServerConfigResponse {
+  bool valid = 1;
+  string error = 2;
+}
+
+// ValidateClientConfigRequest validates a client config JSON or URL
+message ValidateClientConfigRequest {
+  string config = 1;
+}
+
+// ValidateClientConfigResponse reports whether the client config is valid
+message ValidateClientConfigResponse {
+  bool valid = 1;
+  string error = 2;
+}
+
+// ConvertClientConfigRequest converts a client config between JSON and URL form
+message ConvertClientConfigRequest {
+  string config = 1;
+}
+
+// ConvertClientConfigResponse returns the converted client config or an error
+message ConvertClientConfigResponse {
+  string config = 1;
+  string error = 2;
+}
+
+// ProviderInfo describes a managed provider
+message ProviderInfo {
+  string uuid = 1;
+  string name = 2;
+  string config = 3;
+  bool in_use = 4;
+}
+
+// AddProviderRequest adds a new provider
+message AddProviderRequest {
+  string uuid = 1;
+  string name = 2;
+  string config = 3;
+}
+
+// AddProviderResponse carries the provider UUID or an error
+message AddProviderResponse {
+  string uuid = 1;
+  string error = 2;
+}
+
+// GetProviderRequest requests the full details of a provider
+message GetProviderRequest {
+  string uuid = 1;
+}
+
+// GetProviderResponse returns full provider details or an error
+message GetProviderResponse {
+  ProviderInfo provider = 1;
+  string error = 2;
+}
+
+// ListProvidersRequest requests all managed providers
+message ListProvidersRequest {}
+
+// ListProvidersResponse carries the list of all managed providers
+message ListProvidersResponse {
+  repeated ProviderInfo providers = 1;
+}
+
+// DeleteProviderRequest removes a provider
+message DeleteProviderRequest {
+  string uuid = 1;
+}
+
+// DeleteProviderResponse is sent in reply to DeleteProviderRequest
+message DeleteProviderResponse {
+  string error = 1;
+}
+
+// ValidateProviderConfigRequest validates a provider config
+message ValidateProviderConfigRequest {
+  string config = 1;
+}
+
+// ValidateProviderConfigResponse reports whether the provider config is valid
+message ValidateProviderConfigResponse {
+  bool valid = 1;
+  string error = 2;
+}
+
+// RouteInfo describes a route managed by a provider
+message RouteInfo {
+  string id = 1;
+  string address = 2;
+  int32 port = 3;
+  string socket = 4;
+  string transport = 5;
+  string encryption = 6;
+  string name = 7;
+}
+
+// UserInfo describes a user managed by a provider
+message UserInfo {
+  string uuid = 1;
+  repeated string allowed_routes = 2;
+  string type = 3;
+  bool forceturn = 4;
+  int32 peers = 5;
+}
+
+// AddProviderRouteRequest adds a route to a provider
+message AddProviderRouteRequest {
+  string provider_uuid = 1;
+  RouteInfo route = 2;
+}
+
+// AddProviderRouteResponse carries success or error
+message AddProviderRouteResponse {
+  string error = 1;
+}
+
+// DeleteProviderRouteRequest removes a route from a provider
+message DeleteProviderRouteRequest {
+  string provider_uuid = 1;
+  string route_id = 2;
+}
+
+// DeleteProviderRouteResponse carries success or error
+message DeleteProviderRouteResponse {
+  string error = 1;
+}
+
+// ListProviderRoutesRequest calls all routes from a provider
+message ListProviderRoutesRequest {
+  string provider_uuid = 1;
+}
+
+// ListProviderRoutesResponse carries the list of routes
+message ListProviderRoutesResponse {
+  repeated RouteInfo routes = 1;
+  string error = 2;
+}
+
+// AddProviderUserRequest adds a user to a provider
+message AddProviderUserRequest {
+  string provider_uuid = 1;
+  UserInfo user = 2;
+}
+
+// AddProviderUserResponse carries success or error
+message AddProviderUserResponse {
+  string error = 1;
+}
+
+// DeleteProviderUserRequest removes a user from a provider
+message DeleteProviderUserRequest {
+  string provider_uuid = 1;
+  string user_uuid = 2;
+}
+
+// DeleteProviderUserResponse carries success or error
+message DeleteProviderUserResponse {
+  string error = 1;
+}
+
+// ListProviderUsersRequest calls all users from a provider
+message ListProviderUsersRequest {
+  string provider_uuid = 1;
+}
+
+// ListProviderUsersResponse carries the list of users
+message ListProviderUsersResponse {
+  repeated UserInfo users = 1;
+  string error = 2;
+}
+
+// GetInstanceRequest requests the full details of a single instance
+message GetInstanceRequest {
+  string instance_id = 1;
+}
+
+// GetInstanceResponse returns full details including the raw config
+message GetInstanceResponse {
+  InstanceInfo info = 1;
+  string config = 2;
+  repeated string listen_addrs = 3;
+  string error = 4;
+}
+
+// Usage is traffic in bytes from the server's point of view
+message Usage {
+  int64 up = 1;   // sent by clients into the tunnel
+  int64 down = 2; // sent back to clients
+}
+
+// UserStats describes what a server instance knows about a user
+message UserStats {
+  string uuid = 1;
+  Usage usage = 2; // since the instance started
+  int32 channels = 3;
+  int32 sessions = 4;
+  repeated string ips = 5;
+  bool online = 6;
+  int64 last_seen = 7; // unix seconds, 0 if never
+}
+
+// SessionStats describes a live session
+message SessionStats {
+  string id = 1;
+  string user_uuid = 2;
+  string route_id = 3;
+  string addr = 4;
+  int64 since = 5; // unix seconds
+  Usage usage = 6;
+  int32 channels = 7;
+}
+
+// ServerTotals holds server wide numbers
+message ServerTotals {
+  int64 started = 1; // unix seconds
+  Usage usage = 2;
+  int32 channels = 3;
+  int32 sessions = 4;
+  int32 users = 5; // users with a live tunnel
+}
+
+// GetStatsRequest requests the stats of a server instance.
+// With collect set, the response also carries what each user moved since the previous collect and the counters start over.
+message GetStatsRequest {
+  string instance_id = 1;
+  bool collect = 2;
+}
+
+// GetStatsResponse carries server totals, every user seen and the collected usage
+message GetStatsResponse {
+  ServerTotals totals = 1;
+  repeated UserStats users = 2;
+  map<string, Usage> collected = 3; // user UUID to usage since the previous collect
+  string error = 4;
+}
+
+// ListSessionsRequest requests the live sessions of a server instance
+message ListSessionsRequest {
+  string instance_id = 1;
+}
+
+// ListSessionsResponse carries the live sessions
+message ListSessionsResponse {
+  repeated SessionStats sessions = 1;
+  string error = 2;
+}
+
+// KickRequest closes the tunnels of a user or a session, set exactly one of them
+message KickRequest {
+  string instance_id = 1;
+  string user_uuid = 2;
+  string session_id = 3;
+}
+
+// KickResponse carries how many tunnels were closed
+message KickResponse {
+  int32 kicked = 1;
+  string error = 2;
+}
+
+// SessionEventType describes what happened to a tunnel
+enum SessionEventType {
+  SESSION_EVENT_TYPE_UNSPECIFIED = 0;
+  SESSION_EVENT_TYPE_CONNECT = 1;
+  SESSION_EVENT_TYPE_DISCONNECT = 2;
+}
+
+// SessionEvent is broadcast when a tunnel of a server instance opens or closes
+message SessionEvent {
+  string instance_id = 1;
+  SessionEventType event_type = 2;
+  string user_uuid = 3;
+  string session_id = 4;
+  string route_id = 5;
+  string addr = 6;
+  int64 time = 7; // unix seconds
+  Usage usage = 8; // traffic of the tunnel, set on disconnect
+  int32 online = 9; // live tunnels of the user afterwards
+}
+
+// ErrorResponse returns a fatal protocol-level error
+message ErrorResponse {
+  string message = 1;
+}
+
+// Request is a client-to-service message
+message Request {
+  oneof payload {
+    StartServerRequest start_server = 1;
+    StartClientRequest start_client = 2;
+    StopInstanceRequest stop_instance = 3;
+    ListInstancesRequest list_instances = 5;
+    ValidateServerConfigRequest validate_server_config = 6;
+    ValidateClientConfigRequest validate_client_config = 7;
+    ConvertClientConfigRequest convert_client_config = 8;
+    GetInstanceRequest get_instance = 9;
+    AddProviderRequest add_provider = 15;
+    GetProviderRequest get_provider = 16;
+    ListProvidersRequest list_providers = 17;
+    DeleteProviderRequest delete_provider = 18;
+    ValidateProviderConfigRequest validate_provider_config = 19;
+    AddProviderRouteRequest add_provider_route = 20;
+    DeleteProviderRouteRequest delete_provider_route = 21;
+    ListProviderRoutesRequest list_provider_routes = 22;
+    AddProviderUserRequest add_provider_user = 23;
+    DeleteProviderUserRequest delete_provider_user = 24;
+    ListProviderUsersRequest list_provider_users = 25;
+    GetStatsRequest get_stats = 26;
+    ListSessionsRequest list_sessions = 27;
+    KickRequest kick = 28;
+  }
+}
+
+// Response is a service-to-client message
+message Response {
+  oneof payload {
+    StartServerResponse start_server = 1;
+    StartClientResponse start_client = 2;
+    StopInstanceResponse stop_instance = 3;
+    ListInstancesResponse list_instances = 5;
+    LogRecord log_record = 6;
+    ErrorResponse error = 7;
+    ValidateServerConfigResponse validate_server_config = 8;
+    ValidateClientConfigResponse validate_client_config = 9;
+    ConvertClientConfigResponse convert_client_config = 10;
+    GetInstanceResponse get_instance = 11;
+    InstanceEvent instance_event = 12;
+    AddProviderResponse add_provider = 18;
+    GetProviderResponse get_provider = 19;
+    ListProvidersResponse list_providers = 20;
+    DeleteProviderResponse delete_provider = 21;
+    ValidateProviderConfigResponse validate_provider_config = 22;
+    AddProviderRouteResponse add_provider_route = 23;
+    DeleteProviderRouteResponse delete_provider_route = 24;
+    ListProviderRoutesResponse list_provider_routes = 25;
+    AddProviderUserResponse add_provider_user = 26;
+    DeleteProviderUserResponse delete_provider_user = 27;
+    ListProviderUsersResponse list_provider_users = 28;
+    GetStatsResponse get_stats = 29;
+    ListSessionsResponse list_sessions = 30;
+    KickResponse kick = 31;
+    SessionEvent session_event = 32;
+  }
+}

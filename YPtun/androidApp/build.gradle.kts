@@ -1,10 +1,35 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.TaskAction
 import java.util.Properties
 import java.io.FileInputStream
+import java.util.zip.GZIPOutputStream
 
 plugins {
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.android.application)
+}
+
+/** Configuration-cache-safe gzip step for server binaries bundled into Android assets. */
+abstract class GzipBinaryTask : DefaultTask() {
+    @get:InputFile
+    abstract val inputFile: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputFile: RegularFileProperty
+
+    @TaskAction
+    fun gzip() {
+        val input = inputFile.get().asFile
+        val output = outputFile.get().asFile
+        output.parentFile.mkdirs()
+        input.inputStream().buffered().use { source ->
+            GZIPOutputStream(output.outputStream().buffered()).use { target -> source.copyTo(target) }
+        }
+    }
 }
 
 val keystoreProperties = Properties()
@@ -182,6 +207,130 @@ androidAbiFilters.forEach { abi ->
 android.sourceSets.getByName("main").jniLibs.srcDir(openfluxJniLibsDir.get().asFile)
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(buildOpenFluxAndroid) }
+
+// --- Turnable client + VPS server (vendored ../turnable, GPL-2.0, separate subprocess) ---
+// Android owns this integration: other platform builds only configure these tasks and never execute
+// them. The client is packaged as libturnable.so so useLegacyPackaging extracts an executable file;
+// the two Linux server builds are gzip assets consumed by the one-tap SSH installer.
+val turnableRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("turnable")
+val turnableSources = fileTree(turnableRepoDir) {
+    include("**/*.go", "go.mod", "go.sum", "LICENSE", "UPSTREAM_COMMIT")
+    exclude("**/*_test.go")
+}
+val turnableJniLibsDir = layout.buildDirectory.dir("generated/turnable/jniLibs")
+val buildTurnableAndroid = tasks.register("buildTurnableAndroid") {
+    group = "build"
+    description = "Builds the Turnable Android client subprocess for every packaged ABI."
+}
+androidAbiFilters.forEach { abi ->
+    val (goarch, clang, goarm) = when (abi) {
+        "arm64-v8a" -> Triple("arm64", "aarch64-linux-android23-clang", "")
+        "armeabi-v7a" -> Triple("arm", "armv7a-linux-androideabi23-clang", "7")
+        "x86_64" -> Triple("amd64", "x86_64-linux-android23-clang", "")
+        "x86" -> Triple("386", "i686-linux-android23-clang", "")
+        else -> error("Unsupported ABI for Turnable: $abi")
+    }
+    val task = tasks.register<Exec>("buildTurnableAndroid_$abi") {
+        val output = turnableJniLibsDir.map { it.file("$abi/libturnable.so") }
+        inputs.files(turnableSources)
+        outputs.file(output)
+        workingDir = turnableRepoDir
+        environment("GOOS", "android")
+        environment("GOARCH", goarch)
+        environment("CGO_ENABLED", "1")
+        environment(
+            "CC",
+            openfluxNdkDir.resolve("toolchains/llvm/prebuilt/$openfluxHostTag/bin/$clang$openfluxClangSuffix").absolutePath,
+        )
+        if (goarm.isNotEmpty()) environment("GOARM", goarm)
+        commandLine("go", "build", "-trimpath", "-ldflags", "-s -w", "-o", output.get().asFile.absolutePath, "./cmd")
+        doFirst { output.get().asFile.parentFile.mkdirs() }
+    }
+    buildTurnableAndroid.configure { dependsOn(task) }
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(turnableJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildTurnableAndroid) }
+
+val turnableServerRawDir = layout.buildDirectory.dir("generated/turnable/server")
+val turnableAssetsDir = layout.buildDirectory.dir("generated/turnable/assets")
+val buildTurnableServerAssets = tasks.register("buildTurnableServerAssets") {
+    group = "build"
+    description = "Builds compressed Turnable Linux server binaries for the Android SSH installer."
+}
+mapOf("amd64" to "amd64", "arm64" to "arm64").forEach { (name, goarch) ->
+    val raw = turnableServerRawDir.map { it.file("turnable-linux-$name") }
+    val build = tasks.register<Exec>("buildTurnableServer_$name") {
+        inputs.files(turnableSources)
+        outputs.file(raw)
+        workingDir = turnableRepoDir
+        environment("GOOS", "linux")
+        environment("GOARCH", goarch)
+        environment("CGO_ENABLED", "0")
+        commandLine("go", "build", "-trimpath", "-ldflags", "-s -w", "-o", raw.get().asFile.absolutePath, "./cmd")
+        doFirst { raw.get().asFile.parentFile.mkdirs() }
+    }
+    val gzip = tasks.register<GzipBinaryTask>("gzipTurnableServer_$name") {
+        dependsOn(build)
+        inputFile.set(raw)
+        outputFile.set(turnableAssetsDir.map { it.file("turnable/turnable-linux-$name.gz") })
+    }
+    buildTurnableServerAssets.configure { dependsOn(gzip) }
+}
+android.sourceSets.getByName("main").assets.srcDir(turnableAssetsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(buildTurnableServerAssets) }
+// Lint models inspect every Android source-set asset directly (not through mergeAssets), so Gradle 9
+// requires the generated-assets producer to be wired to those tasks too.
+tasks.matching { it.name.contains("lint", ignoreCase = true) }
+    .configureEach { dependsOn(buildTurnableServerAssets) }
+
+// --- mieru client (github.com/enfein/mieru, GPL-3.0, standalone subprocess) ---
+// The app talks to the executable only through its loopback SOCKS5 listener. Keeping it out of the
+// Kotlin/Rust/Go libraries preserves a clear GPL process boundary and lets upstream's own `mieru://`
+// and `mierus://` import code remain authoritative.
+val mieruRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("mieru")
+val mieruSources = fileTree(mieruRepoDir) {
+    include("**/*.go", "go.mod", "go.sum", "LICENSE", "UPSTREAM_COMMIT")
+    exclude("**/*_test.go")
+}
+val mieruJniLibsDir = layout.buildDirectory.dir("generated/mieru/jniLibs")
+val buildMieruAndroid = tasks.register("buildMieruAndroid") {
+    group = "build"
+    description = "Builds the mieru Android SOCKS5 client subprocess for every packaged ABI."
+}
+androidAbiFilters.forEach { abi ->
+    val (goarch, clang, goarm) = when (abi) {
+        "arm64-v8a" -> Triple("arm64", "aarch64-linux-android23-clang", "")
+        "armeabi-v7a" -> Triple("arm", "armv7a-linux-androideabi23-clang", "7")
+        "x86_64" -> Triple("amd64", "x86_64-linux-android23-clang", "")
+        "x86" -> Triple("386", "i686-linux-android23-clang", "")
+        else -> error("Unsupported ABI for mieru: $abi")
+    }
+    val task = tasks.register<Exec>("buildMieruAndroid_$abi") {
+        val output = mieruJniLibsDir.map { it.file("$abi/libmieru.so") }
+        inputs.files(mieruSources)
+        outputs.file(output)
+        workingDir = mieruRepoDir
+        environment("GOOS", "android")
+        environment("GOARCH", goarch)
+        environment("CGO_ENABLED", "1")
+        environment(
+            "CC",
+            openfluxNdkDir.resolve("toolchains/llvm/prebuilt/$openfluxHostTag/bin/$clang$openfluxClangSuffix").absolutePath,
+        )
+        if (goarm.isNotEmpty()) environment("GOARM", goarm)
+        commandLine(
+            "go", "build", "-trimpath", "-ldflags", "-s -w",
+            "-o", output.get().asFile.absolutePath, "./cmd/mieru",
+        )
+        doFirst { output.get().asFile.parentFile.mkdirs() }
+    }
+    buildMieruAndroid.configure { dependsOn(task) }
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(mieruJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildMieruAndroid) }
 
 // --- snolc client executable (../snolc, static, all modules linked in), packaged as lib/<abi>/libsnolc.so ---
 // Prebuilt by snolc/build-all.sh (Rust 1.98.1 + the NDK) and committed; run as a SUBPROCESS from

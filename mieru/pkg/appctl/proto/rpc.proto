@@ -1,0 +1,107 @@
+// Copyright (C) 2024  mieru authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+syntax = "proto3";
+
+package mieru.appctl;
+
+import "appctl/proto/base.proto";
+import "appctl/proto/misc.proto";
+import "appctl/proto/servercfg.proto";
+import "appctl/proto/google/protobuf/empty.proto";
+
+option go_package = "github.com/enfein/mieru/v3/pkg/appctl/appctlgrpc";
+
+service ClientManagementService {
+    // Fetch client application status.
+    rpc GetStatus(google.protobuf.Empty) returns (AppStatusMsg);
+
+    // Quit client daemon.
+    rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Get client metrics.
+    rpc GetMetrics(google.protobuf.Empty) returns (Metrics);
+
+    // Get client session information.
+    rpc GetSessionInfoList(google.protobuf.Empty) returns (SessionInfoList);
+
+    // Generate a thread dump of client daemon.
+    rpc GetThreadDump(google.protobuf.Empty) returns (ThreadDump);
+
+    // Start CPU profiling.
+    rpc StartCPUProfile(ProfileSavePath) returns (google.protobuf.Empty);
+
+    // Stop CPU profiling.
+    rpc StopCPUProfile(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Generate a heap profile.
+    rpc GetHeapProfile(ProfileSavePath) returns (google.protobuf.Empty);
+
+    // Get memory statistics of client daemon.
+    rpc GetMemoryStatistics(google.protobuf.Empty) returns (MemoryStatistics);
+
+    // Get client version.
+    rpc GetVersion(google.protobuf.Empty) returns (Version);
+}
+
+service ServerManagementService {
+    // Fetch server application status.
+    rpc GetStatus(google.protobuf.Empty) returns (AppStatusMsg);
+
+    // Start proxy in server application.
+    rpc Start(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Stop proxy in server application.
+    rpc Stop(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Fetch the server config.
+    rpc GetConfig(google.protobuf.Empty) returns (ServerConfig);
+
+    // Update server config.
+    rpc SetConfig(ServerConfig) returns (ServerConfig);
+
+    // Reload server configuration.
+    rpc Reload(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Quit server daemon.
+    rpc Exit(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Get server metrics.
+    rpc GetMetrics(google.protobuf.Empty) returns (Metrics);
+
+    // Get server session information.
+    rpc GetSessionInfoList(google.protobuf.Empty) returns (SessionInfoList);
+
+    // Get users setting and runtime information.
+    rpc GetUsers(google.protobuf.Empty) returns (UserWithMetricsList);
+
+    // Generate a thread dump of server daemon.
+    rpc GetThreadDump(google.protobuf.Empty) returns (ThreadDump);
+
+    // Start CPU profiling.
+    rpc StartCPUProfile(ProfileSavePath) returns (google.protobuf.Empty);
+
+    // Stop CPU profiling.
+    rpc StopCPUProfile(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Generate a heap profile.
+    rpc GetHeapProfile(ProfileSavePath) returns (google.protobuf.Empty);
+
+    // Get memory statistics of server daemon.
+    rpc GetMemoryStatistics(google.protobuf.Empty) returns (MemoryStatistics);
+
+    // Get server version.
+    rpc GetVersion(google.protobuf.Empty) returns (Version);
+}

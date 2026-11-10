@@ -1,0 +1,59 @@
+{
+    "portBindings": [
+        {
+            "portRange": "2012-2022",
+            "protocol": "TCP"
+        },
+        {
+            "port": 2027,
+            "protocol": "TCP"
+        }
+    ],
+    "users": [
+        {
+            "name": "ducaiguozei",
+            "password": "xijinping"
+        },
+        {
+            "name": "meiyougongchandang",
+            "password": "caiyouxinzhongguo"
+        }
+    ],
+    "loggingLevel": "INFO",
+    "mtu": 1400,
+    "egress": {
+        "proxies": [
+            {
+                "name": "proxy1",
+                "protocol": "SOCKS5_PROXY_PROTOCOL",
+                "host": "localhost",
+                "port": 1081
+            },
+            {
+                "name": "proxy2",
+                "protocol": "SOCKS5_PROXY_PROTOCOL",
+                "host": "localhost",
+                "port": 1082
+            }
+        ],
+        "rules": [
+            {
+                "ipRanges": ["8.8.4.4/32", "8.8.8.8/32"],
+                "action": "REJECT"
+            },
+            {
+                "domainNames": ["chatgpt.com", "grok.com"],
+                "action": "PROXY",
+                "proxyNames": ["proxy1", "proxy2"]
+            },
+            {
+                "ipRanges": ["*"],
+                "domainNames": ["*"],
+                "action": "DIRECT"
+            }
+        ]
+    },
+    "dns": {
+        "dualStack": "PREFER_IPv4"
+    }
+}

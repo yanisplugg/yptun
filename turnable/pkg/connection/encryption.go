@@ -1,0 +1,289 @@
+package connection
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/mlkem"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+)
+
+const (
+	encryptedTunnelMagic   = "TENC" // tunnel hello magic
+	encryptedTunnelVersion = 1      // tunnel hello version
+)
+
+// EncryptedConn wraps a net.Conn with per-packet AES-256-GCM-12 encryption
+type EncryptedConn struct {
+	conn net.Conn // underlying packet conn
+
+	readAEAD  cipher.AEAD // decrypts incoming packets
+	writeAEAD cipher.AEAD // encrypts outgoing packets
+
+	readPrefix  [4]byte // nonce prefix for incoming packets
+	writePrefix [4]byte // nonce prefix for outgoing packets
+	writeSeq    uint64  // next outgoing packet counter
+
+	readBuf  []byte // raw read buffer
+	plainBuf []byte // decrypted read buffer
+	writeBuf []byte // write buffer
+
+	readMu  sync.Mutex // serializes reads
+	writeMu sync.Mutex // serializes writes
+}
+
+// WrapClientEncryptedConn bootstraps the encrypted tunnel from the client side
+func WrapClientEncryptedConn(conn net.Conn, serverPubKey string) (*EncryptedConn, error) {
+	pubBytes, err := base64.StdEncoding.DecodeString(serverPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode server public key: %w", err)
+	}
+
+	pubKey, err := mlkem.NewEncapsulationKey768(pubBytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server public key: %w", err)
+	}
+
+	sharedKey, ciphertext := pubKey.Encapsulate()
+	if err := writeClientHello(conn, ciphertext); err != nil {
+		return nil, err
+	}
+
+	return newEncryptedConn(conn, sharedKey, true)
+}
+
+// WrapServerEncryptedConn bootstraps the encrypted tunnel from the server side
+func WrapServerEncryptedConn(conn net.Conn, serverPrivKey string) (*EncryptedConn, error) {
+	privBytes, err := base64.StdEncoding.DecodeString(serverPrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode server private key: %w", err)
+	}
+
+	privKey, err := mlkem.NewDecapsulationKey768(privBytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server private key: %w", err)
+	}
+
+	ciphertext, err := readClientHello(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	sharedKey, err := privKey.Decapsulate(ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decapsulate client tunnel key: %w", err)
+	}
+
+	return newEncryptedConn(conn, sharedKey, false)
+}
+
+// newEncryptedConn derives directional AEAD contexts from one shared key
+func newEncryptedConn(conn net.Conn, sharedKey []byte, isClient bool) (*EncryptedConn, error) {
+	clientWriteKey, clientWritePrefix := DeriveTunnelMaterial(sharedKey, "client->server")
+	serverWriteKey, serverWritePrefix := DeriveTunnelMaterial(sharedKey, "server->client")
+
+	var readKey, writeKey []byte
+	var readPrefix, writePrefix [4]byte
+	if isClient {
+		writeKey, writePrefix = clientWriteKey, clientWritePrefix
+		readKey, readPrefix = serverWriteKey, serverWritePrefix
+	} else {
+		writeKey, writePrefix = serverWriteKey, serverWritePrefix
+		readKey, readPrefix = clientWriteKey, clientWritePrefix
+	}
+
+	readAEAD, err := NewTunnelAEAD(readKey)
+	if err != nil {
+		return nil, err
+	}
+	writeAEAD, err := NewTunnelAEAD(writeKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EncryptedConn{
+		conn:        conn,
+		readAEAD:    readAEAD,
+		writeAEAD:   writeAEAD,
+		readPrefix:  readPrefix,
+		writePrefix: writePrefix,
+		readBuf:     make([]byte, muxMaxPacket+22),
+		plainBuf:    make([]byte, 0, muxMaxPacket+22),
+		writeBuf:    make([]byte, 8, muxMaxPacket+30),
+	}, nil
+}
+
+// DeriveTunnelMaterial splits the shared key into per-direction key and nonce material
+func DeriveTunnelMaterial(sharedKey []byte, label string) ([]byte, [4]byte) {
+	keyHash := sha256.Sum256(append(append([]byte{}, sharedKey...), []byte(" key "+label)...))
+	prefixHash := sha256.Sum256(append(append([]byte{}, sharedKey...), []byte(" nonce "+label)...))
+	var prefix [4]byte
+	copy(prefix[:], prefixHash[:4])
+	return keyHash[:], prefix
+}
+
+// NewTunnelAEAD creates a new AES-256-GCM-12 AEAD used for tunnel encryption
+func NewTunnelAEAD(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize aes cipher: %w", err)
+	}
+	aead, err := cipher.NewGCMWithTagSize(block, 12)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize aes-gcm: %w", err)
+	}
+	return aead, nil
+}
+
+// writeClientHello sends the client hello packet
+func writeClientHello(conn net.Conn, ciphertext []byte) error {
+	header := make([]byte, 0, 4+1+2+len(ciphertext))
+	header = append(header, encryptedTunnelMagic...)
+	header = append(header, encryptedTunnelVersion)
+	header = binary.BigEndian.AppendUint16(header, uint16(len(ciphertext)))
+	header = append(header, ciphertext...)
+
+	if _, err := conn.Write(header); err != nil {
+		return fmt.Errorf("failed to write encrypted tunnel hello: %w", err)
+	}
+
+	return nil
+}
+
+// readClientHello reads the client hello packet
+func readClientHello(conn net.Conn) ([]byte, error) {
+	buf := make([]byte, 4096)
+	total := 0
+	cipherLen := -1
+
+	for {
+		if total == len(buf) {
+			buf = append(buf, make([]byte, len(buf))...)
+		}
+
+		n, err := conn.Read(buf[total:])
+		total += n
+
+		if cipherLen < 0 && total >= 7 {
+			if string(buf[:4]) != encryptedTunnelMagic {
+				return nil, fmt.Errorf("invalid encrypted tunnel magic: got %q", string(buf[:4]))
+			}
+			if buf[4] != encryptedTunnelVersion {
+				return nil, fmt.Errorf("unsupported encrypted tunnel version %d", buf[4])
+			}
+			cipherLen = int(binary.BigEndian.Uint16(buf[5:7]))
+			if cipherLen == 0 {
+				return nil, errors.New("encrypted tunnel ciphertext is empty")
+			}
+		}
+
+		if cipherLen >= 0 && total >= 7+cipherLen {
+			return buf[7 : 7+cipherLen], nil
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to read encrypted tunnel hello: %w", err)
+		}
+	}
+}
+
+// Read decrypts one incoming datagram
+func (t *EncryptedConn) Read(p []byte) (int, error) {
+	t.readMu.Lock()
+	defer t.readMu.Unlock()
+
+	needed := len(p) + 20
+	if needed > len(t.readBuf) {
+		t.readBuf = make([]byte, needed)
+	}
+	n, err := t.conn.Read(t.readBuf[:needed])
+	if err != nil {
+		return 0, err
+	}
+
+	if n < 8+t.readAEAD.Overhead() {
+		return 0, errors.New("encrypted packet too short")
+	}
+
+	var nonce [12]byte
+	copy(nonce[:4], t.readPrefix[:])
+	copy(nonce[4:], t.readBuf[:8])
+
+	plain, err := t.readAEAD.Open(t.plainBuf[:0], nonce[:], t.readBuf[8:n], nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to decrypt packet: %w", err)
+	}
+
+	if len(plain) > len(p) {
+		return 0, fmt.Errorf("decrypted packet too large for buffer: %d > %d", len(plain), len(p))
+	}
+
+	copy(p, plain)
+	return len(plain), nil
+}
+
+// Write encrypts buffer and sends it as one datagram
+func (t *EncryptedConn) Write(p []byte) (int, error) {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+
+	var nonce [12]byte
+	copy(nonce[:4], t.writePrefix[:])
+	binary.BigEndian.PutUint64(nonce[4:], t.writeSeq)
+	t.writeSeq++
+
+	needed := 8 + len(p) + t.writeAEAD.Overhead()
+	if needed > cap(t.writeBuf) {
+		t.writeBuf = make([]byte, 8, needed)
+	}
+	out := t.writeBuf[:8]
+	copy(out, nonce[4:])
+	out = t.writeAEAD.Seal(out, nonce[:], p, nil)
+
+	if _, err := t.conn.Write(out); err != nil {
+		return 0, err
+	}
+
+	return len(p), nil
+}
+
+// Underlying returns the raw conn beneath the encryption layer
+func (t *EncryptedConn) Underlying() net.Conn {
+	return t.conn
+}
+
+// Close closes the underlying connection
+func (t *EncryptedConn) Close() error {
+	return t.conn.Close()
+}
+
+// LocalAddr returns the local network address
+func (t *EncryptedConn) LocalAddr() net.Addr {
+	return t.conn.LocalAddr()
+}
+
+// RemoteAddr returns the remote network address
+func (t *EncryptedConn) RemoteAddr() net.Addr {
+	return t.conn.RemoteAddr()
+}
+
+// SetDeadline sets the deadline on the underlying connection
+func (t *EncryptedConn) SetDeadline(deadline time.Time) error {
+	return t.conn.SetDeadline(deadline)
+}
+
+// SetReadDeadline sets the read deadline on the underlying connection
+func (t *EncryptedConn) SetReadDeadline(deadline time.Time) error {
+	return t.conn.SetReadDeadline(deadline)
+}
+
+// SetWriteDeadline sets the write deadline on the underlying connection
+func (t *EncryptedConn) SetWriteDeadline(deadline time.Time) error {
+	return t.conn.SetWriteDeadline(deadline)
+}
