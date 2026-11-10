@@ -1,4 +1,9 @@
-use yptun_ffi::{AppleActionKind, AppleConnectionRuntime, AppleStatusKind};
+use yptun_core::location::LocationConfig;
+use yptun_core::model::EngineType;
+use yptun_core::routing::TrafficSettings;
+use yptun_ffi::{
+    apple_bridge_plan, apple_tunnel_plan, AppleActionKind, AppleConnectionRuntime, AppleStatusKind,
+};
 
 fn kinds(actions: &[yptun_ffi::AppleConnectionAction]) -> Vec<AppleActionKind> {
     actions.iter().map(|action| action.kind).collect()
@@ -80,4 +85,64 @@ fn retry_and_user_required_states_keep_context() {
         ]
     );
     assert_eq!(runtime.status().kind, AppleStatusKind::NeedsUser);
+}
+
+#[test]
+fn tunnel_plan_keeps_fake_dns_inside_the_vpn_and_bypasses_lan() {
+    let plan = apple_tunnel_plan(900, true);
+    assert_eq!(plan.mtu, 1_280);
+    assert_eq!(plan.ipv4_address, "198.51.100.1");
+    assert_eq!(plan.ipv6_prefix_length, 126);
+    assert_eq!(plan.dns_servers, vec!["1.1.1.1"]);
+    assert_eq!(plan.dns_match_domains, vec![""]);
+    assert!(plan.include_default_ipv4_route && plan.include_default_ipv6_route);
+    assert!(plan
+        .excluded_ipv4_routes
+        .iter()
+        .any(|route| route.address == "192.168.0.0" && route.subnet_mask == "255.255.0.0"));
+    assert!(!plan
+        .excluded_ipv4_routes
+        .iter()
+        .any(|route| route.address == "100.64.0.0"));
+    assert!(apple_tunnel_plan(1_500, false)
+        .excluded_ipv4_routes
+        .is_empty());
+}
+
+#[test]
+fn bridge_plan_matches_engine_and_ip_family_rules() {
+    let mut location = LocationConfig::default();
+    location.engine = EngineType::MasterDns;
+    let mut traffic = TrafficSettings::default();
+    traffic.mtu = 1_420;
+    traffic.domain_strategy = "prefer_ipv6".into();
+    let plan = apple_bridge_plan(
+        serde_json::to_string(&location).unwrap(),
+        serde_json::to_string(&traffic).unwrap(),
+        10_808,
+        "u'ser".into(),
+        "pass".into(),
+    )
+    .unwrap();
+
+    assert!(plan.tcp_only_udp);
+    assert!(plan.slow_tunnel);
+    assert!(!plan.drop_ipv6);
+    assert!(plan.yaml.contains("mtu: 1420"));
+    assert!(plan.yaml.contains("udp: 'tcp'"));
+    assert!(plan.yaml.contains("username: 'u''ser'"));
+    assert!(plan.yaml.contains("connect-timeout: 30000"));
+    assert!(plan.yaml.contains("ipv6: 'fdfe:dcba:9876::1'"));
+
+    location.engine = EngineType::VkTurn;
+    let vk = apple_bridge_plan(
+        serde_json::to_string(&location).unwrap(),
+        serde_json::to_string(&traffic).unwrap(),
+        10_808,
+        "u".into(),
+        "p".into(),
+    )
+    .unwrap();
+    assert!(vk.drop_ipv6);
+    assert!(vk.yaml.contains("# ipv6 disabled"));
 }

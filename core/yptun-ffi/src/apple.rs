@@ -6,6 +6,145 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use yptun_core::engine::machine::{Action, ConnectionMachine, Event, RetryPolicy, Status};
+use yptun_core::location::LocationConfig;
+use yptun_core::model::EngineType;
+use yptun_core::routing::TrafficSettings;
+
+use crate::{from_json, FfiError};
+
+const TUN_IPV4_ADDRESS: &str = "198.51.100.1";
+const TUN_IPV4_REMOTE: &str = "198.51.100.2";
+const TUN_IPV4_SUBNET_MASK: &str = "255.255.255.0";
+const TUN_IPV6_ADDRESS: &str = "fdfe:dcba:9876::1";
+const MAPDNS_ADDRESS: &str = "1.1.1.1";
+
+const LAN_ROUTES: [(&str, &str); 7] = [
+    ("10.0.0.0", "255.0.0.0"),
+    ("127.0.0.0", "255.0.0.0"),
+    ("169.254.0.0", "255.255.0.0"),
+    ("172.16.0.0", "255.240.0.0"),
+    ("192.168.0.0", "255.255.0.0"),
+    ("224.0.0.0", "240.0.0.0"),
+    ("255.255.255.255", "255.255.255.255"),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleIpv4Route {
+    pub address: String,
+    pub subnet_mask: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleTunnelPlan {
+    pub tunnel_remote_address: String,
+    pub mtu: i32,
+    pub ipv4_address: String,
+    pub ipv4_subnet_mask: String,
+    pub include_default_ipv4_route: bool,
+    pub excluded_ipv4_routes: Vec<AppleIpv4Route>,
+    pub ipv6_address: String,
+    pub ipv6_prefix_length: i32,
+    pub include_default_ipv6_route: bool,
+    pub dns_servers: Vec<String>,
+    pub dns_match_domains: Vec<String>,
+}
+
+/// The platform-neutral values Swift applies to `NEPacketTunnelNetworkSettings`.
+#[uniffi::export]
+pub fn apple_tunnel_plan(mtu: i32, bypass_lan: bool) -> AppleTunnelPlan {
+    AppleTunnelPlan {
+        tunnel_remote_address: TUN_IPV4_REMOTE.into(),
+        mtu: mtu.clamp(1_280, 9_000),
+        ipv4_address: TUN_IPV4_ADDRESS.into(),
+        ipv4_subnet_mask: TUN_IPV4_SUBNET_MASK.into(),
+        include_default_ipv4_route: true,
+        excluded_ipv4_routes: if bypass_lan {
+            LAN_ROUTES
+                .into_iter()
+                .map(|(address, subnet_mask)| AppleIpv4Route {
+                    address: address.into(),
+                    subnet_mask: subnet_mask.into(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        // IPv6 is always captured. When the selected strategy is IPv4-only, the bridge omits its
+        // IPv6 address and blackholes packets rather than allowing them to bypass the VPN.
+        ipv6_address: TUN_IPV6_ADDRESS.into(),
+        ipv6_prefix_length: 126,
+        include_default_ipv6_route: true,
+        dns_servers: vec![MAPDNS_ADDRESS.into()],
+        dns_match_domains: vec![String::new()],
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleBridgePlan {
+    pub yaml: String,
+    pub tcp_only_udp: bool,
+    pub drop_ipv6: bool,
+    pub slow_tunnel: bool,
+}
+
+fn yaml_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+/// Builds the deterministic hev-socks5-tunnel configuration formerly assembled in Kotlin.
+#[uniffi::export]
+pub fn apple_bridge_plan(
+    location_json: String,
+    traffic_json: String,
+    socks_port: i32,
+    socks_username: String,
+    socks_password: String,
+) -> Result<AppleBridgePlan, FfiError> {
+    let location: LocationConfig =
+        from_json::<LocationConfig>("LocationConfig", &location_json)?.normalized();
+    let traffic = from_json::<TrafficSettings>("TrafficSettings", &traffic_json)?.normalized();
+    if !(1..=65_535).contains(&socks_port) {
+        return Err(FfiError::Invalid(format!(
+            "SOCKS port {socks_port} is out of range"
+        )));
+    }
+
+    let tcp_only_udp = matches!(
+        location.engine,
+        EngineType::Stealth | EngineType::MasterDns | EngineType::OpenFlux
+    );
+    let slow_tunnel = matches!(
+        location.engine,
+        EngineType::MasterDns | EngineType::OpenFlux
+    );
+    let drop_ipv6 = location.engine == EngineType::VkTurn
+        || matches!(
+            traffic.domain_strategy.as_str(),
+            "ipv4_only" | "prefer_ipv4"
+        );
+    let ipv6 = if drop_ipv6 {
+        "# ipv6 disabled (IPv4 only/preferred)".to_string()
+    } else {
+        format!("ipv6: '{TUN_IPV6_ADDRESS}'")
+    };
+    let connect_timeout = if slow_tunnel { 30_000 } else { 10_000 };
+    let username = yaml_single_quoted(&socks_username);
+    let password = yaml_single_quoted(&socks_password);
+    let yaml = format!(
+        "tunnel:\n  mtu: {mtu}\n  ipv4: {ipv4}\n  {ipv6}\n\nsocks5:\n  address: 127.0.0.1\n  port: {socks_port}\n  udp: '{udp}'\n  pipeline: false\n  username: '{username}'\n  password: '{password}'\n\nmapdns:\n  address: {mapdns}\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 10000\n\nmisc:\n  task-stack-size: 24576\n  tcp-buffer-size: 4096\n  max-session-count: 1200\n  connect-timeout: {connect_timeout}\n  tcp-read-write-timeout: 300000\n  udp-read-write-timeout: 60000\n  log-level: warn\n",
+        mtu = traffic.mtu,
+        ipv4 = TUN_IPV4_ADDRESS,
+        udp = if tcp_only_udp { "tcp" } else { "udp" },
+        mapdns = MAPDNS_ADDRESS,
+    );
+
+    Ok(AppleBridgePlan {
+        yaml,
+        tcp_only_udp,
+        drop_ipv6,
+        slow_tunnel,
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum AppleStatusKind {
