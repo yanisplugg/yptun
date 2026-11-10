@@ -1374,7 +1374,6 @@ object XrayConfig {
         bypassLan: Boolean = true,
     ): String {
         val bases = wgProfiles.mapIndexedNotNull { i, p -> buildWireguardBaseOutbound(p, "$WG_BAL_PREFIX$i") }
-        val serverCount = bases.size
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
             putJsonObject("dns") {
@@ -1423,45 +1422,19 @@ object XrayConfig {
                 addJsonObject { put("tag", "block"); put("protocol", "blackhole") }
                 if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
             }
-            // Health-probe each WG-over-VK outbound so a DEAD freeturn server (VPS down, relay never
-            // came up) is detected and dropped from the balancer instead of black-holing the
-            // connections round-robined onto it — i.e. "even if the 2nd server doesn't connect, the
-            // tunnel still works off the live one(s)". The probe egresses through each wg-bal-* outbound
-            // (→ its local freeturn relay → VK → VPS → internet), so it measures the real end-to-end path.
-            if (serverCount > 1) {
-                putJsonObject("burstObservatory") {
-                    putJsonArray("subjectSelector") { add(WG_BAL_PREFIX) }
-                    putJsonObject("pingConfig") {
-                        put("destination", "http://connectivitycheck.gstatic.com/generate_204")
-                        put("interval", "10s")
-                        put("sampling", 2)
-                        put("timeout", "8s")
-                    }
-                }
-            }
             putJsonObject("routing") {
                 put("domainStrategy", "AsIs")
                 putJsonArray("balancers") {
                     addJsonObject {
                         put("tag", WG_BALANCER_TAG)
                         putJsonArray("selector") { add(WG_BAL_PREFIX) }
-                        // leastLoad with expected=N keeps ALL healthy servers in rotation (so their
-                        // bandwidth still aggregates like round-robin) while the burstObservatory health
-                        // data lets it EXCLUDE servers that don't answer — a dead 2nd server is skipped,
-                        // not black-holed. fallbackTag guarantees an exit during the cold-start window
-                        // before the first probe lands (and if every server is briefly unhealthy), so
-                        // traffic is never dropped. Single server → no balancer (caller gate), so this
-                        // only ever runs with ≥2 outbounds.
+                        // Do not gate balancing on HTTP health probes. A probe host can be blocked or DNS
+                        // can fail while every WG-over-VK exit is healthy; leastLoad then returned no
+                        // candidates and fallbackTag pinned ALL traffic to wg-bal-0 forever. Round-robin
+                        // is deterministic, needs no observatory, and actually aggregates multi-stream
+                        // traffic across every configured server.
                         put("fallbackTag", "$WG_BAL_PREFIX${'0'}")
-                        putJsonObject("strategy") {
-                            put("type", "leastLoad")
-                            putJsonObject("settings") {
-                                put("expected", serverCount)
-                                // Generous RTT ceiling: a server under this through VK qualifies; it only
-                                // filters out the truly dead/unreachable ones.
-                                putJsonArray("baselines") { add("3000ms") }
-                            }
-                        }
+                        putJsonObject("strategy") { put("type", "roundRobin") }
                     }
                 }
                 putJsonArray("rules") {
