@@ -53,6 +53,7 @@ fun AddConfigurationSheet(
     onImportFileClick: () -> Unit,
     onUpdateSubscriptionsClick: () -> Unit,
     onAddCustomLocationClick: () -> Unit,
+    onAddTurnableClick: () -> Unit = onAddCustomLocationClick,
     onCreateGroupClick: () -> Unit = {},
     onFreeServersClick: () -> Unit = {}
 ) {
@@ -114,6 +115,15 @@ fun AddConfigurationSheet(
                     icon = Icons.Outlined.Add,
                     onClick = onAddCustomLocationClick
                 )
+
+                if (org.olcbox.app.update.UpdatePlatform.current().os == "android") {
+                    AddSheetAction(
+                        title = "Turnable",
+                        value = s.engineVkTurnDesc,
+                        icon = Icons.Outlined.Public,
+                        onClick = onAddTurnableClick
+                    )
+                }
 
                 AddSheetAction(
                     title = s.createFolder,

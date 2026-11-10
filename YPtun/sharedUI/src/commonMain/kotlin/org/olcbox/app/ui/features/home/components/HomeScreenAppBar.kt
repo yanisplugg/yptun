@@ -3,7 +3,6 @@ package org.olcbox.app.ui.features.home.components
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.GridView
@@ -47,7 +46,6 @@ fun HomeScreenAppBar(
     onDeleteAllConfigs: () -> Unit = {},
     // Settings that change the home screen itself live in this menu, next to the list they affect.
     onListViewClick: (() -> Unit)? = null,
-    onPingSettingsClick: (() -> Unit)? = null,
     onCreateGroupClick: (() -> Unit)? = null,
     // Desktop only: a way out of the app from the main window (the tray menu can be unavailable).
     onExitClick: (() -> Unit)? = null
@@ -106,7 +104,7 @@ fun HomeScreenAppBar(
                     )
                 }
             }
-            val hasViewItems = onListViewClick != null || onPingSettingsClick != null || onCreateGroupClick != null
+            val hasViewItems = onListViewClick != null || onCreateGroupClick != null
             if (showOverflowMenu || hasViewItems) {
                 IconButton(onClick = { overflowExpanded = true }) {
                     Icon(
@@ -124,16 +122,6 @@ fun HomeScreenAppBar(
                         DropdownMenuItem(
                             text = { Text(s.listViewTitle) },
                             leadingIcon = { Icon(Icons.Outlined.GridView, contentDescription = null) },
-                            onClick = {
-                                overflowExpanded = false
-                                open()
-                            }
-                        )
-                    }
-                    onPingSettingsClick?.let { open ->
-                        DropdownMenuItem(
-                            text = { Text(s.pingSettingsTitle) },
-                            leadingIcon = { Icon(Icons.Outlined.Bolt, contentDescription = null) },
                             onClick = {
                                 overflowExpanded = false
                                 open()

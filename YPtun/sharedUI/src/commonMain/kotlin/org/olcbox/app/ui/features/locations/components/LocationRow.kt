@@ -273,10 +273,10 @@ fun LocationRow(
         }
         
         // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
-        // so show a neutral dash instead of a ms value or a false "Offline".
+        // so show a neutral question mark instead of a ms value or a false "Offline".
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
         // MasterDNS (DNS tunnel) can't be probed directly either: a NULL ping = "not measurable", not
-        // "offline". Show "—" instead of a red fail when there's no ms; a live end-to-end RTT still shows.
+        // "offline". Show "?" instead of a red fail when there's no ms; a live end-to-end RTT still shows.
         val isMasterDns = location.config?.engine == org.olcbox.app.data.model.EngineType.MasterDns ||
             location.config?.engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
             location.config?.engine == org.olcbox.app.data.model.EngineType.Snolc
@@ -310,7 +310,7 @@ fun LocationRow(
 
             isVkTurn || isMasterDns -> {
                 Text(
-                    text = "—",
+                    text = "?",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -641,7 +641,7 @@ private fun CompactPingIndicator(
 ) {
     val isVkTurn = location.config?.engine == EngineType.VkTurn
     // MasterDNS is an obfuscated DNS tunnel: it has no directly-probeable endpoint, so a NULL ping means
-    // "not measurable" (disconnected), NOT "offline" — showing a red fail was wrong. Render "—" instead
+    // "not measurable" (disconnected), NOT "offline" — showing a red fail was wrong. Render "?" instead
     // when there's no ping; a real end-to-end RTT (measured through the live tunnel) still shows as ms.
     val isMasterDns = location.config?.engine == EngineType.MasterDns ||
         location.config?.engine == EngineType.OpenFlux ||
@@ -669,7 +669,7 @@ private fun CompactPingIndicator(
         }
 
         isVkTurn || isMasterDns -> Text(
-            text = "—",
+            text = "?",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -39,6 +39,7 @@ import org.olcbox.app.ui.components.SettingsCardRow
 import org.olcbox.app.ui.components.SettingsCardToggle
 import org.olcbox.app.ui.components.SettingsChoiceChips
 import org.olcbox.app.ui.components.SettingsNote
+import org.olcbox.app.ui.features.home.components.PingSettingsContent
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Home
@@ -436,6 +437,13 @@ fun AppSettingsSheet(
                     onTrafficChanged = onTrafficChanged
                 )
 
+                AppSettingsRoute.Ping -> SettingsPage(
+                    title = LocalStrings.current.pingSettingsTitle,
+                    onBack = { route = AppSettingsRoute.Hub },
+                ) {
+                    PingSettingsContent(settings = appBehavior, onChanged = onAppBehaviorChanged)
+                }
+
                 AppSettingsRoute.Advanced -> AdvancedSettingsContent(
                     settings = appBehavior,
                     onBack = { route = AppSettingsRoute.Hub },
@@ -778,8 +786,8 @@ private fun ColorSwatch(
 
 /**
  * Settings hub: only the doors, grouped the way people look for them (connection → app → more), each
- * with its current state as the subtitle. What changes the home screen itself (list look, ping, free
- * servers) lives in the home screen's ⋮ menu, next to what it changes.
+ * with its current state as the subtitle. Ping is a full page here; only the visual list layout stays
+ * in the home screen's ⋮ menu, next to the list it changes.
  */
 @Composable
 private fun AppSettingsHubContent(
@@ -857,6 +865,13 @@ private fun AppSettingsHubContent(
                 subtitle = themeSummary(s, dynamicThemeEnabled, lightThemeEnabled),
                 icon = Icons.Outlined.Palette,
                 onClick = { onOpen(AppSettingsRoute.Appearance) }
+            )
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = s.pingSettings,
+                subtitle = s.pingSettingsSubtitle,
+                icon = Icons.Outlined.Bolt,
+                onClick = { onOpen(AppSettingsRoute.Ping) }
             )
             SettingsCardDivider()
             SettingsCardRow(
@@ -3883,6 +3898,7 @@ private sealed class AppSettingsRoute(val depth: Int) {
     object Traffic : AppSettingsRoute(1)
     object Language : AppSettingsRoute(1)
     object Appearance : AppSettingsRoute(1)
+    object Ping : AppSettingsRoute(1)
     object Privacy : AppSettingsRoute(1)
     object Advanced : AppSettingsRoute(1)
     object UrlSchemes : AppSettingsRoute(1)
@@ -3902,6 +3918,7 @@ private fun settingsRouteFor(page: String): AppSettingsRoute? = when (page) {
         "Traffic" -> AppSettingsRoute.Traffic
         "Language" -> AppSettingsRoute.Language
         "Appearance" -> AppSettingsRoute.Appearance
+        "Ping" -> AppSettingsRoute.Ping
         "Privacy" -> AppSettingsRoute.Privacy
         "Advanced" -> AppSettingsRoute.Advanced
         "UrlSchemes" -> AppSettingsRoute.UrlSchemes

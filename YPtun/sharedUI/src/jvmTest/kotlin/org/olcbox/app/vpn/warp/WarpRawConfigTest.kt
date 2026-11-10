@@ -51,12 +51,46 @@ class WarpRawConfigTest {
           "routing": {
             "domainStrategy": "AsIs",
             "balancers": [{
-              "tag": "proxy-balance", "selector": [""], "fallbackTag": "proxy-a",
+              "tag": "proxy-balance", "selector": ["proxy-"], "fallbackTag": "proxy-a",
               "strategy": { "type": "roundRobin" }
             }],
             "rules": [
               { "type": "field", "domain": ["domain:ru"], "outboundTag": "direct" },
               { "type": "field", "network": "tcp,udp", "balancerTag": "proxy-balance" }
+            ]
+          }
+        }
+    """.trimIndent()
+
+    /** A panel subscription whose balancer selects chain helpers, not typed proxy outbounds directly. */
+    private fun chainedBalancedRaw() = """
+        {
+          "inbounds": [{ "tag": "socks", "port": 10808, "protocol": "socks", "settings": { "udp": true } }],
+          "outbounds": [
+            { "tag": "node-a", "protocol": "vless",
+              "settings": { "vnext": [{ "address": "a.example", "port": 443,
+                "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+              "streamSettings": { "network": "tcp", "security": "tls" } },
+            { "tag": "node-b", "protocol": "trojan",
+              "settings": { "servers": [{ "address": "b.example", "port": 443, "password": "secret" }] },
+              "streamSettings": { "network": "tcp", "security": "tls" } },
+            { "tag": "chain-a", "protocol": "freedom", "proxySettings": { "tag": "node-a" } },
+            { "tag": "chain-b", "protocol": "freedom", "proxySettings": { "tag": "node-b" } },
+            { "tag": "direct", "protocol": "freedom" },
+            { "tag": "block", "protocol": "blackhole" }
+          ],
+          "routing": {
+            "domainStrategy": "AsIs",
+            "balancers": [
+              { "tag": "node-balance", "selector": ["node-"],
+                "strategy": { "type": "roundRobin" } },
+              { "tag": "subscription-balance", "selector": ["chain-"],
+                "strategy": { "type": "roundRobin" } }
+            ],
+            "rules": [
+              { "type": "field", "domain": ["domain:example.com"], "balancerTag": "node-balance" },
+              { "type": "field", "domain": ["domain:ru"], "outboundTag": "direct" },
+              { "type": "field", "network": "tcp,udp", "balancerTag": "subscription-balance" }
             ]
           }
         }
@@ -151,5 +185,29 @@ class WarpRawConfigTest {
             .map { it.jsonPrimitive.content }
         assertEquals(listOf("proxy-a", "proxy-b"), selector)
         assertTrue(routing["balancers"]!!.jsonArray.single().jsonObject["fallbackTag"] == null)
+    }
+
+    @Test
+    fun serverSideWarpRecognizesBalancerOverSubscriptionChainOutbounds() {
+        val json = XrayConfig.prepareRaw(
+            rawConfigJson = chainedBalancedRaw(),
+            listenPort = 18081,
+            warpExitPort = 18900,
+            warpRelay = WarpRelay(18993, "162.159.192.1", 2408),
+        )
+        dir?.resolve("raw-subscription-balanced-server.json")?.writeText(json)
+        val routing = Json.parseToJsonElement(json).jsonObject["routing"]!!.jsonObject
+        val rules = routing["rules"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("subscription-balance", rules.first()["balancerTag"]!!.jsonPrimitive.content,
+            "WARP UDP must use the last balancer referenced by the imported routing")
+        assertEquals("cascade-exit", rules[1]["outboundTag"]!!.jsonPrimitive.content,
+            "every routed proxy balancer must be redirected through WARP")
+        assertEquals("direct", rules[2]["outboundTag"]!!.jsonPrimitive.content)
+        assertEquals("cascade-exit", rules.last()["outboundTag"]!!.jsonPrimitive.content,
+            "a balancer over intermediate chain outbounds must still be redirected through WARP")
+        assertTrue(rules.last()["balancerTag"] == null)
+        val selector = routing["balancers"]!!.jsonArray.last().jsonObject["selector"]!!.jsonArray
+            .map { it.jsonPrimitive.content }
+        assertEquals(listOf("chain-a", "chain-b"), selector)
     }
 }

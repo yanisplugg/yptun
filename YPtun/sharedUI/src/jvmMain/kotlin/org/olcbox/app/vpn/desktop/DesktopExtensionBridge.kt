@@ -40,6 +40,9 @@ class DesktopExtensionBridge(
     private val repository: LocationsRepository,
     private val vpnManager: DesktopVpnManager,
     private val log: (String) -> Unit,
+    // Production keeps the extension's stable port; tests use 0 so parallel test instances receive
+    // independent ephemeral ports instead of racing each other for CONTROL_PORT.
+    private val controlPort: Int = CONTROL_PORT,
 ) {
     private var server: HttpServer? = null
     private var bridge: DesktopHttpProxyBridge? = null
@@ -51,11 +54,11 @@ class DesktopExtensionBridge(
             // The browser extension always calls 127.0.0.1. InetAddress.getLoopbackAddress() may
             // choose ::1 on dual-stack JDKs, leaving the bridge "started" but unreachable over IPv4.
             HttpServer.create(
-                InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), CONTROL_PORT),
+                InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), controlPort),
                 0,
             )
         }.getOrElse {
-            log("Extension bridge: port $CONTROL_PORT busy — ${it.message}")
+            log("Extension bridge: port $controlPort busy — ${it.message}")
             return
         }
         srv.createContext("/") { ex -> handle(ex) }
@@ -67,8 +70,11 @@ class DesktopExtensionBridge(
         }
         srv.start()
         server = srv
-        log("Extension bridge listening on $LOOPBACK:$CONTROL_PORT")
+        log("Extension bridge listening on $LOOPBACK:${srv.address.port}")
     }
+
+    internal val listeningPort: Int
+        get() = server?.address?.port ?: controlPort
 
     fun stop() {
         bridge?.stop()
