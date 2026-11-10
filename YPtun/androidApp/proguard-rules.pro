@@ -22,6 +22,8 @@
 # package intact in minified builds; the native Rust library is bundled in src/main/jniLibs.
 -keep class org.olcbox.app.core.** { *; }
 -keep interface org.olcbox.app.core.** { *; }
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.Library { *; }
 -dontwarn com.sun.jna.**
 
 # --- Trust Tunnel (AdGuard) client AAR — JNI bridge (native <-> Kotlin by class/method name) ---

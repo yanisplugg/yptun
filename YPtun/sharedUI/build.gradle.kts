@@ -311,7 +311,9 @@ kotlin {
             implementation(libs.zxing.cpp)
             // UniFFI's generated Kotlin bindings call libyptun_ffi.so through JNA. Traffic never
             // crosses JNA; this bridge is only for config/state operations during connect/recovery.
-            implementation(libs.jna)
+            // Select JNA's Android AAR explicitly. The default Maven artifact is the desktop JAR and
+            // does not package libjnidispatch.so, so it compiles but fails on the first UniFFI call.
+            implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
             implementation(coresAndroidAarDependency)
             // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
             // trusttunnel-client-android:1.1.11) carrying libtrusttunnel_android.so (all ABIs) +
