@@ -1,0 +1,149 @@
+{
+    "log": {
+        "level": "debug",
+        "timestamp": true
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "remote",
+                "type": "udp",
+                "server": "8.8.8.8",
+                "detour": "proxy"
+            },
+            {
+                "tag": "direct",
+                "type": "udp",
+                "server": "77.88.8.8"
+            }
+        ],
+        "rules": [],
+        "final": "remote",
+        "strategy": "ipv4_only"
+    },
+    "inbounds": [
+        {
+            "type": "socks",
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "listen_port": 10808
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "proxy",
+            "server": "203.0.113.10",
+            "server_port": 443,
+            "uuid": "22222222-2222-2222-2222-222222222222",
+            "flow": "xtls-rprx-vision",
+            "packet_encoding": "xudp",
+            "tls": {
+                "enabled": true,
+                "server_name": "www.microsoft.com",
+                "insecure": false,
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                },
+                "reality": {
+                    "enabled": true,
+                    "public_key": "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBLKc1QE",
+                    "short_id": "6ba85179e30d4fc2"
+                }
+            }
+        },
+        {
+            "type": "direct",
+            "tag": "direct"
+        }
+    ],
+    "route": {
+        "final": "proxy",
+        "auto_detect_interface": false,
+        "default_domain_resolver": {
+            "server": "direct"
+        },
+        "rules": [
+            {
+                "action": "sniff"
+            },
+            {
+                "protocol": [
+                    "quic"
+                ],
+                "action": "reject"
+            },
+            {
+                "network": "udp",
+                "port": [
+                    443
+                ],
+                "action": "reject"
+            },
+            {
+                "domain_suffix": [
+                    "cloudflare-dns.com",
+                    "dns.google",
+                    "dns.google.com",
+                    "one.one.one.one",
+                    "dns.quad9.net",
+                    "doh.opendns.com",
+                    "dns.nextdns.io",
+                    "doh.cleanbrowsing.org",
+                    "dns.adguard.com",
+                    "dns.adguard-dns.com"
+                ],
+                "action": "reject"
+            },
+            {
+                "domain": [
+                    "use-application-dns.net"
+                ],
+                "action": "reject"
+            },
+            {
+                "ip_is_private": true,
+                "outbound": "direct"
+            },
+            {
+                "action": "resolve",
+                "strategy": "ipv4_only"
+            },
+            {
+                "ip_cidr": [
+                    "::/0"
+                ],
+                "action": "reject",
+                "method": "drop"
+            },
+            {
+                "rule_set": [
+                    "geoip-ru"
+                ],
+                "outbound": "direct"
+            },
+            {
+                "domain_suffix": [
+                    ".ru"
+                ],
+                "outbound": "direct"
+            },
+            {
+                "domain": [
+                    "ru"
+                ],
+                "outbound": "direct"
+            }
+        ],
+        "rule_set": [
+            {
+                "type": "remote",
+                "tag": "geoip-ru",
+                "format": "binary",
+                "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs",
+                "download_detour": "proxy"
+            }
+        ]
+    }
+}
