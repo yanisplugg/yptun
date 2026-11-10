@@ -30,6 +30,7 @@ class DesktopExtensionBridgeTest {
         repository = LocationsRepositoryImpl(JvmLocationsDataSourceImpl()),
         vpnManager = vpnManager,
         log = {},
+        controlPort = 0,
     ).also { it.start() }
 
     @AfterTest
@@ -48,7 +49,7 @@ class DesktopExtensionBridgeTest {
         guard: Boolean = true,
     ): Pair<Int, String> {
         Socket().use { s ->
-            s.connect(InetSocketAddress("127.0.0.1", DesktopExtensionBridge.CONTROL_PORT), 5_000)
+            s.connect(InetSocketAddress("127.0.0.1", bridge.listeningPort), 5_000)
             s.soTimeout = 5_000
             val head = buildString {
                 append("$method $path HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n")

@@ -844,6 +844,18 @@ fun HomeScreen(
                     isAddSheetOpen = false
                     onAddLocation()
                 },
+                onAddTurnableClick = {
+                    isAddSheetOpen = false
+                    locationViewModel.startEditing(null)
+                    locationViewModel.onEngineChanged(org.olcbox.app.data.model.EngineType.VkTurn)
+                    locationViewModel.updateVkTurnDraft {
+                        it.copy(
+                            core = org.olcbox.app.data.model.VkTurnConfig.CORE_TURNABLE,
+                            outbound = org.olcbox.app.data.model.VkTurnConfig.OUTBOUND_WIREGUARD,
+                        )
+                    }
+                    onOpenLocationSettings(null)
+                },
                 onCreateGroupClick = {
                     isAddSheetOpen = false
                     folderDialog = FolderDialog.Create(emptyList())

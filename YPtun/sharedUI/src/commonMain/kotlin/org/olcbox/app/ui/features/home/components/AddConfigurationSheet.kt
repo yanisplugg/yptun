@@ -67,8 +67,8 @@ private enum class AddPage { Main, FreeServers, Manual }
 
 /**
  * «Добавить»: one field for a subscription link or a key (most people only ever need this), QR and file
- * under it, then the two ways for people without a subscription — free public servers and a hand-made
- * location. The free-server and manual pages open inside the same sheet.
+ * under it, then the choices for people without a subscription — free public servers, Android
+ * Turnable, and a hand-made location. The free-server and manual pages open inside the same sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,6 +81,7 @@ fun AddConfigurationSheet(
     onStartFreeServers: (limit: Int) -> Unit,
     onCreateManual: (engine: EngineType, wireguard: Boolean) -> Unit,
     onCreateVless: () -> Unit = {},
+    onCreateTurnable: () -> Unit = {},
     // The free-servers options (how many, which source); null starts the search with the saved ones.
     freeServersSettings: AppBehaviorSettings? = null,
     onFreeServersSettingsChanged: (AppBehaviorSettings) -> Unit = {}
@@ -112,6 +113,7 @@ fun AddConfigurationSheet(
                             if (freeServersSettings != null) page = AddPage.FreeServers
                             else onStartFreeServers(AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT)
                         },
+                        onTurnableClick = onCreateTurnable,
                         onManualClick = { page = AddPage.Manual }
                     )
                     AddPage.FreeServers -> freeServersSettings?.let { settings ->
@@ -125,7 +127,7 @@ fun AddConfigurationSheet(
                     AddPage.Manual -> ManualTypePage(
                         onBack = { page = AddPage.Main },
                         onPick = onCreateManual,
-                        onPickVless = onCreateVless
+                        onPickVless = onCreateVless,
                     )
                 }
             }
@@ -140,10 +142,12 @@ private fun AddMainPage(
     onImportText: (String) -> Unit,
     onImportFileClick: () -> Unit,
     onFreeServersClick: () -> Unit,
+    onTurnableClick: () -> Unit,
     onManualClick: () -> Unit
 ) {
     val s = LocalStrings.current
     val clipboard = LocalClipboardManager.current
+    val android = remember { org.olcbox.app.update.UpdatePlatform.current().os == "android" }
     var text by remember { mutableStateOf("") }
     val detected = remember(text) { describeImportText(text, s) }
 
@@ -215,6 +219,15 @@ private fun AddMainPage(
             icon = Icons.Outlined.Public,
             onClick = onFreeServersClick
         )
+        if (android) {
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = "Turnable",
+                subtitle = s.engineVkTurnDesc,
+                icon = Icons.Rounded.Phone,
+                onClick = onTurnableClick,
+            )
+        }
         SettingsCardDivider()
         SettingsCardRow(
             title = s.addManualTitle,
@@ -335,7 +348,7 @@ private fun FreeServersStartPage(
 private fun ManualTypePage(
     onBack: () -> Unit,
     onPick: (EngineType, Boolean) -> Unit,
-    onPickVless: () -> Unit
+    onPickVless: () -> Unit,
 ) {
     val s = LocalStrings.current
     // OpenFlux and Snolc have no iOS engine (same rule as the engine picker in the location screen).

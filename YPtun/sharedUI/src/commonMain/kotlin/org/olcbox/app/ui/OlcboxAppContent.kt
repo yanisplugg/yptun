@@ -77,7 +77,7 @@ fun OlcboxAppContent(
     extraConnectContent: (@Composable () -> Unit)? = null,
     // Desktop only: shows an exit button in the home screen's top bar.
     onExitClick: (() -> Unit)? = null,
-    // For the home screen's ⋮ «Вид списка» / «Настройки пинга» sheets; null keeps them hidden.
+    // For the home screen's ⋮ «Вид списка» sheet; null keeps it hidden.
     appBehavior: AppBehaviorSettings? = null,
     onAppBehaviorChanged: (AppBehaviorSettings) -> Unit = {},
     onShareSubscriptionRequested: ((url: String) -> Unit)? = null
@@ -212,6 +212,17 @@ fun OlcboxAppContent(
                         onAddVlessLocation = {
                             locationViewModel.startEditing(null)
                             locationViewModel.onVlessEngineSelected()
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
+                        onAddTurnableLocation = {
+                            locationViewModel.startEditing(null)
+                            locationViewModel.onEngineChanged(org.olcbox.app.data.model.EngineType.VkTurn)
+                            locationViewModel.updateVkTurnDraft {
+                                it.copy(
+                                    core = org.olcbox.app.data.model.VkTurnConfig.CORE_TURNABLE,
+                                    outbound = org.olcbox.app.data.model.VkTurnConfig.OUTBOUND_WIREGUARD,
+                                )
+                            }
                             onNavigate(AppScreen.LocationSettings(null))
                         },
                         onImportTextRequested = onImportTextRequested

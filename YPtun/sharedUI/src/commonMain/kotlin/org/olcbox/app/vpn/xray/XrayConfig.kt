@@ -805,7 +805,8 @@ object XrayConfig {
 
         // Merge profile routing (direct/block buckets) into the user's config, if requested.
         val userOutbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
-        val userOutboundTags = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }.toSet()
+        val userOutboundTagList = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }
+        val userOutboundTags = userOutboundTagList.toSet()
         val userRouting = configRouting
 
         // CASCADE: a standard second proxy chained on top of the verbatim config. Its exit outbound
@@ -821,16 +822,14 @@ object XrayConfig {
             it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
         }
         val mainProxyTag = mainProxyOutbound?.get("tag")?.jsonPrimitive?.contentOrNull
-        val proxyOutboundTags = userOutbounds.mapNotNull { outbound ->
-            outbound["tag"]?.jsonPrimitive?.contentOrNull?.takeIf {
-                outbound["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
-            }
-        }
         // Full JSON subscriptions commonly route a group of proxy outbounds through `balancerTag`
         // instead of naming one `outboundTag`. Keep that topology visible to the WARP rewrite: the
         // client side must not let an injected helper outbound join a broad selector, while the server
         // side must send app traffic to WARP but send WARP's own UDP through the original balancer.
-        val proxyBalancerPlan = rawProxyBalancerPlan(userRouting, proxyOutboundTags)
+        // Match selectors against EVERY original tagged outbound. Panel configs often balance helper
+        // `freedom`/chain outbounds which in turn point at VLESS nodes; looking only at typed proxy
+        // protocols makes those real, routing-referenced balancers invisible.
+        val proxyBalancerPlan = rawProxyBalancerPlan(userRouting, userOutboundTagList)
         // An xhttp/splithttp MAIN can't serve as an intermediate hop: Xray's splithttp transport can be
         // NEITHER a proxySettings target NOR a sockopt.dialerProxy sub-dialer, so a 2nd proxy chained
         // "through" it (either mechanism) gets NO connection — the long-standing "xhttp + 2nd tcp proxy
@@ -964,7 +963,7 @@ object XrayConfig {
                 rewriteRawExitRoutes(
                     routing = geoStrippedRouting,
                     fromOutbound = mainProxyTag,
-                    fromBalancers = proxyBalancerPlan.selections.keys,
+                    fromBalancers = proxyBalancerPlan.routedTags,
                     to = CASCADE_EXIT_TAG,
                 )
             } else {
@@ -1159,17 +1158,18 @@ object XrayConfig {
         }
     }
 
-    /** Original proxy members selected by each raw-config balancer, plus the catch-all/main balancer. */
+    /** Original members selected by each raw-config balancer, plus balancers referenced by routing. */
     private data class RawProxyBalancerPlan(
         val selections: Map<String, List<String>>,
+        val routedTags: Set<String>,
         val primaryTag: String?,
     )
 
     private fun rawProxyBalancerPlan(
         routing: JsonObject?,
-        proxyOutboundTags: List<String>,
+        originalOutboundTags: List<String>,
     ): RawProxyBalancerPlan {
-        if (routing == null || proxyOutboundTags.isEmpty()) return RawProxyBalancerPlan(emptyMap(), null)
+        if (routing == null) return RawProxyBalancerPlan(emptyMap(), emptySet(), null)
         val selections = linkedMapOf<String, List<String>>()
         (routing["balancers"] as? JsonArray)?.forEach { element ->
             val balancer = element as? JsonObject ?: return@forEach
@@ -1177,16 +1177,23 @@ object XrayConfig {
             val selectors = (balancer["selector"] as? JsonArray)
                 ?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 .orEmpty()
-            val selected = proxyOutboundTags.filter { outboundTag ->
+            val selected = originalOutboundTags.filter { outboundTag ->
                 selectors.any { selector -> outboundTag.startsWith(selector) }
             }
-            if (selected.isNotEmpty()) selections[tag] = selected
+            // Keep the definition even when its current selector resolves to no members. Whether this
+            // is the tunnel path is established by routing references, not by an outbound protocol.
+            selections[tag] = selected
         }
-        val primary = (routing["rules"] as? JsonArray)
+        val routed = (routing["rules"] as? JsonArray)
             ?.mapNotNull { (it as? JsonObject)?.get("balancerTag")?.jsonPrimitive?.contentOrNull }
-            ?.lastOrNull { it in selections }
-            ?: selections.keys.firstOrNull()
-        return RawProxyBalancerPlan(selections, primary)
+            ?.filter { it in selections }
+            .orEmpty()
+        return RawProxyBalancerPlan(
+            selections = selections,
+            routedTags = routed.toSet(),
+            // Routing order, not balancer declaration order, identifies the effective catch-all path.
+            primaryTag = routed.lastOrNull(),
+        )
     }
 
     /**

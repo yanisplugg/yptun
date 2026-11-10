@@ -239,11 +239,46 @@ fn balanced_raw() -> &'static str {
   ],
   "routing": {
     "domainStrategy": "AsIs",
-    "balancers": [{ "tag": "proxy-balance", "selector": [""], "fallbackTag": "proxy-a",
+    "balancers": [{ "tag": "proxy-balance", "selector": ["proxy-"], "fallbackTag": "proxy-a",
       "strategy": { "type": "roundRobin" } }],
     "rules": [
       { "type": "field", "domain": ["domain:ru"], "outboundTag": "direct" },
       { "type": "field", "network": "tcp,udp", "balancerTag": "proxy-balance" }
+    ]
+  }
+}"#
+}
+
+/// A panel subscription whose routing balancer selects intermediate chain outbounds rather than the
+/// typed VLESS/Trojan nodes directly.
+fn chained_balanced_raw() -> &'static str {
+    r#"{
+  "inbounds": [{ "tag": "socks", "port": 10808, "protocol": "socks", "settings": { "udp": true } }],
+  "outbounds": [
+    { "tag": "node-a", "protocol": "vless",
+      "settings": { "vnext": [{ "address": "a.example", "port": 443,
+        "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+      "streamSettings": { "network": "tcp", "security": "tls" } },
+    { "tag": "node-b", "protocol": "trojan",
+      "settings": { "servers": [{ "address": "b.example", "port": 443, "password": "secret" }] },
+      "streamSettings": { "network": "tcp", "security": "tls" } },
+    { "tag": "chain-a", "protocol": "freedom", "proxySettings": { "tag": "node-a" } },
+    { "tag": "chain-b", "protocol": "freedom", "proxySettings": { "tag": "node-b" } },
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "block", "protocol": "blackhole" }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "balancers": [
+      { "tag": "node-balance", "selector": ["node-"],
+        "strategy": { "type": "roundRobin" } },
+      { "tag": "subscription-balance", "selector": ["chain-"],
+        "strategy": { "type": "roundRobin" } }
+    ],
+    "rules": [
+      { "type": "field", "domain": ["domain:example.com"], "balancerTag": "node-balance" },
+      { "type": "field", "domain": ["domain:ru"], "outboundTag": "direct" },
+      { "type": "field", "network": "tcp,udp", "balancerTag": "subscription-balance" }
     ]
   }
 }"#
@@ -344,4 +379,24 @@ fn server_side_warp_redirects_balanced_traffic_but_relays_through_balancer() {
     assert_eq!(rules[1]["outboundTag"], "direct");
     assert_eq!(o["routing"]["balancers"][0]["selector"], serde_json::json!(["proxy-a", "proxy-b"]));
     assert!(o["routing"]["balancers"][0].get("fallbackTag").is_none());
+}
+
+#[test]
+fn server_side_warp_recognizes_balancer_over_subscription_chain_outbounds() {
+    let json = xray::prepare_raw(
+        chained_balanced_raw(),
+        &RawOptions {
+            warp_exit_port: Some(18900),
+            warp_relay: Some(relay("162.159.192.1")),
+            ..RawOptions::new(18081)
+        },
+    );
+    let o = dump("raw-subscription-balanced-server", &json);
+    let rules = o["routing"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0]["balancerTag"], "subscription-balance");
+    assert_eq!(rules[1]["outboundTag"], "cascade-exit");
+    assert_eq!(rules[2]["outboundTag"], "direct");
+    assert_eq!(rules.last().unwrap()["outboundTag"], "cascade-exit");
+    assert!(rules.last().unwrap().get("balancerTag").is_none());
+    assert_eq!(o["routing"]["balancers"][1]["selector"], serde_json::json!(["chain-a", "chain-b"]));
 }

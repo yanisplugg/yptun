@@ -40,4 +40,10 @@ class SettingsSearchTest {
         assertTrue(ru.none { it.page == "Experimental" })
         assertTrue(en.any { it.page == "Experimental" })
     }
+
+    @Test
+    fun pingHasItsOwnSettingsPage() {
+        assertTrue(ru.any { it.page == "Ping" && it.title == RuStrings.pingSettings })
+        assertTrue(en.any { it.page == "Ping" && it.title == EnStrings.pingSettings })
+    }
 }
