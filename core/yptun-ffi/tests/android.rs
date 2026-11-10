@@ -26,8 +26,8 @@ fn stats(tx_packets: i64, tx_bytes: i64, rx_packets: i64, rx_bytes: i64) -> Andr
 fn start_split_and_ports_cross_ffi() {
     let tun = android_prepare_start(start(AndroidMode::Tun)).unwrap();
     assert_eq!(tun.connection_mode, AndroidMode::Tun);
-    assert_eq!(tun.socks_username.len(), 24);
-    assert_eq!(tun.socks_password.len(), 24);
+    assert_eq!(tun.socks_username.len(), 36);
+    assert_eq!(tun.socks_password.len(), 36);
 
     let mut proxy = start(AndroidMode::Proxy);
     proxy.socks_username = "ignored".into();

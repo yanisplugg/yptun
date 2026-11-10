@@ -24,8 +24,8 @@ pub const DEFAULT_SOCKS_PORT: i32 = 10_808;
 pub const MIN_SOCKS_PORT: i32 = 1_024;
 pub const MAX_SOCKS_PORT: i32 = 65_535;
 pub const MAX_SOCKS_HOST_LENGTH: usize = 255;
-pub const SOCKS_TOKEN_LENGTH: usize = 24;
-const SOCKS_TOKEN_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+pub const SOCKS_TOKEN_BYTES: usize = 18;
+pub const SOCKS_TOKEN_LENGTH: usize = SOCKS_TOKEN_BYTES * 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -163,24 +163,16 @@ impl AndroidStartOptions {
     }
 }
 
-/// Uniform token over the same no-look-alikes alphabet as `AndroidVpnManager`.
+/// Per-session TUN credential: 18 CSPRNG bytes as lowercase hex, matching
+/// `OlcboxVpnService.randomSocksToken` exactly.
 pub fn random_socks_token() -> Result<String, String> {
-    let limit = 256 - (256 % SOCKS_TOKEN_ALPHABET.len());
+    let mut bytes = [0u8; SOCKS_TOKEN_BYTES];
+    getrandom::getrandom(&mut bytes).map_err(|e| format!("OS random source unavailable: {e}"))?;
     let mut out = String::with_capacity(SOCKS_TOKEN_LENGTH);
-    let mut bytes = [0u8; 64];
-    while out.len() < SOCKS_TOKEN_LENGTH {
-        getrandom::getrandom(&mut bytes)
-            .map_err(|e| format!("OS random source unavailable: {e}"))?;
-        for byte in bytes {
-            if (byte as usize) < limit {
-                out.push(
-                    SOCKS_TOKEN_ALPHABET[(byte as usize) % SOCKS_TOKEN_ALPHABET.len()] as char,
-                );
-                if out.len() == SOCKS_TOKEN_LENGTH {
-                    break;
-                }
-            }
-        }
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     Ok(out)
 }

@@ -103,7 +103,9 @@ fn start_options_secure_tun_and_open_proxy() {
 
     let token = random_socks_token().unwrap();
     assert_eq!(token.len(), SOCKS_TOKEN_LENGTH);
-    assert!(token.bytes().all(|b| b.is_ascii_alphanumeric()));
+    assert!(token
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
 }
 
 #[test]
