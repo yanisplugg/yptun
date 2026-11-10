@@ -133,7 +133,6 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.security.SecureRandom
 import kotlin.concurrent.thread
 import kotlin.coroutines.coroutineContext
 
@@ -709,44 +708,26 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun applyStartOptions(options: StartOptions) {
-        connectionMode = options.connectionMode
-        socksListenHost = options.socksListenHost
-        socksListenPort = options.socksListenPort
-        socksUsername = options.socksUsername
-        socksPassword = options.socksPassword
-        // Security: in TUN mode the local SOCKS5 is purely internal (tun2socks <-> core), so
-        // force per-session random credentials. Otherwise any app on the device could connect to
-        // the unauthenticated 127.0.0.1 SOCKS listener, learn the real exit IP and bypass
-        // split tunneling (disclosed 2026 for xray/sing-box mobile clients).
-        //
-        // In Proxy mode the SOCKS is the user-facing product: force NO-AUTH so ANY local client
-        // connects immediately. Requiring an (auto-generated) username/password is exactly what made
-        // Proxy mode "connects but no traffic" — a client that doesn't send credentials is accepted at
-        // the TCP layer but its CONNECT is rejected, so nothing flows. Loopback-only listener anyway.
-        when (options.connectionMode) {
-            AndroidConnectionMode.Tun -> {
-                // Protect the internal loopback SOCKS5 (tun2socks <-> core) so no other app can use it.
-                // Honor the user's configured login/password if BOTH are set (that "SOCKS5 proxy" field
-                // is exactly for this); otherwise fall back to per-session random credentials so the
-                // listener is never left open with no auth.
-                if (options.socksUsername.isBlank() || options.socksPassword.isBlank()) {
-                    socksUsername = randomSocksToken()
-                    socksPassword = randomSocksToken()
-                }
-            }
-            AndroidConnectionMode.Proxy, AndroidConnectionMode.Tproxy -> {
-                socksUsername = ""
-                socksPassword = ""
-                // Bind the exposed SOCKS (and, in Tproxy mode, the tproxy inbound) on all interfaces so
-                // it's reachable from loopback (on-device Chrome via the Wi-Fi proxy) AND the LAN (a PC or
-                // a router redirecting to the phone's IP) — like Happ's local-proxy mode. The
-                // HttpProxyBridge binds the same host. (TUN keeps its 127.0.0.1.)
-                socksListenHost = AndroidSocksProxySettings.ALL_INTERFACES
-            }
-        }
-        splitTunnelMode = options.splitTunnelMode
-        splitTunnelProxyApps = options.splitTunnelProxyApps
-        splitTunnelBypassApps = options.splitTunnelBypassApps
+        // Rust owns the security-sensitive normalization: TUN gets per-session CSPRNG credentials
+        // when either configured value is blank; Proxy/Tproxy bind all interfaces with no auth.
+        val applied = RustAndroidVpn.prepareStart(
+            connectionMode = options.connectionMode,
+            socksListenHost = options.socksListenHost,
+            socksListenPort = options.socksListenPort,
+            socksUsername = options.socksUsername,
+            socksPassword = options.socksPassword,
+            splitTunnelMode = options.splitTunnelMode,
+            splitTunnelProxyApps = options.splitTunnelProxyApps,
+            splitTunnelBypassApps = options.splitTunnelBypassApps,
+        )
+        connectionMode = applied.connectionMode
+        socksListenHost = applied.socksListenHost
+        socksListenPort = applied.socksListenPort
+        socksUsername = applied.socksUsername
+        socksPassword = applied.socksPassword
+        splitTunnelMode = applied.splitTunnelMode
+        splitTunnelProxyApps = applied.splitTunnelProxyApps
+        splitTunnelBypassApps = applied.splitTunnelBypassApps
     }
 
     private fun Intent.stringCollectionExtra(key: String): Set<String>? {
@@ -2265,14 +2246,11 @@ class OlcboxVpnService : VpnService() {
                 // low, to draw from more calls without exploding the parallel-path count. splitLinks() in
                 // freeturn splits on newline/CR/tab/space/comma — count the same way. An explicit vk.streams
                 // still acts as a power-user floor (up to a hard safety ceiling).
-                val linkCount = vk.vkLink
+                val allLinks = vk.vkLink
                     .split('\n', '\r', '\t', ' ', ',')
-                    .count { it.isNotBlank() }
-                    .coerceAtLeast(1)
-                val autoStreams = (VKTURN_STREAMS_BASE + (linkCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
-                    .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
-                val effectiveStreams = maxOf(vk.streams, autoStreams)
-                    .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
+                    .filter { it.isNotBlank() }
+                val linkCount = allLinks.size.coerceAtLeast(1)
+                val effectiveStreams = RustAndroidVpn.vkturnStreams(vk.vkLink, vk.streams)
                 if (multiFreeturn) {
                     // One relay per server, each on its own local listener (vk.listenPort + index). The
                     // VK call links are PARTITIONED across the servers (round-robin) — NOT shared in full
@@ -2280,19 +2258,15 @@ class OlcboxVpnService : VpnService() {
                     // N relays hammering the same calls (which only multiplied phone CPU/obf and split
                     // each call N ways → no speed gain). Per-server streams scale with that server's own
                     // share of links. freeturn's StartMulti runs them together; Stop() cancels all.
-                    val allLinks = vk.vkLink.split('\n', '\r', '\t', ' ', ',').filter { it.isNotBlank() }
                     val n = freeturnServers.size
+                    val linkGroups = RustAndroidVpn.partitionVkLinks(vk.vkLink, n)
                     val specsJson = Json.encodeToString(buildJsonArray {
                         freeturnServers.forEachIndexed { idx, u ->
                             // This server's share of the call links; if fewer links than servers, wrap
                             // so every relay still gets at least one call.
-                            val myLinks = allLinks.filterIndexed { li, _ -> li % n == idx }
-                                .ifEmpty { listOfNotNull(allLinks.getOrNull(if (allLinks.isEmpty()) -1 else idx % allLinks.size)) }
-                            val myCount = myLinks.size.coerceAtLeast(1)
-                            val myStreams = (VKTURN_STREAMS_BASE + (myCount - 1) * VKTURN_STREAMS_PER_EXTRA_CALL)
-                                .coerceAtMost(VKTURN_STREAMS_AUTO_MAX)
-                                .let { maxOf(vk.streams.takeIf { s -> s > 0 } ?: 0, it) }
-                                .coerceAtMost(VKTURN_STREAMS_HARD_MAX)
+                            val myLinkText = linkGroups.getOrElse(idx) { "" }
+                            val myLinks = myLinkText.lineSequence().filter { it.isNotBlank() }.toList()
+                            val myStreams = RustAndroidVpn.vkturnStreams(myLinkText, vk.streams)
                             addJsonObject {
                                 put("uri", u)
                                 put("listenAddr", "127.0.0.1:${vk.listenPort + idx}")
@@ -2880,23 +2854,16 @@ class OlcboxVpnService : VpnService() {
             ?.filterNot { it.isAnyLocalAddress || it.isLoopbackAddress || it.isMulticastAddress }
             ?.sortedBy { it.address.size }
             ?.mapNotNull { it.hostAddress }
-            ?.map(::dnsEndpoint)
             ?.firstOrNull()
 
         // Keep the fallbacks appended instead of replaced: olcrtc takes a LIST and walks it
         // in order (protect.splitDNSServers/pickReachableDNS, which really resolves a probe
         // name through each candidate). A carrier resolver that answers but answers wrong
         // then fails the probe and signaling moves on, instead of being stranded on it.
-        val selectedDnsServer = upstreamDnsServer
-            ?.let { "$it,$FALLBACK_OLCRTC_DNS_SERVERS" }
-            ?: FALLBACK_OLCRTC_DNS_SERVERS
+        val selectedDnsServer = RustAndroidVpn.olcrtcDns(upstreamDnsServer)
         val source = if (upstreamDnsServer != null) "upstream+fallback" else "fallback"
         addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
         return selectedDnsServer
-    }
-
-    private fun dnsEndpoint(address: String): String {
-        return if (':' in address) "[$address]:53" else "$address:53"
     }
 
     private fun startTun2socks(pfd: ParcelFileDescriptor): Boolean {
@@ -3047,17 +3014,8 @@ class OlcboxVpnService : VpnService() {
     /** Present while our root redirect rules may be installed (survives a killed process). */
     private val tproxyFlagFile get() = File(filesDir, "tproxy.applied")
 
-    private fun tproxyTeardownLines(): List<String> = listOf(
-        "export PATH=/system/bin:/system/xbin:/vendor/bin:\$PATH",
-        "while iptables -t mangle -D OUTPUT -j YPT_OUT 2>/dev/null; do :; done",
-        "while iptables -t mangle -D PREROUTING -j YPT_PRE 2>/dev/null; do :; done",
-        "while ip6tables -D OUTPUT -j YPT_OUT6 2>/dev/null; do :; done",
-        "iptables -t mangle -F YPT_OUT 2>/dev/null; iptables -t mangle -X YPT_OUT 2>/dev/null",
-        "iptables -t mangle -F YPT_PRE 2>/dev/null; iptables -t mangle -X YPT_PRE 2>/dev/null",
-        "ip6tables -F YPT_OUT6 2>/dev/null; ip6tables -X YPT_OUT6 2>/dev/null",
-        "while ip rule del fwmark $TPROXY_MARK lookup $TPROXY_TABLE pref $TPROXY_PREF 2>/dev/null; do :; done",
-        "ip route flush table $TPROXY_TABLE 2>/dev/null",
-    )
+    private fun tproxyTeardownLines(): List<String> =
+        RustAndroidVpn.tproxyTeardownScript().lineSequence().toList()
 
     /**
      * Root: sends the phone's own TCP+UDP through the tproxy inbound (the Box4Magisk scheme).
@@ -3072,40 +3030,7 @@ class OlcboxVpnService : VpnService() {
         if (!isLocalSocksPortOpen(tproxyPort)) {
             return@withContext "This engine has no transparent-proxy inbound (needs a sing-box core)"
         }
-        val uid = android.os.Process.myUid()
-        val m = TPROXY_MARK
-        val lan = listOf("0.0.0.0/8", "10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
-            "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4")
-        val out = "iptables -t mangle -A YPT_OUT"
-        val script = (tproxyTeardownLines() + listOf(
-            "ip rule add fwmark $m lookup $TPROXY_TABLE pref $TPROXY_PREF",
-            "ip route add local 0.0.0.0/0 dev lo table $TPROXY_TABLE",
-            "iptables -t mangle -N YPT_OUT; iptables -t mangle -N YPT_PRE",
-            "$out -m owner --uid-owner $uid -j RETURN",
-            "$out -o lo -j RETURN",
-            "$out -m addrtype --dst-type LOCAL -j RETURN",
-            "$out -p udp --dport 53 -j MARK --set-mark $m",
-            "$out -p tcp --dport 53 -j MARK --set-mark $m",
-        ) + lan.map { "$out -d $it -j RETURN" } + listOf(
-            "$out -p tcp -j MARK --set-mark $m",
-            "$out -p udp -j MARK --set-mark $m",
-            "iptables -t mangle -I OUTPUT -j YPT_OUT",
-            // Only packets we marked and looped back through lo; everything else passes untouched.
-            "iptables -t mangle -A YPT_PRE -m mark ! --mark $m -j RETURN",
-            "iptables -t mangle -A YPT_PRE -p tcp -j TPROXY --on-port $tproxyPort --tproxy-mark $m",
-            "iptables -t mangle -A YPT_PRE -p udp -j TPROXY --on-port $tproxyPort --tproxy-mark $m",
-            "iptables -t mangle -I PREROUTING -j YPT_PRE",
-            "ip6tables -N YPT_OUT6",
-            "ip6tables -A YPT_OUT6 -m owner --uid-owner $uid -j RETURN",
-            "ip6tables -A YPT_OUT6 -o lo -j RETURN",
-            "ip6tables -A YPT_OUT6 -d fe80::/10 -j RETURN",
-            "ip6tables -A YPT_OUT6 -d fc00::/7 -j RETURN",
-            "ip6tables -A YPT_OUT6 -d ff00::/8 -j RETURN",
-            "ip6tables -A YPT_OUT6 -j REJECT",
-            "ip6tables -I OUTPUT -j YPT_OUT6",
-            "if iptables -t mangle -S YPT_PRE | grep -q TPROXY && ip rule | grep -q ' $TPROXY_TABLE'; " +
-                "then echo YPT_OK; else echo YPT_FAIL; fi",
-        )).joinToString("\n")
+        val script = RustAndroidVpn.tproxyApplyScript(android.os.Process.myUid(), tproxyPort)
         tproxyFlagFile.writeText("1")
         val result = runCatching {
             val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
@@ -3113,13 +3038,10 @@ class OlcboxVpnService : VpnService() {
             p.waitFor()
             text
         }
-        val text = result.getOrNull()
-        when {
-            result.isFailure -> "Root (su) unavailable: ${result.exceptionOrNull()?.message}"
-            text!!.lines().lastOrNull() == "YPT_OK" -> null
-            else -> text.lines().filter { it != "YPT_FAIL" }.takeLast(3).joinToString(" | ")
-                .ifBlank { "iptables TPROXY rules were not installed (root denied or kernel lacks TPROXY)" }
-        }.also { if (it != null) teardownTproxyRules() }
+        RustAndroidVpn.tproxyFailure(
+            executionError = result.exceptionOrNull()?.message,
+            output = result.getOrNull().orEmpty(),
+        ).also { if (it != null) teardownTproxyRules() }
     }
 
     /** Removes everything [applyTproxyRules] installed; no-op (and no `su`) when it never ran. */
@@ -3138,28 +3060,16 @@ class OlcboxVpnService : VpnService() {
 
     private fun establishSystemVpnTunnel(): ParcelFileDescriptor? {
         return try {
+            // Rust computes the complete route/address plan; Kotlin only applies it to Android's
+            // VpnService.Builder. IPv6 stays captured even for IPv4-only transports (no real-IP leak).
+            val tunnel = RustAndroidVpn.tunnelPlan(activeMtu, activeBypassLan)
             val builder = Builder()
-                .setSession("YPtun")
-                .setBlocking(true)
-                .setMtu(activeMtu)
-                .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
-                .addDnsServer(MAPDNS_ADDRESS)
-            // IPv4 capture. With "Обход LAN" on, route everything EXCEPT the private/LAN ranges into
-            // the tunnel (so local-network traffic exits on the real interface — works for every engine,
-            // including the ones whose core can't route "direct": olcRTC/VK-TURN/MasterDNS). The mapped-DNS
-            // pool 100.64.0.0/10 is deliberately NOT excluded so synthetic DNS IPs still enter the tun.
-            // Off → capture all of 0.0.0.0/0 exactly as before.
-            if (activeBypassLan) {
-                ipv4RoutesExcludingLan().forEach { (addr, prefix) -> builder.addRoute(addr, prefix) }
-            } else {
-                builder.addRoute("0.0.0.0", 0)
-            }
-            // Always capture IPv6 (addAddress + addRoute ::/0) so raw IPv6 traffic can NOT leak past
-            // the tunnel to the real interface (was leaking the real IPv6 for VK-TURN). VK-TURN's
-            // WireGuard/AmneziaWG/proxy paths all force ipv4_only DNS, so dual-stack apps never get
-            // AAAA records and won't attempt IPv6 — the captured ::/0 only blackholes rare literal
-            // IPv6, avoiding both the leak AND the old "no route to host" dead-sites problem.
-            builder.addAddress(TUN_IPV6_ADDRESS, IPV6_PREFIX_LENGTH).addRoute("::", 0)
+                .setSession(tunnel.sessionName)
+                .setBlocking(tunnel.blocking)
+                .setMtu(tunnel.mtu)
+            tunnel.addresses.forEach { builder.addAddress(it.address, it.prefix) }
+            tunnel.dnsServers.forEach(builder::addDnsServer)
+            tunnel.routes.forEach { builder.addRoute(it.address, it.prefix) }
 
             if (!applySplitTunneling(builder)) return null
 
@@ -3173,92 +3083,33 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
-    /**
-     * The minimal set of IPv4 routes that cover all of 0.0.0.0/0 EXCEPT the private/LAN ranges, so
-     * those addresses are left on the real network (the "Обход LAN" behaviour) for every engine. Built
-     * by subtracting the excluded CIDRs from the full space and re-packing each remaining gap into
-     * aligned CIDR blocks. Loopback (127/8), link-local (169.254/16), multicast (224/4) and the
-     * limited broadcast address are excluded alongside the RFC-1918 ranges. Works on all API
-     * levels (no excludeRoute).
-     */
-    private fun ipv4RoutesExcludingLan(): List<Pair<String, Int>> {
-        val excluded = listOf(
-            cidrRange("10.0.0.0", 8),
-            cidrRange("127.0.0.0", 8),
-            cidrRange("169.254.0.0", 16),
-            cidrRange("172.16.0.0", 12),
-            cidrRange("192.168.0.0", 16),
-            // Multicast and the limited broadcast address. Leaving these IN the tunnel is what made
-            // "Обход LAN" look broken even though unicast LAN addresses already worked: every local
-            // DISCOVERY protocol is multicast (mDNS/Bonjour 224.0.0.251, SSDP/DLNA 239.255.255.250,
-            // Chromecast, printers) or broadcast (DHCP, Wake-on-LAN, older NAS/IoT apps), so nothing
-            // on the network could be FOUND — only reached by an IP typed in by hand. Neither range
-            // is routable off the local link, so keeping them on the real interface leaks nothing.
-            cidrRange("224.0.0.0", 4),
-            cidrRange("255.255.255.255", 32)
-        ).sortedBy { it.first }
-
-        val routes = mutableListOf<Pair<String, Int>>()
-        var cursor = 0L
-        val max = 0xFFFFFFFFL
-        for ((start, end) in excluded) {
-            if (start > cursor) appendCidrs(cursor, start - 1, routes)
-            if (end + 1 > cursor) cursor = end + 1
-        }
-        if (cursor <= max) appendCidrs(cursor, max, routes)
-        return routes
-    }
-
-    /** [base, base+2^(32-prefix)-1] as an inclusive unsigned-32-bit range. */
-    private fun cidrRange(addr: String, prefix: Int): Pair<Long, Long> {
-        val base = ipv4ToLong(addr)
-        val size = 1L shl (32 - prefix)
-        return base to (base + size - 1)
-    }
-
-    private fun ipv4ToLong(addr: String): Long {
-        val p = addr.split(".")
-        return ((p[0].toLong() shl 24) or (p[1].toLong() shl 16) or (p[2].toLong() shl 8) or p[3].toLong()) and 0xFFFFFFFFL
-    }
-
-    private fun longToIpv4(value: Long): String =
-        "${(value shr 24) and 0xFF}.${(value shr 16) and 0xFF}.${(value shr 8) and 0xFF}.${value and 0xFF}"
-
-    /** Packs the inclusive range [start, end] into the fewest aligned CIDR blocks. */
-    private fun appendCidrs(start: Long, end: Long, out: MutableList<Pair<String, Int>>) {
-        var cur = start
-        while (cur <= end) {
-            // Largest block aligned at `cur` (its lowest set bit) that still fits the remaining span.
-            var size = if (cur == 0L) (1L shl 32) else cur.takeLowestOneBit()
-            val remaining = end - cur + 1
-            while (size > remaining) size = size shr 1
-            out.add(longToIpv4(cur) to (32 - size.countTrailingZeroBits()))
-            cur += size
-        }
-    }
-
     private fun applySplitTunneling(builder: Builder): Boolean {
+        val plan = runCatching {
+            RustAndroidVpn.splitTunnelPlan(
+                mode = splitTunnelMode,
+                ownPackage = packageName,
+                proxyPackages = splitTunnelProxyApps,
+                bypassPackages = splitTunnelBypassApps,
+            )
+        }.getOrElse { error ->
+            addLog("Split tunneling proxy list is empty")
+            setStatus(VpnStatus.Error(error.message ?: "Select apps for split tunneling"))
+            updateNotification(ns.notifSplitTunnelError)
+            return false
+        }
+
+        val disallowedApplied = plan.disallowedPackages.associateWith { target ->
+            addDisallowedApp(builder, target, if (target == packageName) "Olcbox" else target)
+        }
         return when (splitTunnelMode) {
             AndroidSplitTunnelMode.AllApps -> {
-                addDisallowedApp(builder, packageName, "Olcbox")
                 addLog("Split tunneling: all apps use TUN")
                 true
             }
 
             AndroidSplitTunnelMode.ProxySelected -> {
-                val packages = splitTunnelProxyApps
-                    .filter { it.isNotBlank() && it != packageName }
-                    .distinct()
-
-                if (packages.isEmpty()) {
-                    addLog("Split tunneling proxy list is empty")
-                    setStatus(VpnStatus.Error("Select apps for split tunneling"))
-                    updateNotification(ns.notifSplitTunnelError)
-                    return false
-                }
-
-                val applied = packages.count { addAllowedApp(builder, it) }
-                if (applied == 0) {
+                val applied = plan.allowedPackages.count { addAllowedApp(builder, it) }
+                if (plan.requireOneAllowed && applied == 0) {
                     addLog("Split tunneling has no valid proxy apps")
                     setStatus(VpnStatus.Error("Selected apps are unavailable"))
                     updateNotification(ns.notifSplitTunnelError)
@@ -3270,11 +3121,9 @@ class OlcboxVpnService : VpnService() {
             }
 
             AndroidSplitTunnelMode.BypassSelected -> {
-                addDisallowedApp(builder, packageName, "Olcbox")
-                val applied = splitTunnelBypassApps
-                    .filter { it.isNotBlank() && it != packageName }
-                    .distinct()
-                    .count { addDisallowedApp(builder, it) }
+                val applied = disallowedApplied.count { (target, success) ->
+                    target != packageName && success
+                }
 
                 if (applied == 0) {
                     addLog("Split tunneling: no selected apps bypass TUN")
@@ -3312,56 +3161,16 @@ class OlcboxVpnService : VpnService() {
 
     private fun writeTun2socksConfig(): File {
         val file = File(filesDir, TUN2SOCKS_CONFIG_FILE_NAME)
-
-        // IPv4-leaning strategy ("IPv4 only" OR "IPv4 preferred"): drop the tun's IPv6 address from the
-        // bridge config so hev-socks5-tunnel REFUSES every IPv6 session (no `tunnel.ipv6` ⇒
-        // ipv6_enabled=0 in the native bridge). This DROPS IPv6 for EVERY engine — including
-        // olcRTC(Stealth) and VK-TURN, which run no sing-box/Xray family enforcement and would otherwise
-        // carry IPv6 to an IPv4-only upstream → "google.com closed" (prefer_ipv4) or a server-side IPv6
-        // on a leak-check. The system TUN still routes ::/0 into the tunnel (see establishSystemVpnTunnel),
-        // so the refused IPv6 is blackholed — never leaked to the iface, in full OR split tunneling.
-        // Why prefer_ipv4 belongs here: the bridge's mapped-DNS only ever answers A (never AAAA), so the
-        // ONLY IPv6 reaching the bridge is from apps' own DoH/DoT (Chrome Secure DNS) or IPv6 literals —
-        // which an IPv4 tunnel can't serve. RST-ing it makes the app fall back to IPv4 (= "prefer IPv4").
-        // sing-box can still reach v6-only sites THROUGH the proxy (that path is app→fake-v4→domain→proxy,
-        // it never hits the bridge as raw v6). prefer_ipv6/ipv6_only keep dual-stack (cores handle family).
-        // [activeDropBridgeIpv6] is snapshotted in startMobile (loadTrafficSettings is suspend; this isn't).
-        val ipv6Line = if (activeDropBridgeIpv6) "# ipv6 disabled (IPv4 only/preferred)" else "ipv6: '$TUN_IPV6_ADDRESS'"
-
         file.writeText(
-            """
-            tunnel:
-              name: tun0
-              mtu: $activeMtu
-              multi-queue: false
-              ipv4: $TUN_IPV4_ADDRESS
-              $ipv6Line
-
-            socks5:
-              address: ${socksConnectHost()}
-              port: $socksListenPort
-              udp: '${if (engineType == EngineType.Stealth || engineType == EngineType.MasterDns || engineType == EngineType.OpenFlux) "tcp" else "udp"}'
-              pipeline: false
-              username: '$socksUsername'
-              password: '$socksPassword'
-
-            mapdns:
-              address: $MAPDNS_ADDRESS
-              port: 53
-              network: $MAPDNS_NETWORK
-              netmask: $MAPDNS_NETMASK
-              cache-size: 10000
-
-            misc:
-              task-stack-size: 24576
-              tcp-buffer-size: 4096
-              max-session-count: 1200
-              connect-timeout: ${if (engineType == EngineType.MasterDns || engineType == EngineType.OpenFlux) 30000 else 10000}
-              tcp-read-write-timeout: 300000
-              udp-read-write-timeout: 60000
-              log-file: stderr
-              log-level: warn
-            """.trimIndent()
+            RustAndroidVpn.tun2socksYaml(
+                mtu = activeMtu,
+                dropIpv6 = activeDropBridgeIpv6,
+                socksListenHost = socksListenHost,
+                socksListenPort = socksListenPort,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                engine = engineType,
+            )
         )
         return file
     }
@@ -3996,13 +3805,6 @@ class OlcboxVpnService : VpnService() {
             LocationConfig.normalizeProvider(config.bypassProvider) == LocationConfig.PROVIDER_TELEMOST
         runCatching { mobileRuntime.setTelemostCookies(if (use) behavior.telemostCookies.trim() else "") }
         if (use) addLog("Applied Telemost cookies")
-    }
-
-    /** Cryptographically random token for per-session local SOCKS5 credentials (hex, 18 bytes). */
-    private fun randomSocksToken(): String {
-        val bytes = ByteArray(18)
-        secureRandom.nextBytes(bytes)
-        return bytes.joinToString("") { (it.toInt() and 0xFF or 0x100).toString(16).substring(1) }
     }
 
     private fun stopAuthenticatedSocksProxy() {
@@ -4988,8 +4790,6 @@ class OlcboxVpnService : VpnService() {
     }
 
     companion object {
-        private val secureRandom = SecureRandom()
-
         @Volatile
         private var nativeLibrariesLoaded = false
         private var nativeLibrariesLoadError: Throwable? = null
@@ -5040,19 +4840,11 @@ class OlcboxVpnService : VpnService() {
         private const val LOCAL_SOCKS_PORT_BASE = 10818
         private const val LOCAL_SOCKS_PORT_MAX = 10858
         private const val MOBILE_READY_TIMEOUT_MS = 25_000L
-        // Preference-ordered fallback when the active network advertises no usable DNS (see
-        // resolveOlcRtcDnsServer): Yandex first — it stays reachable on RU IPv4-only mobile where
-        // Cloudflare/Google UDP/53 are frequently blocked.
-        private const val FALLBACK_OLCRTC_DNS_SERVERS = "77.88.8.8:53,8.8.8.8:53,1.1.1.1:53"
         private const val PREVIOUS_STOP_WAIT_MS = 12_000L
         private const val JITSI_RESTART_SETTLE_MS = 2_000L
         private const val TUN2SOCKS_STOP_WAIT_MS = 1_000L
         private const val TUNNEL_HANDOFF_DELAY_MS = 300L
 
-        // Tproxy root rules: packet mark, routing table and ip-rule priority (below Android's 10000+).
-        private const val TPROXY_MARK = "0x7e1"
-        private const val TPROXY_TABLE = 2026
-        private const val TPROXY_PREF = 90
         private const val NETWORK_LOSS_GRACE_MS = 2_500L
         private const val NETWORK_STABILITY_GRACE_MS = 600L
         private const val WATCHDOG_INTERVAL_MS = 15_000L
@@ -5083,20 +4875,6 @@ class OlcboxVpnService : VpnService() {
         private const val VKTURN_RELAY_POLL_MS = 50L
         // Max EXTRA freeturn servers run alongside the primary for load-balancing (6 total).
         private const val VKTURN_MAX_EXTRA_FREETURN = 5
-        // VK-TURN parallel TURN streams. freeturn fans these across the call links (multiProvider), so
-        // more streams = more parallel relay paths. But a single WireGuard flow degrades when sprayed
-        // across too many paths of differing latency (reorder past WG's replay window → drops) and each
-        // stream's per-packet obf burns phone CPU — so "more streams" backfires past a point. Keep a
-        // proven BASE (≈ one call's worth) and add only a few streams per EXTRA call, capped LOW.
-        private const val VKTURN_STREAMS_BASE = 10
-        private const val VKTURN_STREAMS_PER_EXTRA_CALL = 3
-        // Low auto cap on the gently-scaled total: 1 call→10, 2+→12. Upstream docs (free-turn-proxy
-        // docs/modes.md) say 6-12 streams is the comfortable range and >15-20 RISKS A VK BAN, so 12 is
-        // the safe ceiling — letting this run to 20-64 was the regression (slower + ban risk).
-        private const val VKTURN_STREAMS_AUTO_MAX = 12
-        // Hard ceiling that even an explicit power-user vk.streams can't exceed, so a huge pasted link
-        // list / manual value can't spawn a runaway number of DTLS handshakes / TURN allocations.
-        private const val VKTURN_STREAMS_HARD_MAX = 64
         private const val SOCKET_CONNECT_TIMEOUT_MS = 150
         // Proxy-mode post-connect self-check: drive one real request through the local SOCKS to confirm
         // the path actually carries traffic and learn the exit IP (logged for the user). Plain-HTTP
@@ -5107,15 +4885,6 @@ class OlcboxVpnService : VpnService() {
         private const val WAKE_LOCK_REFRESH_INTERVAL_MS = 30_000L
         private const val WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 1000L
         private const val TUN_MTU = 1500
-        private const val TUN_IPV4_ADDRESS = "10.0.88.88"
-        private const val IPV4_PREFIX_LENGTH = 24
-        // ULA IPv6 address for the TUN. We claim ::/0 too so IPv6 traffic is captured by the
-        // tunnel instead of leaking out the underlying network's native IPv6 (see issue #3).
-        private const val TUN_IPV6_ADDRESS = "fdfe:dcba:9876::1"
-        private const val IPV6_PREFIX_LENGTH = 126
-        private const val MAPDNS_ADDRESS = "1.1.1.1"
-        private const val MAPDNS_NETWORK = "100.64.0.0"
-        private const val MAPDNS_NETMASK = "255.192.0.0"
         // Proxy types xray-core can serve from typed fields (used to prefer Xray for the RU blocklist).
         private val XRAY_SUPPORTED_TYPES = setOf(
             ProxyProfile.TYPE_VLESS,
