@@ -2,8 +2,8 @@ use yptun_core::location::LocationConfig;
 use yptun_core::model::EngineType;
 use yptun_core::routing::TrafficSettings;
 use yptun_ffi::{
-    apple_bridge_plan, apple_migrate_location_bundle, apple_tunnel_plan, AppleActionKind,
-    AppleConnectionRuntime, AppleStatusKind,
+    apple_bridge_plan, apple_location_catalog, apple_migrate_location_bundle, apple_tunnel_plan,
+    AppleActionKind, AppleConnectionRuntime, AppleStatusKind,
 };
 
 fn kinds(actions: &[yptun_ffi::AppleConnectionAction]) -> Vec<AppleActionKind> {
@@ -195,4 +195,34 @@ fn location_migration_preserves_valid_kotlin_bundle_data() {
     assert_eq!(migrated.locations_after, 1);
     assert_eq!(migrated.active_location_id.as_deref(), Some("keep"));
     assert!(migrated.normalized_json.contains("Москва"));
+}
+
+#[test]
+fn location_catalog_preserves_selection_and_returns_ui_fields() {
+    let bundle = serde_json::json!({
+        "version": 5,
+        "active_location_id": "selected",
+        "locations": [
+            {
+                "storage_id": "selected",
+                "name": "Основная",
+                "description": "Надёжное подключение",
+                "engine": "stealth",
+                "id": "room",
+                "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "subscription_url": "https://example.com/sub"
+            }
+        ]
+    });
+
+    let catalog = apple_location_catalog(bundle.to_string()).unwrap();
+    assert_eq!(catalog.active_location_id.as_deref(), Some("selected"));
+    assert_eq!(catalog.locations.len(), 1);
+    let location = &catalog.locations[0];
+    assert_eq!(location.id, "selected");
+    assert_eq!(location.display_name, "Основная");
+    assert_eq!(location.detail, "Надёжное подключение");
+    assert!(location.complete);
+    assert!(location.from_subscription);
+    assert!(!location.needs_user_action);
 }

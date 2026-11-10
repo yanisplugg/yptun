@@ -1,25 +1,13 @@
 import SwiftUI
-import YPtunRustBridge
-import YPtunShared
+import YPtunAppUI
 
 @main
 struct YPtunIOSApp: App {
+    @State private var model = YPtunApplicationModel()
+
     var body: some Scene {
         WindowGroup {
-            IOSRootView()
+            YPtunIOSRootView(model: model)
         }
-    }
-}
-
-private struct IOSRootView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Text(YPtunIdentity.displayName)
-                .font(.headline)
-            Text("Native iOS shell")
-            Text("Rust bridge: iOS \(YPtunRustBridgeInfo.minimumIOS)+")
-                .font(.caption)
-        }
-        .padding()
     }
 }

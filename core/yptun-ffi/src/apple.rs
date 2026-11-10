@@ -97,6 +97,22 @@ pub struct AppleLocationMigration {
     pub active_location_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleLocationSummary {
+    pub id: String,
+    pub display_name: String,
+    pub detail: String,
+    pub complete: bool,
+    pub needs_user_action: bool,
+    pub from_subscription: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleLocationCatalog {
+    pub active_location_id: Option<String>,
+    pub locations: Vec<AppleLocationSummary>,
+}
+
 /// Validates and normalizes a Kotlin-era location bundle before Swift replaces the original file.
 /// Swift owns the backup and atomic rename; Rust owns wire compatibility and model normalization.
 #[uniffi::export]
@@ -118,6 +134,48 @@ pub fn apple_migrate_location_bundle(
         locations_before,
         locations_after,
         active_location_id,
+    })
+}
+
+/// A compact, typed view of the location bundle for Apple lists and selection controls.
+/// Swift never needs to duplicate the evolving Kotlin/Rust location wire model.
+#[uniffi::export]
+pub fn apple_location_catalog(bundle_json: String) -> Result<AppleLocationCatalog, FfiError> {
+    let bundle: LocationBundleV4 = from_json("LocationBundle", &bundle_json)?;
+    let normalized = bundle.normalized();
+    let locations = normalized
+        .locations
+        .iter()
+        .map(|entry| {
+            let location = entry.location();
+            let detail = if !location.description.trim().is_empty() {
+                location.description.trim().to_string()
+            } else {
+                let provider = location.provider_name();
+                let transport = location.transport_name();
+                match (provider.trim().is_empty(), transport.trim().is_empty()) {
+                    (false, false) if provider != transport => format!("{provider} · {transport}"),
+                    (false, _) => provider.to_string(),
+                    (_, false) => transport.to_string(),
+                    _ => String::new(),
+                }
+            };
+            AppleLocationSummary {
+                id: entry.storage_id.clone(),
+                display_name: location.display_name(),
+                detail,
+                complete: location.is_complete(),
+                needs_user_action: location.needs_vk_link(),
+                from_subscription: entry
+                    .subscription_url
+                    .as_deref()
+                    .is_some_and(|url| !url.trim().is_empty()),
+            }
+        })
+        .collect();
+    Ok(AppleLocationCatalog {
+        active_location_id: normalized.active_location_id,
+        locations,
     })
 }
 

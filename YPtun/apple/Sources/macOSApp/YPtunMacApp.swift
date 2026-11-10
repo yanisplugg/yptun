@@ -1,26 +1,18 @@
 import SwiftUI
-import YPtunRustBridge
-import YPtunShared
+import YPtunAppUI
 
 @main
 struct YPtunMacApp: App {
-    var body: some Scene {
-        WindowGroup {
-            MacRootView()
-        }
-    }
-}
+    @State private var model = YPtunApplicationModel()
 
-private struct MacRootView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Text(YPtunIdentity.displayName)
-                .font(.headline)
-            Text("Native macOS shell")
-            Text("Rust bridge: macOS \(YPtunRustBridgeInfo.minimumMacOS)+")
-                .font(.caption)
+    var body: some Scene {
+        WindowGroup("YPtun", id: "main") {
+            YPtunMacRootView(model: model)
         }
-        .padding()
-        .frame(minWidth: 420, minHeight: 260)
+        .defaultSize(width: 920, height: 680)
+
+        MenuBarExtra("YPtun", systemImage: model.connectionState == .connected ? "shield.fill" : "shield") {
+            YPtunMenuBarView(model: model)
+        }
     }
 }

@@ -21,3 +21,28 @@ public enum VPNConnectionState: String, Codable, Sendable {
     case connected
     case disconnecting
 }
+
+public struct LocationListItem: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let detail: String
+    public let isComplete: Bool
+    public let needsUserAction: Bool
+    public let isFromSubscription: Bool
+
+    public init(
+        id: String,
+        name: String,
+        detail: String,
+        isComplete: Bool,
+        needsUserAction: Bool,
+        isFromSubscription: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.detail = detail
+        self.isComplete = isComplete
+        self.needsUserAction = needsUserAction
+        self.isFromSubscription = isFromSubscription
+    }
+}

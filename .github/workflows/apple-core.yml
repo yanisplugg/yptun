@@ -58,7 +58,7 @@ jobs:
         run: swift test
       - name: Build shared Apple packages
         working-directory: YPtun/apple/Packages/YPtunAppleKit
-        run: swift build
+        run: swift test
       - name: Generate native Apple project
         working-directory: YPtun/apple
         run: |

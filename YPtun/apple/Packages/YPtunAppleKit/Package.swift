@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "YPtunShared", targets: ["YPtunShared"]),
         .library(name: "YPtunTunnelSupport", targets: ["YPtunTunnelSupport"]),
         .library(name: "YPtunMigrationSupport", targets: ["YPtunMigrationSupport"]),
+        .library(name: "YPtunAppUI", targets: ["YPtunAppUI"]),
     ],
     dependencies: [
         .package(path: "../YPtunRustBridge"),
@@ -28,9 +29,21 @@ let package = Package(
         .target(
             name: "YPtunMigrationSupport",
             dependencies: [
+                "YPtunShared",
                 .product(name: "YPtunRustBridge", package: "YPtunRustBridge"),
                 .product(name: "YPtunAppleDataMigration", package: "YPtunAppleDataMigration"),
             ]
+        ),
+        .target(
+            name: "YPtunAppUI",
+            dependencies: [
+                "YPtunShared",
+                "YPtunMigrationSupport",
+            ]
+        ),
+        .testTarget(
+            name: "YPtunAppUITests",
+            dependencies: ["YPtunAppUI", "YPtunShared"]
         ),
     ],
     swiftLanguageModes: [.v6]

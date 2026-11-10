@@ -31,6 +31,7 @@ targets:
     platform: iOS
     sources:
       - path: Sources/iOSApp
+      - path: Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_NAME: YPtun
@@ -45,6 +46,8 @@ targets:
         product: YPtunShared
       - package: YPtunAppleKit
         product: YPtunMigrationSupport
+      - package: YPtunAppleKit
+        product: YPtunAppUI
       - package: YPtunRustBridge
         product: YPtunRustBridge
       - target: YPtunPacketTunnelIOS
@@ -99,6 +102,7 @@ targets:
     platform: macOS
     sources:
       - path: Sources/macOSApp
+      - path: Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_NAME: YPtun
@@ -112,6 +116,8 @@ targets:
         product: YPtunShared
       - package: YPtunAppleKit
         product: YPtunMigrationSupport
+      - package: YPtunAppleKit
+        product: YPtunAppUI
       - package: YPtunRustBridge
         product: YPtunRustBridge
       - target: YPtunPacketTunnelMac
