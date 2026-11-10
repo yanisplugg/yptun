@@ -9,11 +9,13 @@
 uniffi::setup_scaffolding!();
 
 mod api;
+mod android;
 mod logs;
 mod plan;
 mod session;
 
 pub use api::*;
+pub use android::*;
 pub use logs::*;
 pub use plan::*;
 pub use session::*;
