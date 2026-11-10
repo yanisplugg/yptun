@@ -2,7 +2,8 @@ use yptun_core::location::LocationConfig;
 use yptun_core::model::EngineType;
 use yptun_core::routing::TrafficSettings;
 use yptun_ffi::{
-    apple_bridge_plan, apple_tunnel_plan, AppleActionKind, AppleConnectionRuntime, AppleStatusKind,
+    apple_bridge_plan, apple_migrate_location_bundle, apple_tunnel_plan, AppleActionKind,
+    AppleConnectionRuntime, AppleStatusKind,
 };
 
 fn kinds(actions: &[yptun_ffi::AppleConnectionAction]) -> Vec<AppleActionKind> {
@@ -145,4 +146,36 @@ fn bridge_plan_matches_engine_and_ip_family_rules() {
     .unwrap();
     assert!(vk.drop_ipv6);
     assert!(vk.yaml.contains("# ipv6 disabled"));
+}
+
+#[test]
+fn location_migration_preserves_valid_kotlin_bundle_data() {
+    let legacy = serde_json::json!({
+        "version": 4,
+        "active_location_id": "keep",
+        "locations": [
+            {
+                "storage_id": "keep",
+                "name": "Москва",
+                "engine": "stealth",
+                "id": "room",
+                "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            },
+            {
+                "storage_id": "keep",
+                "name": "duplicate",
+                "engine": "stealth",
+                "id": "other",
+                "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
+        ]
+    });
+
+    let migrated = apple_migrate_location_bundle(legacy.to_string()).unwrap();
+    assert_eq!(migrated.source_version, 4);
+    assert_eq!(migrated.target_version, 5);
+    assert_eq!(migrated.locations_before, 2);
+    assert_eq!(migrated.locations_after, 1);
+    assert_eq!(migrated.active_location_id.as_deref(), Some("keep"));
+    assert!(migrated.normalized_json.contains("Москва"));
 }

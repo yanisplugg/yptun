@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use yptun_core::engine::machine::{Action, ConnectionMachine, Event, RetryPolicy, Status};
-use yptun_core::location::LocationConfig;
+use yptun_core::location::{LocationBundleV4, LocationConfig, BUNDLE_VERSION};
 use yptun_core::model::EngineType;
 use yptun_core::routing::TrafficSettings;
 
@@ -85,6 +85,40 @@ pub struct AppleBridgePlan {
     pub tcp_only_udp: bool,
     pub drop_ipv6: bool,
     pub slow_tunnel: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleLocationMigration {
+    pub normalized_json: String,
+    pub source_version: i32,
+    pub target_version: i32,
+    pub locations_before: u32,
+    pub locations_after: u32,
+    pub active_location_id: Option<String>,
+}
+
+/// Validates and normalizes a Kotlin-era location bundle before Swift replaces the original file.
+/// Swift owns the backup and atomic rename; Rust owns wire compatibility and model normalization.
+#[uniffi::export]
+pub fn apple_migrate_location_bundle(
+    bundle_json: String,
+) -> Result<AppleLocationMigration, FfiError> {
+    let source: LocationBundleV4 = from_json("LocationBundle", &bundle_json)?;
+    let source_version = source.version;
+    let locations_before = source.locations.len() as u32;
+    let normalized = source.normalized();
+    let locations_after = normalized.locations.len() as u32;
+    let active_location_id = normalized.active_location_id.clone();
+    let normalized_json = serde_json::to_string_pretty(&normalized)
+        .map_err(|error| FfiError::Json(error.to_string()))?;
+    Ok(AppleLocationMigration {
+        normalized_json,
+        source_version,
+        target_version: BUNDLE_VERSION,
+        locations_before,
+        locations_after,
+        active_location_id,
+    })
 }
 
 fn yaml_single_quoted(value: &str) -> String {
