@@ -59,7 +59,7 @@ open class RustBuffer : Structure() {
     companion object {
         internal fun alloc(size: ULong = 0UL) = uniffiRustCall() { status ->
             // Note: need to convert the size to a `Long` value to make this work with JVM.
-            UniffiLib.INSTANCE.ffi_yptun_ffi_rustbuffer_alloc(size.toLong(), status)
+            UniffiLib.ffi_yptun_ffi_rustbuffer_alloc(size.toLong(), status)
         }.also {
             if(it.data == null) {
                throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=${size})")
@@ -75,49 +75,15 @@ open class RustBuffer : Structure() {
         }
 
         internal fun free(buf: RustBuffer.ByValue) = uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.ffi_yptun_ffi_rustbuffer_free(buf, status)
+            UniffiLib.ffi_yptun_ffi_rustbuffer_free(buf, status)
         }
     }
 
     @Suppress("TooGenericExceptionThrown")
     fun asByteBuffer() =
-        this.data?.getByteBuffer(0, this.len.toLong())?.also {
+        this.data?.getByteBuffer(0, this.len)?.also {
             it.order(ByteOrder.BIG_ENDIAN)
         }
-}
-
-/**
- * The equivalent of the `*mut RustBuffer` type.
- * Required for callbacks taking in an out pointer.
- *
- * Size is the sum of all values in the struct.
- *
- * @suppress
- */
-class RustBufferByReference : ByReference(16) {
-    /**
-     * Set the pointed-to `RustBuffer` to the given value.
-     */
-    fun setValue(value: RustBuffer.ByValue) {
-        // NOTE: The offsets are as they are in the C-like struct.
-        val pointer = getPointer()
-        pointer.setLong(0, value.capacity)
-        pointer.setLong(8, value.len)
-        pointer.setPointer(16, value.data)
-    }
-
-    /**
-     * Get a `RustBuffer.ByValue` from this reference.
-     */
-    fun getValue(): RustBuffer.ByValue {
-        val pointer = getPointer()
-        val value = RustBuffer.ByValue()
-        value.writeField("capacity", pointer.getLong(0))
-        value.writeField("len", pointer.getLong(8))
-        value.writeField("data", pointer.getLong(16))
-
-        return value
-    }
 }
 
 // This is a helper for safely passing byte references into the rust code.
@@ -132,6 +98,43 @@ internal open class ForeignBytes : Structure() {
     @JvmField var data: Pointer? = null
 
     class ByValue : ForeignBytes(), Structure.ByValue
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Only `lower` is valid — zero-copy byte buffers only flow foreign -> Rust,
+// and only in argument position. `lift`, `read`, `write`, and
+// `allocationSize` have no sound implementation here and all panic at
+// runtime. The `FfiConverter` interface is implemented so that the
+// compiler enforces the full method set (rather than relying on eyeball).
+//
+// The provided `ByteBuffer` MUST be direct — only direct buffers have a
+// stable native address that JNA can expose via `getDirectBufferPointer`.
+// The returned `ForeignBytes.ByValue` is only valid for the duration of
+// the FFI call; the Rust side treats it as a borrow.
+internal object FfiConverterByRefBytes : FfiConverter<java.nio.ByteBuffer, ForeignBytes.ByValue> {
+    override fun lower(value: java.nio.ByteBuffer): ForeignBytes.ByValue {
+        require(value.isDirect) { "UniFFI zero-copy &[u8] requires a direct ByteBuffer. Use ByteBuffer.allocateDirect()." }
+        val remaining = value.remaining()
+        val fb = ForeignBytes.ByValue()
+        fb.len = remaining
+        // Zero-length direct buffers: skip getDirectBufferPointer (platform-variable behavior)
+        // and pass null. The Rust side treats (null, 0) as &[].
+        fb.data = if (remaining == 0) null else com.sun.jna.Native.getDirectBufferPointer(value)
+        return fb
+    }
+
+    override fun lift(value: ForeignBytes.ByValue): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+
+    override fun read(buf: java.nio.ByteBuffer): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun write(value: java.nio.ByteBuffer, buf: java.nio.ByteBuffer): Unit =
+        error("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun allocationSize(value: java.nio.ByteBuffer): ULong =
+        error("ByRef bytes have no RustBuffer allocation size: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
 }
 /**
  * The FfiConverter interface handles converter types to and from the FFI
@@ -316,8 +319,9 @@ internal inline fun<T> uniffiTraitInterfaceCall(
     try {
         writeReturn(makeCall())
     } catch(e: kotlin.Exception) {
+        val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
         callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
-        callStatus.error_buf = FfiConverterString.lower(e.toString())
+        callStatus.error_buf = FfiConverterString.lower(err)
     }
 }
 
@@ -334,26 +338,39 @@ internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallWithError(
             callStatus.code = UNIFFI_CALL_ERROR
             callStatus.error_buf = lowerError(e)
         } else {
+            val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
             callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
-            callStatus.error_buf = FfiConverterString.lower(e.toString())
+            callStatus.error_buf = FfiConverterString.lower(err)
         }
     }
 }
+// Initial value and increment amount for handles.
+// These ensure that Kotlin-generated handles always have the lowest bit set
+private const val UNIFFI_HANDLEMAP_INITIAL = 1.toLong()
+private const val UNIFFI_HANDLEMAP_DELTA = 2.toLong()
+
 // Map handles to objects
 //
 // This is used pass an opaque 64-bit handle representing a foreign object to the Rust code.
 internal class UniffiHandleMap<T: Any> {
     private val map = ConcurrentHashMap<Long, T>()
-    private val counter = java.util.concurrent.atomic.AtomicLong(0)
+    // Start
+    private val counter = java.util.concurrent.atomic.AtomicLong(UNIFFI_HANDLEMAP_INITIAL)
 
     val size: Int
         get() = map.size
 
     // Insert a new object into the handle map and get a handle for it
     fun insert(obj: T): Long {
-        val handle = counter.getAndAdd(1)
+        val handle = counter.getAndAdd(UNIFFI_HANDLEMAP_DELTA)
         map.put(handle, obj)
         return handle
+    }
+
+    // Clone a handle, creating a new one
+    fun clone(handle: Long): Long {
+        val obj = map.get(handle) ?: throw InternalException("UniffiHandleMap.clone: Invalid handle")
+        return insert(obj)
     }
 
     // Get an object from the handle map
@@ -378,521 +395,286 @@ private fun findLibraryName(componentName: String): String {
     return "yptun_ffi"
 }
 
-private inline fun <reified Lib : Library> loadIndirect(
-    componentName: String
-): Lib {
-    return Native.load<Lib>(findLibraryName(componentName), Lib::class.java)
-}
-
 // Define FFI callback types
 internal interface UniffiRustFutureContinuationCallback : com.sun.jna.Callback {
     fun callback(`data`: Long,`pollResult`: Byte,)
 }
-internal interface UniffiForeignFutureFree : com.sun.jna.Callback {
+internal interface UniffiForeignFutureDroppedCallback : com.sun.jna.Callback {
     fun callback(`handle`: Long,)
 }
 internal interface UniffiCallbackInterfaceFree : com.sun.jna.Callback {
     fun callback(`handle`: Long,)
 }
+internal interface UniffiCallbackInterfaceClone : com.sun.jna.Callback {
+    fun callback(`handle`: Long,)
+    : Long
+}
 @Structure.FieldOrder("handle", "free")
-internal open class UniffiForeignFuture(
+internal open class UniffiForeignFutureDroppedCallbackStruct(
     @JvmField internal var `handle`: Long = 0.toLong(),
-    @JvmField internal var `free`: UniffiForeignFutureFree? = null,
+    @JvmField internal var `free`: UniffiForeignFutureDroppedCallback? = null,
 ) : Structure() {
     class UniffiByValue(
         `handle`: Long = 0.toLong(),
-        `free`: UniffiForeignFutureFree? = null,
-    ): UniffiForeignFuture(`handle`,`free`,), Structure.ByValue
+        `free`: UniffiForeignFutureDroppedCallback? = null,
+    ): UniffiForeignFutureDroppedCallbackStruct(`handle`,`free`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFuture) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureDroppedCallbackStruct) {
         `handle` = other.`handle`
         `free` = other.`free`
     }
 
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructU8(
+internal open class UniffiForeignFutureResultU8(
     @JvmField internal var `returnValue`: Byte = 0.toByte(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Byte = 0.toByte(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructU8(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultU8(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructU8) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU8) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteU8 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructU8.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU8.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructI8(
+internal open class UniffiForeignFutureResultI8(
     @JvmField internal var `returnValue`: Byte = 0.toByte(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Byte = 0.toByte(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructI8(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultI8(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructI8) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI8) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteI8 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructI8.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI8.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructU16(
+internal open class UniffiForeignFutureResultU16(
     @JvmField internal var `returnValue`: Short = 0.toShort(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Short = 0.toShort(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructU16(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultU16(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructU16) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU16) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteU16 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructU16.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU16.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructI16(
+internal open class UniffiForeignFutureResultI16(
     @JvmField internal var `returnValue`: Short = 0.toShort(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Short = 0.toShort(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructI16(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultI16(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructI16) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI16) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteI16 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructI16.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI16.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructU32(
+internal open class UniffiForeignFutureResultU32(
     @JvmField internal var `returnValue`: Int = 0,
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Int = 0,
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructU32(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultU32(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructU32) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU32) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteU32 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructU32.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU32.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructI32(
+internal open class UniffiForeignFutureResultI32(
     @JvmField internal var `returnValue`: Int = 0,
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Int = 0,
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructI32(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultI32(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructI32) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI32) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteI32 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructI32.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI32.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructU64(
+internal open class UniffiForeignFutureResultU64(
     @JvmField internal var `returnValue`: Long = 0.toLong(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Long = 0.toLong(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructU64(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultU64(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructU64) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU64) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteU64 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructU64.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU64.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructI64(
+internal open class UniffiForeignFutureResultI64(
     @JvmField internal var `returnValue`: Long = 0.toLong(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Long = 0.toLong(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructI64(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultI64(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructI64) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI64) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteI64 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructI64.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI64.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructF32(
+internal open class UniffiForeignFutureResultF32(
     @JvmField internal var `returnValue`: Float = 0.0f,
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Float = 0.0f,
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructF32(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultF32(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructF32) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultF32) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteF32 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructF32.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultF32.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructF64(
+internal open class UniffiForeignFutureResultF64(
     @JvmField internal var `returnValue`: Double = 0.0,
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: Double = 0.0,
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructF64(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultF64(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructF64) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultF64) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteF64 : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructF64.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultF64.UniffiByValue,)
 }
 @Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructPointer(
-    @JvmField internal var `returnValue`: Pointer = Pointer.NULL,
-    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-) : Structure() {
-    class UniffiByValue(
-        `returnValue`: Pointer = Pointer.NULL,
-        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructPointer(`returnValue`,`callStatus`,), Structure.ByValue
-
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructPointer) {
-        `returnValue` = other.`returnValue`
-        `callStatus` = other.`callStatus`
-    }
-
-}
-internal interface UniffiForeignFutureCompletePointer : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructPointer.UniffiByValue,)
-}
-@Structure.FieldOrder("returnValue", "callStatus")
-internal open class UniffiForeignFutureStructRustBuffer(
+internal open class UniffiForeignFutureResultRustBuffer(
     @JvmField internal var `returnValue`: RustBuffer.ByValue = RustBuffer.ByValue(),
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `returnValue`: RustBuffer.ByValue = RustBuffer.ByValue(),
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructRustBuffer(`returnValue`,`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultRustBuffer(`returnValue`,`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructRustBuffer) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultRustBuffer) {
         `returnValue` = other.`returnValue`
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteRustBuffer : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructRustBuffer.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultRustBuffer.UniffiByValue,)
 }
 @Structure.FieldOrder("callStatus")
-internal open class UniffiForeignFutureStructVoid(
+internal open class UniffiForeignFutureResultVoid(
     @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
         `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ): UniffiForeignFutureStructVoid(`callStatus`,), Structure.ByValue
+    ): UniffiForeignFutureResultVoid(`callStatus`,), Structure.ByValue
 
-   internal fun uniffiSetValue(other: UniffiForeignFutureStructVoid) {
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultVoid) {
         `callStatus` = other.`callStatus`
     }
 
 }
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
-    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
 internal interface UniffiCallbackInterfaceLogSinkMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`lines`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
-@Structure.FieldOrder("onLogs", "uniffiFree")
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "onLogs")
 internal open class UniffiVTableCallbackInterfaceLogSink(
-    @JvmField internal var `onLogs`: UniffiCallbackInterfaceLogSinkMethod0? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `onLogs`: UniffiCallbackInterfaceLogSinkMethod0? = null,
 ) : Structure() {
     class UniffiByValue(
-        `onLogs`: UniffiCallbackInterfaceLogSinkMethod0? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceLogSink(`onLogs`,`uniffiFree`,), Structure.ByValue
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `onLogs`: UniffiCallbackInterfaceLogSinkMethod0? = null,
+    ): UniffiVTableCallbackInterfaceLogSink(`uniffiFree`,`uniffiClone`,`onLogs`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceLogSink) {
-        `onLogs` = other.`onLogs`
         `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `onLogs` = other.`onLogs`
     }
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// A JNA Library to expose the extern-C FFI definitions.
+// This is an implementation detail which will be called internally by the public API.
 
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is
@@ -900,509 +682,479 @@ internal open class UniffiVTableCallbackInterfaceLogSink(
 // in the interface for large crates.
 //
 // By splitting the otherwise huge interface into two parts
-// * UniffiLib
-// * IntegrityCheckingUniffiLib (this)
+// * UniffiLib (this)
+// * IntegrityCheckingUniffiLib
+// And all checksum methods are put into `IntegrityCheckingUniffiLib`
 // we allow for ~2x as many methods in the UniffiLib interface.
 //
-// The `ffi_uniffi_contract_version` method and all checksum methods are put
-// into `IntegrityCheckingUniffiLib` and these methods are called only once,
-// when the library is loaded.
-internal interface IntegrityCheckingUniffiLib : Library {
-    // Integrity check functions only
-    fun uniffi_yptun_ffi_checksum_func_android_can_reconnect_in_place(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_olcrtc_dns(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_partition_vk_links(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_port_plan(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_prepare_start(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_should_restart(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_split_tunnel_plan(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_status_effects(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_tproxy_apply_script(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_tproxy_failure(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_tproxy_teardown_script(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_tun2socks_yaml(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_tunnel_plan(
-): Short
-fun uniffi_yptun_ffi_checksum_func_android_vkturn_streams(
-): Short
-fun uniffi_yptun_ffi_checksum_func_delta_parse_manifest(
-): Short
-fun uniffi_yptun_ffi_checksum_func_i18n_catalog(
-): Short
-fun uniffi_yptun_ffi_checksum_func_i18n_effective_language(
-): Short
-fun uniffi_yptun_ffi_checksum_func_i18n_format(
-): Short
-fun uniffi_yptun_ffi_checksum_func_i18n_language_ids(
-): Short
-fun uniffi_yptun_ffi_checksum_func_i18n_text(
-): Short
-fun uniffi_yptun_ffi_checksum_func_is_official_signing_sha256(
-): Short
-fun uniffi_yptun_ffi_checksum_func_is_routing_link(
-): Short
-fun uniffi_yptun_ffi_checksum_func_location_info(
-): Short
-fun uniffi_yptun_ffi_checksum_func_location_normalized(
-): Short
-fun uniffi_yptun_ffi_checksum_func_location_resolved_core(
-): Short
-fun uniffi_yptun_ffi_checksum_func_looks_like_amneziawg(
-): Short
-fun uniffi_yptun_ffi_checksum_func_looks_like_routing_profile(
-): Short
-fun uniffi_yptun_ffi_checksum_func_looks_like_trust_tunnel(
-): Short
-fun uniffi_yptun_ffi_checksum_func_normalize_provider(
-): Short
-fun uniffi_yptun_ffi_checksum_func_parse_amneziawg(
-): Short
-fun uniffi_yptun_ffi_checksum_func_parse_routing_profile(
-): Short
-fun uniffi_yptun_ffi_checksum_func_parse_share_link(
-): Short
-fun uniffi_yptun_ffi_checksum_func_parse_subscription(
-): Short
-fun uniffi_yptun_ffi_checksum_func_parse_trust_tunnel(
-): Short
-fun uniffi_yptun_ffi_checksum_func_plan_check_supported(
-): Short
-fun uniffi_yptun_ffi_checksum_func_plan_topology(
-): Short
-fun uniffi_yptun_ffi_checksum_func_profile_info(
-): Short
-fun uniffi_yptun_ffi_checksum_func_provider_display_name(
-): Short
-fun uniffi_yptun_ffi_checksum_func_routing_profile_asns(
-): Short
-fun uniffi_yptun_ffi_checksum_func_routing_profile_happ_link(
-): Short
-fun uniffi_yptun_ffi_checksum_func_sha256_hex(
-): Short
-fun uniffi_yptun_ffi_checksum_func_supported_transports_for_provider(
-): Short
-fun uniffi_yptun_ffi_checksum_func_transport_display_name(
-): Short
-fun uniffi_yptun_ffi_checksum_func_warp_endpoint(
-): Short
-fun uniffi_yptun_ffi_checksum_func_warp_engine_ini(
-): Short
-fun uniffi_yptun_ffi_checksum_func_warp_parse_ini(
-): Short
-fun uniffi_yptun_ffi_checksum_func_warp_plain_wireguard(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_next_retry_delay_ms(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_rtc_line(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_tun_stats(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_recovery(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_retry(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_rtc(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_speed(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_tun_health(
-): Short
-fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_speed_tick(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_any_needs_geo_files(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_build_singbox_config(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_build_xray_config(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_global_core(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_prepare_raw_xray(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_resolve_routing_profile(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_resolved_core(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_set_global_core(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_set_routing(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_set_routing_profiles(
-): Short
-fun uniffi_yptun_ffi_checksum_method_coresession_set_traffic(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logbuffer_drain(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logbuffer_flush_to(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logbuffer_is_empty(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logbuffer_len(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logbuffer_push(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logbuffer_push_all(
-): Short
-fun uniffi_yptun_ffi_checksum_method_logsink_on_logs(
-): Short
-fun uniffi_yptun_ffi_checksum_constructor_androidvpnruntime_new(
-): Short
-fun uniffi_yptun_ffi_checksum_constructor_coresession_new(
-): Short
-fun uniffi_yptun_ffi_checksum_constructor_logbuffer_new(
-): Short
-fun ffi_yptun_ffi_uniffi_contract_version(
-): Int
+// Note: above all written when we used JNA's `loadIndirect` etc.
+// We now use JNA's "direct mapping" - unclear if same considerations apply exactly.
+internal object IntegrityCheckingUniffiLib {
+    init {
+        Native.register(IntegrityCheckingUniffiLib::class.java, findLibraryName(componentName = "yptun_ffi"))
+        uniffiCheckContractApiVersion(this)
+        uniffiCheckApiChecksums(this)
+    }
+
+    internal fun ensureInitialized() = Unit
+    external fun uniffi_yptun_ffi_checksum_func_android_can_reconnect_in_place(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_olcrtc_dns(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_partition_vk_links(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_port_plan(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_prepare_start(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_should_restart(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_split_tunnel_plan(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_status_effects(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_tproxy_apply_script(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_tproxy_failure(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_tproxy_teardown_script(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_tun2socks_yaml(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_tunnel_plan(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_android_vkturn_streams(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_delta_parse_manifest(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_i18n_catalog(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_i18n_effective_language(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_i18n_format(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_i18n_language_ids(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_i18n_text(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_is_official_signing_sha256(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_is_routing_link(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_location_info(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_location_normalized(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_location_resolved_core(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_looks_like_amneziawg(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_looks_like_routing_profile(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_looks_like_trust_tunnel(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_normalize_provider(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_parse_amneziawg(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_parse_routing_profile(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_parse_share_link(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_parse_subscription(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_parse_trust_tunnel(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_profile_info(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_provider_display_name(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_routing_profile_asns(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_routing_profile_happ_link(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_sha256_hex(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_supported_transports_for_provider(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_transport_display_name(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_warp_endpoint(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_warp_engine_ini(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_warp_parse_ini(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_warp_plain_wireguard(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_plan_check_supported(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_func_plan_topology(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_next_retry_delay_ms(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_rtc_line(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_tun_stats(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_recovery(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_retry(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_rtc(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_speed(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_tun_health(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_speed_tick(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logbuffer_drain(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logbuffer_flush_to(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logbuffer_is_empty(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logbuffer_len(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logbuffer_push(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logbuffer_push_all(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_logsink_on_logs(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_any_needs_geo_files(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_build_singbox_config(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_build_xray_config(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_global_core(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_prepare_raw_xray(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_resolve_routing_profile(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_resolved_core(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_set_global_core(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_set_routing(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_set_routing_profiles(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_method_coresession_set_traffic(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_constructor_androidvpnruntime_new(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_constructor_logbuffer_new(
+    ): Int
+    external fun uniffi_yptun_ffi_checksum_constructor_coresession_new(
+    ): Int
+    external fun ffi_yptun_ffi_uniffi_contract_version(
+    ): Int
+
 
 }
 
-// A JNA Library to expose the extern-C FFI definitions.
-// This is an implementation detail which will be called internally by the public API.
-internal interface UniffiLib : Library {
-    companion object {
-        internal val INSTANCE: UniffiLib by lazy {
-            val componentName = "yptun_ffi"
-            // For large crates we prevent `MethodTooLargeException` (see #2340)
-            // N.B. the name of the extension is very misleading, since it is
-            // rather `InterfaceTooLargeException`, caused by too many methods
-            // in the interface for large crates.
-            //
-            // By splitting the otherwise huge interface into two parts
-            // * UniffiLib (this)
-            // * IntegrityCheckingUniffiLib
-            // And all checksum methods are put into `IntegrityCheckingUniffiLib`
-            // we allow for ~2x as many methods in the UniffiLib interface.
-            //
-            // Thus we first load the library with `loadIndirect` as `IntegrityCheckingUniffiLib`
-            // so that we can (optionally!) call `uniffiCheckApiChecksums`...
-            loadIndirect<IntegrityCheckingUniffiLib>(componentName)
-                .also { lib: IntegrityCheckingUniffiLib ->
-                    uniffiCheckContractApiVersion(lib)
-                    uniffiCheckApiChecksums(lib)
-                }
-            // ... and then we load the library as `UniffiLib`
-            // N.B. we cannot use `loadIndirect` once and then try to cast it to `UniffiLib`
-            // => results in `java.lang.ClassCastException: com.sun.proxy.$Proxy cannot be cast to ...`
-            // error. So we must call `loadIndirect` twice. For crates large enough
-            // to trigger this issue, the performance impact is negligible, running on
-            // a macOS M1 machine the `loadIndirect` call takes ~50ms.
-            val lib = loadIndirect<UniffiLib>(componentName)
-            // No need to check the contract version and checksums, since
-            // we already did that with `IntegrityCheckingUniffiLib` above.
-            uniffiCallbackInterfaceLogSink.register(lib)
-            // Loading of library with integrity check done.
-            lib
-        }
+internal object UniffiLib {
 
-        // The Cleaner for the whole library
-        internal val CLEANER: UniffiCleaner by lazy {
-            UniffiCleaner.create()
-        }
+    // The Cleaner for the whole library
+    internal val CLEANER: UniffiCleaner by lazy {
+        UniffiCleaner.create()
     }
 
-    // FFI functions
-    fun uniffi_yptun_ffi_fn_clone_androidvpnruntime(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_free_androidvpnruntime(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_constructor_androidvpnruntime_new(`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_next_retry_delay_ms(`ptr`: Pointer,`baseDelayMs`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Long
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_rtc_line(`ptr`: Pointer,`line`: RustBuffer.ByValue,`nowMs`: Long,`statusConnected`: Byte,`mode`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_tun_stats(`ptr`: Pointer,`stats`: RustBuffer.ByValue,`coreRunning`: Byte,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_recovery(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_retry(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_rtc(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_speed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_tun_health(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_androidvpnruntime_speed_tick(`ptr`: Pointer,`stats`: RustBuffer.ByValue,`intervalMs`: Long,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_clone_coresession(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_free_coresession(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_constructor_coresession_new(uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_method_coresession_any_needs_geo_files(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_method_coresession_build_singbox_config(`ptr`: Pointer,`profileJson`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_coresession_build_xray_config(`ptr`: Pointer,`profileJson`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_coresession_global_core(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_coresession_prepare_raw_xray(`ptr`: Pointer,`rawConfigJson`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_coresession_resolve_routing_profile(`ptr`: Pointer,`locationProfileId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_coresession_resolved_core(`ptr`: Pointer,`locationJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_coresession_set_global_core(`ptr`: Pointer,`core`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_coresession_set_routing(`ptr`: Pointer,`routingJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_coresession_set_routing_profiles(`ptr`: Pointer,`profilesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_coresession_set_traffic(`ptr`: Pointer,`trafficJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_clone_logbuffer(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_free_logbuffer(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_constructor_logbuffer_new(`capacity`: Int,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_method_logbuffer_drain(`ptr`: Pointer,`max`: Int,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_method_logbuffer_flush_to(`ptr`: Pointer,`sink`: Pointer,`max`: Int,uniffi_out_err: UniffiRustCallStatus,
-): Int
-fun uniffi_yptun_ffi_fn_method_logbuffer_is_empty(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_method_logbuffer_len(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Int
-fun uniffi_yptun_ffi_fn_method_logbuffer_push(`ptr`: Pointer,`line`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_method_logbuffer_push_all(`ptr`: Pointer,`lines`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_clone_logsink(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun uniffi_yptun_ffi_fn_free_logsink(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_init_callback_vtable_logsink(`vtable`: UniffiVTableCallbackInterfaceLogSink,
-): Unit
-fun uniffi_yptun_ffi_fn_method_logsink_on_logs(`ptr`: Pointer,`lines`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_func_android_can_reconnect_in_place(`mode`: RustBuffer.ByValue,`runtime`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_android_olcrtc_dns(`upstreamAddress`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_partition_vk_links(`vkLinks`: RustBuffer.ByValue,`servers`: Int,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_port_plan(`socksPort`: Int,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_prepare_start(`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_should_restart(`status`: RustBuffer.ByValue,`runtime`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_android_split_tunnel_plan(`mode`: RustBuffer.ByValue,`ownPackage`: RustBuffer.ByValue,`proxyPackages`: RustBuffer.ByValue,`bypassPackages`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_status_effects(`status`: RustBuffer.ByValue,`connectedSinceMs`: Long,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_tproxy_apply_script(`uid`: Int,`tproxyPort`: Int,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_tproxy_failure(`executionError`: RustBuffer.ByValue,`output`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_tproxy_teardown_script(uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_tun2socks_yaml(`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_tunnel_plan(`mtu`: Int,`bypassLan`: Byte,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_android_vkturn_streams(`vkLinks`: RustBuffer.ByValue,`requestedStreams`: Int,uniffi_out_err: UniffiRustCallStatus,
-): Int
-fun uniffi_yptun_ffi_fn_func_delta_parse_manifest(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_i18n_catalog(`languageId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_i18n_effective_language(`languageId`: RustBuffer.ByValue,`systemLanguageId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_i18n_format(`languageId`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,`args`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_i18n_language_ids(uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_i18n_text(`languageId`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_is_official_signing_sha256(`sha256`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_is_routing_link(`link`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_location_info(`locationJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_location_normalized(`locationJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_location_resolved_core(`locationJson`: RustBuffer.ByValue,`global`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_looks_like_amneziawg(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_looks_like_routing_profile(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_looks_like_trust_tunnel(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun uniffi_yptun_ffi_fn_func_normalize_provider(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_parse_amneziawg(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_parse_routing_profile(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_parse_share_link(`uri`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_parse_subscription(`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_parse_trust_tunnel(`uri`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_plan_check_supported(`locationJson`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun uniffi_yptun_ffi_fn_func_plan_topology(`locationJson`: RustBuffer.ByValue,`socksPort`: Int,`platform`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_profile_info(`profileJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_provider_display_name(`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_routing_profile_asns(`profileJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_routing_profile_happ_link(`profileJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_sha256_hex(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_supported_transports_for_provider(`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_transport_display_name(`transport`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_warp_endpoint(`ini`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_warp_engine_ini(`ini`: RustBuffer.ByValue,`awg`: Byte,`initPackets`: Byte,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_warp_parse_ini(`ini`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun uniffi_yptun_ffi_fn_func_warp_plain_wireguard(`ini`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun ffi_yptun_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun ffi_yptun_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun ffi_yptun_ffi_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
-): Unit
-fun ffi_yptun_ffi_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun ffi_yptun_ffi_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_u8(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_u8(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun ffi_yptun_ffi_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_i8(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_i8(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Byte
-fun ffi_yptun_ffi_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_u16(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_u16(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Short
-fun ffi_yptun_ffi_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_i16(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_i16(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Short
-fun ffi_yptun_ffi_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_u32(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_u32(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Int
-fun ffi_yptun_ffi_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_i32(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_i32(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Int
-fun ffi_yptun_ffi_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_u64(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_u64(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Long
-fun ffi_yptun_ffi_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_i64(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_i64(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Long
-fun ffi_yptun_ffi_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_f32(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_f32(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Float
-fun ffi_yptun_ffi_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_f64(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_f64(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Double
-fun ffi_yptun_ffi_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_pointer(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_pointer(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Pointer
-fun ffi_yptun_ffi_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_rust_buffer(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_rust_buffer(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): RustBuffer.ByValue
-fun ffi_yptun_ffi_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_cancel_void(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_free_void(`handle`: Long,
-): Unit
-fun ffi_yptun_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
-): Unit
+
+    init {
+        Native.register(UniffiLib::class.java, findLibraryName(componentName = "yptun_ffi"))
+        uniffiCallbackInterfaceLogSink.register(this)
+
+    }
+
+    internal fun ensureInitialized() = Unit
+    external fun uniffi_yptun_ffi_fn_clone_androidvpnruntime(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_free_androidvpnruntime(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_constructor_androidvpnruntime_new(`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_next_retry_delay_ms(`ptr`: Long,`baseDelayMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_rtc_line(`ptr`: Long,`line`: RustBuffer.ByValue,`nowMs`: Long,`statusConnected`: Byte,`mode`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_tun_stats(`ptr`: Long,`stats`: RustBuffer.ByValue,`coreRunning`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_recovery(`ptr`: Long,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_retry(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_rtc(`ptr`: Long,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_speed(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_tun_health(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_androidvpnruntime_speed_tick(`ptr`: Long,`stats`: RustBuffer.ByValue,`intervalMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_clone_logbuffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_free_logbuffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_constructor_logbuffer_new(`capacity`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_method_logbuffer_drain(`ptr`: Long,`max`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_logbuffer_flush_to(`ptr`: Long,`sink`: Long,`max`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun uniffi_yptun_ffi_fn_method_logbuffer_is_empty(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_method_logbuffer_len(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun uniffi_yptun_ffi_fn_method_logbuffer_push(`ptr`: Long,`line`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_logbuffer_push_all(`ptr`: Long,`lines`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_clone_logsink(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_free_logsink(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_init_callback_vtable_logsink(`vtable`: UniffiVTableCallbackInterfaceLogSink,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_logsink_on_logs(`ptr`: Long,`lines`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_clone_coresession(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_free_coresession(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_constructor_coresession_new(uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun uniffi_yptun_ffi_fn_method_coresession_any_needs_geo_files(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_method_coresession_build_singbox_config(`ptr`: Long,`profileJson`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_coresession_build_xray_config(`ptr`: Long,`profileJson`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_coresession_global_core(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_coresession_prepare_raw_xray(`ptr`: Long,`rawConfigJson`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_coresession_resolve_routing_profile(`ptr`: Long,`locationProfileId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_coresession_resolved_core(`ptr`: Long,`locationJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_method_coresession_set_global_core(`ptr`: Long,`core`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_coresession_set_routing(`ptr`: Long,`routingJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_coresession_set_routing_profiles(`ptr`: Long,`profilesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_method_coresession_set_traffic(`ptr`: Long,`trafficJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_func_android_can_reconnect_in_place(`mode`: RustBuffer.ByValue,`runtime`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_android_olcrtc_dns(`upstreamAddress`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_partition_vk_links(`vkLinks`: RustBuffer.ByValue,`servers`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_port_plan(`socksPort`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_prepare_start(`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_should_restart(`status`: RustBuffer.ByValue,`runtime`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_android_split_tunnel_plan(`mode`: RustBuffer.ByValue,`ownPackage`: RustBuffer.ByValue,`proxyPackages`: RustBuffer.ByValue,`bypassPackages`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_status_effects(`status`: RustBuffer.ByValue,`connectedSinceMs`: Long,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_tproxy_apply_script(`uid`: Int,`tproxyPort`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_tproxy_failure(`executionError`: RustBuffer.ByValue,`output`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_tproxy_teardown_script(uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_tun2socks_yaml(`options`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_tunnel_plan(`mtu`: Int,`bypassLan`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_android_vkturn_streams(`vkLinks`: RustBuffer.ByValue,`requestedStreams`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun uniffi_yptun_ffi_fn_func_delta_parse_manifest(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_i18n_catalog(`languageId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_i18n_effective_language(`languageId`: RustBuffer.ByValue,`systemLanguageId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_i18n_format(`languageId`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,`args`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_i18n_language_ids(uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_i18n_text(`languageId`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_is_official_signing_sha256(`sha256`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_is_routing_link(`link`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_location_info(`locationJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_location_normalized(`locationJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_location_resolved_core(`locationJson`: RustBuffer.ByValue,`global`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_looks_like_amneziawg(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_looks_like_routing_profile(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_looks_like_trust_tunnel(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun uniffi_yptun_ffi_fn_func_normalize_provider(`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_parse_amneziawg(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_parse_routing_profile(`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_parse_share_link(`uri`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_parse_subscription(`body`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_parse_trust_tunnel(`uri`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_profile_info(`profileJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_provider_display_name(`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_routing_profile_asns(`profileJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_routing_profile_happ_link(`profileJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_sha256_hex(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_supported_transports_for_provider(`provider`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_transport_display_name(`transport`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_warp_endpoint(`ini`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_warp_engine_ini(`ini`: RustBuffer.ByValue,`awg`: Byte,`initPackets`: Byte,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_warp_parse_ini(`ini`: RustBuffer.ByValue,`tag`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_warp_plain_wireguard(`ini`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_yptun_ffi_fn_func_plan_check_supported(`locationJson`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun uniffi_yptun_ffi_fn_func_plan_topology(`locationJson`: RustBuffer.ByValue,`socksPort`: Int,`platform`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun ffi_yptun_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun ffi_yptun_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun ffi_yptun_ffi_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    external fun ffi_yptun_ffi_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun ffi_yptun_ffi_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_u8(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_u8(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun ffi_yptun_ffi_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_i8(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_i8(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    external fun ffi_yptun_ffi_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_u16(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_u16(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun ffi_yptun_ffi_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_i16(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_i16(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Short
+    external fun ffi_yptun_ffi_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_u32(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_u32(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun ffi_yptun_ffi_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_i32(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_i32(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    external fun ffi_yptun_ffi_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_u64(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_u64(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun ffi_yptun_ffi_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_i64(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_i64(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Long
+    external fun ffi_yptun_ffi_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_f32(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_f32(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Float
+    external fun ffi_yptun_ffi_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_f64(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_f64(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Double
+    external fun ffi_yptun_ffi_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_rust_buffer(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_rust_buffer(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun ffi_yptun_ffi_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_cancel_void(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_free_void(`handle`: Long,
+    ): Unit
+    external fun ffi_yptun_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+
 
 }
 
 private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
     // Get the bindings contract version from our ComponentInterface
-    val bindings_contract_version = 29
+    val bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     val scaffolding_contract_version = lib.ffi_yptun_ffi_uniffi_contract_version()
     if (bindings_contract_version != scaffolding_contract_version) {
@@ -1411,235 +1163,235 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_yptun_ffi_checksum_func_android_can_reconnect_in_place() != 5960.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_can_reconnect_in_place() and 0xFFFF) != 43168) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_olcrtc_dns() != 30081.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_olcrtc_dns() and 0xFFFF) != 24138) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_partition_vk_links() != 49493.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_partition_vk_links() and 0xFFFF) != 37700) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_port_plan() != 4293.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_port_plan() and 0xFFFF) != 61486) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_prepare_start() != 22556.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_prepare_start() and 0xFFFF) != 22706) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_should_restart() != 50430.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_should_restart() and 0xFFFF) != 23362) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_split_tunnel_plan() != 41941.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_split_tunnel_plan() and 0xFFFF) != 36756) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_status_effects() != 3370.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_status_effects() and 0xFFFF) != 45901) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_tproxy_apply_script() != 47819.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_tproxy_apply_script() and 0xFFFF) != 20565) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_tproxy_failure() != 63555.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_tproxy_failure() and 0xFFFF) != 55845) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_tproxy_teardown_script() != 59849.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_tproxy_teardown_script() and 0xFFFF) != 59429) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_tun2socks_yaml() != 27467.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_tun2socks_yaml() and 0xFFFF) != 6470) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_tunnel_plan() != 9633.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_tunnel_plan() and 0xFFFF) != 57778) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_android_vkturn_streams() != 52122.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_android_vkturn_streams() and 0xFFFF) != 33978) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_delta_parse_manifest() != 46779.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_delta_parse_manifest() and 0xFFFF) != 2045) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_i18n_catalog() != 59991.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_i18n_catalog() and 0xFFFF) != 58164) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_i18n_effective_language() != 21943.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_i18n_effective_language() and 0xFFFF) != 55770) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_i18n_format() != 63190.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_i18n_format() and 0xFFFF) != 29784) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_i18n_language_ids() != 56328.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_i18n_language_ids() and 0xFFFF) != 37700) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_i18n_text() != 64873.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_i18n_text() and 0xFFFF) != 24632) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_is_official_signing_sha256() != 7378.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_is_official_signing_sha256() and 0xFFFF) != 7386) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_is_routing_link() != 31946.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_is_routing_link() and 0xFFFF) != 3751) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_location_info() != 65334.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_location_info() and 0xFFFF) != 60138) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_location_normalized() != 39672.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_location_normalized() and 0xFFFF) != 58113) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_location_resolved_core() != 19562.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_location_resolved_core() and 0xFFFF) != 22633) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_looks_like_amneziawg() != 18348.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_looks_like_amneziawg() and 0xFFFF) != 8429) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_looks_like_routing_profile() != 25791.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_looks_like_routing_profile() and 0xFFFF) != 37360) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_looks_like_trust_tunnel() != 2930.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_looks_like_trust_tunnel() and 0xFFFF) != 22612) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_normalize_provider() != 4431.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_normalize_provider() and 0xFFFF) != 17156) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_parse_amneziawg() != 13754.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_parse_amneziawg() and 0xFFFF) != 6773) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_parse_routing_profile() != 6014.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_parse_routing_profile() and 0xFFFF) != 6176) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_parse_share_link() != 11477.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_parse_share_link() and 0xFFFF) != 56109) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_parse_subscription() != 11330.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_parse_subscription() and 0xFFFF) != 6745) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_parse_trust_tunnel() != 18711.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_parse_trust_tunnel() and 0xFFFF) != 52135) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_plan_check_supported() != 11546.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_profile_info() and 0xFFFF) != 35409) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_plan_topology() != 10739.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_provider_display_name() and 0xFFFF) != 65159) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_profile_info() != 13504.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_routing_profile_asns() and 0xFFFF) != 21421) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_provider_display_name() != 6396.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_routing_profile_happ_link() and 0xFFFF) != 9841) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_routing_profile_asns() != 26435.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_sha256_hex() and 0xFFFF) != 30476) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_routing_profile_happ_link() != 8234.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_supported_transports_for_provider() and 0xFFFF) != 19470) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_sha256_hex() != 17142.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_transport_display_name() and 0xFFFF) != 16019) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_supported_transports_for_provider() != 60092.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_warp_endpoint() and 0xFFFF) != 56280) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_transport_display_name() != 2282.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_warp_engine_ini() and 0xFFFF) != 17702) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_warp_endpoint() != 4681.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_warp_parse_ini() and 0xFFFF) != 60094) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_warp_engine_ini() != 27261.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_warp_plain_wireguard() and 0xFFFF) != 40393) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_warp_parse_ini() != 30217.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_plan_check_supported() and 0xFFFF) != 20973) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_func_warp_plain_wireguard() != 45806.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_func_plan_topology() and 0xFFFF) != 56488) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_next_retry_delay_ms() != 21535.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_next_retry_delay_ms() and 0xFFFF) != 64234) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_rtc_line() != 6264.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_rtc_line() and 0xFFFF) != 48839) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_tun_stats() != 25614.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_tun_stats() and 0xFFFF) != 3246) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_recovery() != 25422.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_recovery() and 0xFFFF) != 55165) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_retry() != 44783.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_retry() and 0xFFFF) != 2853) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_rtc() != 18673.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_rtc() and 0xFFFF) != 12420) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_speed() != 29989.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_speed() and 0xFFFF) != 34079) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_tun_health() != 21715.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_tun_health() and 0xFFFF) != 11387) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_speed_tick() != 14936.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_speed_tick() and 0xFFFF) != 50142) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_any_needs_geo_files() != 35428.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logbuffer_drain() and 0xFFFF) != 19431) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_build_singbox_config() != 33843.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logbuffer_flush_to() and 0xFFFF) != 53958) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_build_xray_config() != 52218.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logbuffer_is_empty() and 0xFFFF) != 24365) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_global_core() != 14589.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logbuffer_len() and 0xFFFF) != 20490) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_prepare_raw_xray() != 15553.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logbuffer_push() and 0xFFFF) != 11191) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_resolve_routing_profile() != 65527.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logbuffer_push_all() and 0xFFFF) != 46751) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_resolved_core() != 10804.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_logsink_on_logs() and 0xFFFF) != 17758) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_set_global_core() != 49577.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_any_needs_geo_files() and 0xFFFF) != 49734) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_set_routing() != 48903.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_build_singbox_config() and 0xFFFF) != 13298) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_set_routing_profiles() != 37114.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_build_xray_config() and 0xFFFF) != 14329) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_coresession_set_traffic() != 47893.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_global_core() and 0xFFFF) != 27282) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logbuffer_drain() != 60972.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_prepare_raw_xray() and 0xFFFF) != 65248) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logbuffer_flush_to() != 41082.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_resolve_routing_profile() and 0xFFFF) != 2103) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logbuffer_is_empty() != 9281.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_resolved_core() and 0xFFFF) != 57462) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logbuffer_len() != 61282.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_set_global_core() and 0xFFFF) != 62170) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logbuffer_push() != 24359.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_set_routing() and 0xFFFF) != 47199) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logbuffer_push_all() != 16846.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_set_routing_profiles() and 0xFFFF) != 26553) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_method_logsink_on_logs() != 12520.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_method_coresession_set_traffic() and 0xFFFF) != 21337) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_constructor_androidvpnruntime_new() != 26160.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_constructor_androidvpnruntime_new() and 0xFFFF) != 50594) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_constructor_coresession_new() != 36260.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_constructor_logbuffer_new() and 0xFFFF) != 42960) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_yptun_ffi_checksum_constructor_logbuffer_new() != 17633.toShort()) {
+    if ((lib.uniffi_yptun_ffi_checksum_constructor_coresession_new() and 0xFFFF) != 33326) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1648,7 +1400,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
  * @suppress
  */
 public fun uniffiEnsureInitialized() {
-    UniffiLib.INSTANCE
+    // Call arbitrary methods on IntegrityCheckingUniffiLib and UniffiLib to ensure that
+    // their init blocks run. This ensures initialization across crates works as expected.
+    IntegrityCheckingUniffiLib.ensureInitialized()
+    UniffiLib.ensureInitialized()
 }
 
 // Async support
@@ -1715,11 +1470,22 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
     }
 
 /**
+ * Placeholder object used to signal that we're constructing an interface with a FFI handle.
+ *
+ * This is the first argument for interface constructors that input a raw handle. It exists is that
+ * so we can avoid signature conflicts when an interface has a regular constructor than inputs a
+ * Long.
+ *
+ * @suppress
+ * */
+object UniffiWithHandle
+
+/**
  * Used to instantiate an interface without an actual pointer, for fakes in tests, mostly.
  *
  * @suppress
  * */
-object NoPointer// Magic number for the Rust proxy to call using the same mechanism as every other method,
+object NoHandle// Magic number for the Rust proxy to call using the same mechanism as every other method,
 // to free the callback once it's dropped by Rust.
 internal const val IDX_CALLBACK_FREE = 0
 // Callback return codes
@@ -2008,21 +1774,18 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 }
 
 
-// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// This template implements a class for working with a Rust struct via a handle
 // to the live Rust struct on the other side of the FFI.
-//
-// Each instance implements core operations for working with the Rust `Arc<T>` and the
-// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
 //
 // There's some subtlety here, because we have to be careful not to operate on a Rust
 // struct after it has been dropped, and because we must expose a public API for freeing
 // theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
 //
-//   * Each instance holds an opaque pointer to the underlying Rust struct.
-//     Method calls need to read this pointer from the object's state and pass it in to
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
 //     the Rust FFI.
 //
-//   * When an instance is no longer needed, its pointer should be passed to a
+//   * When an instance is no longer needed, its handle should be passed to a
 //     special destructor function provided by the Rust FFI, which will drop the
 //     underlying Rust struct.
 //
@@ -2047,13 +1810,13 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 //      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
 //         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
 //
-// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// If we try to implement this with mutual exclusion on access to the handle, there is the
 // possibility of a race between a method call and a concurrent call to `destroy`:
 //
-//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
-//      before it can pass the pointer over the FFI to Rust.
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
 //    * Thread B calls `destroy` and frees the underlying Rust struct.
-//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
 //      a use-after-free.
 //
 // One possible solution would be to use a `ReadWriteLock`, with each method call taking
@@ -2138,34 +1901,47 @@ public interface AndroidVpnRuntimeInterface {
 open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterface
 {
 
-    constructor(pointer: Pointer) {
-        this.pointer = pointer
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
     }
 
     /**
+     * @suppress
+     *
      * This constructor can be used to instantiate a fake object. Only used for tests. Any
      * attempt to actually use an object constructed this way will fail as there is no
      * connected Rust object.
      */
     @Suppress("UNUSED_PARAMETER")
-    constructor(noPointer: NoPointer) {
-        this.pointer = null
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
     }
     constructor(`nowMs`: kotlin.ULong) :
-        this(
+        this(UniffiWithHandle,
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_constructor_androidvpnruntime_new(
+    UniffiLib.uniffi_yptun_ffi_fn_constructor_androidvpnruntime_new(
+
+
         FfiConverterULong.lower(`nowMs`),_status)
 }
     )
 
-    protected val pointer: Pointer?
-    protected val cleanable: UniffiCleaner.Cleanable
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
 
     override fun destroy() {
         // Only allow a single call to this method.
@@ -2173,7 +1949,7 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
@@ -2183,7 +1959,7 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
         this.destroy()
     }
 
-    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
         do {
@@ -2195,41 +1971,51 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
                 throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
             }
         } while (! this.callCounter.compareAndSet(c, c + 1L))
-        // Now we can safely do the method call without the pointer being freed concurrently.
+        // Now we can safely do the method call without the handle being freed concurrently.
         try {
-            return block(this.uniffiClonePointer())
+            return block(this.uniffiCloneHandle())
         } finally {
             // This decrement always matches the increment we performed above.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
 
     // Use a static inner class instead of a closure so as not to accidentally
     // capture `this` as part of the cleanable's action.
-    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
         override fun run() {
-            pointer?.let { ptr ->
-                uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_free_androidvpnruntime(ptr, status)
-                }
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_yptun_ffi_fn_free_androidvpnruntime(handle, status)
             }
         }
     }
 
-    fun uniffiClonePointer(): Pointer {
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_clone_androidvpnruntime(pointer!!, status)
+            UniffiLib.uniffi_yptun_ffi_fn_clone_androidvpnruntime(handle, status)
         }
     }
 
     override fun `nextRetryDelayMs`(`baseDelayMs`: kotlin.ULong): kotlin.ULong {
             return FfiConverterULong.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_next_retry_delay_ms(
-        it, FfiConverterULong.lower(`baseDelayMs`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_next_retry_delay_ms(
+        it,
+
+        FfiConverterULong.lower(`baseDelayMs`),_status)
 }
     }
     )
@@ -2238,10 +2024,15 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `observeRtcLine`(`line`: kotlin.String, `nowMs`: kotlin.ULong, `statusConnected`: kotlin.Boolean, `mode`: AndroidMode): AndroidRecovery? {
             return FfiConverterOptionalTypeAndroidRecovery.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_rtc_line(
-        it, FfiConverterString.lower(`line`),FfiConverterULong.lower(`nowMs`),FfiConverterBoolean.lower(`statusConnected`),FfiConverterTypeAndroidMode.lower(`mode`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_rtc_line(
+        it,
+
+        FfiConverterString.lower(`line`),
+        FfiConverterULong.lower(`nowMs`),
+        FfiConverterBoolean.lower(`statusConnected`),
+        FfiConverterTypeAndroidMode.lower(`mode`),_status)
 }
     }
     )
@@ -2250,10 +2041,13 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `observeTunStats`(`stats`: AndroidTunStats?, `coreRunning`: kotlin.Boolean): kotlin.Boolean {
             return FfiConverterBoolean.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_tun_stats(
-        it, FfiConverterOptionalTypeAndroidTunStats.lower(`stats`),FfiConverterBoolean.lower(`coreRunning`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_tun_stats(
+        it,
+
+        FfiConverterOptionalTypeAndroidTunStats.lower(`stats`),
+        FfiConverterBoolean.lower(`coreRunning`),_status)
 }
     }
     )
@@ -2262,10 +2056,12 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `resetRecovery`(`nowMs`: kotlin.ULong)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_recovery(
-        it, FfiConverterULong.lower(`nowMs`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_recovery(
+        it,
+
+        FfiConverterULong.lower(`nowMs`),_status)
 }
     }
 
@@ -2273,10 +2069,11 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `resetRetry`()
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_retry(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_retry(
+        it,
+        _status)
 }
     }
 
@@ -2284,10 +2081,12 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `resetRtc`(`nowMs`: kotlin.ULong)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_rtc(
-        it, FfiConverterULong.lower(`nowMs`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_rtc(
+        it,
+
+        FfiConverterULong.lower(`nowMs`),_status)
 }
     }
 
@@ -2295,10 +2094,11 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `resetSpeed`()
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_speed(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_speed(
+        it,
+        _status)
 }
     }
 
@@ -2306,10 +2106,11 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `resetTunHealth`()
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_tun_health(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_tun_health(
+        it,
+        _status)
 }
     }
 
@@ -2317,10 +2118,13 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
     override fun `speedTick`(`stats`: AndroidTunStats?, `intervalMs`: kotlin.ULong): AndroidSpeed? {
             return FfiConverterOptionalTypeAndroidSpeed.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_speed_tick(
-        it, FfiConverterOptionalTypeAndroidTunStats.lower(`stats`),FfiConverterULong.lower(`intervalMs`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_androidvpnruntime_speed_tick(
+        it,
+
+        FfiConverterOptionalTypeAndroidTunStats.lower(`stats`),
+        FfiConverterULong.lower(`intervalMs`),_status)
 }
     }
     )
@@ -2331,54 +2135,53 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
 
 
 
+
+
+
+    /**
+     * @suppress
+     */
     companion object
 
 }
 
+
 /**
  * @suppress
  */
-public object FfiConverterTypeAndroidVpnRuntime: FfiConverter<AndroidVpnRuntime, Pointer> {
-
-    override fun lower(value: AndroidVpnRuntime): Pointer {
-        return value.uniffiClonePointer()
+public object FfiConverterTypeAndroidVpnRuntime: FfiConverter<AndroidVpnRuntime, Long> {
+    override fun lower(value: AndroidVpnRuntime): Long {
+        return value.uniffiCloneHandle()
     }
 
-    override fun lift(value: Pointer): AndroidVpnRuntime {
-        return AndroidVpnRuntime(value)
+    override fun lift(value: Long): AndroidVpnRuntime {
+        return AndroidVpnRuntime(UniffiWithHandle, value)
     }
 
     override fun read(buf: ByteBuffer): AndroidVpnRuntime {
-        // The Rust code always writes pointers as 8 bytes, and will
-        // fail to compile if they don't fit.
-        return lift(Pointer(buf.getLong()))
+        return lift(buf.getLong())
     }
 
     override fun allocationSize(value: AndroidVpnRuntime) = 8UL
 
     override fun write(value: AndroidVpnRuntime, buf: ByteBuffer) {
-        // The Rust code always expects pointers written as 8 bytes,
-        // and will fail to compile if they don't fit.
-        buf.putLong(Pointer.nativeValue(lower(value)))
+        buf.putLong(lower(value))
     }
 }
 
 
-// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// This template implements a class for working with a Rust struct via a handle
 // to the live Rust struct on the other side of the FFI.
-//
-// Each instance implements core operations for working with the Rust `Arc<T>` and the
-// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
 //
 // There's some subtlety here, because we have to be careful not to operate on a Rust
 // struct after it has been dropped, and because we must expose a public API for freeing
 // theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
 //
-//   * Each instance holds an opaque pointer to the underlying Rust struct.
-//     Method calls need to read this pointer from the object's state and pass it in to
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
 //     the Rust FFI.
 //
-//   * When an instance is no longer needed, its pointer should be passed to a
+//   * When an instance is no longer needed, its handle should be passed to a
 //     special destructor function provided by the Rust FFI, which will drop the
 //     underlying Rust struct.
 //
@@ -2403,13 +2206,13 @@ public object FfiConverterTypeAndroidVpnRuntime: FfiConverter<AndroidVpnRuntime,
 //      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
 //         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
 //
-// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// If we try to implement this with mutual exclusion on access to the handle, there is the
 // possibility of a race between a method call and a concurrent call to `destroy`:
 //
-//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
-//      before it can pass the pointer over the FFI to Rust.
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
 //    * Thread B calls `destroy` and frees the underlying Rust struct.
-//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
 //      a use-after-free.
 //
 // One possible solution would be to use a `ReadWriteLock`, with each method call taking
@@ -2498,34 +2301,46 @@ public interface CoreSessionInterface {
 open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 {
 
-    constructor(pointer: Pointer) {
-        this.pointer = pointer
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
     }
 
     /**
+     * @suppress
+     *
      * This constructor can be used to instantiate a fake object. Only used for tests. Any
      * attempt to actually use an object constructed this way will fail as there is no
      * connected Rust object.
      */
     @Suppress("UNUSED_PARAMETER")
-    constructor(noPointer: NoPointer) {
-        this.pointer = null
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
     }
     constructor() :
-        this(
+        this(UniffiWithHandle,
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_constructor_coresession_new(
+    UniffiLib.uniffi_yptun_ffi_fn_constructor_coresession_new(
+
         _status)
 }
     )
 
-    protected val pointer: Pointer?
-    protected val cleanable: UniffiCleaner.Cleanable
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
 
     override fun destroy() {
         // Only allow a single call to this method.
@@ -2533,7 +2348,7 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
@@ -2543,7 +2358,7 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
         this.destroy()
     }
 
-    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
         do {
@@ -2555,41 +2370,50 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
                 throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
             }
         } while (! this.callCounter.compareAndSet(c, c + 1L))
-        // Now we can safely do the method call without the pointer being freed concurrently.
+        // Now we can safely do the method call without the handle being freed concurrently.
         try {
-            return block(this.uniffiClonePointer())
+            return block(this.uniffiCloneHandle())
         } finally {
             // This decrement always matches the increment we performed above.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
 
     // Use a static inner class instead of a closure so as not to accidentally
     // capture `this` as part of the cleanable's action.
-    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
         override fun run() {
-            pointer?.let { ptr ->
-                uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_free_coresession(ptr, status)
-                }
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_yptun_ffi_fn_free_coresession(handle, status)
             }
         }
     }
 
-    fun uniffiClonePointer(): Pointer {
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_clone_coresession(pointer!!, status)
+            UniffiLib.uniffi_yptun_ffi_fn_clone_coresession(handle, status)
         }
     }
 
     override fun `anyNeedsGeoFiles`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_any_needs_geo_files(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_any_needs_geo_files(
+        it,
+        _status)
 }
     }
     )
@@ -2599,10 +2423,13 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     @Throws(FfiException::class)override fun `buildSingboxConfig`(`profileJson`: kotlin.String, `options`: InboundOptions): kotlin.String {
             return FfiConverterString.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_build_singbox_config(
-        it, FfiConverterString.lower(`profileJson`),FfiConverterTypeInboundOptions.lower(`options`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_build_singbox_config(
+        it,
+
+        FfiConverterString.lower(`profileJson`),
+        FfiConverterTypeInboundOptions.lower(`options`),_status)
 }
     }
     )
@@ -2612,10 +2439,13 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     @Throws(FfiException::class)override fun `buildXrayConfig`(`profileJson`: kotlin.String, `options`: InboundOptions): kotlin.String {
             return FfiConverterString.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_build_xray_config(
-        it, FfiConverterString.lower(`profileJson`),FfiConverterTypeInboundOptions.lower(`options`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_build_xray_config(
+        it,
+
+        FfiConverterString.lower(`profileJson`),
+        FfiConverterTypeInboundOptions.lower(`options`),_status)
 }
     }
     )
@@ -2624,10 +2454,11 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     override fun `globalCore`(): CoreKind {
             return FfiConverterTypeCoreKind.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_global_core(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_global_core(
+        it,
+        _status)
 }
     }
     )
@@ -2639,10 +2470,13 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
      * A user's own Xray JSON made runnable (only the SOCKS inbound is rewritten).
      */override fun `prepareRawXray`(`rawConfigJson`: kotlin.String, `options`: InboundOptions): kotlin.String {
             return FfiConverterString.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_prepare_raw_xray(
-        it, FfiConverterString.lower(`rawConfigJson`),FfiConverterTypeInboundOptions.lower(`options`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_prepare_raw_xray(
+        it,
+
+        FfiConverterString.lower(`rawConfigJson`),
+        FfiConverterTypeInboundOptions.lower(`options`),_status)
 }
     }
     )
@@ -2655,10 +2489,12 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
      */
     @Throws(FfiException::class)override fun `resolveRoutingProfile`(`locationProfileId`: kotlin.String?): kotlin.String? {
             return FfiConverterOptionalString.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_resolve_routing_profile(
-        it, FfiConverterOptionalString.lower(`locationProfileId`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_resolve_routing_profile(
+        it,
+
+        FfiConverterOptionalString.lower(`locationProfileId`),_status)
 }
     }
     )
@@ -2668,10 +2504,12 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     @Throws(FfiException::class)override fun `resolvedCore`(`locationJson`: kotlin.String): CoreKind {
             return FfiConverterTypeCoreKind.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_resolved_core(
-        it, FfiConverterString.lower(`locationJson`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_resolved_core(
+        it,
+
+        FfiConverterString.lower(`locationJson`),_status)
 }
     }
     )
@@ -2680,10 +2518,12 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     override fun `setGlobalCore`(`core`: CoreKind)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_set_global_core(
-        it, FfiConverterTypeCoreKind.lower(`core`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_set_global_core(
+        it,
+
+        FfiConverterTypeCoreKind.lower(`core`),_status)
 }
     }
 
@@ -2692,10 +2532,12 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     @Throws(FfiException::class)override fun `setRouting`(`routingJson`: kotlin.String)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_set_routing(
-        it, FfiConverterString.lower(`routingJson`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_set_routing(
+        it,
+
+        FfiConverterString.lower(`routingJson`),_status)
 }
     }
 
@@ -2704,10 +2546,12 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     @Throws(FfiException::class)override fun `setRoutingProfiles`(`profilesJson`: kotlin.String)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_set_routing_profiles(
-        it, FfiConverterString.lower(`profilesJson`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_set_routing_profiles(
+        it,
+
+        FfiConverterString.lower(`profilesJson`),_status)
 }
     }
 
@@ -2716,10 +2560,12 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
     @Throws(FfiException::class)override fun `setTraffic`(`trafficJson`: kotlin.String)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_coresession_set_traffic(
-        it, FfiConverterString.lower(`trafficJson`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_coresession_set_traffic(
+        it,
+
+        FfiConverterString.lower(`trafficJson`),_status)
 }
     }
 
@@ -2729,54 +2575,53 @@ open class CoreSession: Disposable, AutoCloseable, CoreSessionInterface
 
 
 
+
+
+
+    /**
+     * @suppress
+     */
     companion object
 
 }
 
+
 /**
  * @suppress
  */
-public object FfiConverterTypeCoreSession: FfiConverter<CoreSession, Pointer> {
-
-    override fun lower(value: CoreSession): Pointer {
-        return value.uniffiClonePointer()
+public object FfiConverterTypeCoreSession: FfiConverter<CoreSession, Long> {
+    override fun lower(value: CoreSession): Long {
+        return value.uniffiCloneHandle()
     }
 
-    override fun lift(value: Pointer): CoreSession {
-        return CoreSession(value)
+    override fun lift(value: Long): CoreSession {
+        return CoreSession(UniffiWithHandle, value)
     }
 
     override fun read(buf: ByteBuffer): CoreSession {
-        // The Rust code always writes pointers as 8 bytes, and will
-        // fail to compile if they don't fit.
-        return lift(Pointer(buf.getLong()))
+        return lift(buf.getLong())
     }
 
     override fun allocationSize(value: CoreSession) = 8UL
 
     override fun write(value: CoreSession, buf: ByteBuffer) {
-        // The Rust code always expects pointers written as 8 bytes,
-        // and will fail to compile if they don't fit.
-        buf.putLong(Pointer.nativeValue(lower(value)))
+        buf.putLong(lower(value))
     }
 }
 
 
-// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// This template implements a class for working with a Rust struct via a handle
 // to the live Rust struct on the other side of the FFI.
-//
-// Each instance implements core operations for working with the Rust `Arc<T>` and the
-// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
 //
 // There's some subtlety here, because we have to be careful not to operate on a Rust
 // struct after it has been dropped, and because we must expose a public API for freeing
 // theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
 //
-//   * Each instance holds an opaque pointer to the underlying Rust struct.
-//     Method calls need to read this pointer from the object's state and pass it in to
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
 //     the Rust FFI.
 //
-//   * When an instance is no longer needed, its pointer should be passed to a
+//   * When an instance is no longer needed, its handle should be passed to a
 //     special destructor function provided by the Rust FFI, which will drop the
 //     underlying Rust struct.
 //
@@ -2801,13 +2646,13 @@ public object FfiConverterTypeCoreSession: FfiConverter<CoreSession, Pointer> {
 //      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
 //         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
 //
-// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// If we try to implement this with mutual exclusion on access to the handle, there is the
 // possibility of a race between a method call and a concurrent call to `destroy`:
 //
-//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
-//      before it can pass the pointer over the FFI to Rust.
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
 //    * Thread B calls `destroy` and frees the underlying Rust struct.
-//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
 //      a use-after-free.
 //
 // One possible solution would be to use a `ReadWriteLock`, with each method call taking
@@ -2893,34 +2738,47 @@ public interface LogBufferInterface {
 open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
 {
 
-    constructor(pointer: Pointer) {
-        this.pointer = pointer
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
     }
 
     /**
+     * @suppress
+     *
      * This constructor can be used to instantiate a fake object. Only used for tests. Any
      * attempt to actually use an object constructed this way will fail as there is no
      * connected Rust object.
      */
     @Suppress("UNUSED_PARAMETER")
-    constructor(noPointer: NoPointer) {
-        this.pointer = null
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
     }
     constructor(`capacity`: kotlin.UInt) :
-        this(
+        this(UniffiWithHandle,
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_constructor_logbuffer_new(
+    UniffiLib.uniffi_yptun_ffi_fn_constructor_logbuffer_new(
+
+
         FfiConverterUInt.lower(`capacity`),_status)
 }
     )
 
-    protected val pointer: Pointer?
-    protected val cleanable: UniffiCleaner.Cleanable
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
 
     override fun destroy() {
         // Only allow a single call to this method.
@@ -2928,7 +2786,7 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
@@ -2938,7 +2796,7 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
         this.destroy()
     }
 
-    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
         do {
@@ -2950,32 +2808,40 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
                 throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
             }
         } while (! this.callCounter.compareAndSet(c, c + 1L))
-        // Now we can safely do the method call without the pointer being freed concurrently.
+        // Now we can safely do the method call without the handle being freed concurrently.
         try {
-            return block(this.uniffiClonePointer())
+            return block(this.uniffiCloneHandle())
         } finally {
             // This decrement always matches the increment we performed above.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
 
     // Use a static inner class instead of a closure so as not to accidentally
     // capture `this` as part of the cleanable's action.
-    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
         override fun run() {
-            pointer?.let { ptr ->
-                uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_free_logbuffer(ptr, status)
-                }
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_yptun_ffi_fn_free_logbuffer(handle, status)
             }
         }
     }
 
-    fun uniffiClonePointer(): Pointer {
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_clone_logbuffer(pointer!!, status)
+            UniffiLib.uniffi_yptun_ffi_fn_clone_logbuffer(handle, status)
         }
     }
 
@@ -2984,10 +2850,12 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
      * Takes up to max oldest lines (0 = all).
      */override fun `drain`(`max`: kotlin.UInt): LogBatch {
             return FfiConverterTypeLogBatch.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logbuffer_drain(
-        it, FfiConverterUInt.lower(`max`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logbuffer_drain(
+        it,
+
+        FfiConverterUInt.lower(`max`),_status)
 }
     }
     )
@@ -3000,10 +2868,13 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
      * The lock is released before the sink runs.
      */override fun `flushTo`(`sink`: LogSink, `max`: kotlin.UInt): kotlin.UInt {
             return FfiConverterUInt.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logbuffer_flush_to(
-        it, FfiConverterTypeLogSink.lower(`sink`),FfiConverterUInt.lower(`max`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logbuffer_flush_to(
+        it,
+
+        FfiConverterTypeLogSink.lower(`sink`),
+        FfiConverterUInt.lower(`max`),_status)
 }
     }
     )
@@ -3012,10 +2883,11 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
 
     override fun `isEmpty`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logbuffer_is_empty(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logbuffer_is_empty(
+        it,
+        _status)
 }
     }
     )
@@ -3024,10 +2896,11 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
 
     override fun `len`(): kotlin.UInt {
             return FfiConverterUInt.lift(
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logbuffer_len(
-        it, _status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logbuffer_len(
+        it,
+        _status)
 }
     }
     )
@@ -3036,10 +2909,12 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
 
     override fun `push`(`line`: kotlin.String)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logbuffer_push(
-        it, FfiConverterString.lower(`line`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logbuffer_push(
+        it,
+
+        FfiConverterString.lower(`line`),_status)
 }
     }
 
@@ -3047,10 +2922,12 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
 
     override fun `pushAll`(`lines`: List<kotlin.String>)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logbuffer_push_all(
-        it, FfiConverterSequenceString.lower(`lines`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logbuffer_push_all(
+        it,
+
+        FfiConverterSequenceString.lower(`lines`),_status)
 }
     }
 
@@ -3060,54 +2937,53 @@ open class LogBuffer: Disposable, AutoCloseable, LogBufferInterface
 
 
 
+
+
+
+    /**
+     * @suppress
+     */
     companion object
 
 }
 
+
 /**
  * @suppress
  */
-public object FfiConverterTypeLogBuffer: FfiConverter<LogBuffer, Pointer> {
-
-    override fun lower(value: LogBuffer): Pointer {
-        return value.uniffiClonePointer()
+public object FfiConverterTypeLogBuffer: FfiConverter<LogBuffer, Long> {
+    override fun lower(value: LogBuffer): Long {
+        return value.uniffiCloneHandle()
     }
 
-    override fun lift(value: Pointer): LogBuffer {
-        return LogBuffer(value)
+    override fun lift(value: Long): LogBuffer {
+        return LogBuffer(UniffiWithHandle, value)
     }
 
     override fun read(buf: ByteBuffer): LogBuffer {
-        // The Rust code always writes pointers as 8 bytes, and will
-        // fail to compile if they don't fit.
-        return lift(Pointer(buf.getLong()))
+        return lift(buf.getLong())
     }
 
     override fun allocationSize(value: LogBuffer) = 8UL
 
     override fun write(value: LogBuffer, buf: ByteBuffer) {
-        // The Rust code always expects pointers written as 8 bytes,
-        // and will fail to compile if they don't fit.
-        buf.putLong(Pointer.nativeValue(lower(value)))
+        buf.putLong(lower(value))
     }
 }
 
 
-// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// This template implements a class for working with a Rust struct via a handle
 // to the live Rust struct on the other side of the FFI.
-//
-// Each instance implements core operations for working with the Rust `Arc<T>` and the
-// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
 //
 // There's some subtlety here, because we have to be careful not to operate on a Rust
 // struct after it has been dropped, and because we must expose a public API for freeing
 // theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
 //
-//   * Each instance holds an opaque pointer to the underlying Rust struct.
-//     Method calls need to read this pointer from the object's state and pass it in to
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
 //     the Rust FFI.
 //
-//   * When an instance is no longer needed, its pointer should be passed to a
+//   * When an instance is no longer needed, its handle should be passed to a
 //     special destructor function provided by the Rust FFI, which will drop the
 //     underlying Rust struct.
 //
@@ -3132,13 +3008,13 @@ public object FfiConverterTypeLogBuffer: FfiConverter<LogBuffer, Pointer> {
 //      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
 //         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
 //
-// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// If we try to implement this with mutual exclusion on access to the handle, there is the
 // possibility of a race between a method call and a concurrent call to `destroy`:
 //
-//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
-//      before it can pass the pointer over the FFI to Rust.
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
 //    * Thread B calls `destroy` and frees the underlying Rust struct.
-//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
 //      a use-after-free.
 //
 // One possible solution would be to use a `ReadWriteLock`, with each method call taking
@@ -3207,27 +3083,38 @@ public interface LogSink {
 open class LogSinkImpl: Disposable, AutoCloseable, LogSink
 {
 
-    constructor(pointer: Pointer) {
-        this.pointer = pointer
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
     }
 
     /**
+     * @suppress
+     *
      * This constructor can be used to instantiate a fake object. Only used for tests. Any
      * attempt to actually use an object constructed this way will fail as there is no
      * connected Rust object.
      */
     @Suppress("UNUSED_PARAMETER")
-    constructor(noPointer: NoPointer) {
-        this.pointer = null
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
     }
 
-    protected val pointer: Pointer?
-    protected val cleanable: UniffiCleaner.Cleanable
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
 
     override fun destroy() {
         // Only allow a single call to this method.
@@ -3235,7 +3122,7 @@ open class LogSinkImpl: Disposable, AutoCloseable, LogSink
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
@@ -3245,7 +3132,7 @@ open class LogSinkImpl: Disposable, AutoCloseable, LogSink
         this.destroy()
     }
 
-    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
         // Check and increment the call counter, to keep the object alive.
         // This needs a compare-and-set retry loop in case of concurrent updates.
         do {
@@ -3257,41 +3144,51 @@ open class LogSinkImpl: Disposable, AutoCloseable, LogSink
                 throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
             }
         } while (! this.callCounter.compareAndSet(c, c + 1L))
-        // Now we can safely do the method call without the pointer being freed concurrently.
+        // Now we can safely do the method call without the handle being freed concurrently.
         try {
-            return block(this.uniffiClonePointer())
+            return block(this.uniffiCloneHandle())
         } finally {
             // This decrement always matches the increment we performed above.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
 
     // Use a static inner class instead of a closure so as not to accidentally
     // capture `this` as part of the cleanable's action.
-    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
         override fun run() {
-            pointer?.let { ptr ->
-                uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_free_logsink(ptr, status)
-                }
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_yptun_ffi_fn_free_logsink(handle, status)
             }
         }
     }
 
-    fun uniffiClonePointer(): Pointer {
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_clone_logsink(pointer!!, status)
+            UniffiLib.uniffi_yptun_ffi_fn_clone_logsink(handle, status)
         }
     }
 
     override fun `onLogs`(`lines`: List<kotlin.String>)
         =
-    callWithPointer {
+    callWithHandle {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_logsink_on_logs(
-        it, FfiConverterSequenceString.lower(`lines`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_method_logsink_on_logs(
+        it,
+
+        FfiConverterSequenceString.lower(`lines`),_status)
 }
     }
 
@@ -3301,9 +3198,16 @@ open class LogSinkImpl: Disposable, AutoCloseable, LogSink
 
 
 
+
+
+
+    /**
+     * @suppress
+     */
     companion object
 
 }
+
 
 
 // Put the implementation in an object so we don't pollute the top-level namespace
@@ -3327,9 +3231,16 @@ internal object uniffiCallbackInterfaceLogSink {
         }
     }
 
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeLogSink.handleMap.clone(handle)
+        }
+    }
+
     internal var vtable = UniffiVTableCallbackInterfaceLogSink.UniffiByValue(
-        `onLogs`,
         uniffiFree,
+        uniffiClone,
+        `onLogs`,
     )
 
     // Registers the foreign callback with the Rust side.
@@ -3342,38 +3253,53 @@ internal object uniffiCallbackInterfaceLogSink {
 /**
  * @suppress
  */
-public object FfiConverterTypeLogSink: FfiConverter<LogSink, Pointer> {
+public object FfiConverterTypeLogSink: FfiConverter<LogSink, Long> {
     internal val handleMap = UniffiHandleMap<LogSink>()
 
-    override fun lower(value: LogSink): Pointer {
-        return Pointer(handleMap.insert(value))
+    override fun lower(value: LogSink): Long {
+        if (value is LogSinkImpl) {
+             // Rust-implemented object.  Clone the handle and return it
+            return value.uniffiCloneHandle()
+         } else {
+            // Kotlin object, generate a new vtable handle and return that.
+            return handleMap.insert(value)
+         }
     }
 
-    override fun lift(value: Pointer): LogSink {
-        return LogSinkImpl(value)
+    override fun lift(value: Long): LogSink {
+        if ((value and 1.toLong()) == 0.toLong()) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return LogSinkImpl(UniffiWithHandle, value)
+        } else {
+            // Kotlin-generated handle, get the object from the handle map
+            return handleMap.remove(value)
+        }
     }
 
     override fun read(buf: ByteBuffer): LogSink {
-        // The Rust code always writes pointers as 8 bytes, and will
-        // fail to compile if they don't fit.
-        return lift(Pointer(buf.getLong()))
+        return lift(buf.getLong())
     }
 
     override fun allocationSize(value: LogSink) = 8UL
 
     override fun write(value: LogSink, buf: ByteBuffer) {
-        // The Rust code always expects pointers written as 8 bytes,
-        // and will fail to compile if they don't fit.
-        buf.putLong(Pointer.nativeValue(lower(value)))
+        buf.putLong(lower(value))
     }
 }
 
 
 
 data class AndroidIpPrefix (
-    var `address`: kotlin.String,
+    var `address`: kotlin.String
+    ,
     var `prefix`: kotlin.Int
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3403,15 +3329,27 @@ public object FfiConverterTypeAndroidIpPrefix: FfiConverterRustBuffer<AndroidIpP
 
 
 data class AndroidPortConfig (
-    var `socks`: kotlin.Int,
-    var `chainOlcrtc`: kotlin.Int,
-    var `amneziawg`: kotlin.Int,
-    var `warpRelay`: kotlin.Int,
-    var `tproxy`: kotlin.Int,
-    var `httpProxy`: kotlin.Int,
-    var `trustTunnel`: kotlin.Int,
+    var `socks`: kotlin.Int
+    ,
+    var `chainOlcrtc`: kotlin.Int
+    ,
+    var `amneziawg`: kotlin.Int
+    ,
+    var `warpRelay`: kotlin.Int
+    ,
+    var `tproxy`: kotlin.Int
+    ,
+    var `httpProxy`: kotlin.Int
+    ,
+    var `trustTunnel`: kotlin.Int
+    ,
     var `singBoxFront`: kotlin.Int
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3459,9 +3397,15 @@ public object FfiConverterTypeAndroidPortConfig: FfiConverterRustBuffer<AndroidP
 
 
 data class AndroidRecovery (
-    var `reason`: kotlin.String,
+    var `reason`: kotlin.String
+    ,
     var `fullRestart`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3491,14 +3435,25 @@ public object FfiConverterTypeAndroidRecovery: FfiConverterRustBuffer<AndroidRec
 
 
 data class AndroidRuntimeSnapshot (
-    var `vpnInterface`: kotlin.Boolean,
-    var `tun2socksThread`: kotlin.Boolean,
-    var `tun2socksAlive`: kotlin.Boolean,
-    var `socksProxy`: kotlin.Boolean,
-    var `coreRunning`: kotlin.Boolean,
-    var `startupJobActive`: kotlin.Boolean,
+    var `vpnInterface`: kotlin.Boolean
+    ,
+    var `tun2socksThread`: kotlin.Boolean
+    ,
+    var `tun2socksAlive`: kotlin.Boolean
+    ,
+    var `socksProxy`: kotlin.Boolean
+    ,
+    var `coreRunning`: kotlin.Boolean
+    ,
+    var `startupJobActive`: kotlin.Boolean
+    ,
     var `cleanupJobActive`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3543,9 +3498,15 @@ public object FfiConverterTypeAndroidRuntimeSnapshot: FfiConverterRustBuffer<And
 
 
 data class AndroidSpeed (
-    var `downBytesPerSec`: kotlin.Long,
+    var `downBytesPerSec`: kotlin.Long
+    ,
     var `upBytesPerSec`: kotlin.Long
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3575,10 +3536,17 @@ public object FfiConverterTypeAndroidSpeed: FfiConverterRustBuffer<AndroidSpeed>
 
 
 data class AndroidSplitPlan (
-    var `allowedPackages`: List<kotlin.String>,
-    var `disallowedPackages`: List<kotlin.String>,
+    var `allowedPackages`: List<kotlin.String>
+    ,
+    var `disallowedPackages`: List<kotlin.String>
+    ,
     var `requireOneAllowed`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3611,15 +3579,27 @@ public object FfiConverterTypeAndroidSplitPlan: FfiConverterRustBuffer<AndroidSp
 
 
 data class AndroidStartConfig (
-    var `connectionMode`: AndroidMode,
-    var `socksListenHost`: kotlin.String,
-    var `socksListenPort`: kotlin.Int,
-    var `socksUsername`: kotlin.String,
-    var `socksPassword`: kotlin.String,
-    var `splitTunnelMode`: AndroidSplitMode,
-    var `splitTunnelProxyApps`: List<kotlin.String>,
+    var `connectionMode`: AndroidMode
+    ,
+    var `socksListenHost`: kotlin.String
+    ,
+    var `socksListenPort`: kotlin.Int
+    ,
+    var `socksUsername`: kotlin.String
+    ,
+    var `socksPassword`: kotlin.String
+    ,
+    var `splitTunnelMode`: AndroidSplitMode
+    ,
+    var `splitTunnelProxyApps`: List<kotlin.String>
+    ,
     var `splitTunnelBypassApps`: List<kotlin.String>
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3667,10 +3647,17 @@ public object FfiConverterTypeAndroidStartConfig: FfiConverterRustBuffer<Android
 
 
 data class AndroidStatusEffect (
-    var `connected`: kotlin.Boolean,
-    var `connectedSinceMs`: kotlin.ULong,
+    var `connected`: kotlin.Boolean
+    ,
+    var `connectedSinceMs`: kotlin.ULong
+    ,
     var `resetSpeed`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3703,14 +3690,25 @@ public object FfiConverterTypeAndroidStatusEffect: FfiConverterRustBuffer<Androi
 
 
 data class AndroidTun2SocksConfig (
-    var `mtu`: kotlin.Int,
-    var `dropIpv6`: kotlin.Boolean,
-    var `socksListenHost`: kotlin.String,
-    var `socksListenPort`: kotlin.Int,
-    var `socksUsername`: kotlin.String,
-    var `socksPassword`: kotlin.String,
+    var `mtu`: kotlin.Int
+    ,
+    var `dropIpv6`: kotlin.Boolean
+    ,
+    var `socksListenHost`: kotlin.String
+    ,
+    var `socksListenPort`: kotlin.Int
+    ,
+    var `socksUsername`: kotlin.String
+    ,
+    var `socksPassword`: kotlin.String
+    ,
     var `engine`: AndroidBridgeEngine
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3755,11 +3753,19 @@ public object FfiConverterTypeAndroidTun2SocksConfig: FfiConverterRustBuffer<And
 
 
 data class AndroidTunStats (
-    var `txPackets`: kotlin.Long,
-    var `txBytes`: kotlin.Long,
-    var `rxPackets`: kotlin.Long,
+    var `txPackets`: kotlin.Long
+    ,
+    var `txBytes`: kotlin.Long
+    ,
+    var `rxPackets`: kotlin.Long
+    ,
     var `rxBytes`: kotlin.Long
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3795,13 +3801,23 @@ public object FfiConverterTypeAndroidTunStats: FfiConverterRustBuffer<AndroidTun
 
 
 data class AndroidTunnelConfig (
-    var `sessionName`: kotlin.String,
-    var `blocking`: kotlin.Boolean,
-    var `mtu`: kotlin.Int,
-    var `addresses`: List<AndroidIpPrefix>,
-    var `dnsServers`: List<kotlin.String>,
+    var `sessionName`: kotlin.String
+    ,
+    var `blocking`: kotlin.Boolean
+    ,
+    var `mtu`: kotlin.Int
+    ,
+    var `addresses`: List<AndroidIpPrefix>
+    ,
+    var `dnsServers`: List<kotlin.String>
+    ,
     var `routes`: List<AndroidIpPrefix>
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3847,23 +3863,40 @@ public object FfiConverterTypeAndroidTunnelConfig: FfiConverterRustBuffer<Androi
  * fields not listed keep the core defaults.
  */
 data class InboundOptions (
-    var `listenHost`: kotlin.String,
-    var `listenPort`: kotlin.Int,
-    var `socksUsername`: kotlin.String,
-    var `socksPassword`: kotlin.String,
-    var `logLevel`: kotlin.String,
+    var `listenHost`: kotlin.String
+    ,
+    var `listenPort`: kotlin.Int
+    ,
+    var `socksUsername`: kotlin.String
+    ,
+    var `socksPassword`: kotlin.String
+    ,
+    var `logLevel`: kotlin.String
+    ,
     /**
      * The location's routing profile id (None = the global one).
      */
-    var `routingProfileId`: kotlin.String?,
-    var `tunMode`: kotlin.Boolean,
-    var `hijackDns`: kotlin.Boolean,
-    var `autoDetectInterface`: kotlin.Boolean,
-    var `mixedInbound`: kotlin.Boolean,
-    var `blockQuic`: kotlin.Boolean,
-    var `logFilePath`: kotlin.String?,
+    var `routingProfileId`: kotlin.String?
+    ,
+    var `tunMode`: kotlin.Boolean
+    ,
+    var `hijackDns`: kotlin.Boolean
+    ,
+    var `autoDetectInterface`: kotlin.Boolean
+    ,
+    var `mixedInbound`: kotlin.Boolean
+    ,
+    var `blockQuic`: kotlin.Boolean
+    ,
+    var `logFilePath`: kotlin.String?
+    ,
     var `cacheFilePath`: kotlin.String?
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3926,15 +3959,27 @@ public object FfiConverterTypeInboundOptions: FfiConverterRustBuffer<InboundOpti
 
 
 data class LocationInfo (
-    var `displayName`: kotlin.String,
-    var `providerName`: kotlin.String,
-    var `transportName`: kotlin.String,
-    var `complete`: kotlin.Boolean,
-    var `storable`: kotlin.Boolean,
-    var `requiresXray`: kotlin.Boolean,
-    var `needsVkLink`: kotlin.Boolean,
+    var `displayName`: kotlin.String
+    ,
+    var `providerName`: kotlin.String
+    ,
+    var `transportName`: kotlin.String
+    ,
+    var `complete`: kotlin.Boolean
+    ,
+    var `storable`: kotlin.Boolean
+    ,
+    var `requiresXray`: kotlin.Boolean
+    ,
+    var `needsVkLink`: kotlin.Boolean
+    ,
     var `usesMultiRoom`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -3982,12 +4027,18 @@ public object FfiConverterTypeLocationInfo: FfiConverterRustBuffer<LocationInfo>
 
 
 data class LogBatch (
-    var `lines`: List<kotlin.String>,
+    var `lines`: List<kotlin.String>
+    ,
     /**
      * Oldest lines dropped because the buffer was full, since the previous drain.
      */
     var `dropped`: kotlin.ULong
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -4020,10 +4071,17 @@ public object FfiConverterTypeLogBatch: FfiConverterRustBuffer<LogBatch> {
  * One runtime to start. upstream_port is set only for ProxyCore (the local hop it dials).
  */
 data class PlanStep (
-    var `kind`: StepKind,
-    var `port`: kotlin.Int,
+    var `kind`: StepKind
+    ,
+    var `port`: kotlin.Int
+    ,
     var `upstreamPort`: kotlin.Int?
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -4056,17 +4114,25 @@ public object FfiConverterTypePlanStep: FfiConverterRustBuffer<PlanStep> {
 
 
 data class PlanTopology (
-    var `socksPort`: kotlin.Int,
+    var `socksPort`: kotlin.Int
+    ,
     /**
      * Start order.
      */
-    var `steps`: List<PlanStep>,
+    var `steps`: List<PlanStep>
+    ,
     /**
      * Reverse start order.
      */
-    var `stopOrder`: List<PlanStep>,
+    var `stopOrder`: List<PlanStep>
+    ,
     var `usesProxyCore`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -4102,11 +4168,19 @@ public object FfiConverterTypePlanTopology: FfiConverterRustBuffer<PlanTopology>
 
 
 data class ProfileInfo (
-    var `displayName`: kotlin.String,
-    var `displayServer`: kotlin.String,
-    var `complete`: kotlin.Boolean,
+    var `displayName`: kotlin.String
+    ,
+    var `displayServer`: kotlin.String
+    ,
+    var `complete`: kotlin.Boolean
+    ,
     var `requiresXray`: kotlin.Boolean
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -4142,9 +4216,15 @@ public object FfiConverterTypeProfileInfo: FfiConverterRustBuffer<ProfileInfo> {
 
 
 data class WarpEndpoint (
-    var `host`: kotlin.String,
+    var `host`: kotlin.String
+    ,
     var `port`: kotlin.Int
-) {
+
+){
+
+
+
+
 
     companion object
 }
@@ -4180,6 +4260,10 @@ enum class AndroidBridgeEngine {
     MASTER_DNS,
     OPEN_FLUX,
     OTHER;
+
+
+
+
     companion object
 }
 
@@ -4211,6 +4295,10 @@ enum class AndroidMode {
     TUN,
     PROXY,
     TPROXY;
+
+
+
+
     companion object
 }
 
@@ -4242,6 +4330,10 @@ enum class AndroidSplitMode {
     ALL_APPS,
     PROXY_SELECTED,
     BYPASS_SELECTED;
+
+
+
+
     companion object
 }
 
@@ -4276,6 +4368,10 @@ enum class AndroidStatusKind {
     STOPPING,
     DISCONNECTED,
     ERROR;
+
+
+
+
     companion object
 }
 
@@ -4310,6 +4406,10 @@ enum class CoreKind {
     AUTO,
     SING_BOX,
     XRAY;
+
+
+
+
     companion object
 }
 
@@ -4414,6 +4514,10 @@ enum class StepKind {
     OPEN_FLUX,
     SNOLC,
     PROXY_CORE;
+
+
+
+
     companion object
 }
 
@@ -4446,6 +4550,10 @@ enum class TargetPlatform {
     IOS,
     MAC_OS,
     DESKTOP;
+
+
+
+
     companion object
 }
 
@@ -4753,8 +4861,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
 } fun `androidCanReconnectInPlace`(`mode`: AndroidMode, `runtime`: AndroidRuntimeSnapshot): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_can_reconnect_in_place(
-        FfiConverterTypeAndroidMode.lower(`mode`),FfiConverterTypeAndroidRuntimeSnapshot.lower(`runtime`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_can_reconnect_in_place(
+
+
+        FfiConverterTypeAndroidMode.lower(`mode`),
+        FfiConverterTypeAndroidRuntimeSnapshot.lower(`runtime`),_status)
 }
     )
     }
@@ -4762,7 +4873,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidOlcrtcDns`(`upstreamAddress`: kotlin.String?): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_olcrtc_dns(
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_olcrtc_dns(
+
+
         FfiConverterOptionalString.lower(`upstreamAddress`),_status)
 }
     )
@@ -4774,8 +4887,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          */ fun `androidPartitionVkLinks`(`vkLinks`: kotlin.String, `servers`: kotlin.UInt): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_partition_vk_links(
-        FfiConverterString.lower(`vkLinks`),FfiConverterUInt.lower(`servers`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_partition_vk_links(
+
+
+        FfiConverterString.lower(`vkLinks`),
+        FfiConverterUInt.lower(`servers`),_status)
 }
     )
     }
@@ -4783,7 +4899,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidPortPlan`(`socksPort`: kotlin.Int): AndroidPortConfig {
             return FfiConverterTypeAndroidPortConfig.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_port_plan(
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_port_plan(
+
+
         FfiConverterInt.lower(`socksPort`),_status)
 }
     )
@@ -4793,7 +4911,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `androidPrepareStart`(`options`: AndroidStartConfig): AndroidStartConfig {
             return FfiConverterTypeAndroidStartConfig.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_prepare_start(
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_prepare_start(
+
+
         FfiConverterTypeAndroidStartConfig.lower(`options`),_status)
 }
     )
@@ -4802,8 +4922,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidShouldRestart`(`status`: AndroidStatusKind, `runtime`: AndroidRuntimeSnapshot): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_should_restart(
-        FfiConverterTypeAndroidStatusKind.lower(`status`),FfiConverterTypeAndroidRuntimeSnapshot.lower(`runtime`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_should_restart(
+
+
+        FfiConverterTypeAndroidStatusKind.lower(`status`),
+        FfiConverterTypeAndroidRuntimeSnapshot.lower(`runtime`),_status)
 }
     )
     }
@@ -4812,8 +4935,13 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `androidSplitTunnelPlan`(`mode`: AndroidSplitMode, `ownPackage`: kotlin.String, `proxyPackages`: List<kotlin.String>, `bypassPackages`: List<kotlin.String>): AndroidSplitPlan {
             return FfiConverterTypeAndroidSplitPlan.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_split_tunnel_plan(
-        FfiConverterTypeAndroidSplitMode.lower(`mode`),FfiConverterString.lower(`ownPackage`),FfiConverterSequenceString.lower(`proxyPackages`),FfiConverterSequenceString.lower(`bypassPackages`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_split_tunnel_plan(
+
+
+        FfiConverterTypeAndroidSplitMode.lower(`mode`),
+        FfiConverterString.lower(`ownPackage`),
+        FfiConverterSequenceString.lower(`proxyPackages`),
+        FfiConverterSequenceString.lower(`bypassPackages`),_status)
 }
     )
     }
@@ -4821,8 +4949,12 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidStatusEffects`(`status`: AndroidStatusKind, `connectedSinceMs`: kotlin.ULong, `nowMs`: kotlin.ULong): AndroidStatusEffect {
             return FfiConverterTypeAndroidStatusEffect.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_status_effects(
-        FfiConverterTypeAndroidStatusKind.lower(`status`),FfiConverterULong.lower(`connectedSinceMs`),FfiConverterULong.lower(`nowMs`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_status_effects(
+
+
+        FfiConverterTypeAndroidStatusKind.lower(`status`),
+        FfiConverterULong.lower(`connectedSinceMs`),
+        FfiConverterULong.lower(`nowMs`),_status)
 }
     )
     }
@@ -4830,8 +4962,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidTproxyApplyScript`(`uid`: kotlin.UInt, `tproxyPort`: kotlin.Int): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_tproxy_apply_script(
-        FfiConverterUInt.lower(`uid`),FfiConverterInt.lower(`tproxyPort`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_tproxy_apply_script(
+
+
+        FfiConverterUInt.lower(`uid`),
+        FfiConverterInt.lower(`tproxyPort`),_status)
 }
     )
     }
@@ -4839,8 +4974,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidTproxyFailure`(`executionError`: kotlin.String?, `output`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_tproxy_failure(
-        FfiConverterOptionalString.lower(`executionError`),FfiConverterString.lower(`output`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_tproxy_failure(
+
+
+        FfiConverterOptionalString.lower(`executionError`),
+        FfiConverterString.lower(`output`),_status)
 }
     )
     }
@@ -4848,7 +4986,8 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidTproxyTeardownScript`(): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_tproxy_teardown_script(
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_tproxy_teardown_script(
+
         _status)
 }
     )
@@ -4857,7 +4996,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidTun2socksYaml`(`options`: AndroidTun2SocksConfig): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_tun2socks_yaml(
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_tun2socks_yaml(
+
+
         FfiConverterTypeAndroidTun2SocksConfig.lower(`options`),_status)
 }
     )
@@ -4866,8 +5007,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidTunnelPlan`(`mtu`: kotlin.Int, `bypassLan`: kotlin.Boolean): AndroidTunnelConfig {
             return FfiConverterTypeAndroidTunnelConfig.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_tunnel_plan(
-        FfiConverterInt.lower(`mtu`),FfiConverterBoolean.lower(`bypassLan`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_tunnel_plan(
+
+
+        FfiConverterInt.lower(`mtu`),
+        FfiConverterBoolean.lower(`bypassLan`),_status)
 }
     )
     }
@@ -4875,8 +5019,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `androidVkturnStreams`(`vkLinks`: kotlin.String, `requestedStreams`: kotlin.Int): kotlin.Int {
             return FfiConverterInt.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_android_vkturn_streams(
-        FfiConverterString.lower(`vkLinks`),FfiConverterInt.lower(`requestedStreams`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_android_vkturn_streams(
+
+
+        FfiConverterString.lower(`vkLinks`),
+        FfiConverterInt.lower(`requestedStreams`),_status)
 }
     )
     }
@@ -4888,7 +5035,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `deltaParseManifest`(`bytes`: kotlin.ByteArray): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_delta_parse_manifest(
+    UniffiLib.uniffi_yptun_ffi_fn_func_delta_parse_manifest(
+
+
         FfiConverterByteArray.lower(`bytes`),_status)
 }
     )
@@ -4900,7 +5049,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          */ fun `i18nCatalog`(`languageId`: kotlin.String?): Map<kotlin.String, kotlin.String> {
             return FfiConverterMapStringString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_i18n_catalog(
+    UniffiLib.uniffi_yptun_ffi_fn_func_i18n_catalog(
+
+
         FfiConverterOptionalString.lower(`languageId`),_status)
 }
     )
@@ -4912,8 +5063,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          */ fun `i18nEffectiveLanguage`(`languageId`: kotlin.String?, `systemLanguageId`: kotlin.String?): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_i18n_effective_language(
-        FfiConverterOptionalString.lower(`languageId`),FfiConverterOptionalString.lower(`systemLanguageId`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_i18n_effective_language(
+
+
+        FfiConverterOptionalString.lower(`languageId`),
+        FfiConverterOptionalString.lower(`systemLanguageId`),_status)
 }
     )
     }
@@ -4921,8 +5075,12 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `i18nFormat`(`languageId`: kotlin.String?, `key`: kotlin.String, `args`: Map<kotlin.String, kotlin.String>): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_i18n_format(
-        FfiConverterOptionalString.lower(`languageId`),FfiConverterString.lower(`key`),FfiConverterMapStringString.lower(`args`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_i18n_format(
+
+
+        FfiConverterOptionalString.lower(`languageId`),
+        FfiConverterString.lower(`key`),
+        FfiConverterMapStringString.lower(`args`),_status)
 }
     )
     }
@@ -4930,7 +5088,8 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `i18nLanguageIds`(): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_i18n_language_ids(
+    UniffiLib.uniffi_yptun_ffi_fn_func_i18n_language_ids(
+
         _status)
 }
     )
@@ -4939,8 +5098,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `i18nText`(`languageId`: kotlin.String?, `key`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_i18n_text(
-        FfiConverterOptionalString.lower(`languageId`),FfiConverterString.lower(`key`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_i18n_text(
+
+
+        FfiConverterOptionalString.lower(`languageId`),
+        FfiConverterString.lower(`key`),_status)
 }
     )
     }
@@ -4951,7 +5113,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          */ fun `isOfficialSigningSha256`(`sha256`: kotlin.String?): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_is_official_signing_sha256(
+    UniffiLib.uniffi_yptun_ffi_fn_func_is_official_signing_sha256(
+
+
         FfiConverterOptionalString.lower(`sha256`),_status)
 }
     )
@@ -4960,7 +5124,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `isRoutingLink`(`link`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_is_routing_link(
+    UniffiLib.uniffi_yptun_ffi_fn_func_is_routing_link(
+
+
         FfiConverterString.lower(`link`),_status)
 }
     )
@@ -4973,7 +5139,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `locationInfo`(`locationJson`: kotlin.String): LocationInfo {
             return FfiConverterTypeLocationInfo.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_location_info(
+    UniffiLib.uniffi_yptun_ffi_fn_func_location_info(
+
+
         FfiConverterString.lower(`locationJson`),_status)
 }
     )
@@ -4983,7 +5151,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `locationNormalized`(`locationJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_location_normalized(
+    UniffiLib.uniffi_yptun_ffi_fn_func_location_normalized(
+
+
         FfiConverterString.lower(`locationJson`),_status)
 }
     )
@@ -4993,8 +5163,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `locationResolvedCore`(`locationJson`: kotlin.String, `global`: CoreKind): CoreKind {
             return FfiConverterTypeCoreKind.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_location_resolved_core(
-        FfiConverterString.lower(`locationJson`),FfiConverterTypeCoreKind.lower(`global`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_location_resolved_core(
+
+
+        FfiConverterString.lower(`locationJson`),
+        FfiConverterTypeCoreKind.lower(`global`),_status)
 }
     )
     }
@@ -5002,7 +5175,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `looksLikeAmneziawg`(`text`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_looks_like_amneziawg(
+    UniffiLib.uniffi_yptun_ffi_fn_func_looks_like_amneziawg(
+
+
         FfiConverterString.lower(`text`),_status)
 }
     )
@@ -5011,7 +5186,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `looksLikeRoutingProfile`(`text`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_looks_like_routing_profile(
+    UniffiLib.uniffi_yptun_ffi_fn_func_looks_like_routing_profile(
+
+
         FfiConverterString.lower(`text`),_status)
 }
     )
@@ -5020,7 +5197,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `looksLikeTrustTunnel`(`text`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_looks_like_trust_tunnel(
+    UniffiLib.uniffi_yptun_ffi_fn_func_looks_like_trust_tunnel(
+
+
         FfiConverterString.lower(`text`),_status)
 }
     )
@@ -5029,7 +5208,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `normalizeProvider`(`value`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_normalize_provider(
+    UniffiLib.uniffi_yptun_ffi_fn_func_normalize_provider(
+
+
         FfiConverterString.lower(`value`),_status)
 }
     )
@@ -5039,7 +5220,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `parseAmneziawg`(`text`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_parse_amneziawg(
+    UniffiLib.uniffi_yptun_ffi_fn_func_parse_amneziawg(
+
+
         FfiConverterString.lower(`text`),_status)
 }
     )
@@ -5052,7 +5235,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `parseRoutingProfile`(`text`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_parse_routing_profile(
+    UniffiLib.uniffi_yptun_ffi_fn_func_parse_routing_profile(
+
+
         FfiConverterString.lower(`text`),_status)
 }
     )
@@ -5065,7 +5250,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `parseShareLink`(`uri`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_parse_share_link(
+    UniffiLib.uniffi_yptun_ffi_fn_func_parse_share_link(
+
+
         FfiConverterString.lower(`uri`),_status)
 }
     )
@@ -5078,7 +5265,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `parseSubscription`(`body`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_parse_subscription(
+    UniffiLib.uniffi_yptun_ffi_fn_func_parse_subscription(
+
+
         FfiConverterString.lower(`body`),_status)
 }
     )
@@ -5088,30 +5277,10 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `parseTrustTunnel`(`uri`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_parse_trust_tunnel(
+    UniffiLib.uniffi_yptun_ffi_fn_func_parse_trust_tunnel(
+
+
         FfiConverterString.lower(`uri`),_status)
-}
-    )
-    }
-
-
-        /**
-         * Ok when the location can run on the platform; Unsupported(message) otherwise.
-         */
-    @Throws(FfiException::class) fun `planCheckSupported`(`locationJson`: kotlin.String, `platform`: TargetPlatform)
-        =
-    uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_plan_check_supported(
-        FfiConverterString.lower(`locationJson`),FfiConverterTypeTargetPlatform.lower(`platform`),_status)
-}
-
-
-
-    @Throws(FfiException::class) fun `planTopology`(`locationJson`: kotlin.String, `socksPort`: kotlin.Int, `platform`: TargetPlatform): PlanTopology {
-            return FfiConverterTypePlanTopology.lift(
-    uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_plan_topology(
-        FfiConverterString.lower(`locationJson`),FfiConverterInt.lower(`socksPort`),FfiConverterTypeTargetPlatform.lower(`platform`),_status)
 }
     )
     }
@@ -5123,7 +5292,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `profileInfo`(`profileJson`: kotlin.String): ProfileInfo {
             return FfiConverterTypeProfileInfo.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_profile_info(
+    UniffiLib.uniffi_yptun_ffi_fn_func_profile_info(
+
+
         FfiConverterString.lower(`profileJson`),_status)
 }
     )
@@ -5132,7 +5303,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `providerDisplayName`(`provider`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_provider_display_name(
+    UniffiLib.uniffi_yptun_ffi_fn_func_provider_display_name(
+
+
         FfiConverterString.lower(`provider`),_status)
 }
     )
@@ -5145,7 +5318,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `routingProfileAsns`(`profileJson`: kotlin.String): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_routing_profile_asns(
+    UniffiLib.uniffi_yptun_ffi_fn_func_routing_profile_asns(
+
+
         FfiConverterString.lower(`profileJson`),_status)
 }
     )
@@ -5155,7 +5330,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `routingProfileHappLink`(`profileJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_routing_profile_happ_link(
+    UniffiLib.uniffi_yptun_ffi_fn_func_routing_profile_happ_link(
+
+
         FfiConverterString.lower(`profileJson`),_status)
 }
     )
@@ -5164,7 +5341,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `sha256Hex`(`bytes`: kotlin.ByteArray): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_sha256_hex(
+    UniffiLib.uniffi_yptun_ffi_fn_func_sha256_hex(
+
+
         FfiConverterByteArray.lower(`bytes`),_status)
 }
     )
@@ -5173,7 +5352,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `supportedTransportsForProvider`(`provider`: kotlin.String): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_supported_transports_for_provider(
+    UniffiLib.uniffi_yptun_ffi_fn_func_supported_transports_for_provider(
+
+
         FfiConverterString.lower(`provider`),_status)
 }
     )
@@ -5182,7 +5363,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `transportDisplayName`(`transport`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_transport_display_name(
+    UniffiLib.uniffi_yptun_ffi_fn_func_transport_display_name(
+
+
         FfiConverterString.lower(`transport`),_status)
 }
     )
@@ -5191,7 +5374,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `warpEndpoint`(`ini`: kotlin.String): WarpEndpoint {
             return FfiConverterTypeWarpEndpoint.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_warp_endpoint(
+    UniffiLib.uniffi_yptun_ffi_fn_func_warp_endpoint(
+
+
         FfiConverterString.lower(`ini`),_status)
 }
     )
@@ -5200,8 +5385,12 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `warpEngineIni`(`ini`: kotlin.String, `awg`: kotlin.Boolean, `initPackets`: kotlin.Boolean): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_warp_engine_ini(
-        FfiConverterString.lower(`ini`),FfiConverterBoolean.lower(`awg`),FfiConverterBoolean.lower(`initPackets`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_warp_engine_ini(
+
+
+        FfiConverterString.lower(`ini`),
+        FfiConverterBoolean.lower(`awg`),
+        FfiConverterBoolean.lower(`initPackets`),_status)
 }
     )
     }
@@ -5210,8 +5399,11 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     @Throws(FfiException::class) fun `warpParseIni`(`ini`: kotlin.String, `tag`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCallWithError(FfiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_warp_parse_ini(
-        FfiConverterString.lower(`ini`),FfiConverterString.lower(`tag`),_status)
+    UniffiLib.uniffi_yptun_ffi_fn_func_warp_parse_ini(
+
+
+        FfiConverterString.lower(`ini`),
+        FfiConverterString.lower(`tag`),_status)
 }
     )
     }
@@ -5219,8 +5411,39 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
  fun `warpPlainWireguard`(`ini`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_func_warp_plain_wireguard(
+    UniffiLib.uniffi_yptun_ffi_fn_func_warp_plain_wireguard(
+
+
         FfiConverterString.lower(`ini`),_status)
+}
+    )
+    }
+
+
+        /**
+         * Ok when the location can run on the platform; Unsupported(message) otherwise.
+         */
+    @Throws(FfiException::class) fun `planCheckSupported`(`locationJson`: kotlin.String, `platform`: TargetPlatform)
+        =
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_yptun_ffi_fn_func_plan_check_supported(
+
+
+        FfiConverterString.lower(`locationJson`),
+        FfiConverterTypeTargetPlatform.lower(`platform`),_status)
+}
+
+
+
+    @Throws(FfiException::class) fun `planTopology`(`locationJson`: kotlin.String, `socksPort`: kotlin.Int, `platform`: TargetPlatform): PlanTopology {
+            return FfiConverterTypePlanTopology.lift(
+    uniffiRustCallWithError(FfiException) { _status ->
+    UniffiLib.uniffi_yptun_ffi_fn_func_plan_topology(
+
+
+        FfiConverterString.lower(`locationJson`),
+        FfiConverterInt.lower(`socksPort`),
+        FfiConverterTypeTargetPlatform.lower(`platform`),_status)
 }
     )
     }

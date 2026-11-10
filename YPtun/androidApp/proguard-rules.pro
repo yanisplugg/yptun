@@ -18,8 +18,8 @@
 -keep class awg.** { *; }
 
 # --- Rust yptun-core (UniFFI/JNA) ---
-# UniFFI loads its Library interface and callback classes by their runtime names. Keep the generated
-# package intact in minified builds; the native Rust library is bundled in src/main/jniLibs.
+# UniFFI registers its generated native entrypoints and callback classes by their runtime names. Keep
+# the generated package intact in minified builds; the native Rust library is bundled in src/main/jniLibs.
 -keep class org.olcbox.app.core.** { *; }
 -keep interface org.olcbox.app.core.** { *; }
 -keep class com.sun.jna.** { *; }

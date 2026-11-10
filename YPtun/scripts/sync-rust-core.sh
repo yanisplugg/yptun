@@ -16,7 +16,7 @@ fi
 binding_target="$app_root/sharedUI/src/androidMain/kotlin/org/olcbox/app/core/yptun_ffi.kt"
 mkdir -p "$(dirname "$binding_target")"
 cp "$binding" "$binding_target"
-# UniFFI 0.29 emits trailing spaces when ktlint is unavailable. Keep generated commits clean and
+# UniFFI output can contain trailing spaces when ktlint is unavailable. Keep generated commits clean and
 # collapse its extra blank lines at EOF without requiring ktlint on every developer machine.
 awk '{ sub(/[[:space:]]+$/, ""); lines[NR]=$0; if ($0 != "") last=NR }
      END { for (i=1; i<=last; i++) print lines[i] }' "$binding_target" > "$binding_target.tmp"
