@@ -40,8 +40,11 @@ jobs:
         working-directory: core
         run: cargo test --workspace --locked
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Use preinstalled Android SDK
+        shell: bash
+        run: |
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
       - name: Install pinned NDK and cargo-ndk
         run: |
