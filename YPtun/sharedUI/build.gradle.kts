@@ -309,6 +309,9 @@ kotlin {
             // zxing-core only draws share QRs; the camera scanner decodes with native zxing-cpp.
             implementation(libs.zxing.core)
             implementation(libs.zxing.cpp)
+            // UniFFI's generated Kotlin bindings call libyptun_ffi.so through JNA. Traffic never
+            // crosses JNA; this bridge is only for config/state operations during connect/recovery.
+            implementation(libs.jna)
             implementation(coresAndroidAarDependency)
             // Trust Tunnel (AdGuard) client — vendored prebuilt AAR (com.adguard.trusttunnel:
             // trusttunnel-client-android:1.1.11) carrying libtrusttunnel_android.so (all ABIs) +
