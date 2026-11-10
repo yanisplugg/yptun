@@ -55,7 +55,9 @@ class SingBoxDnsFormatTest {
 
         val byTag = servers.associateBy { it["tag"]!!.jsonPrimitive.content }
         assertEquals("https", byTag["remote"]!!["type"]!!.jsonPrimitive.content)
-        assertEquals("dns.google", byTag["remote"]!!["server"]!!.jsonPrimitive.content)
+        // Known DoH providers use an IP whose certificate includes the hostname, avoiding a
+        // bootstrap lookup through the resolver that is still being configured.
+        assertEquals("8.8.8.8", byTag["remote"]!!["server"]!!.jsonPrimitive.content)
         assertEquals("tls", byTag["remote2"]!!["type"]!!.jsonPrimitive.content)
         assertEquals("udp", byTag["direct"]!!["type"]!!.jsonPrimitive.content)
         assertEquals("8.8.8.8", byTag["direct"]!!["server"]!!.jsonPrimitive.content)

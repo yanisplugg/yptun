@@ -60,12 +60,12 @@ class SingBoxConfigDesktopTest {
     }
 
     @Test
-    fun vlessAlwaysCarriesXudpEvenWithVisionFlow() {
+    fun visionFlowDoesNotCarryIncompatibleXudpEncoding() {
         @Suppress("UNCHECKED_CAST")
         val out = build(tunMode = true, mixedInbound = true)["proxyOutbound"]
             as kotlinx.serialization.json.JsonObject
         assertEquals("xtls-rprx-vision", out["flow"]!!.jsonPrimitive.content)
-        assertEquals("xudp", out["packet_encoding"]!!.jsonPrimitive.content)
+        assertTrue(out["packet_encoding"] == null)
     }
 
     @Test

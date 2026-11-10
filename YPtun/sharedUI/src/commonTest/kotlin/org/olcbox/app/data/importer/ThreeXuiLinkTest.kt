@@ -78,7 +78,11 @@ class ThreeXuiLinkTest {
         assertEquals("example.com", tls["verifyPeerCertByName"]!!.jsonPrimitive.content)
         val xhttp = stream["xhttpSettings"]!!.jsonObject
         assertEquals("packet-up", xhttp["mode"]!!.jsonPrimitive.content)
-        assertEquals(Json.parseToJsonElement(extra), xhttp["extra"])
+        val carriedExtra = xhttp["extra"]!!.jsonObject
+        val sourceExtra = Json.parseToJsonElement(extra).jsonObject
+        sourceExtra.forEach { (key, value) -> assertEquals(value, carriedExtra[key], key) }
+        // The builder safely fills absent 3x-ui xmux values with YPtun's shipped defaults.
+        assertEquals("2-4", carriedExtra["xmux"]!!.jsonObject["maxConnections"]!!.jsonPrimitive.content)
     }
 
     @Test

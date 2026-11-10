@@ -32,6 +32,7 @@ class SnolcFilesTest {
     /** The generated files must satisfy the real engine (skipped when the prebuilt Windows binary is absent). */
     @Test
     fun generatedConfigsValidateWithTheRealEngine() {
+        if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) return
         val exe = File("../../snolc/prebuilt/snolc-windows-amd64.exe").takeIf { it.isFile } ?: return
         val dir = Files.createTempDirectory("snolc-test").toFile()
         fun write(root: File, files: Map<String, String>) = files.forEach { (n, b) ->

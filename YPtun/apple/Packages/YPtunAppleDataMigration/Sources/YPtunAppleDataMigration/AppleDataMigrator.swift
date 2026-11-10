@@ -94,9 +94,9 @@ public actor AppleDataMigrator {
         let selectedSource = sources.min { lhs, rhs in
             sourceRank(lhs.origin, for: artifact) < sourceRank(rhs.origin, for: artifact)
         }
-        let destinationSnapshot = sources
-            .first { samePath($0.snapshot.url, destination) }
-            ?.snapshot
+        let destinationSnapshot = sources.first(
+            where: { samePath($0.snapshot.url, destination) }
+        )?.snapshot
 
         guard relevantIssues.isEmpty else {
             return MigrationPlanItem(

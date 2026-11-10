@@ -1492,6 +1492,16 @@ class LocationsRepositoryImpl(
             }
         }
 
+        if (linkBundles.isEmpty()) {
+            // A full sing-box config must run before the generic subscription parser. That parser can
+            // also recognize its outbounds, but only as bare profiles, which drops the config's own
+            // route, rule-sets and FakeDNS pool.
+            (parseRawSingBox(text, subscriptionUrl, subscriptionMetadata)
+                ?: parseRawSingBox(linkText, subscriptionUrl, subscriptionMetadata))?.let {
+                return ParsedImport(it, ImportMode.Additive)
+            }
+        }
+
         // Proxy share links / subscriptions (vless, vmess, trojan, ss, base64 blobs and
         // JSON panels with a "links" array) become sing-box (Standard) locations.
         parseProxyText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
@@ -1526,8 +1536,7 @@ class LocationsRepositoryImpl(
             return ParsedImport(withMeta, ImportMode.Additive)
         }
 
-        // Raw sing-box config (full config with "outbounds", a single outbound object, or an
-        // array of outbounds) → Standard locations carrying the outbound JSON verbatim.
+        // A single outbound object or array may not have looked like a complete config above.
         (parseRawSingBox(text, subscriptionUrl, subscriptionMetadata)
             ?: parseRawSingBox(linkText, subscriptionUrl, subscriptionMetadata))?.let {
             return ParsedImport(it, ImportMode.Additive)

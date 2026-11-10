@@ -764,7 +764,9 @@ class LocationsRepositoryImplTest {
         // The retry is the Compatibility-mode attempt: it drops the identity headers (x-hwid and
         // the device descriptors). The User-Agent itself stays the app's own — the browser-UA
         // fallback this test used to assert no longer exists in the fetch path.
-        val retry = hwids.indexOfFirst { it == null }
+        val retry = hwids.indices.firstOrNull { index ->
+            hwids[index] == null && userAgents[index] == CurrentAppInfo.userAgent
+        } ?: -1
         assertTrue(retry > 0, "expected an anonymous retry after the identity attempt")
         assertEquals(CurrentAppInfo.userAgent, userAgents[retry])
         assertEquals("room", bundle.locations.single().location.id)

@@ -52,7 +52,10 @@ class XrayDnsFormatTest {
         assertEquals("proxy", domainRule["outboundTag"]!!.jsonPrimitive.content)
         // Well-known DoH hostnames are rewritten to their IP, which is pinned by an ip rule instead.
         val ipRule = rules.first { it["ip"] != null }
-        assertEquals(listOf("1.1.1.1"), ipRule["ip"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(
+            listOf("1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"),
+            ipRule["ip"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
     }
 
     @Test
@@ -61,10 +64,10 @@ class XrayDnsFormatTest {
             TrafficSettings(remoteDns = "1.1.1.1", remoteDns2 = "https+local://dns.google/dns-query", directDns = "77.88.8.8")
         )
         assertEquals(emptyList(), domains)
-        assertEquals(listOf("1.1.1.1"), ips)
+        assertEquals(listOf("1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"), ips)
         val (d2, i2) = XrayConfig.remoteDnsEndpoints(TrafficSettings(remoteDns = "192.168.1.1", remoteDns2 = "dns.example.org"))
         assertEquals(listOf("full:dns.example.org"), d2)
-        assertEquals(emptyList(), i2)
+        assertEquals(listOf("1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"), i2)
     }
 
     /** A hostname DoH would be bootstrapped through the DNS being configured (4s stall); known hosts become IPs. */

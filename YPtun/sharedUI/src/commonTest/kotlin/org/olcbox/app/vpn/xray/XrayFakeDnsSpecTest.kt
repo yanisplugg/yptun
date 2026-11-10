@@ -96,10 +96,11 @@ class XrayFakeDnsSpecTest {
     fun noSpecKeepsTheConfigExactlyAsBefore() {
         val root = build(null)
         assertTrue(root["fakedns"] == null, "no spec, no fakedns block")
+        // Remote DNS still needs the ordinary DNS outbound even without a FakeDNS pool.
         assertTrue(
             root["routing"]!!.jsonObject["rules"]!!.jsonArray
-                .none { it.jsonObject["outboundTag"]?.jsonPrimitive?.content == "dns-out" },
-            "no spec, no DNS hijack"
+                .any { it.jsonObject["outboundTag"]?.jsonPrimitive?.content == "dns-out" },
+            "remote DNS must still be hijacked to dns-out"
         )
     }
 }
