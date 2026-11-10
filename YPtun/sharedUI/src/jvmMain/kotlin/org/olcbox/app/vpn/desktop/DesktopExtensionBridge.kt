@@ -48,7 +48,12 @@ class DesktopExtensionBridge(
     fun start() {
         if (server != null) return
         val srv = runCatching {
-            HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), CONTROL_PORT), 0)
+            // The browser extension always calls 127.0.0.1. InetAddress.getLoopbackAddress() may
+            // choose ::1 on dual-stack JDKs, leaving the bridge "started" but unreachable over IPv4.
+            HttpServer.create(
+                InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), CONTROL_PORT),
+                0,
+            )
         }.getOrElse {
             log("Extension bridge: port $CONTROL_PORT busy — ${it.message}")
             return
