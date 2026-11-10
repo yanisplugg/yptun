@@ -1,0 +1,212 @@
+// Copyright (C) 2024  mieru authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+package socks5
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net"
+
+	"github.com/enfein/mieru/v3/apis/constant"
+	"github.com/enfein/mieru/v3/pkg/common"
+)
+
+// Auth provide authentication settings to socks5 server.
+type Auth struct {
+	// Do socks5 authentication at proxy client side.
+	ClientSideAuthentication bool
+
+	// Credentials to authenticate incoming requests.
+	// If empty, username password authentication is not supported.
+	IngressCredentials []Credential
+
+	// Credential to dial an outgoing socks5 connection.
+	// If nil, username password authentication is not used.
+	EgressCredential *Credential
+}
+
+// Credential stores socks5 credential for user password authentication.
+type Credential struct {
+	// User to dial an outgoing socks5 connection.
+	User string
+
+	// Password to dial an outgoing socks5 connection.
+	Password string
+}
+
+// handleAuthentication reads socks5 authentication request from the
+// connection and write response back.
+func (s *Server) handleAuthentication(conn net.Conn) error {
+	// Read the version byte and ensure we are compatible.
+	common.SetReadTimeout(conn, s.config.HandshakeTimeout)
+	defer common.SetReadTimeout(conn, 0)
+	version := []byte{0}
+	if _, err := io.ReadFull(conn, version); err != nil {
+		HandshakeErrors.Add(1)
+		return fmt.Errorf("get socks version failed: %w", err)
+	}
+	if version[0] != constant.Socks5Version {
+		HandshakeErrors.Add(1)
+		return fmt.Errorf("unsupported socks version: %v", version)
+	}
+
+	// Authenticate the connection.
+	nAuthMethods := []byte{0}
+	if _, err := io.ReadFull(conn, nAuthMethods); err != nil {
+		HandshakeErrors.Add(1)
+		return fmt.Errorf("get number of authentication method failed: %w", err)
+	}
+	if nAuthMethods[0] == 0 {
+		HandshakeErrors.Add(1)
+		return fmt.Errorf("number of authentication method is 0")
+	}
+
+	// Collect authentication methods.
+	requestNoAuth := false
+	requestUserPassAuth := false
+	authMethods := make([]byte, nAuthMethods[0])
+	if _, err := io.ReadFull(conn, authMethods); err != nil {
+		HandshakeErrors.Add(1)
+		return fmt.Errorf("get authentication method failed: %w", err)
+	}
+	for _, method := range authMethods {
+		if method == constant.Socks5NoAuth {
+			requestNoAuth = true
+		}
+		if method == constant.Socks5UserPassAuth {
+			requestUserPassAuth = true
+		}
+	}
+
+	if !requestNoAuth && !requestUserPassAuth {
+		HandshakeErrors.Add(1)
+		if _, err := conn.Write([]byte{constant.Socks5Version, constant.Socks5NoAcceptableAuth}); err != nil {
+			return fmt.Errorf("write authentication response (no acceptable methods) failed: %w", err)
+		}
+		return fmt.Errorf("socks5 client provided authentication is not supported by socks5 server")
+	}
+	if requestNoAuth && len(s.config.AuthOpts.IngressCredentials) == 0 {
+		// Allow no authentication when the socks5 server does not configure credentials.
+		if _, err := conn.Write([]byte{constant.Socks5Version, constant.Socks5NoAuth}); err != nil {
+			HandshakeErrors.Add(1)
+			return fmt.Errorf("write authentication response (no authentication required) failed: %w", err)
+		}
+	} else if requestUserPassAuth {
+		// Handle user password authentication.
+		if len(s.config.AuthOpts.IngressCredentials) == 0 {
+			HandshakeErrors.Add(1)
+			return fmt.Errorf("there is no registered socks5 server user")
+		}
+
+		// Tell the client to use user password authentication.
+		if _, err := conn.Write([]byte{constant.Socks5Version, constant.Socks5UserPassAuth}); err != nil {
+			HandshakeErrors.Add(1)
+			return fmt.Errorf("write user password authentication request failed: %w", err)
+		}
+
+		// Get the authentication version.
+		header := []byte{0}
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return fmt.Errorf("get user password authentication version failed: %w", err)
+		}
+		if header[0] != constant.Socks5UserPassAuthVersion {
+			return fmt.Errorf("user password authentication version %d is not supported by socks5 server", header[0])
+		}
+
+		// Get user.
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return fmt.Errorf("get user length failed: %w", err)
+		}
+		user := make([]byte, header[0])
+		if _, err := io.ReadFull(conn, user); err != nil {
+			return fmt.Errorf("read user failed: %w", err)
+		}
+
+		// Get password.
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return fmt.Errorf("get password length failed: %w", err)
+		}
+		password := make([]byte, header[0])
+		if _, err := io.ReadFull(conn, password); err != nil {
+			return fmt.Errorf("read password failed: %w", err)
+		}
+
+		// Verify user and password.
+		userStr := string(user)
+		passwordStr := string(password)
+		for _, c := range s.config.AuthOpts.IngressCredentials {
+			if c.User == userStr && c.Password == passwordStr {
+				if _, err := conn.Write([]byte{constant.Socks5UserPassAuthVersion, constant.Socks5AuthSuccess}); err != nil {
+					HandshakeErrors.Add(1)
+					return fmt.Errorf("write user password authentication success response failed: %w", err)
+				}
+				return nil
+			}
+		}
+		HandshakeErrors.Add(1)
+		if _, err := conn.Write([]byte{constant.Socks5UserPassAuthVersion, constant.Socks5AuthFailure}); err != nil {
+			return fmt.Errorf("write user password authentication failure response failed: %w", err)
+		}
+		return fmt.Errorf("user password authentication failed: invalid user or password")
+	} else {
+		// The client only offers no authentication, but the server requires credentials.
+		HandshakeErrors.Add(1)
+		return fmt.Errorf("socks5 client requested no authentication, but user and password are required by socks5 server")
+	}
+	return nil
+}
+
+func clientNegotiateAuthentication(conn io.ReadWriter, credential *Credential) error {
+	method := constant.Socks5NoAuth
+	if credential != nil {
+		method = constant.Socks5UserPassAuth
+	}
+	if _, err := conn.Write([]byte{constant.Socks5Version, 1, method}); err != nil {
+		return fmt.Errorf("write socks5 authentication methods failed: %w", err)
+	}
+
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return fmt.Errorf("read socks5 authentication method failed: %w", err)
+	}
+	if resp[0] != constant.Socks5Version || resp[1] != method {
+		return fmt.Errorf("socks5 authentication method negotiation failed: %v", resp)
+	}
+	if credential == nil {
+		return nil
+	}
+
+	if len(credential.User) > 255 || len(credential.Password) > 255 {
+		return fmt.Errorf("socks5 username and password must not exceed 255 bytes")
+	}
+	var req bytes.Buffer
+	req.WriteByte(constant.Socks5UserPassAuthVersion)
+	req.WriteByte(byte(len(credential.User)))
+	req.WriteString(credential.User)
+	req.WriteByte(byte(len(credential.Password)))
+	req.WriteString(credential.Password)
+	if _, err := conn.Write(req.Bytes()); err != nil {
+		return fmt.Errorf("write socks5 username password authentication failed: %w", err)
+	}
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return fmt.Errorf("read socks5 username password authentication failed: %w", err)
+	}
+	if resp[0] != constant.Socks5UserPassAuthVersion || resp[1] != constant.Socks5AuthSuccess {
+		return fmt.Errorf("socks5 username password authentication failed: %v", resp)
+	}
+	return nil
+}

@@ -1,0 +1,141 @@
+// Copyright (C) 2021  mieru authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+syntax = "proto3";
+
+package mieru.appctl;
+
+import "appctl/proto/base.proto";
+
+option go_package = "github.com/enfein/mieru/v3/pkg/appctl/appctlpb";
+
+// Proxy server configuration. The next field number is 10.
+message ServerConfig {
+    // The IP address the server listens on.
+    // If not set, the server listens on all interfaces.
+    optional string listenIPAddress = 9;
+
+    // Server's port-protocol bindings.
+    repeated PortBinding portBindings = 1;
+
+    // A list of registered users.
+    repeated User users = 2;
+
+    // Server advanced settings.
+    optional ServerAdvancedSettings advancedSettings = 3;
+
+    // Server logging level.
+    optional LoggingLevel loggingLevel = 4;
+
+    // Maximum transmission unit of L2 payload.
+    // This setting only applies to UDP protocol egress traffic.
+    optional int32 mtu = 5;
+
+    // Egress proxies and rules.
+    optional Egress egress = 6;
+
+    // How to resolve IP address when the client send a request
+    // with a domain name.
+    optional DNS dns = 7;
+
+    // Fine tune traffic behaviors.
+    optional TrafficPattern trafficPattern = 8;
+}
+
+message ServerAdvancedSettings {
+    // Was: optional bool allowLocalDestination = 1;
+    reserved 1;
+
+    // The interval to log metrics.
+    // Examples: 30s, 5m, 2h.
+    // Minimum value: 1s.
+    // If empty, the default interval is used.
+    optional string metricsLoggingInterval = 2;
+
+    // If true, proxy clients must provide user hint,
+    // otherwise proxy server will refuse to decrypt the network packets.
+    optional bool userHintIsMandatory = 3;
+
+    // Server closes TCP underlay if it is idle in both directions
+    // after this amount of time. The TCP underlay is closed even if
+    // there are active sessions attached to the underlay.
+    // Examples: 600s, 15m, 1h.
+    // Minimum value: 1m / 60s.
+    // If empty, there is no idle timeout.
+    optional string tcpIdleTimeout = 4;
+}
+
+message Egress {
+    // A list of proxies.
+    repeated EgressProxy proxies = 1;
+
+    // A list of rules.
+    // If no rule is matched, the default action is DIRECT.
+    repeated EgressRule rules = 2;
+}
+
+message EgressProxy {
+    optional string name = 1;
+
+    optional ProxyProtocol protocol = 2;
+
+    // Proxy IP address or domain name.
+    optional string host = 3;
+
+    // Proxy port number.
+    optional int32 port = 4;
+
+    // Credential to authenticate egress socks5 proxy.
+    // If the proxy protocol is not socks5, this is ignored.
+    optional Auth socks5Authentication = 5;
+}
+
+message EgressRule {
+    // A list of CIDR to match the rule.
+    // Use "*" to match all IP addresses.
+    repeated string ipRanges = 1;
+
+    // A list of domain names to match the rule.
+    // Use "*" to match all domain names.
+    repeated string domainNames = 2;
+
+    // The action to do when the rule is matched.
+    optional EgressAction action = 3;
+
+    // The list of proxies to connect.
+    // This must not be empty when the action is PROXY.
+    // When multiple proxies are provided, a random one is selected
+    // for each request.
+    repeated string proxyNames = 4;
+}
+
+enum EgressAction {
+    // Use proxy to connect to the destination.
+    PROXY = 0;
+
+    // Directly connect to the destination.
+    DIRECT = 1;
+
+    // Do not connect to the destination.
+    REJECT = 2;
+}
+
+message DNS {
+    // Pick up IP address from IP version preference.
+    optional DualStack dualStack = 1;
+
+    // Static domain to IP mappings, similar to /etc/hosts.
+    map<string, string> hosts = 2;
+}

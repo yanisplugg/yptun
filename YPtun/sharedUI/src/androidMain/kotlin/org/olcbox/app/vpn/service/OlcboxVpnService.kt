@@ -78,6 +78,8 @@ import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.VkTurnComposer
 import org.olcbox.app.data.share.YptunInboundCodec
 import org.olcbox.app.vpn.csqtt.CsqttBridge
+import org.olcbox.app.vpn.turnable.TurnableProcess
+import org.olcbox.app.vpn.mieru.MieruProcess
 import org.olcbox.app.vpn.snolc.SnolcFiles
 import org.olcbox.app.vpn.singbox.SingBoxConfig
 import org.olcbox.app.vpn.singbox.SingBoxEngine
@@ -210,6 +212,10 @@ class OlcboxVpnService : VpnService() {
 
     /** The csqtt VK-TURN core (bridge + Rust client subprocesses) while a csqtt location runs. */
     private val csqttBridge = CsqttBridge { addLog(it) }
+    /** Turnable VK-TURN client subprocess; Android-only and mutually exclusive with the other cores. */
+    private val turnableProcess = TurnableProcess { addLog(it) }
+    /** GPL-3.0 mieru client, isolated as a subprocess behind its loopback SOCKS5 listener. */
+    private val mieruProcess = MieruProcess { addLog(it) }
 
     /** True when a proxy core fronts the OpenFlux tunnel (proxy-over-OpenFlux). */
     private var openFluxProxyActive: Boolean = false
@@ -1659,6 +1665,10 @@ class OlcboxVpnService : VpnService() {
             return false
         }
 
+        if (profile.type == ProxyProfile.TYPE_MIERU) {
+            return startMieruCore(config, profile, upstream, requestedGeneration, setErrorOnFailure)
+        }
+
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort
         // Optional SECOND/cascade proxy chained on top of the main: traffic exits via it, dialing
@@ -2059,6 +2069,48 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    /** Runs an imported mieru/mierus profile directly as the Standard engine's local SOCKS5 core. */
+    private suspend fun startMieruCore(
+        config: LocationConfig,
+        profile: ProxyProfile,
+        upstream: Network,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean,
+    ): Boolean {
+        return try {
+            check(config.engine == EngineType.Standard) { "Mieru supports Standard mode only (not olcRTC Chain)" }
+            check(!config.warpEnabled) { "WARP chaining is not supported for the standalone Mieru core" }
+            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            check(!isLocalSocksPortOpen(socksListenPort)) { "SOCKS port $socksListenPort is still in use" }
+            activeProxyCore = ProxyCore.Auto
+            addLog("Starting Mieru on 127.0.0.1:$socksListenPort")
+            mieruProcess.start(applicationContext, profile.mieruConfig, socksListenPort)
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                mieruProcess.stop()
+                return false
+            }
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            mieruProcess.stop()
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Mieru failed"
+            addLog(if (staleRequest) "Mieru start canceled: $message" else "Mieru start failed: $message")
+            mieruProcess.stop()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
+        } finally {
+            releaseProcessBindingUnlessProxy()
+        }
+    }
+
     /**
      * VK-TURN: the free-turn-proxy client raises a local WireGuard entry listener
      * (127.0.0.1:listenPort) tunnelling through VK, and sing-box runs a WireGuard
@@ -2085,15 +2137,17 @@ class OlcboxVpnService : VpnService() {
         val wdttRaw = usesWdtt && vk?.wdttPlus?.rawMode == true
         // csqtt always serves its tunnel as a local SOCKS5 (the bridge), exactly like qWDTT Raw.
         val usesCsqtt = vk?.usesCsqtt() == true
+        val usesTurnable = vk?.usesTurnable() == true
         // WDTT exits via WireGuard (server-provided); the freeturn outbound choice is irrelevant. Its Raw
         // mode is a local SOCKS5 served by the core — the very shape of the AmneziaWG exit (awgproxy's
         // SOCKS on [awgLocalPort]), so it rides that branch: chain proxy, routing and DNS included.
         val outboundType = if (wdttRaw || usesCsqtt) VkTurnConfig.OUTBOUND_AMNEZIAWG
-            else if (usesWdtt) VkTurnConfig.OUTBOUND_WIREGUARD
+            else if (usesWdtt || usesTurnable) VkTurnConfig.OUTBOUND_WIREGUARD
             else vk?.outbound?.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD } ?: VkTurnConfig.OUTBOUND_WIREGUARD
         val outboundConfigured = when {
             usesWdtt -> vk?.wdttPeer?.isNotBlank() == true // WG config comes from the server
             usesCsqtt -> vk?.csqttPeer?.isNotBlank() == true // the server hands the tunnel address over
+            usesTurnable -> !profile?.rawOutbound.isNullOrBlank()
             outboundType == VkTurnConfig.OUTBOUND_AMNEZIAWG -> !profile?.awgConfig.isNullOrBlank()
             outboundType == VkTurnConfig.OUTBOUND_PROXY -> profile != null &&
                 profile.server.isNotBlank() && profile.serverPort in 1..65535
@@ -2121,7 +2175,7 @@ class OlcboxVpnService : VpnService() {
             // across them per connection (Xray balancer over N WireGuard outbounds) so their bandwidth
             // aggregates. Only for the freeturn core with a plain WireGuard exit and no chain proxy;
             // a single server (or any other shape) keeps the exact original single-server path.
-            val freeturnServers = if (!vk.usesWdtt() && !usesCsqtt &&
+            val freeturnServers = if (!vk.usesWdtt() && !usesCsqtt && !usesTurnable &&
                 outboundType == VkTurnConfig.OUTBOUND_WIREGUARD &&
                 vk.chainProxyLink.isBlank()
             ) vk.allFreeturnUris().take(1 + VKTURN_MAX_EXTRA_FREETURN) else emptyList()
@@ -2143,7 +2197,10 @@ class OlcboxVpnService : VpnService() {
             var wdttConfigSignal: CompletableDeferred<String>? = null
             var csqttStarted = false
 
-            if (usesCsqtt) {
+            if (usesTurnable) {
+                addLog("Starting Turnable client on 127.0.0.1:${vk.listenPort}")
+                turnableProcess.start(applicationContext, vk.turnableConfig, vk.listenPort)
+            } else if (usesCsqtt) {
                 // csqtt core: a Rust client (libcsqtt.so) behind the Go bridge (libcsqtthost.so), which serves
                 // the tunnel as a SOCKS5 on [awgLocalPort] — the shape of the AmneziaWG exit. Awaited below,
                 // after the settings preparation, so that work overlaps the VK handshake.
@@ -2295,7 +2352,9 @@ class OlcboxVpnService : VpnService() {
             // report offline while the relay is still coming up (only masked on a fast same-LAN path).
             // Best-effort: if the relay does not report ready in time we proceed anyway and retry.
             val wdttSignal = wdttConfigSignal
-            if (csqttStarted) {
+            if (usesTurnable) {
+                addLog("Turnable listener is up; starting WireGuard (handshake retries while the relay connects)")
+            } else if (csqttStarted) {
                 val up = csqttBridge.awaitReady(VKTURN_RELAY_READY_TIMEOUT_MS)
                     ?: throw IllegalStateException(CsqttBridge.noTunnelMessage(csqttBridge.lastError()))
                 profile = localSocksProfile("csqtt", awgLocalPort)
@@ -2762,10 +2821,12 @@ class OlcboxVpnService : VpnService() {
     /** True when the active engine's core(s) are alive. */
     private fun coreRunning(): Boolean = when (engineType) {
         EngineType.Stealth -> olcrtcRunning()
-        EngineType.Standard -> proxyCoreRunning()
+        EngineType.Standard -> mieruProcess.isRunning() || proxyCoreRunning()
         EngineType.Chain -> olcrtcRunning() && proxyCoreRunning()
         // VK-TURN runs either the freeturn OR the WDTT transport core (mutually exclusive per location).
-        EngineType.VkTurn -> (Freeturn.isRunning() || Wdttmobile.isRunning() || csqttBridge.isRunning()) && proxyCoreRunning()
+        EngineType.VkTurn ->
+            (Freeturn.isRunning() || Wdttmobile.isRunning() || csqttBridge.isRunning() || turnableProcess.isRunning()) &&
+                proxyCoreRunning()
         // MasterDNS raises its own local SOCKS listener; with a proxy-over-MasterDNS a proxy core fronts it.
         EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> openFluxProcess?.isAlive == true && (!openFluxProxyActive || proxyCoreRunning())
@@ -3431,6 +3492,8 @@ class OlcboxVpnService : VpnService() {
         cancelVkCaptchaNotification()
         runCatching { Wdttmobile.stop() }
         runCatching { csqttBridge.stop() }
+        runCatching { turnableProcess.stop() }
+        runCatching { mieruProcess.stop() }
         runCatching { masterDnsClient?.stop() }
         masterDnsClient = null
         masterDnsProxyActive = false

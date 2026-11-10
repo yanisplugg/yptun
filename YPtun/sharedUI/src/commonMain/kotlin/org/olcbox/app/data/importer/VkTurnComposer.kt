@@ -72,8 +72,10 @@ data class VkTurnDraft(
     /** Proxy share link (vless/vmess/trojan/ss) used as the exit when outbound == proxy. */
     val outboundProxyLink: String = "",
     val proxyCore: ProxyCore = ProxyCore.Auto,
-    // VK-TURN transport core: "freeturn" (default) | "wdtt". WDTT fields are used only when core==wdtt.
+    // VK-TURN transport core: freeturn (default) | wdtt | csqtt | turnable.
     val core: String = VkTurnConfig.CORE_FREETURN,
+    /** Complete Turnable client JSON or `turnable://` URL (core==turnable). */
+    val turnableConfig: String = "",
     /** WDTT server IP/host dialled over VK TURN (the wdtt-server / Peer). Port = [wdttPort]. */
     val wdttPeer: String = "",
     /** WDTT server port; blank/0 → 56000. */
@@ -118,7 +120,14 @@ object VkTurnComposer {
             ?: LocationConfig.DEFAULT_FREETURN_PORT
         val peerPort = draft.peerPort.trim().toIntOrNull() ?: 0
         val mtu = draft.wgMtu.trim().toIntOrNull() ?: 0
-        val outbound = draft.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
+        val selectedCore = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN }
+        // Turnable exposes a local TCP/UDP route endpoint; the supported YPtun integration is
+        // WireGuard-over-Turnable, exactly like the upstream Android guide.
+        val outbound = if (selectedCore.equals(VkTurnConfig.CORE_TURNABLE, ignoreCase = true)) {
+            VkTurnConfig.OUTBOUND_WIREGUARD
+        } else {
+            draft.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD }
+        }
 
         // The freeturn payload mode is dictated by the outbound transport: WireGuard/AmneziaWG are
         // UDP (udprelay → udp local listener), a proxy exit is TCP (tcpfwd → tcp local listener).
@@ -131,7 +140,8 @@ object VkTurnComposer {
             else -> ""
         }
 
-        val uri = buildUri(draft, peerPort, wgB64, mode)
+        val uri = if (selectedCore.equals(VkTurnConfig.CORE_TURNABLE, ignoreCase = true)) ""
+        else buildUri(draft, peerPort, wgB64, mode)
 
         val proxy = when (outbound) {
             VkTurnConfig.OUTBOUND_AMNEZIAWG -> ProxyProfile(
@@ -192,7 +202,8 @@ object VkTurnComposer {
             outbound = outbound,
             outboundProxyLink = if (outbound == VkTurnConfig.OUTBOUND_PROXY) draft.outboundProxyLink.trim() else "",
             proxyCore = draft.proxyCore,
-            core = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+            core = selectedCore,
+            turnableConfig = draft.turnableConfig.trim(),
             wdttPeer = draft.wdttPeer.trim(),
             wdttPort = draft.wdttPort.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: 0,
             wdttPassword = draft.wdttPassword.trim(),
@@ -320,6 +331,7 @@ object VkTurnComposer {
                 outboundProxyLink = vkturn.outboundProxyLink,
                 proxyCore = vkturn.proxyCore,
                 core = vkturn.core.ifBlank { VkTurnConfig.CORE_FREETURN },
+                turnableConfig = vkturn.turnableConfig,
                 wdttPeer = vkturn.wdttPeer,
                 wdttPort = vkturn.wdttPort.takeIf { it > 0 }?.toString() ?: "",
                 wdttPassword = vkturn.wdttPassword,

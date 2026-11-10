@@ -1,0 +1,16 @@
+{
+    "portBindings": [
+        {
+            "port": 8964,
+            "protocol": "TCP"
+        }
+    ],
+    "users": [
+        {
+            "name": "shilishanlu",
+            "password": "buhuanjian",
+            "allowLoopbackIP": true
+        }
+    ],
+    "loggingLevel": "DEBUG"
+}

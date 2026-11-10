@@ -363,6 +363,9 @@ internal class DesktopEngineController(
     ) {
         val profile = config.proxy
         check(profile != null && profile.isComplete()) { "No proxy configured" }
+        check(profile.type != ProxyProfile.TYPE_MIERU) {
+            "Mieru is currently available only in the Android build (standalone client process)."
+        }
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort(listenPort)
@@ -1102,6 +1105,9 @@ internal class DesktopEngineController(
         deviceId: String,
     ) {
         val vk = config.vkturn
+        check(vk?.usesTurnable() != true) {
+            "Turnable пока поддерживается только Android-сборкой (клиент — отдельный Android-процесс)."
+        }
         // Clamp the exit's WireGuard/AmneziaWG MTU to what the VK TURN + DTLS + RTP-obf path can carry
         // — a panel link's 1280/1420 does not fail loudly, it just silently drops full-size segments.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)

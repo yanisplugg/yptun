@@ -1,0 +1,17 @@
+{
+    "portBindings": [
+        {
+            "port": 8964,
+            "protocol": "UDP"
+        }
+    ],
+    "users": [
+        {
+            "name": "shilishanlu",
+            "password": "buhuanjian",
+            "allowLoopbackIP": true
+        }
+    ],
+    "loggingLevel": "DEBUG",
+    "mtu": 1400
+}

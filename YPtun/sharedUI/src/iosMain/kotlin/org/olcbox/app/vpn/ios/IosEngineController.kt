@@ -160,6 +160,9 @@ internal class IosEngineController(
     ) {
         val profile = config.proxy
         check(profile != null && profile.isComplete()) { "No proxy configured" }
+        check(profile.type != ProxyProfile.TYPE_MIERU) {
+            "Mieru is not available on iOS (the integration uses a standalone Android process)."
+        }
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort(listenPort)
@@ -508,6 +511,9 @@ internal class IosEngineController(
         val vk = config.vkturn
         // csqtt is a Rust executable run as a subprocess — iOS cannot spawn processes.
         check(vk?.usesCsqtt() != true) { "csqtt не поддерживается на iOS (ядро — отдельный процесс). Выбери freeturn или qWDTT." }
+        check(vk?.usesTurnable() != true) {
+            "Turnable не поддерживается на iOS (ядро — отдельный Android-процесс). Выбери freeturn или qWDTT."
+        }
         // Clamp the exit's WireGuard/AmneziaWG MTU to what VK TURN + DTLS + RTP-obf can carry.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true
