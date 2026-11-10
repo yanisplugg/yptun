@@ -502,6 +502,22 @@ impl AndroidVpnRuntime {
         self.lock().retry.next_delay_ms(base_delay_ms)
     }
 
+    pub fn reset_rtc(&self, now_ms: u64) {
+        self.lock().rtc.reset(now_ms);
+    }
+
+    pub fn reset_tun_health(&self) {
+        self.lock().stall.reset();
+    }
+
+    pub fn reset_speed(&self) {
+        self.lock().speed.reset();
+    }
+
+    pub fn reset_retry(&self) {
+        self.lock().retry.reset();
+    }
+
     pub fn reset_recovery(&self, now_ms: u64) {
         let mut state = self.lock();
         state.rtc.reset(now_ms);

@@ -134,6 +134,8 @@ fn stateful_health_stats_and_backoff_cross_ffi() {
     assert!(!runtime.observe_tun_stats(Some(stats(8, 10, 0, 0)), true));
     assert!(!runtime.observe_tun_stats(Some(stats(16, 20, 0, 0)), true));
     assert!(runtime.observe_tun_stats(Some(stats(24, 30, 0, 0)), true));
+    runtime.reset_tun_health();
+    assert!(!runtime.observe_tun_stats(Some(stats(40, 40, 0, 0)), true));
 
     assert_eq!(runtime.speed_tick(Some(stats(0, 100, 0, 200)), 2_000), None);
     assert_eq!(
@@ -143,8 +145,22 @@ fn stateful_health_stats_and_backoff_cross_ffi() {
             up_bytes_per_sec: 100
         })
     );
+    runtime.reset_speed();
+    assert_eq!(runtime.speed_tick(Some(stats(0, 500, 0, 700)), 2_000), None);
     assert_eq!(runtime.next_retry_delay_ms(4_000), 4_000);
     assert_eq!(runtime.next_retry_delay_ms(4_000), 8_000);
+    runtime.reset_retry();
+    assert_eq!(runtime.next_retry_delay_ms(4_000), 4_000);
+    runtime.reset_rtc(9_000);
+    assert_eq!(
+        runtime.observe_rtc_line(
+            "ICE connection state changed: failed".into(),
+            10_000,
+            true,
+            AndroidMode::Tun,
+        ),
+        None
+    );
     runtime.reset_recovery(10_000);
     assert_eq!(runtime.next_retry_delay_ms(4_000), 4_000);
     assert_eq!(runtime.speed_tick(Some(stats(0, 900, 0, 900)), 2_000), None);
