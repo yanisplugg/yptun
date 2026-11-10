@@ -3,6 +3,7 @@
 //! iOS/macOS, Rust on Windows/Linux) is a thin UI over this crate.
 
 pub mod asn_resolver;
+pub mod android_vpn;
 pub mod awg;
 pub mod conflicting_vpn;
 pub mod core_versions;
