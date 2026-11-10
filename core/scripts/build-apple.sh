@@ -19,7 +19,9 @@ MAC_ARM=aarch64-apple-darwin
 MAC_INTEL=x86_64-apple-darwin
 
 cd "$ROOT"
-mkdir -p "$OUT" "$GENERATED" "$HEADERS"
+# Do not let a previous generation leave stale headers or bindings in the XCFramework.
+rm -rf "$GENERATED" "$HEADERS" "$OUT/ios-simulator" "$OUT/macos"
+mkdir -p "$OUT" "$GENERATED" "$HEADERS" "$OUT/ios-simulator" "$OUT/macos"
 
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
@@ -33,19 +35,18 @@ done
 cargo build -p yptun-ffi --lib --locked
 HOST_LIBRARY="$ROOT/target/debug/libyptun_ffi.dylib"
 test -s "$HOST_LIBRARY"
-cargo run -p yptun-ffi --bin uniffi-bindgen --locked -- \
+cargo run -p yptun-ffi --features bindgen --bin uniffi-bindgen --locked -- \
   generate --library "$HOST_LIBRARY" --language swift --out-dir "$GENERATED" --no-format
 
-HEADER=$(find "$GENERATED" -maxdepth 1 -name '*FFI.h' -print -quit)
-MODULEMAP=$(find "$GENERATED" -maxdepth 1 -name '*.modulemap' -print -quit)
-SWIFT=$(find "$GENERATED" -maxdepth 1 -name '*.swift' -print -quit)
+HEADER="$GENERATED/yptun_ffiFFI.h"
+MODULEMAP="$GENERATED/yptun_ffiFFI.modulemap"
+SWIFT="$GENERATED/yptun_ffi.swift"
 test -s "$HEADER"
 test -s "$MODULEMAP"
 test -s "$SWIFT"
 cp "$HEADER" "$HEADERS/"
 cp "$MODULEMAP" "$HEADERS/module.modulemap"
 
-mkdir -p "$OUT/ios-simulator" "$OUT/macos"
 xcrun lipo -create \
   "$ROOT/target/$IOS_SIM_ARM/release/libyptun_ffi.a" \
   "$ROOT/target/$IOS_SIM_INTEL/release/libyptun_ffi.a" \

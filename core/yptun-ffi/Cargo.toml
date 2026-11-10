@@ -14,9 +14,13 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
 
 [dependencies]
 yptun-core = { path = "../yptun-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-uniffi = { version = "0.32.2", features = ["cli"] }
+uniffi = "0.32.2"

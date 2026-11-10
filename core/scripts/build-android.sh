@@ -24,5 +24,5 @@ for f in target/debug/libyptun_ffi.so target/debug/libyptun_ffi.dylib target/deb
   if [ -f "$f" ]; then lib="$f"; break; fi
 done
 if [ -z "$lib" ]; then echo "host cdylib not found in target/debug" >&2; exit 1; fi
-cargo run -p yptun-ffi --bin uniffi-bindgen -- generate --library "$lib" --language kotlin --out-dir "$OUT/kotlin"
+cargo run -p yptun-ffi --features bindgen --bin uniffi-bindgen -- generate --library "$lib" --language kotlin --out-dir "$OUT/kotlin"
 echo "done: $OUT/jniLibs, $OUT/kotlin"
