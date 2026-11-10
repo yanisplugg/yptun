@@ -409,13 +409,15 @@ fn wireguard_balancer() {
     let wg = |port: i32| ProxyProfile { kind: "wireguard".into(), raw_outbound: Some(format!(r#"{{"type":"wireguard","server":"127.0.0.1","server_port":{port},"local_address":["10.7.0.2/32"],"private_key":"K","peer_public_key":"P"}}"#)), ..Default::default() };
     let root = parse(&build_wireguard_balancer(&[wg(9101), wg(9102)], 10808, "127.0.0.1", "", "", "warning", &TrafficSettings::default(), true));
     assert_eq!(list(&root, "outbounds")[1]["tag"], "wg-bal-1");
-    assert_eq!(root["routing"]["balancers"][0]["strategy"]["settings"]["expected"], 2);
+    assert_eq!(root["routing"]["balancers"][0]["strategy"]["type"], "roundRobin");
+    assert!(root["routing"]["balancers"][0]["strategy"].get("settings").is_none());
     assert_eq!(root["routing"]["balancers"][0]["fallbackTag"], "wg-bal-0");
-    assert!(root.get("burstObservatory").is_some());
+    assert!(root.get("burstObservatory").is_none());
     let last = (*list(&root["routing"], "rules").last().unwrap()).clone();
     assert_eq!(last["balancerTag"], "vk-bal");
     let one = parse(&build_wireguard_balancer(&[wg(9101)], 10808, "127.0.0.1", "", "", "warning", &TrafficSettings::default(), false));
     assert!(one.get("burstObservatory").is_none());
+    assert_eq!(one["routing"]["balancers"][0]["strategy"]["type"], "roundRobin");
 }
 
 #[test]

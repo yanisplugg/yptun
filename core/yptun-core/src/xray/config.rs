@@ -533,10 +533,9 @@ pub use raw::{build_raw_proxy_ping_config, lift_hosts_into_routing, prepare_raw,
 
 // ---------------- WireGuard balancer ----------------
 
-/// Load-balanced WireGuard exits, one per VK-TURN freeturn server (leastLoad + health probes).
+/// Load-balanced WireGuard exits, one per VK-TURN freeturn server (deterministic round-robin).
 pub fn build_wireguard_balancer(wg_profiles: &[ProxyProfile], listen_port: i32, listen_host: &str, socks_user: &str, socks_pass: &str, log_level: &str, traffic: &TrafficSettings, bypass_lan: bool) -> String {
     let bases: Vec<Value> = wg_profiles.iter().enumerate().filter_map(|(i, p)| wireguard_base_outbound(p, &format!("{WG_BAL_PREFIX}{i}"), None)).collect();
-    let count = bases.len();
     let fake = traffic.fake_dns_enabled;
     let mut config = Obj::new();
     config.insert("log".into(), json!({ "loglevel": log_level }));
@@ -567,12 +566,6 @@ pub fn build_wireguard_balancer(wg_profiles: &[ProxyProfile], listen_port: i32, 
         outbounds.push(dns_out_outbound());
     }
     config.insert("outbounds".into(), Value::Array(outbounds));
-    if count > 1 {
-        config.insert(
-            "burstObservatory".into(),
-            json!({ "subjectSelector": [WG_BAL_PREFIX], "pingConfig": { "destination": "http://connectivitycheck.gstatic.com/generate_204", "interval": "10s", "sampling": 2, "timeout": "8s" } }),
-        );
-    }
     let mut rules: Vec<Value> = Vec::new();
     if fake {
         rules.extend(dns_hijack_rules());
@@ -587,7 +580,9 @@ pub fn build_wireguard_balancer(wg_profiles: &[ProxyProfile], listen_port: i32, 
         json!({
             "domainStrategy": "AsIs",
             "balancers": [{ "tag": WG_BALANCER_TAG, "selector": [WG_BAL_PREFIX], "fallbackTag": format!("{WG_BAL_PREFIX}0"),
-                "strategy": { "type": "leastLoad", "settings": { "expected": count, "baselines": ["3000ms"] } } }],
+                // Do not gate balancing on an HTTP probe: its host or DNS can fail while every
+                // WG-over-VK exit is healthy, which made fallbackTag pin all traffic to wg-bal-0.
+                "strategy": { "type": "roundRobin" } }],
             "rules": rules,
         }),
     );
