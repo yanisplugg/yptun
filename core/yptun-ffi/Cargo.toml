@@ -1,0 +1,22 @@
+[package]
+name = "yptun-ffi"
+version = "0.1.0"
+description = "uniffi bindings over yptun-core for the Android (Kotlin) and Apple (Swift) apps"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "yptun_ffi"
+# lib: tests and the bindgen bin; cdylib: Android .so; staticlib: iOS/macOS later.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+yptun-core = { path = "../yptun-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+uniffi = { version = "0.32.2", features = ["cli"] }

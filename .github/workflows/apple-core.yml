@@ -1,0 +1,68 @@
+name: Apple Rust core
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/testflight-deploy
+    paths:
+      - "core/**"
+      - "YPtun/apple/Packages/YPtunRustBridge/**"
+      - ".github/workflows/apple-core.yml"
+  pull_request:
+    paths:
+      - "core/**"
+      - "YPtun/apple/Packages/YPtunRustBridge/**"
+      - ".github/workflows/apple-core.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+      - name: Test Rust workspace
+        working-directory: core
+        run: cargo test --workspace --locked
+
+  build-apple:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+      - name: Build XCFramework and Swift bindings
+        run: bash core/scripts/build-apple.sh
+      - name: Verify Swift package
+        working-directory: YPtun/apple/Packages/YPtunRustBridge
+        run: swift build
+      - name: Verify generated artifacts
+        run: |
+          test -d YPtun/apple/Packages/YPtunRustBridge/Artifacts/yptun_ffiFFI.xcframework
+          test -s YPtun/apple/Packages/YPtunRustBridge/Sources/YPtunRustBridge/Generated/yptun_ffi.swift
+          find YPtun/apple/Packages/YPtunRustBridge -maxdepth 5 -type f -print
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yptun-apple-rust-bridge-${{ github.sha }}
+          path: |
+            YPtun/apple/Packages/YPtunRustBridge/Artifacts
+            YPtun/apple/Packages/YPtunRustBridge/Sources/YPtunRustBridge/Generated
+          if-no-files-found: error
+          retention-days: 14
