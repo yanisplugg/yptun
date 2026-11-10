@@ -97,10 +97,10 @@ pub struct PlatformCaps {
 
 impl PlatformCaps {
     pub const fn ios() -> Self {
-        Self { platform: Platform::Ios, open_flux: false, snolc: false, trust_tunnel: false, naive: false, xray_when_auto: true }
+        Self { platform: Platform::Ios, open_flux: true, snolc: true, trust_tunnel: false, naive: false, xray_when_auto: true }
     }
 
-    /// Same restrictions as iOS until the macOS Swift client says otherwise.
+    /// The native macOS client embeds the same in-process Apple cores as iOS initially.
     pub const fn macos() -> Self {
         Self { platform: Platform::MacOs, ..Self::ios() }
     }
@@ -470,8 +470,15 @@ pub fn topology(location: &LocationConfig, socks_port: i32, caps: &PlatformCaps)
             if location.needs_vk_link() {
                 return Err(PlanError::VkLinkRequired);
             }
-            steps.push(Step::VkTurn { port: ports.awg_local() });
-            steps.push(Step::ProxyCore { port: main, upstream_port: Some(ports.awg_local()) });
+            // CSQTT's in-process netstack bridge uses the chain slot (+1); freeturn/qWDTT use the
+            // AWG slot (+2). Both stay behind ProxyCore so routing is always applied.
+            let relay_port = if location.vkturn.as_ref().is_some_and(|vk| vk.uses_csqtt()) {
+                ports.olcrtc_chain()
+            } else {
+                ports.awg_local()
+            };
+            steps.push(Step::VkTurn { port: relay_port });
+            steps.push(Step::ProxyCore { port: main, upstream_port: Some(relay_port) });
         }
         EngineType::MasterDns => {
             if proxy_usable(location).is_some() {

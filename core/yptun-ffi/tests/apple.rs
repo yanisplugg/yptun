@@ -128,12 +128,15 @@ fn bridge_plan_matches_engine_and_ip_family_rules() {
 
     assert!(plan.tcp_only_udp);
     assert!(plan.slow_tunnel);
-    assert!(!plan.drop_ipv6);
+    assert!(plan.drop_ipv6);
     assert!(plan.yaml.contains("mtu: 1420"));
     assert!(plan.yaml.contains("udp: 'tcp'"));
     assert!(plan.yaml.contains("username: 'u''ser'"));
     assert!(plan.yaml.contains("connect-timeout: 30000"));
-    assert!(plan.yaml.contains("ipv6: 'fdfe:dcba:9876::1'"));
+    assert!(plan.yaml.contains("# ipv6 disabled"));
+    assert!(plan.yaml.contains("cache-size: 2048"));
+    assert!(plan.yaml.contains("task-stack-size: 16384"));
+    assert!(plan.yaml.contains("max-session-count: 512"));
 
     location.engine = EngineType::VkTurn;
     let vk = apple_bridge_plan(
@@ -145,7 +148,21 @@ fn bridge_plan_matches_engine_and_ip_family_rules() {
     )
     .unwrap();
     assert!(vk.drop_ipv6);
+    assert!(vk.slow_tunnel);
     assert!(vk.yaml.contains("# ipv6 disabled"));
+
+    location.engine = EngineType::Standard;
+    traffic.domain_strategy = "prefer_ipv4".into();
+    let prefer_ipv4 = apple_bridge_plan(
+        serde_json::to_string(&location).unwrap(),
+        serde_json::to_string(&traffic).unwrap(),
+        10_808,
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert!(!prefer_ipv4.drop_ipv6);
+    assert!(prefer_ipv4.yaml.contains("# no auth"));
 }
 
 #[test]

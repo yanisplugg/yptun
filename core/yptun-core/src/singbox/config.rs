@@ -380,9 +380,6 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     if fake_enabled {
         rules.push(json!({ "ip_cidr": [fake4, fake6], "outbound": PROXY_TAG }));
     }
-    if rp.is_some() || routing.bypass_lan {
-        rules.push(json!({ "ip_is_private": true, "outbound": direct_tag }));
-    }
     let expert_strategy = sb_expert_strategy.clone().unwrap_or_else(|| effective_strategy.clone());
     let force_family = o.force_family_resolve && (expert_strategy == "ipv4_only" || expert_strategy == "ipv6_only");
     let manual_use_ip = routing.rules.iter().any(|r| r.enabled && !r.ip.is_empty());
@@ -432,6 +429,10 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
         if routing.bypass_russia {
             rules.push(json!({ "rule_set": ["geoip-ru", "geosite-ru"], "outbound": direct_tag }));
         }
+    }
+    // Broad convenience fallback only: explicit JSON/manual/profile rules must win first-match.
+    if rp.is_some() || routing.bypass_lan {
+        rules.push(json!({ "ip_is_private": true, "outbound": direct_tag }));
     }
 
     // Rule-sets are fetched before endpoints start: WireGuard tunnels fetch over `direct`.

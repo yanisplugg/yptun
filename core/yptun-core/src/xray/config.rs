@@ -499,9 +499,6 @@ pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
         let v6 = spec.map(|s| s.inet6_range.as_str()).filter(|s| not_blank(s)).unwrap_or(FAKEDNS_POOL6);
         rules.push(json!({ "type": "field", "ip": [v4, v6], "outboundTag": exit_tag }));
     }
-    if o.bypass_lan && !o.direct_via_base {
-        rules.push(json!({ "type": "field", "ip": LAN_CIDRS, "outboundTag": "direct" }));
-    }
     if o.block_quic {
         rules.push(json!({ "type": "field", "network": "udp", "port": 443, "outboundTag": "block" }));
     }
@@ -522,6 +519,10 @@ pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
         }
         None => (if force_family { "IPIfNonMatch" } else { "AsIs" }).to_string(),
     };
+    // Xray is first-match-wins: a broad LAN convenience rule must not shadow an explicit profile.
+    if o.bypass_lan && !o.direct_via_base {
+        rules.push(json!({ "type": "field", "ip": LAN_CIDRS, "outboundTag": "direct" }));
+    }
     config.insert("routing".into(), json!({ "domainStrategy": strategy, "rules": rules }));
     Value::Object(config)
 }

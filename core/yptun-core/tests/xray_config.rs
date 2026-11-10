@@ -70,6 +70,17 @@ fn known_doh_hostnames_become_ips_and_remote_ips_become_doh_or_tcp() {
     assert_eq!(s, ["https://8.8.8.8/dns-query", "https://1.1.1.1/dns-query", "223.5.5.5"]);
 }
 
+#[test]
+fn explicit_private_route_precedes_lan_fallback() {
+    let profile = RoutingProfile { proxy_ip: vec!["192.168.50.0/24".into()], route_order: "proxy".into(), ..Default::default() };
+    let root = built(&vless(), XrayOptions { routing_profile: Some(profile), bypass_lan: true, ..Default::default() });
+    let rules = list(&root["routing"], "rules");
+    let explicit = rules.iter().position(|r| r["ip"].as_array().is_some_and(|v| v.iter().any(|x| x == "192.168.50.0/24"))).unwrap();
+    let lan = rules.iter().position(|r| r["outboundTag"] == "direct" && r["ip"].as_array().is_some_and(|v| v.iter().any(|x| x == "192.168.0.0/16"))).unwrap();
+    assert_eq!(rules[explicit]["outboundTag"], "proxy");
+    assert!(explicit < lan);
+}
+
 // ---------------- FakeDNS ----------------
 
 #[test]
@@ -382,8 +393,8 @@ fn build_family_lan_quic_and_profile() {
     assert_eq!(root["routing"]["domainStrategy"], "IPIfNonMatch");
     let rules = list(&root["routing"], "rules");
     let tags: Vec<&str> = rules.iter().map(|r| r["outboundTag"].as_str().unwrap()).collect();
-    // remote DNS (8.8.8.8 → proxy), LAN, QUIC, ::/0, 0.0.0.0, profile direct, catch-all direct.
-    assert_eq!(tags, ["proxy", "direct", "block", "block", "block", "direct", "direct"]);
+    // remote DNS, safety blocks, explicit profile rules, catch-all, then the broad LAN fallback.
+    assert_eq!(tags, ["proxy", "block", "block", "block", "direct", "direct", "direct"]);
     assert!(root["dns"]["hosts"].as_object().unwrap().len() > 100);
     assert_eq!(by_tag(&root, "outbounds", "direct")["settings"]["domainStrategy"], "ForceIPv4");
 

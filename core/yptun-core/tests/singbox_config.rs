@@ -87,6 +87,23 @@ fn rule_sets_download_through_the_proxy_unless_wireguard() {
 }
 
 #[test]
+fn explicit_routes_precede_russia_and_lan_bypasses() {
+    let profile = RoutingProfile {
+        proxy_sites: vec!["domain:myserver.lan".into()],
+        route_order: "proxy".into(),
+        ..Default::default()
+    };
+    let routing = RoutingRules { bypass_lan: true, bypass_russia: true, ..Default::default() };
+    let root = build(&vless(), SingBoxOptions { routing, routing_profile: Some(profile), ..Default::default() });
+    let rules = arr(&root, &["route", "rules"]);
+    let explicit = rules.iter().position(|r| r["domain_suffix"].as_array().is_some_and(|v| v.iter().any(|x| x == ".myserver.lan"))).unwrap();
+    let russia = rules.iter().position(|r| r["rule_set"].as_array().is_some_and(|v| v.iter().any(|x| x == "geosite-ru") && v.iter().any(|x| x == "geoip-ru"))).unwrap();
+    let private = rules.iter().position(|r| r.get("ip_is_private").is_some()).unwrap();
+    assert_eq!(rules[explicit]["outbound"], "proxy");
+    assert!(explicit < russia && russia < private);
+}
+
+#[test]
 fn wireguard_loopback_bind() {
     let endpoint = |server: &str, auto: bool| {
         let p = ProxyProfile { tag: "WDTT".into(), kind: "wireguard".into(), server: server.into(), server_port: 9000, raw_outbound: Some(wg_raw(server)), ..Default::default() };

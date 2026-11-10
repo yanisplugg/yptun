@@ -831,16 +831,16 @@ internal class IosEngineController(
                 ?.enrichedFromRaw()
                 ?.takeIf { it.isComplete() }
         }
-        val useProxy = chainProxy != null
-        csqttProxyActive = useProxy
-        val csqttPort = if (useProxy) chainOlcrtcPort(listenPort) else listenPort
+        // csqtt's bridge must always stay behind the normal proxy core. Besides keeping one stable
+        // public SOCKS port, that front core is where routing profiles and the user's Rules are
+        // evaluated. Serving csqtt directly on [listenPort] made every route silently ineffective.
+        csqttProxyActive = true
+        val csqttPort = chainOlcrtcPort(listenPort)
 
         IosNet.awaitLocalPortClosed(listenPort, 3000)
         require(!IosNet.isLocalPortOpen(listenPort)) { "SOCKS port $listenPort is still in use" }
-        if (useProxy) {
-            IosNet.awaitLocalPortClosed(csqttPort, 3000)
-            require(!IosNet.isLocalPortOpen(csqttPort)) { "csqtt internal port $csqttPort is still in use" }
-        }
+        IosNet.awaitLocalPortClosed(csqttPort, 3000)
+        require(!IosNet.isLocalPortOpen(csqttPort)) { "csqtt internal port $csqttPort is still in use" }
 
         runCatching { core.csqttStop() }
         runCatching { core.csqttBridgeStop() }
@@ -877,11 +877,40 @@ internal class IosEngineController(
         }
         log("csqtt ready on $LISTEN_HOST:$csqttPort")
 
-        if (chainProxy == null) return
-
-        startProxyOverTunnel("csqtt", config, chainProxy, csqttPort, listenPort, socksUsername, socksPassword) { p, _ ->
-            vk.resolvedProxyCore(p)
+        if (chainProxy != null) {
+            startProxyOverTunnel("csqtt", config, chainProxy, csqttPort, listenPort, socksUsername, socksPassword) { p, _ ->
+                vk.resolvedProxyCore(p)
+            }
+            return
         }
+
+        // No extra exit proxy: route the user's proxy/direct/block buckets around a loopback SOCKS
+        // outbound backed by csqtt. `direct` remains the real network, while the final/proxy bucket
+        // exits through csqtt. This is the same topology Rust's Step::VkTurn + Step::ProxyCore uses.
+        val routing = IosSharedStore.loadRouting()
+        val traffic = IosSharedStore.loadTraffic().copy(domainStrategy = "ipv4_only")
+        val profilesState = IosSharedStore.loadRoutingProfiles()
+        val routingProfile = profilesState.resolve(config.routingProfileId)
+        val csqttExit = localSocksProfile("csqtt", csqttPort)
+        val json = vkTurnSingBox(
+            profile = csqttExit,
+            listenPort = listenPort,
+            socksUsername = socksUsername,
+            socksPassword = socksPassword,
+            routing = routing,
+            traffic = traffic,
+            profilesState = profilesState,
+            routingProfile = routingProfile,
+            sniffOverrideDestination = true,
+            preferTcpRemoteDns = true,
+        )
+        activeProxyCore = ProxyCore.SingBox
+        log("Starting sing-box routing front for csqtt on $LISTEN_HOST:$listenPort")
+        startSingBox(json, listenPort)
+        if (!IosNet.awaitLocalPortOpen(listenPort, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("csqtt routing SOCKS port $listenPort did not open")
+        }
+        log("csqtt routing front ready on $LISTEN_HOST:$listenPort")
     }
 
     private suspend fun startVkTurn(

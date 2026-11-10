@@ -149,23 +149,29 @@ pub fn apple_bridge_plan(
     );
     let slow_tunnel = matches!(
         location.engine,
-        EngineType::MasterDns | EngineType::OpenFlux
+        EngineType::MasterDns | EngineType::OpenFlux | EngineType::VkTurn
     );
-    let drop_ipv6 = location.engine == EngineType::VkTurn
-        || matches!(
-            traffic.domain_strategy.as_str(),
-            "ipv4_only" | "prefer_ipv4"
-        );
+    let drop_ipv6 = matches!(
+        location.engine,
+        EngineType::VkTurn | EngineType::MasterDns | EngineType::OpenFlux
+    ) || traffic.domain_strategy == "ipv4_only";
     let ipv6 = if drop_ipv6 {
         "# ipv6 disabled (IPv4 only/preferred)".to_string()
     } else {
         format!("ipv6: '{TUN_IPV6_ADDRESS}'")
     };
     let connect_timeout = if slow_tunnel { 30_000 } else { 10_000 };
-    let username = yaml_single_quoted(&socks_username);
-    let password = yaml_single_quoted(&socks_password);
+    let authentication = if socks_username.trim().is_empty() {
+        "# no auth".to_string()
+    } else {
+        format!(
+            "username: '{}'\n  password: '{}'",
+            yaml_single_quoted(&socks_username),
+            yaml_single_quoted(&socks_password)
+        )
+    };
     let yaml = format!(
-        "tunnel:\n  mtu: {mtu}\n  ipv4: {ipv4}\n  {ipv6}\n\nsocks5:\n  address: 127.0.0.1\n  port: {socks_port}\n  udp: '{udp}'\n  pipeline: false\n  username: '{username}'\n  password: '{password}'\n\nmapdns:\n  address: {mapdns}\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 10000\n\nmisc:\n  task-stack-size: 24576\n  tcp-buffer-size: 4096\n  max-session-count: 1200\n  connect-timeout: {connect_timeout}\n  tcp-read-write-timeout: 300000\n  udp-read-write-timeout: 60000\n  log-level: warn\n",
+        "tunnel:\n  mtu: {mtu}\n  ipv4: {ipv4}\n  {ipv6}\n\nsocks5:\n  address: 127.0.0.1\n  port: {socks_port}\n  udp: '{udp}'\n  pipeline: false\n  {authentication}\n\nmapdns:\n  address: {mapdns}\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 2048\n\nmisc:\n  task-stack-size: 16384\n  tcp-buffer-size: 4096\n  max-session-count: 512\n  connect-timeout: {connect_timeout}\n  tcp-read-write-timeout: 300000\n  udp-read-write-timeout: 60000\n  log-level: warn\n",
         mtu = traffic.mtu,
         ipv4 = TUN_IPV4_ADDRESS,
         udp = if tcp_only_udp { "tcp" } else { "udp" },

@@ -685,13 +685,6 @@ object SingBoxConfig {
                             put("outbound", PROXY_TAG)
                         }
                     }
-                    // Private/LAN always direct (Happ profiles assume it; bypassLan toggle wants it).
-                    if (routingProfile != null || routing.bypassLan) {
-                        addJsonObject {
-                            put("ip_is_private", true)
-                            put("outbound", directTag)
-                        }
-                    }
                     // sing-box 1.11+: ip_cidr/geoip rules only match a connection that already carries
                     // an IP. A sniffed domain connection has none, so `geoip:ru → direct` (profile or
                     // the bypassRussia toggle) is silently skipped and RU sites wrongly use the proxy
@@ -805,6 +798,15 @@ object SingBoxConfig {
                     if (routing.bypassRussia) {
                         addJsonObject {
                             putJsonArray("rule_set") { add("geoip-ru"); add("geosite-ru") }
+                            put("outbound", directTag)
+                        }
+                    }
+                    // Broad convenience fallback only. sing-box is first-match-wins: placing this
+                    // before the user's JSON/Rules/profile buckets made private destinations
+                    // impossible to override deliberately (proxy or block).
+                    if (routingProfile != null || routing.bypassLan) {
+                        addJsonObject {
+                            put("ip_is_private", true)
                             put("outbound", directTag)
                         }
                     }

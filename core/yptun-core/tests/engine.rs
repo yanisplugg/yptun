@@ -4,6 +4,7 @@ use yptun_core::engine::*;
 use yptun_core::location::LocationConfig;
 use yptun_core::model::{EngineType, ProxyCore, ProxyProfile};
 use yptun_core::routing::{RoutingProfile, TrafficSettings};
+use yptun_core::transports::{VkTurnConfig, CORE_CSQTT};
 
 fn vless(server: &str) -> ProxyProfile {
     ProxyProfile {
@@ -88,11 +89,31 @@ fn masterdns_with_and_without_proxy() {
 }
 
 #[test]
-fn ios_rejects_what_its_build_cannot_run() {
+fn csqtt_is_always_fronted_by_the_routing_core() {
+    let loc = LocationConfig {
+        engine: EngineType::VkTurn,
+        vkturn: Some(VkTurnConfig {
+            core: CORE_CSQTT.into(),
+            listen_port: 10808,
+            csqtt_peer: "198.51.100.7".into(),
+            vk_link: "vk-hash".into(),
+            ..VkTurnConfig::default()
+        }),
+        ..LocationConfig::default()
+    };
+    let t = topology(&loc, 10808, &PlatformCaps::ios()).unwrap();
+    assert_eq!(t.steps, vec![Step::VkTurn { port: 10809 }, Step::ProxyCore { port: 10808, upstream_port: Some(10809) }]);
+}
+
+#[test]
+fn ios_capabilities_match_the_in_process_apple_cores() {
     let of = LocationConfig { engine: EngineType::OpenFlux, ..LocationConfig::default() };
-    let err = topology(&of, 10808, &PlatformCaps::ios()).unwrap_err();
-    assert_eq!(err.message(), "OpenFlux на iOS пока не поддерживается");
+    assert!(topology(&of, 10808, &PlatformCaps::ios()).is_ok());
     assert!(topology(&of, 10808, &PlatformCaps::desktop()).is_ok());
+
+    let snolc = LocationConfig { engine: EngineType::Snolc, ..LocationConfig::default() };
+    assert!(topology(&snolc, 10808, &PlatformCaps::ios()).is_ok());
+    assert!(topology(&snolc, 10808, &PlatformCaps::macos()).is_ok());
 
     let naive = standard(ProxyProfile { kind: "naive".into(), server: "n.example".into(), server_port: 443, ..ProxyProfile::default() });
     let err = check_supported(&naive, &PlatformCaps::ios()).unwrap_err();

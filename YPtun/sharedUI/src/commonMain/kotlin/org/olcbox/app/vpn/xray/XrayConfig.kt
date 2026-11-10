@@ -828,17 +828,19 @@ object XrayConfig {
                         dnsOutRules.forEach { add(it) }
                         remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
-                        lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
                         ruBlockRule?.let { add(it) }
                         userBlockDomainsRule?.let { add(it) }
                         adBlockRule?.let { add(it) }
+                        // Explicit profile buckets precede broad convenience bypasses. Xray uses
+                        // first-match-wins, so Bypass LAN/Russia must not shadow a user route.
+                        (base["rules"] as? JsonArray)?.forEach { add(it) }
                         userDirectDomainsRule?.let { add(it) }
                         bypassRussiaDomainRule?.let { add(it) }
                         bypassRussiaIpRule?.let { add(it) }
-                        (base["rules"] as? JsonArray)?.forEach { add(it) }
+                        lanBypassRule?.let { add(it) }
                     }
                 } else {
                     put("domainStrategy", if (forceFamily || traffic.remoteDns.isNotBlank()) "IPIfNonMatch" else "AsIs")
@@ -848,7 +850,6 @@ object XrayConfig {
                         dnsOutRules.forEach { add(it) }
                         remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
-                        lanBypassRule?.let { add(it) }
                         if (blockQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
@@ -858,6 +859,7 @@ object XrayConfig {
                         userDirectDomainsRule?.let { add(it) }
                         bypassRussiaDomainRule?.let { add(it) }
                         bypassRussiaIpRule?.let { add(it) }
+                        lanBypassRule?.let { add(it) }
                     }
                 }
             }
