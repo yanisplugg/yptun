@@ -186,18 +186,9 @@ class OlcboxVpnService : VpnService() {
     private var cleanupJob: Job? = null
     private var networkLossJob: Job? = null
     private var recoveryJob: Job? = null
-    private var reconnectAttempt = 0
     private var generation = 0L
     private var recoveryRequestedForGeneration = 0L
-    private var watchdogTunStats: Tun2SocksStats? = null
-    private var watchdogStalledSamples = 0
     private var lastWakeLockRefreshAtMs = 0L
-    @Volatile
-    private var lastRtcConnectedAtMs = 0L
-    @Volatile
-    private var lastRtcFailureAtMs = 0L
-    @Volatile
-    private var rtcFailureCount = 0
     @Volatile
     private var lastMobileProvider: String? = null
     @Volatile
@@ -1479,7 +1470,7 @@ class OlcboxVpnService : VpnService() {
             coroutineContext.ensureActive()
             addLog("olcRTC ready on $socksListenHost:$targetSocksPort")
             addLog("username: $socksUsername, password: $socksPassword")
-            markRtcConnected()
+            resetRtcHealthState()
             if (keepProcessBound) {
                 addLog("Keeping olcRTC bound to ${getNetName(upstream)}")
             }
@@ -1760,7 +1751,7 @@ class OlcboxVpnService : VpnService() {
                 // enableBond: Stage-2 — the single Chain→VLESS flow is striped across rooms and reassembled
                 // server-side (needs the bond reassembler on the olcRTC host) instead of round-robined.
                 startOlcrtcSocks(config, deviceIdentityProvider.hwid(), chainPort, enableBond = true)
-                markRtcConnected()
+                resetRtcHealthState()
                 coroutineContext.ensureActive()
                 if (requestedGeneration != generation) return false
                 addLog("olcRTC chain ready on 127.0.0.1:$chainPort")
@@ -3190,18 +3181,18 @@ class OlcboxVpnService : VpnService() {
         // Energy-saver: tick less often (fewer wake-ups + JNI reads + notification reposts) at the cost
         // of a slightly laggier speed/rooms readout.
         val interval = if (activeEnergySaver) ENERGY_SAVER_SPEED_INTERVAL_MS else SPEED_INTERVAL_MS
+        RustAndroidVpn.resetSpeed()
         speedJob = scope.launch {
-            var prev: Tun2SocksStats? = null
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 val cur = readTun2SocksStats()
+                val speed = RustAndroidVpn.speedTick(cur?.toRust(), interval)
                 // Re-evaluate the base text each tick when showing the rooms count so "up/total" updates
                 // live as rooms (re)connect; otherwise reuse the last status (cheap).
                 val base = if (showRoomsInNotif) connectedNotificationText()
                 else lastNotificationStatus.ifBlank { ns.notifConnected }
-                if (cur != null && prev != null) {
-                    val secs = (interval / 1000.0).coerceAtLeast(0.5)
-                    val down = ((cur.rxBytes - prev.rxBytes).coerceAtLeast(0L) / secs).toLong()
-                    val up = ((cur.txBytes - prev.txBytes).coerceAtLeast(0L) / secs).toLong()
+                if (speed != null) {
+                    val down = speed.downBytesPerSec
+                    val up = speed.upBytesPerSec
                     // Publish to state for the optional Home speed line / status widget regardless of
                     // the notif toggle.
                     val statusWidgets = hasStatusWidgets()
@@ -3218,7 +3209,6 @@ class OlcboxVpnService : VpnService() {
                 } else if (showRoomsInNotif) {
                     updateNotification(base)
                 }
-                prev = cur
                 delay(interval)
             }
         }
@@ -3226,8 +3216,7 @@ class OlcboxVpnService : VpnService() {
 
     private fun startWatchdog() {
         watchdogJob?.cancel()
-        watchdogTunStats = null
-        watchdogStalledSamples = 0
+        RustAndroidVpn.resetTunHealth()
         val mode = connectionMode
         startSpeedUpdater()
         startNotifPing()
@@ -4061,101 +4050,30 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun handleRtcLine(line: String) {
-        val lowerLine = line.lowercase()
-
-        if (lowerLine.contains("ice connection state changed: connected") ||
-            lowerLine.contains("peer connection state changed: connected") ||
-            lowerLine.contains("socks5 server listening")
-        ) {
-            markRtcConnected()
-            return
+        RustAndroidVpn.observeRtcLine(
+            line = line,
+            nowMs = System.currentTimeMillis(),
+            statusConnected = OlcboxVpnState.status.value is VpnStatus.Connected,
+            mode = connectionMode,
+        )?.let { recovery ->
+            requestTransportRecovery(recovery.reason, recovery.fullRestart)
         }
-
-        if (lowerLine.contains("ice connection state changed: failed") ||
-            lowerLine.contains("peer connection state changed: failed")
-        ) {
-            noteRtcFailure(
-                reason = "RTC failed",
-                fullRestart = shouldRecreateTunnelOnRtcLoss(),
-                threshold = RTC_FAILED_RECOVERY_THRESHOLD
-            )
-            return
-        }
-
-        if (lowerLine.contains("ice connection state changed: closed") ||
-            lowerLine.contains("peer connection state changed: closed")
-        ) {
-            noteRtcFailure(
-                reason = "RTC closed",
-                fullRestart = shouldRecreateTunnelOnRtcLoss(),
-                threshold = RTC_CLOSED_RECOVERY_THRESHOLD
-            )
-            return
-        }
-
-        if (lowerLine.contains("network is unreachable") ||
-            lowerLine.contains("use of closed network connection") ||
-            lowerLine.contains("read/write on closed pipe")
-        ) {
-            noteRtcFailure(
-                reason = "RTC network path is closed",
-                fullRestart = false,
-                threshold = RTC_IO_ERROR_RECOVERY_THRESHOLD
-            )
-        }
-    }
-
-    private fun markRtcConnected() {
-        lastRtcConnectedAtMs = System.currentTimeMillis()
-        lastRtcFailureAtMs = 0L
-        rtcFailureCount = 0
     }
 
     private fun resetRtcHealthState() {
-        lastRtcConnectedAtMs = System.currentTimeMillis()
-        lastRtcFailureAtMs = 0L
-        rtcFailureCount = 0
-    }
-
-    private fun noteRtcFailure(
-        reason: String,
-        fullRestart: Boolean,
-        threshold: Int
-    ) {
-        if (OlcboxVpnState.status.value !is VpnStatus.Connected) return
-
-        val now = System.currentTimeMillis()
-        if (now - lastRtcConnectedAtMs < RTC_RECOVERY_GRACE_MS) return
-
-        rtcFailureCount = if (now - lastRtcFailureAtMs <= RTC_FAILURE_WINDOW_MS) {
-            rtcFailureCount + 1
-        } else {
-            1
-        }
-        lastRtcFailureAtMs = now
-
-        if (rtcFailureCount >= threshold) {
-            requestTransportRecovery(reason, fullRestart)
-        }
+        RustAndroidVpn.resetRtc()
     }
 
     private fun isTunTrafficStalled(): Boolean {
-        val stats = readTun2SocksStats() ?: return false
-        val previous = watchdogTunStats
-        watchdogTunStats = stats
-
-        if (previous == null) return false
-
-        val txDelta = stats.txPackets - previous.txPackets
-        val rxDelta = stats.rxPackets - previous.rxPackets
-        if (txDelta >= WATCHDOG_STALLED_TX_PACKET_DELTA && rxDelta <= 0L && coreRunning()) {
-            watchdogStalledSamples++
-        } else if (rxDelta > 0L || txDelta <= 0L) {
-            watchdogStalledSamples = 0
-        }
-
-        return watchdogStalledSamples >= WATCHDOG_STALLED_SAMPLE_LIMIT
+        return RustAndroidVpn.observeTunStats(readTun2SocksStats()?.toRust(), coreRunning())
     }
+
+    private fun Tun2SocksStats.toRust() = RustAndroidVpn.TunStats(
+        txPackets = txPackets,
+        txBytes = txBytes,
+        rxPackets = rxPackets,
+        rxBytes = rxBytes,
+    )
 
     private fun readTun2SocksStats(): Tun2SocksStats? {
         if (!nativeLibrariesLoaded || !tun2socksStarted) return null
@@ -4260,20 +4178,14 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun nextReconnectRetryDelay(baseDelayMs: Long): Long {
-        val multiplier = 1L shl reconnectAttempt.coerceAtMost(MAX_RECONNECT_BACKOFF_POWER)
-        reconnectAttempt++
-        return (baseDelayMs * multiplier).coerceAtMost(RECONNECT_RETRY_MAX_DELAY_MS)
+        return RustAndroidVpn.nextRetryDelayMs(baseDelayMs)
     }
 
     private fun resetRecoveryState() {
         recoveryRequestedForGeneration = 0L
-        reconnectAttempt = 0
+        RustAndroidVpn.resetRecovery()
         recoveryJob?.cancel()
         recoveryJob = null
-    }
-
-    private fun shouldRecreateTunnelOnRtcLoss(): Boolean {
-        return connectionMode == AndroidConnectionMode.Tun
     }
 
     private fun cleanupVpnInterface() {
@@ -4283,28 +4195,22 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun canReconnectTransportInPlace(): Boolean {
-        return when (connectionMode) {
-            AndroidConnectionMode.Tun -> vpnInterface != null && tun2socksThread?.isAlive == true
-            AndroidConnectionMode.Proxy, AndroidConnectionMode.Tproxy -> coreRunning()
-        }
+        return RustAndroidVpn.canReconnectInPlace(connectionMode, runtimeSnapshot())
     }
 
     private fun shouldRestartForStartCommand(): Boolean {
-        return when (OlcboxVpnState.status.value) {
-            VpnStatus.Connected,
-            VpnStatus.Connecting,
-            VpnStatus.Reconnecting,
-            VpnStatus.Stopping -> true
-            VpnStatus.Disconnected,
-            is VpnStatus.Error -> false
-        } ||
-            startupJob?.isActive == true ||
-            cleanupJob?.isActive == true ||
-            vpnInterface != null ||
-            tun2socksThread != null ||
-            socksProxy != null ||
-            coreRunning()
+        return RustAndroidVpn.shouldRestart(OlcboxVpnState.status.value, runtimeSnapshot())
     }
+
+    private fun runtimeSnapshot() = RustAndroidVpn.RuntimeSnapshot(
+        vpnInterface = vpnInterface != null,
+        tun2socksThread = tun2socksThread != null,
+        tun2socksAlive = tun2socksThread?.isAlive == true,
+        socksProxy = socksProxy != null,
+        coreRunning = coreRunning(),
+        startupJobActive = startupJob?.isActive == true,
+        cleanupJobActive = cleanupJob?.isActive == true,
+    )
 
     private fun registerNetworkMonitor() {
         if (isCallbackRegistered) return
@@ -4854,17 +4760,8 @@ class OlcboxVpnService : VpnService() {
         // switches are event-driven (the NetworkCallback), so the watchdog is only a backstop for a
         // silently-dead core / stalled traffic — safe to poll far less often when saving power.
         private const val ENERGY_SAVER_SPEED_INTERVAL_MS = 6_000L
-        private const val WATCHDOG_STALLED_TX_PACKET_DELTA = 8L
-        private const val WATCHDOG_STALLED_SAMPLE_LIMIT = 3
-        private const val RTC_RECOVERY_GRACE_MS = 2_500L
-        private const val RTC_FAILURE_WINDOW_MS = 6_000L
-        private const val RTC_FAILED_RECOVERY_THRESHOLD = 1
-        private const val RTC_CLOSED_RECOVERY_THRESHOLD = 2
-        private const val RTC_IO_ERROR_RECOVERY_THRESHOLD = 3
         private const val RECONNECT_RETRY_BASE_DELAY_MS = 4_000L
         private const val NETWORK_RETRY_BASE_DELAY_MS = 8_000L
-        private const val RECONNECT_RETRY_MAX_DELAY_MS = 30_000L
-        private const val MAX_RECONNECT_BACKOFF_POWER = 3
         private const val SOCKS_RELEASE_TIMEOUT_MS = 2_500L
         private const val SOCKS_RELEASE_QUICK_TIMEOUT_MS = 500L
         private const val SOCKS_RELEASE_POLL_MS = 100L

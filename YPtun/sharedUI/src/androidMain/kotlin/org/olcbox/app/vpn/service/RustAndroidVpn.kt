@@ -240,6 +240,22 @@ internal object RustAndroidVpn {
     fun nextRetryDelayMs(baseDelayMs: Long): Long =
         runtime.nextRetryDelayMs(baseDelayMs.coerceAtLeast(0L).toULong()).toLong()
 
+    fun resetRtc(nowMs: Long = System.currentTimeMillis()) {
+        runtime.resetRtc(nowMs.coerceAtLeast(0L).toULong())
+    }
+
+    fun resetTunHealth() {
+        runtime.resetTunHealth()
+    }
+
+    fun resetSpeed() {
+        runtime.resetSpeed()
+    }
+
+    fun resetRetry() {
+        runtime.resetRetry()
+    }
+
     fun resetRecovery(nowMs: Long = System.currentTimeMillis()) {
         runtime.resetRecovery(nowMs.coerceAtLeast(0L).toULong())
     }

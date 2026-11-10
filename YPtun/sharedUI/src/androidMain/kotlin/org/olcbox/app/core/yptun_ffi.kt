@@ -886,6 +886,14 @@ internal open class UniffiVTableCallbackInterfaceLogSink(
 
 
 
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is
 // rather `InterfaceTooLargeException`, caused by too many methods
@@ -1003,6 +1011,14 @@ fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_observe_tun_stats(
 ): Short
 fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_recovery(
 ): Short
+fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_retry(
+): Short
+fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_rtc(
+): Short
+fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_speed(
+): Short
+fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_tun_health(
+): Short
 fun uniffi_yptun_ffi_checksum_method_androidvpnruntime_speed_tick(
 ): Short
 fun uniffi_yptun_ffi_checksum_method_coresession_any_needs_geo_files(
@@ -1110,6 +1126,14 @@ fun uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_rtc_line(`ptr`: Pointer
 fun uniffi_yptun_ffi_fn_method_androidvpnruntime_observe_tun_stats(`ptr`: Pointer,`stats`: RustBuffer.ByValue,`coreRunning`: Byte,uniffi_out_err: UniffiRustCallStatus,
 ): Byte
 fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_recovery(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+): Unit
+fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_retry(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+): Unit
+fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_rtc(`ptr`: Pointer,`nowMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+): Unit
+fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_speed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+): Unit
+fun uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_tun_health(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
 ): Unit
 fun uniffi_yptun_ffi_fn_method_androidvpnruntime_speed_tick(`ptr`: Pointer,`stats`: RustBuffer.ByValue,`intervalMs`: Long,uniffi_out_err: UniffiRustCallStatus,
 ): RustBuffer.ByValue
@@ -1538,6 +1562,18 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_recovery() != 25422.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_retry() != 44783.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_rtc() != 18673.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_speed() != 29989.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_reset_tun_health() != 21715.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_yptun_ffi_checksum_method_androidvpnruntime_speed_tick() != 14936.toShort()) {
@@ -2083,6 +2119,14 @@ public interface AndroidVpnRuntimeInterface {
 
     fun `resetRecovery`(`nowMs`: kotlin.ULong)
 
+    fun `resetRetry`()
+
+    fun `resetRtc`(`nowMs`: kotlin.ULong)
+
+    fun `resetSpeed`()
+
+    fun `resetTunHealth`()
+
     fun `speedTick`(`stats`: AndroidTunStats?, `intervalMs`: kotlin.ULong): AndroidSpeed?
 
     companion object
@@ -2222,6 +2266,50 @@ open class AndroidVpnRuntime: Disposable, AutoCloseable, AndroidVpnRuntimeInterf
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_recovery(
         it, FfiConverterULong.lower(`nowMs`),_status)
+}
+    }
+
+
+
+    override fun `resetRetry`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_retry(
+        it, _status)
+}
+    }
+
+
+
+    override fun `resetRtc`(`nowMs`: kotlin.ULong)
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_rtc(
+        it, FfiConverterULong.lower(`nowMs`),_status)
+}
+    }
+
+
+
+    override fun `resetSpeed`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_speed(
+        it, _status)
+}
+    }
+
+
+
+    override fun `resetTunHealth`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_yptun_ffi_fn_method_androidvpnruntime_reset_tun_health(
+        it, _status)
 }
     }
 
