@@ -81,6 +81,8 @@ targets:
         product: YPtunRustBridge
       - package: Tun2SocksKit
         product: Tun2SocksKit
+      - sdk: UIKit.framework
+      - sdk: libresolv.tbd
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
@@ -161,6 +163,7 @@ targets:
         product: YPtunRustBridge
       - package: Tun2SocksKit
         product: Tun2SocksKit
+      - sdk: libresolv.tbd
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
