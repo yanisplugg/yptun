@@ -17,6 +17,15 @@
 -keep class wdttmobile.** { *; }
 -keep class awg.** { *; }
 
+# --- Rust yptun-core (UniFFI/JNA) ---
+# UniFFI registers its generated native entrypoints and callback classes by their runtime names. Keep
+# the generated package intact in minified builds; the native Rust library is bundled in src/main/jniLibs.
+-keep class org.olcbox.app.core.** { *; }
+-keep interface org.olcbox.app.core.** { *; }
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.Library { *; }
+-dontwarn com.sun.jna.**
+
 # --- Trust Tunnel (AdGuard) client AAR — JNI bridge (native <-> Kotlin by class/method name) ---
 # libtrusttunnel_android.so calls back into VpnClient/DeepLink/VpnClientListener by name (native
 # methods + the listener callbacks), so renaming/stripping them breaks the bridge at runtime.

@@ -363,6 +363,9 @@ internal class DesktopEngineController(
     ) {
         val profile = config.proxy
         check(profile != null && profile.isComplete()) { "No proxy configured" }
+        check(profile.type != ProxyProfile.TYPE_MIERU) {
+            "Mieru is currently available only in the Android build (standalone client process)."
+        }
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort(listenPort)
@@ -464,6 +467,8 @@ internal class DesktopEngineController(
         // Trust Tunnel (AdGuard) — like AmneziaWG, raises a local SOCKS5 (its own client, SOCKS-only)
         // that the proxy routes through; a full TCP/UDP tunnel over HTTP2/QUIC.
         val isTrustTunnel = profile.type == ProxyProfile.TYPE_TRUSTTUNNEL
+        val isOpenVpn = profile.type == ProxyProfile.TYPE_OPENVPN
+        val hasOpenVpn = isOpenVpn || secondProfile?.type == ProxyProfile.TYPE_OPENVPN
         val effectiveProfile = when {
             isAwg -> prepareAmneziaWgProxy(profile, listenPort)
             isTrustTunnel -> prepareTrustTunnelProxy(profile, listenPort)
@@ -475,7 +480,7 @@ internal class DesktopEngineController(
             // (Telegram) survived. The host OS resolver does this once, reliably.
             else -> dialByServerIp(profile)
         }
-        val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel
+        val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel || hasOpenVpn
 
         val traffic = JvmVpnSettings.loadTraffic()
         val routing = loadRoutingExpandingAsn()
@@ -647,6 +652,7 @@ internal class DesktopEngineController(
         } else {
             if (isAwg) log("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4")
             if (isHy2) log("Hysteria2 outbound: QUIC allowed + sniff-override→IPv4")
+            if (hasOpenVpn) log("OpenVPN endpoint: native sing-box 1.14 (TCP/UDP allowed)")
             val json = SingBoxConfig.build(
                 profile = effectiveProfile,
                 listenPort = listenPort,
@@ -1102,6 +1108,9 @@ internal class DesktopEngineController(
         deviceId: String,
     ) {
         val vk = config.vkturn
+        check(vk?.usesTurnable() != true) {
+            "Turnable пока поддерживается только Android-сборкой (клиент — отдельный Android-процесс)."
+        }
         // Clamp the exit's WireGuard/AmneziaWG MTU to what the VK TURN + DTLS + RTP-obf path can carry
         // — a panel link's 1280/1420 does not fail loudly, it just silently drops full-size segments.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)

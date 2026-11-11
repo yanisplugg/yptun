@@ -15,6 +15,7 @@ object ConfigShareService {
     fun shareLink(config: LocationConfig, universal: Boolean): String {
         val hasOwnLink = when (config.engine) {
             EngineType.MasterDns, EngineType.OpenFlux, EngineType.Snolc -> false
+            EngineType.VkTurn -> config.vkturn?.usesTurnable() != true
             else -> true
         }
         return if (universal || !hasOwnLink) YptunInboundCodec.compose(config) else olcRtcUri(config)
@@ -28,6 +29,7 @@ object ConfigShareService {
         // core has no freeturn:// link, so re-emit the wdtt-server's qwdtt:// quick link instead.
         if (normalized.engine == EngineType.VkTurn) {
             val vk = normalized.vkturn
+            if (vk?.usesTurnable() == true) return YptunInboundCodec.compose(normalized)
             if (vk?.usesWdtt() == true) return QwdttUriParser.compose(normalized.name, vk)
             if (vk?.usesCsqtt() == true) return CsqttUriParser.compose(vk, normalized.name)
             return vk?.uri.orEmpty()

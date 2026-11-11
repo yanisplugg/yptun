@@ -1,0 +1,191 @@
+package connection
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/theairblow/turnable/pkg/common"
+)
+
+// EventStream is a single-slot, latest-wins ConnectEvent channel with idempotent close
+type EventStream struct {
+	ch     chan ConnectEvent // event channel, one pending event
+	mu     sync.Mutex        // guards closed
+	closed bool              // the stream is closed
+}
+
+// NewEventStream creates an empty EventStream
+func NewEventStream() *EventStream {
+	return &EventStream{ch: make(chan ConnectEvent, 1)}
+}
+
+// Chan returns the read-only event channel, closed once the stream is done for good
+func (s *EventStream) Chan() <-chan ConnectEvent {
+	return s.ch
+}
+
+// Publish delivers ev, replacing any unread pending event instead of blocking
+func (s *EventStream) Publish(ev ConnectEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.ch <- ev:
+	default:
+		select {
+		case <-s.ch:
+		default:
+		}
+		select {
+		case s.ch <- ev:
+		default:
+		}
+	}
+}
+
+// Close closes the stream; safe to call more than once or concurrently
+func (s *EventStream) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.closed = true
+		close(s.ch)
+	}
+}
+
+// Closed reports whether the stream has been closed
+func (s *EventStream) Closed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+// Fail publishes a fatal err and closes the stream
+func (s *EventStream) Fail(err error) {
+	s.Publish(ConnectEvent{Connected: false, Err: err})
+	s.Close()
+}
+
+// ReconnectBackoffInit is the initial wait between platform-error reconnect attempts
+const ReconnectBackoffInit = 5 * time.Second
+
+// ReconnectBackoffMax is the maximum wait between platform-error reconnect attempts
+const ReconnectBackoffMax = 5 * time.Minute
+
+// reconnectImmediateWait is the fixed (non-growing) wait used for transient network errors
+const reconnectImmediateWait = 1 * time.Second
+
+// reconnectAction describes how a failed connection attempt should be retried
+type reconnectAction int
+
+const (
+	reconnectBackoff   reconnectAction = iota // platform/application error: retry with exponential backoff
+	reconnectImmediate                        // transient network error: wait for connectivity, retry at a fixed pace
+	reconnectFatal                            // non-retryable error: stop trying
+)
+
+// classifyReconnectError decides the retry strategy for a failed connection attempt
+func classifyReconnectError(err error) reconnectAction {
+	if errors.Is(err, ErrFatal) {
+		return reconnectFatal
+	}
+	if isTransientNetworkError(err) {
+		return reconnectImmediate
+	}
+	return reconnectBackoff
+}
+
+// isTransientNetworkError reports whether err looks like a transient connectivity failure
+func isTransientNetworkError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	for _, errno := range []syscall.Errno{syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.EPIPE} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, kw := range []string{"eof", "connection refused", "connection reset", "tls", "ssl", "certificate", "handshake", "timeout", "no route to host", "network is unreachable", "broken pipe"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// RunReconnectLoop retries connect until it succeeds, backing off or giving up by error class; ctx must outlive sessions, since connect may cancel the current one
+func RunReconnectLoop(ctx context.Context, log *slog.Logger, reconnecting *atomic.Bool, events *EventStream, reason string, connect func() error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	if events.Closed() || !reconnecting.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+		defer reconnecting.Store(false)
+		if reason == "initial connect" {
+			log.Debug("starting reconnect", "reason", reason)
+		} else {
+			log.Info("starting reconnect", "reason", reason)
+		}
+
+		delay := ReconnectBackoffInit
+		for {
+			err := connect()
+			if err == nil {
+				events.Publish(ConnectEvent{Connected: true})
+				return
+			}
+
+			action := classifyReconnectError(err)
+			events.Publish(ConnectEvent{Connected: false, Err: err})
+
+			if action == reconnectFatal {
+				log.Error("reconnect stopped: fatal error", "error", err)
+				events.Close()
+				return
+			}
+
+			wait := delay
+			if action == reconnectImmediate {
+				wait = reconnectImmediateWait
+				delay = ReconnectBackoffInit
+				if _, werr := common.WaitForConnectivity(ctx); werr != nil {
+					events.Close()
+					return
+				}
+			} else {
+				delay = min(delay*2, ReconnectBackoffMax)
+			}
+
+			log.Warn("reconnect attempt failed, retrying", "immediate", action == reconnectImmediate, "wait", wait, "error", err)
+
+			select {
+			case <-ctx.Done():
+				events.Close()
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+}

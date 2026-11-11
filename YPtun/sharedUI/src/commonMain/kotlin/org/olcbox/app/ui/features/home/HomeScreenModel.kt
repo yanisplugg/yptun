@@ -25,6 +25,7 @@ import kotlinx.coroutines.sync.withLock
 import org.olcbox.app.data.datasource.createProxyHttpClient
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
+import org.olcbox.app.data.importer.OpenVpnParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
@@ -922,6 +923,10 @@ class HomeScreenViewModel(
         if (text.startsWith("openflux://", ignoreCase = true)) {
             return "This OpenFlux link can't be imported: only Yandex / Mail.ru / cups.online / Avito / direct " +
                 "transports are supported (a session needs a secret), or the link is damaged."
+        }
+        if (OpenVpnParser.looksLikeOpenVpn(text) && OpenVpnParser.parse(text) == null) {
+            return "This OpenVPN profile is not self-contained. Embed its CA/certificate/private key, " +
+                "control key and credentials in the .ovpn file instead of referencing separate files."
         }
         return if (isSingleInboundLink && YptunInboundCodec.parse(text) == null) {
             "This YPtun link is damaged — characters were lost in transit. " +

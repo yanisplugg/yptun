@@ -762,7 +762,9 @@ class LocationsRepositoryImplTest {
         // The retry is the Compatibility-mode attempt: it drops the identity headers (x-hwid and
         // the device descriptors). The User-Agent itself stays the app's own — the browser-UA
         // fallback this test used to assert no longer exists in the fetch path.
-        val retry = hwids.indexOfFirst { it == null }
+        val retry = hwids.indices.firstOrNull { index ->
+            hwids[index] == null && userAgents[index] == CurrentAppInfo.userAgent
+        } ?: -1
         assertTrue(retry > 0, "expected an anonymous retry after the identity attempt")
         assertEquals(CurrentAppInfo.userAgent, userAgents[retry])
         assertEquals("room", bundle.locations.single().location.id)
@@ -1144,7 +1146,12 @@ class LocationsRepositoryImplTest {
         val link = "vless://11111111-2222-3333-4444-555555555555@a.test:443?type=tcp&security=tls#A"
         val seen = mutableListOf<Pair<String, String?>>()
         val engine = MockEngine { request ->
-            seen += request.headers[HttpHeaders.UserAgent].orEmpty() to request.headers["x-hwid"]
+            val userAgent = request.headers[HttpHeaders.UserAgent].orEmpty()
+            // Branding discovery deliberately impersonates a browser and is unrelated to the user's
+            // subscription-UA privacy choice this helper verifies.
+            if (!userAgent.startsWith("Mozilla/5.0")) {
+                seen += userAgent to request.headers["x-hwid"]
+            }
             respond(link)
         }
         val source = FakeLocationsDataSource().also { it.behavior = behavior }

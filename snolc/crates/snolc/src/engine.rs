@@ -21,7 +21,7 @@ use crate::core_io::{MuxDatagramIo, RegisteredDatagramIo, RegisteredIo, is_regis
 use crate::events::{Event, EventReceiver, Lifecycle, PlatformEvent, Snapshot};
 use crate::loader::{LoadError, LoadedModule, ModuleByteIo};
 use crate::logging::{FileLogger, LogError};
-use crate::mux::{MuxError, MuxSession, MuxStream, OpenFlowFuture};
+use crate::mux::{MuxError, MuxSession, MuxStream, OpenFlowFuture, UserStreamSlots};
 use crate::stack::{
     FlowMetadata, PacketTcpPort, PacketUdpPort, SharedStackBridge, StackError, TcpStreamPort,
     UdpDatagramPort,
@@ -104,6 +104,8 @@ struct PolicyAttachState {
 
 struct EstablishedSession {
     mux: Option<MuxSession<ModuleByteIo>>,
+    /// Same counter as the session's; usable while `mux` is inside `accepting`.
+    slots: UserStreamSlots,
     policy_session: u64,
     accepting: Option<AcceptFlowFuture>,
     responding: Option<RespondFlowFuture>,
@@ -1118,6 +1120,7 @@ impl TunnelRuntime {
                             None => return self.fail("yamux session is unavailable".into(), false),
                         };
                         self.state = TunnelState::Established(Box::new(EstablishedSession {
+                            slots: mux.slots(),
                             mux: Some(mux),
                             policy_session,
                             accepting: None,
@@ -1386,9 +1389,7 @@ impl EstablishedSession {
                             response.reason.as_bytes(),
                         )?;
                     }
-                    if let Some(mux) = &mut self.mux {
-                        mux.release_flow();
-                    }
+                    self.slots.release();
                 }
                 Err(error) => {
                     if let Some((adapter, flow)) = pending.adapter_flow {
@@ -1478,6 +1479,22 @@ impl EstablishedSession {
             }
             return Ok(());
         };
+        // Every user stream of the session is in use: refuse THIS flow (the app sees one failed
+        // connection and retries) and keep the session. Opening anyway made `begin_open_flow_confirmed`
+        // fail with `StreamLimit`, a session error that closed the tunnel and every live connection.
+        if let Some(mux) = &self.mux
+            && !mux.has_free_user_stream()
+        {
+            if let Some((adapter, flow)) = pending.adapter_flow {
+                modules[adapter].adapter_complete_flow(
+                    flow,
+                    snolc_abi::STATUS_RESOURCE,
+                    b"stream limit",
+                )?;
+            }
+            self.client_pending = None;
+            return Ok(());
+        }
         if !pending.admitted {
             let metadata = pending.metadata.abi();
             match modules[binding.policy].policy_admit_flow(self.policy_session, &metadata, context)
@@ -1774,29 +1791,33 @@ impl EstablishedSession {
             if let Some((adapter, flow)) = pending.adapter_flow.take() {
                 let _ = modules[adapter].adapter_close_flow(flow);
             }
-            if let Some(mux) = &mut self.mux {
-                mux.release_flow();
-            }
+            self.slots.release();
         }
     }
 
     fn reap_closed(&mut self, modules: &[LoadedModule]) {
         let mut closed = Vec::new();
+        let mut finished = 0usize;
         self.active.retain(|flow| {
             if is_registered(flow.mux_handle) {
                 true
             } else {
+                finished += 1;
                 if let Some(adapter_flow) = flow.adapter_flow {
                     closed.push(adapter_flow);
                 }
                 false
             }
         });
-        if let Some(mux) = &mut self.mux {
-            for (adapter, flow) in closed {
-                let _ = modules[adapter].adapter_close_flow(flow);
-                mux.release_flow();
-            }
+        // Neither step may depend on `self.mux`: on the server it is moved into the pending accept for
+        // almost the whole session, and skipping the release here leaked one stream slot per closed flow
+        // until "yamux user stream limit is exhausted" reset the tunnel for everyone on it. A packet-port
+        // flow has no adapter flow but held a slot all the same.
+        for (adapter, flow) in closed {
+            let _ = modules[adapter].adapter_close_flow(flow);
+        }
+        for _ in 0..finished {
+            self.slots.release();
         }
     }
 }

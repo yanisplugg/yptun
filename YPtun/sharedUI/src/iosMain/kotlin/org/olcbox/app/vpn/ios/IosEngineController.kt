@@ -160,6 +160,9 @@ internal class IosEngineController(
     ) {
         val profile = config.proxy
         check(profile != null && profile.isComplete()) { "No proxy configured" }
+        check(profile.type != ProxyProfile.TYPE_MIERU) {
+            "Mieru is not available on iOS (the integration uses a standalone Android process)."
+        }
 
         val chained = config.engine == EngineType.Chain
         val chainPort = chainOlcrtcPort(listenPort)
@@ -185,6 +188,8 @@ internal class IosEngineController(
         val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
         val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
         val isNaive = profile.type == ProxyProfile.TYPE_NAIVE
+        val isOpenVpn = profile.type == ProxyProfile.TYPE_OPENVPN
+        val hasOpenVpn = isOpenVpn || secondProfile?.type == ProxyProfile.TYPE_OPENVPN
         if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
             throw IllegalStateException("Trust Tunnel на iOS пока не поддерживается")
         }
@@ -204,7 +209,7 @@ internal class IosEngineController(
 
         // The app-wide engine choice applies only when this server's own core is "Auto".
         val globalCore = IosSharedStore.loadAppBehavior().globalProxyCore
-        activeProxyCore = if (isAwg || isHy2 || isNaive) ProxyCore.SingBox else config.resolvedCore(globalCore)
+        activeProxyCore = if (isAwg || isHy2 || isNaive || hasOpenVpn) ProxyCore.SingBox else config.resolvedCore(globalCore)
         val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
         if (!effectiveProfile.rawXrayConfig.isNullOrBlank()) {
             if (activeProxyCore != ProxyCore.Xray) log("Raw Xray config present → forcing Xray core")
@@ -320,6 +325,7 @@ internal class IosEngineController(
             if (isAwg) log("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4")
             if (isHy2) log("Hysteria2 outbound: native sing-box (QUIC allowed)")
             if (isNaive) log("Naive outbound: native sing-box")
+            if (hasOpenVpn) log("OpenVPN endpoint: native sing-box 1.14 (TCP/UDP allowed)")
             val json = SingBoxConfig.build(
                 profile = effectiveProfile,
                 listenPort = listenPort,
@@ -335,7 +341,7 @@ internal class IosEngineController(
                 routingProfile = routingProfile,
                 singboxGeositeBase = profilesState.singboxGeositeBase,
                 singboxGeoipBase = profilesState.singboxGeoipBase,
-                blockQuic = !(isAwg || isHy2 || (isNaive && effectiveProfile.naiveQuic)),
+                blockQuic = !(isAwg || isHy2 || hasOpenVpn || (isNaive && effectiveProfile.naiveQuic)),
                 sniffOverrideDestination = isAwg,
                 secondProfile = secondProfile,
                 fakeDnsSpec = config.fakeDns,
@@ -508,6 +514,9 @@ internal class IosEngineController(
         val vk = config.vkturn
         // csqtt is a Rust executable run as a subprocess — iOS cannot spawn processes.
         check(vk?.usesCsqtt() != true) { "csqtt не поддерживается на iOS (ядро — отдельный процесс). Выбери freeturn или qWDTT." }
+        check(vk?.usesTurnable() != true) {
+            "Turnable не поддерживается на iOS (ядро — отдельный Android-процесс). Выбери freeturn или qWDTT."
+        }
         // Clamp the exit's WireGuard/AmneziaWG MTU to what VK TURN + DTLS + RTP-obf can carry.
         var profile = VkTurnComposer.clampVkTurnMtu(config.proxy)
         val usesWdtt = vk?.usesWdtt() == true

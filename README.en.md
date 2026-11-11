@@ -4,7 +4,7 @@
 
 ### Multi-protocol network client · Android, Windows and Linux · iOS in beta
 
-*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **MasterDNS** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, a transport over video-conferencing services.*
+*VLESS · Reality · XHTTP over **Xray** and **sing-box**, **OpenVPN**, **Hysteria2** (QUIC), obfuscated **AmneziaWG**, a tunnel through **VK-TURN** calls, the **MasterDNS** DNS tunnel, a standalone Telegram proxy over **WARP** — and **olcRTC**, a transport over video-conferencing services.*
 
 <br>
 
@@ -66,7 +66,7 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 | Core | Version | Purpose |
 |---|---|---|
 | [Xray-core](https://github.com/XTLS/Xray-core) | 26.9.30 (local patches) | VLESS · Reality · XHTTP |
-| [sing-box](https://github.com/SagerNet/sing-box) | 1.14.1 | Hysteria2, TUN, routing |
+| [sing-box](https://github.com/SagerNet/sing-box) | 1.14.4 | OpenVPN, Hysteria2, TUN, routing |
 | [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) | amneziawg-go | obfuscated WireGuard |
 | [olcRTC](https://github.com/ghostlane-project/olcrtc) | ghostlane fork | traffic over video calls |
 | [free-turn-proxy (VK-TURN)](https://github.com/samosvalishe/free-turn-proxy) | 1.3.2 | tunnel over VK calls |
@@ -86,12 +86,12 @@ Most VPN clients give you one core and one way to connect. **YPtun gives you a t
 | | |
 |---|---|
 | **Multiple engines** | Xray, sing-box, AmneziaWG, VK-TURN, MasterDNS — the core is picked per protocol automatically or by hand. |
-| **Protocols** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
+| **Protocols** | VLESS · VMess · Trojan · Shadowsocks · OpenVPN · Hysteria2 · WireGuard / AmneziaWG |
 | **Transports** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · uTLS fingerprints |
 | **MasterDNS (DNS tunnel)** | A tunnel over DNS queries (MasterDnsVPN: custom ARQ transport, several resolvers at once, packet duplication) — an option for networks where only DNS is available. One-tap server install on a VPS over SSH. |
 | **Telegram proxy over WARP** | A lightweight background service: a WARP tunnel + a local SOCKS5 for Telegram, independent of the main connection. |
 | **olcRTC** | The [olcRTC](https://github.com/ghostlane-project/olcrtc) transport — traffic rides real video-call services (Jazz, MTS Link, VK Calls, Telemost, Jitsi); traffic is carried over these services. |
-| **Smart import** | vless/vmess/trojan/ss links, base64, JSON panels, **full raw Xray / sing-box configs** (applied as-is), AmneziaWG `.conf`/QR, olcRTC URIs, Happ profiles, bulk link-list import. |
+| **Smart import** | vless/vmess/trojan/ss links, base64, JSON panels, **full raw Xray / sing-box configs**, self-contained OpenVPN `.ovpn`, AmneziaWG `.conf`/QR, olcRTC URIs, Happ profiles, bulk link-list import. |
 | **DNS & routing** | Happ-compatible routing profiles (deny/direct/proxy by `geoip:`/`geosite:`/`asn:`/domains/CIDR), v2rayNG-style per-rule routing, an RU-domain filter toggle, custom DNS and fakedns. |
 | **Auto server pick** | One-tap connect to the fastest reachable node, with failover. |
 | **HTTP proxy** | A Happ-compatible local HTTP proxy on top of the active engine. |

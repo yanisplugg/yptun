@@ -102,6 +102,8 @@ import org.olcbox.app.vpn.openflux.OpenFluxInstallOptions
 import org.olcbox.app.vpn.snolc.SnolcInstallOptions
 import org.olcbox.app.vpn.snolc.rememberSnolcServerInstaller
 import org.olcbox.app.vpn.openflux.rememberOpenFluxServerInstaller
+import org.olcbox.app.vpn.turnable.TurnableInstallOptions
+import org.olcbox.app.vpn.turnable.rememberTurnableServerInstaller
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -240,6 +242,15 @@ fun LocationSettingsScreen(
         )
     }
 
+    var showTurnableInstall by remember { mutableStateOf(false) }
+    if (showTurnableInstall) {
+        TurnableInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
+            onDismiss = { showTurnableInstall = false }
+        )
+    }
+
     var showOlcRtcInstall by remember { mutableStateOf(false) }
     if (showOlcRtcInstall) {
         OlcRtcInstallDialog(
@@ -324,6 +335,7 @@ fun LocationSettingsScreen(
         config.engine == EngineType.VkTurn -> when (viewModel.editingVkTurn.core) {
             VkTurnConfig.CORE_WDTT -> { { showWdttInstall = true } }
             VkTurnConfig.CORE_CSQTT -> { { showCsqttInstall = true } }
+            VkTurnConfig.CORE_TURNABLE -> { { showTurnableInstall = true } }
             else -> { { showFreeturnInstall = true } }
         }
         config.engine == EngineType.MasterDns -> { { showMasterDnsInstall = true } }
@@ -427,7 +439,8 @@ fun LocationSettingsScreen(
                         }
                         // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
                         if ((config.engine == EngineType.Standard || config.engine == EngineType.Chain) &&
-                            !viewModel.isWireguardEngine
+                            !viewModel.isWireguardEngine &&
+                            listOfNotNull(config.proxy, config.proxy2).none { it.type == ProxyProfile.TYPE_OPENVPN }
                         ) {
                             SettingsCardDivider()
                             CoreRow(
@@ -631,6 +644,7 @@ fun LocationSettingsScreen(
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true },
                     onCsqttAutoInstall = { showCsqttInstall = true },
+                    onTurnableAutoInstall = { showTurnableInstall = true },
                     onFreeturnAutoInstall = { showFreeturnInstall = true }
                 )
             }
@@ -1033,7 +1047,7 @@ private fun ProxyField(
             value = link,
             onValueChange = onChange,
             label = { Text(LocalStrings.current.proxyLinkOrConfig) },
-            placeholder = { Text("vless://…  or  { \"type\": … }") },
+            placeholder = { Text("vless://… / mieru://… / { \"type\": … }") },
             enabled = enabled,
             isError = error != null,
             supportingText = {
@@ -1203,14 +1217,11 @@ private fun LazyListScope.vkTurnSection(
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
     onWdttAutoInstall: () -> Unit,
     onCsqttAutoInstall: () -> Unit,
+    onTurnableAutoInstall: () -> Unit,
     onFreeturnAutoInstall: () -> Unit
 ) {
-    item {
-        VkTurnLinksField(
-            value = draft.vkLink,
-            enabled = enabled,
-            onChange = { v -> onChange { it.copy(vkLink = v) } }
-        )
+    if (draft.core != VkTurnConfig.CORE_TURNABLE) item {
+        VkTurnLinksField(value = draft.vkLink, enabled = enabled) { v -> onChange { it.copy(vkLink = v) } }
     }
 
     // VK-TURN transport core: freeturn (default) vs WDTT. WDTT aggregates a single WG flow across the
@@ -1222,18 +1233,31 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео; csqtt — туннель поверх TURN/RTP (Rust), только Android и ПК"
+                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация; csqtt — TURN/RTP; Turnable — модульный relay/mpath-клиент (Android)"
             )
             SettingsDropdown(
                 label = "Ядро",
                 selectedValue = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
-                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT, VkTurnConfig.CORE_CSQTT),
+                options = listOf(
+                    VkTurnConfig.CORE_FREETURN,
+                    VkTurnConfig.CORE_WDTT,
+                    VkTurnConfig.CORE_CSQTT,
+                    VkTurnConfig.CORE_TURNABLE,
+                ),
                 enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(core = v) } },
+                onValueSelected = { v ->
+                    onChange {
+                        it.copy(
+                            core = v,
+                            outbound = if (v == VkTurnConfig.CORE_TURNABLE) VkTurnConfig.OUTBOUND_WIREGUARD else it.outbound,
+                        )
+                    }
+                },
                 valueLabel = {
                     when (it) {
                         VkTurnConfig.CORE_WDTT -> "qWDTT (агрегация по звонкам)"
                         VkTurnConfig.CORE_CSQTT -> "csqtt (TURN/RTP, Rust)"
+                        VkTurnConfig.CORE_TURNABLE -> "Turnable (relay/mpath, Android)"
                         else -> "freeturn (стандарт)"
                     }
                 }
@@ -1353,12 +1377,40 @@ private fun LazyListScope.vkTurnSection(
                     onChange = { transform -> onChange { it.copy(wdttPlus = transform(it.wdttPlus)) } }
                 )
             }
+            if (draft.core == VkTurnConfig.CORE_TURNABLE) {
+                OutlinedTextField(
+                    value = draft.turnableConfig,
+                    onValueChange = { value -> onChange { it.copy(turnableConfig = value) } },
+                    label = { Text("Turnable client config") },
+                    placeholder = { Text("turnable://… или JSON") },
+                    enabled = enabled,
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Turnable запускается отдельным Android-процессом; WireGuard ниже подключается к его локальному UDP-порту.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onTurnableAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Установить Turnable на VPS")
+                    }
+                }
+            }
         }
     }
 
     // freeturn-only transport/exit section — entirely hidden for the WDTT core (it connects purely by the
     // wdtt-server IP[:port] above and fetches its WireGuard config from the server).
-    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT &&
+        draft.core != VkTurnConfig.CORE_TURNABLE) item {
         val isWdtt = false
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -2964,6 +3016,219 @@ private fun CsqttInstallDialog(
     )
 }
 
+/** Android-only one-tap Turnable relay + WireGuard deployment. */
+@Composable
+internal fun TurnableInstallDialog(
+    draft: VkTurnDraft,
+    onApplyDraft: (((VkTurnDraft) -> VkTurnDraft)) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val installer = rememberTurnableServerInstaller()
+    val scope = rememberCoroutineScope()
+    var ip by remember { mutableStateOf(draft.peerHost) }
+    var sshPort by remember { mutableStateOf("22") }
+    var login by remember { mutableStateOf("root") }
+    var password by remember { mutableStateOf("") }
+    var useKey by remember { mutableStateOf(false) }
+    var sshKey by remember { mutableStateOf("") }
+    var keyPassphrase by remember { mutableStateOf("") }
+    var relayPortText by remember { mutableStateOf(draft.peerPort.ifBlank { "56000" }) }
+    var callId by remember { mutableStateOf(draft.vkLink.takeIf { it.matches(Regex("[A-Za-z0-9_-]+")) }.orEmpty()) }
+    var peersText by remember { mutableStateOf("5") }
+    var dns by remember { mutableStateOf(draft.wgDns.ifBlank { "1.1.1.1" }) }
+    var running by remember { mutableStateOf(false) }
+    var removed by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<Result<String>?>(null) }
+    val log = remember { mutableStateListOf<String>() }
+    val logScroll = rememberScrollState()
+    val relayPort = relayPortText.toIntOrNull()?.takeIf { it in 1024..65535 } ?: 56000
+    val peers = peersText.toIntOrNull()?.coerceIn(1, 32) ?: 5
+    val hasAccess = ip.isNotBlank() && (if (useKey) sshKey.isNotBlank() else password.isNotBlank())
+    val canInstall = !running && hasAccess && callId.matches(Regex("[A-Za-z0-9_-]{3,256}"))
+    val canRemove = !running && hasAccess
+    val succeeded = result?.isSuccess == true
+
+    androidx.compose.runtime.LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) logScroll.scrollTo(logScroll.maxValue)
+    }
+
+    fun options(requireCall: Boolean = true) = TurnableInstallOptions(
+        host = ip.trim(),
+        sshPort = sshPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 22,
+        login = login.ifBlank { "root" },
+        sshPassword = if (useKey) "" else password,
+        sshKey = if (useKey) sshKey else "",
+        sshKeyPassphrase = if (useKey) keyPassphrase else "",
+        turnablePort = relayPort,
+        callId = if (requireCall) callId.trim() else "unused",
+        peers = peers,
+        dns = dns.ifBlank { "1.1.1.1" },
+    )
+
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("Автоустановка Turnable на VPS") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    "Загружу Turnable, создам relay/mpath-конфиг и WireGuard-выход. " +
+                        "Клиентская turnable:// ссылка и ключи WireGuard подставятся автоматически.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = ip,
+                    onValueChange = { ip = it.trim() },
+                    label = { Text("IP/хост VPS") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = login,
+                        onValueChange = { login = it.trim() },
+                        label = { Text("Логин SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = sshPort,
+                        onValueChange = { sshPort = it.filter(Char::isDigit) },
+                        label = { Text("Порт SSH") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(100.dp),
+                    )
+                }
+                SshAuthFields(
+                    useKey = useKey,
+                    onUseKeyChange = { useKey = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    privateKey = sshKey,
+                    onPrivateKeyChange = { sshKey = it },
+                    passphrase = keyPassphrase,
+                    onPassphraseChange = { keyPassphrase = it },
+                    enabled = !running,
+                )
+                HorizontalDivider()
+                OutlinedTextField(
+                    value = callId,
+                    onValueChange = { callId = it.trim().filter { c -> c.isLetterOrDigit() || c == '_' || c == '-' } },
+                    label = { Text("VK call id") },
+                    placeholder = { Text("123456789") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = relayPortText,
+                        onValueChange = { relayPortText = it.filter(Char::isDigit) },
+                        label = { Text("Порт Turnable") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = peersText,
+                        onValueChange = { peersText = it.filter(Char::isDigit) },
+                        label = { Text("Peer-соединения") },
+                        singleLine = true,
+                        enabled = !running,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                OutlinedTextField(
+                    value = dns,
+                    onValueChange = { dns = it.trim() },
+                    label = { Text("DNS WireGuard") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                InstallLogView(log, logScroll)
+                result?.exceptionOrNull()?.let {
+                    Text(it.message ?: "Ошибка Turnable", color = MaterialTheme.colorScheme.error)
+                }
+                if (succeeded) {
+                    Text(
+                        result?.getOrNull().orEmpty() + if (removed) "" else "\nКонфиг и ключи подставлены в локацию.",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (succeeded) {
+                TextButton(onClick = onDismiss) { Text("Готово") }
+            } else {
+                TextButton(
+                    enabled = canInstall,
+                    onClick = {
+                        running = true; removed = false; result = null; log.clear()
+                        scope.launch {
+                            val install = installer.install(options()) { log.add(it) }
+                            install.getOrNull()?.let { ok ->
+                                onApplyDraft { current ->
+                                    current.copy(
+                                        core = VkTurnConfig.CORE_TURNABLE,
+                                        turnableConfig = ok.clientConfig,
+                                        outbound = VkTurnConfig.OUTBOUND_WIREGUARD,
+                                        peerHost = ip.trim(),
+                                        peerPort = ok.turnablePort.toString(),
+                                        wgPrivateKey = ok.clientWgPrivateKey,
+                                        wgPeerPublicKey = ok.serverWgPublicKey,
+                                        wgAddress = ok.clientWgAddress,
+                                        wgDns = dns.ifBlank { "1.1.1.1" },
+                                        wgMtu = "1200",
+                                    )
+                                }
+                            }
+                            install.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = install.map { it.status }
+                            running = false
+                        }
+                    },
+                ) {
+                    if (running) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (running) "Установка…" else "Установить")
+                }
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    enabled = canRemove,
+                    onClick = {
+                        running = true; removed = true; result = null; log.clear()
+                        scope.launch {
+                            val removal = installer.uninstall(options(requireCall = false)) { log.add(it) }
+                            removal.exceptionOrNull()?.let { log.add("ОШИБКА: ${it.message}") }
+                            result = removal
+                            running = false
+                        }
+                    },
+                ) { Text("Удалить с VPS") }
+                TextButton(onClick = onDismiss, enabled = !running) {
+                    Text(if (succeeded) "Закрыть" else "Отмена")
+                }
+            }
+        },
+    )
+}
+
 /**
  * One-tap free-turn-proxy server installer. Collects SSH access to the VPS + the public freeturn
  * port, and on confirm connects over SSH, uploads the bundled freeturn-server binary, provisions a
@@ -4185,6 +4450,8 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_TRUSTTUNNEL -> "Trust Tunnel"
     ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
     ProxyProfile.TYPE_NAIVE -> "Naive"
+    ProxyProfile.TYPE_MIERU -> "Mieru"
+    ProxyProfile.TYPE_OPENVPN -> "OpenVPN"
     else -> type.uppercase()
 }
 

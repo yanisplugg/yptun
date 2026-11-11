@@ -309,6 +309,8 @@ object XrayConfig {
         // then aborts mid-handshake → "connection reset" for EVERY transport. null = leave Xray's default.
         handshakeTimeoutSec: Int? = null,
     ): String {
+        // The routing profile may carry its own DNS (e.g. the China preset); see withProfileDns.
+        val traffic = traffic.withProfileDns(routingProfile)
         // Cascade over an xhttp/splithttp MAIN: Xray's splithttp transport can be NEITHER a
         // sockopt.dialerProxy sub-dialer NOR a proxySettings target, so the 2nd-proxy exit can't reach
         // its server "through" the main (→ "failed to find an available destination > EOF" = the user's
@@ -803,7 +805,8 @@ object XrayConfig {
 
         // Merge profile routing (direct/block buckets) into the user's config, if requested.
         val userOutbounds = (root["outbounds"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
-        val userOutboundTags = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }.toSet()
+        val userOutboundTagList = userOutbounds.mapNotNull { it["tag"]?.jsonPrimitive?.contentOrNull }
+        val userOutboundTags = userOutboundTagList.toSet()
         val userRouting = configRouting
 
         // CASCADE: a standard second proxy chained on top of the verbatim config. Its exit outbound
@@ -819,6 +822,14 @@ object XrayConfig {
             it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase() in cascadeTypes
         }
         val mainProxyTag = mainProxyOutbound?.get("tag")?.jsonPrimitive?.contentOrNull
+        // Full JSON subscriptions commonly route a group of proxy outbounds through `balancerTag`
+        // instead of naming one `outboundTag`. Keep that topology visible to the WARP rewrite: the
+        // client side must not let an injected helper outbound join a broad selector, while the server
+        // side must send app traffic to WARP but send WARP's own UDP through the original balancer.
+        // Match selectors against EVERY original tagged outbound. Panel configs often balance helper
+        // `freedom`/chain outbounds which in turn point at VLESS nodes; looking only at typed proxy
+        // protocols makes those real, routing-referenced balancers invisible.
+        val proxyBalancerPlan = rawProxyBalancerPlan(userRouting, userOutboundTagList)
         // An xhttp/splithttp MAIN can't serve as an intermediate hop: Xray's splithttp transport can be
         // NEITHER a proxySettings target NOR a sockopt.dialerProxy sub-dialer, so a 2nd proxy chained
         // "through" it (either mechanism) gets NO connection — the long-standing "xhttp + 2nd tcp proxy
@@ -948,7 +959,16 @@ object XrayConfig {
         // the exit (which dials through the main) becomes the real exit. Default fall-through is also
         // covered by emitting CASCADE_EXIT_TAG as the FIRST outbound below.
         val routingAfterCascade = if (cascadeOutbound != null && mainProxyTag != null) {
-            rewriteOutboundTag(geoStrippedRouting, mainProxyTag, CASCADE_EXIT_TAG)
+            if (warpServerActive) {
+                rewriteRawExitRoutes(
+                    routing = geoStrippedRouting,
+                    fromOutbound = mainProxyTag,
+                    fromBalancers = proxyBalancerPlan.routedTags,
+                    to = CASCADE_EXIT_TAG,
+                )
+            } else {
+                rewriteOutboundTag(geoStrippedRouting, mainProxyTag, CASCADE_EXIT_TAG)
+            }
         } else geoStrippedRouting
         // Loopback chaining: the relay inbound the exit dials through MUST exit via the real xhttp main —
         // NOT direct/geo, and NOT the rewritten cascade-exit (that would loop forever). Prepend a
@@ -971,7 +991,16 @@ object XrayConfig {
             val relayRule = buildJsonObject {
                 put("type", "field")
                 putJsonArray("inboundTag") { add(WARP_RELAY_IN_TAG) }
-                put("outboundTag", mainProxyTag)
+                // Pin the encapsulated WireGuard UDP flow to ONE concrete member of the config's
+                // catch-all balancer. Reusing a dynamic leastLoad/leastPing balancer here is unsafe:
+                // real subscriptions use `fallbackTag: block`, and before burstObservatory has its
+                // first result every WARP handshake packet is sent to that blackhole. A single WG
+                // flow cannot benefit from changing proxy nodes mid-session anyway.
+                val relayOutboundTag = proxyBalancerPlan.primaryTag
+                    ?.let(proxyBalancerPlan.selections::get)
+                    ?.firstOrNull()
+                    ?: mainProxyTag
+                put("outboundTag", relayOutboundTag)
             }
             val existingRules = (routingToWrite?.get("rules") as? JsonArray)?.toList() ?: emptyList()
             buildJsonObject {
@@ -979,6 +1008,15 @@ object XrayConfig {
                 putJsonArray("rules") { add(relayRule); existingRules.forEach { add(it) } }
             }
         } else routingToWrite
+        val routingWithSafeBalancers = if (
+            (warpClientActive || warpServerActive) && proxyBalancerPlan.selections.isNotEmpty()
+        ) {
+            freezeRawProxyBalancerSelectors(
+                routing = routingFinal,
+                plan = proxyBalancerPlan,
+                hasObservatory = root["observatory"] != null || root["burstObservatory"] != null,
+            )
+        } else routingFinal
 
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
@@ -1044,7 +1082,7 @@ object XrayConfig {
                 // FakeDNS dns outbound for the hijacked queries.
                 if (injectFake && "dns-out" !in userOutboundTags) add(dnsOutOutbound())
             }
-            if (routingFinal != null) put("routing", routingFinal)
+            if (routingWithSafeBalancers != null) put("routing", routingWithSafeBalancers)
         }
         return json.encodeToString(newRoot)
     }
@@ -1121,6 +1159,116 @@ object XrayConfig {
         return buildJsonObject {
             routing.forEach { (k, v) -> if (k != "rules") put(k, v) }
             put("rules", JsonArray(rewritten))
+        }
+    }
+
+    /** Original members selected by each raw-config balancer, plus balancers referenced by routing. */
+    private data class RawProxyBalancerPlan(
+        val selections: Map<String, List<String>>,
+        val routedTags: Set<String>,
+        val primaryTag: String?,
+    )
+
+    private fun rawProxyBalancerPlan(
+        routing: JsonObject?,
+        originalOutboundTags: List<String>,
+    ): RawProxyBalancerPlan {
+        if (routing == null) return RawProxyBalancerPlan(emptyMap(), emptySet(), null)
+        val selections = linkedMapOf<String, List<String>>()
+        (routing["balancers"] as? JsonArray)?.forEach { element ->
+            val balancer = element as? JsonObject ?: return@forEach
+            val tag = balancer["tag"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+            val selectors = (balancer["selector"] as? JsonArray)
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                .orEmpty()
+            val selected = originalOutboundTags.filter { outboundTag ->
+                selectors.any { selector -> outboundTag.startsWith(selector) }
+            }
+            // Keep the definition even when its current selector resolves to no members. Whether this
+            // is the tunnel path is established by routing references, not by an outbound protocol.
+            selections[tag] = selected
+        }
+        val routed = (routing["rules"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonObject)?.get("balancerTag")?.jsonPrimitive?.contentOrNull }
+            ?.filter { it in selections }
+            .orEmpty()
+        return RawProxyBalancerPlan(
+            selections = selections,
+            routedTags = routed.toSet(),
+            // Routing order, not balancer declaration order, identifies the effective catch-all path.
+            primaryTag = routed.lastOrNull(),
+        )
+    }
+
+    /**
+     * Server-side WARP replaces routes to either the old main outbound OR one of its proxy balancers
+     * with the local WARP SOCKS exit. Direct/block/DNS rules stay untouched. A balancer rule must lose
+     * `balancerTag` when `outboundTag` is inserted: Xray rejects/ambiguously handles a rule carrying both.
+     */
+    private fun rewriteRawExitRoutes(
+        routing: JsonObject?,
+        fromOutbound: String,
+        fromBalancers: Set<String>,
+        to: String,
+    ): JsonObject? {
+        if (routing == null) return null
+        val rules = routing["rules"] as? JsonArray ?: return routing
+        val rewritten = rules.map { element ->
+            val rule = element as? JsonObject ?: return@map element
+            val outboundMatch = rule["outboundTag"]?.jsonPrimitive?.contentOrNull == fromOutbound
+            val balancerMatch = rule["balancerTag"]?.jsonPrimitive?.contentOrNull in fromBalancers
+            if (!outboundMatch && !balancerMatch) return@map element
+            buildJsonObject {
+                rule.forEach { (key, value) ->
+                    if (key != "outboundTag" && key != "balancerTag") put(key, value)
+                }
+                put("outboundTag", to)
+            }
+        }
+        return buildJsonObject {
+            routing.forEach { (key, value) -> if (key != "rules") put(key, value) }
+            put("rules", JsonArray(rewritten))
+        }
+    }
+
+    /**
+     * Freeze broad prefix selectors to the ORIGINAL proxy tags before helper outbounds (`warp-out`,
+     * `cascade-exit`) are inserted. A selector such as `""` otherwise starts selecting the helper too:
+     * client mode may bypass every real node, and server mode can route WARP's UDP back into itself.
+     */
+    private fun freezeRawProxyBalancerSelectors(
+        routing: JsonObject?,
+        plan: RawProxyBalancerPlan,
+        hasObservatory: Boolean,
+    ): JsonObject? {
+        if (routing == null || plan.selections.isEmpty()) return routing
+        val balancers = routing["balancers"] as? JsonArray ?: return routing
+        return buildJsonObject {
+            routing.forEach { (key, value) -> if (key != "balancers") put(key, value) }
+            putJsonArray("balancers") {
+                balancers.forEach { element ->
+                    val balancer = element as? JsonObject
+                    val selected = balancer?.get("tag")?.jsonPrimitive?.contentOrNull
+                        ?.let(plan.selections::get)
+                    if (balancer == null || selected == null) {
+                        add(element)
+                    } else {
+                        addJsonObject {
+                            val strategy = (balancer["strategy"] as? JsonObject)
+                                ?.get("type")?.jsonPrimitive?.contentOrNull?.lowercase()
+                                ?: "random"
+                            // Xray's random/roundRobin implementation treats a non-empty fallbackTag
+                            // as a request for an Observatory feature. With no observatory block the
+                            // otherwise valid config aborts at startup: "not all dependencies resolved".
+                            val dropFallback = !hasObservatory && strategy in setOf("random", "roundrobin")
+                            balancer.forEach { (key, value) ->
+                                if (key != "selector" && !(dropFallback && key == "fallbackTag")) put(key, value)
+                            }
+                            putJsonArray("selector") { selected.forEach { add(it) } }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1372,7 +1520,6 @@ object XrayConfig {
         bypassLan: Boolean = true,
     ): String {
         val bases = wgProfiles.mapIndexedNotNull { i, p -> buildWireguardBaseOutbound(p, "$WG_BAL_PREFIX$i") }
-        val serverCount = bases.size
         val config = buildJsonObject {
             putJsonObject("log") { put("loglevel", logLevel) }
             putJsonObject("dns") {
@@ -1421,45 +1568,18 @@ object XrayConfig {
                 addJsonObject { put("tag", "block"); put("protocol", "blackhole") }
                 if (traffic.fakeDnsEnabled) add(dnsOutOutbound())
             }
-            // Health-probe each WG-over-VK outbound so a DEAD freeturn server (VPS down, relay never
-            // came up) is detected and dropped from the balancer instead of black-holing the
-            // connections round-robined onto it — i.e. "even if the 2nd server doesn't connect, the
-            // tunnel still works off the live one(s)". The probe egresses through each wg-bal-* outbound
-            // (→ its local freeturn relay → VK → VPS → internet), so it measures the real end-to-end path.
-            if (serverCount > 1) {
-                putJsonObject("burstObservatory") {
-                    putJsonArray("subjectSelector") { add(WG_BAL_PREFIX) }
-                    putJsonObject("pingConfig") {
-                        put("destination", "http://connectivitycheck.gstatic.com/generate_204")
-                        put("interval", "10s")
-                        put("sampling", 2)
-                        put("timeout", "8s")
-                    }
-                }
-            }
             putJsonObject("routing") {
                 put("domainStrategy", "AsIs")
                 putJsonArray("balancers") {
                     addJsonObject {
                         put("tag", WG_BALANCER_TAG)
                         putJsonArray("selector") { add(WG_BAL_PREFIX) }
-                        // leastLoad with expected=N keeps ALL healthy servers in rotation (so their
-                        // bandwidth still aggregates like round-robin) while the burstObservatory health
-                        // data lets it EXCLUDE servers that don't answer — a dead 2nd server is skipped,
-                        // not black-holed. fallbackTag guarantees an exit during the cold-start window
-                        // before the first probe lands (and if every server is briefly unhealthy), so
-                        // traffic is never dropped. Single server → no balancer (caller gate), so this
-                        // only ever runs with ≥2 outbounds.
-                        put("fallbackTag", "$WG_BAL_PREFIX${'0'}")
-                        putJsonObject("strategy") {
-                            put("type", "leastLoad")
-                            putJsonObject("settings") {
-                                put("expected", serverCount)
-                                // Generous RTT ceiling: a server under this through VK qualifies; it only
-                                // filters out the truly dead/unreachable ones.
-                                putJsonArray("baselines") { add("3000ms") }
-                            }
-                        }
+                        // Do not gate balancing on HTTP health probes. A probe host can be blocked or DNS
+                        // can fail while every WG-over-VK exit is healthy; leastLoad then returned no
+                        // candidates and fallbackTag pinned ALL traffic to wg-bal-0 forever. Round-robin
+                        // is deterministic, needs no observatory, and actually aggregates multi-stream
+                        // traffic across every configured server.
+                        putJsonObject("strategy") { put("type", "roundRobin") }
                     }
                 }
                 putJsonArray("rules") {

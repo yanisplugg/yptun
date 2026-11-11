@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"sync"
 	"syscall"
@@ -102,6 +103,9 @@ func MeasureDelay(configJSON, url, method string, timeoutMs int) (result int64) 
 	}
 	client := &http.Client{
 		Timeout: timeout,
+		// A ping URL redirect would measure another host (and possibly another connection), not this
+		// proxy path. Match Xray's observatory and stop at the first response.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{
 			DisableKeepAlives: true,
 			// Dial every connection THROUGH the test instance (its default/proxy outbound).
@@ -122,13 +126,57 @@ func MeasureDelay(configJSON, url, method string, timeoutMs int) (result int64) 
 		return -1
 	}
 	req.Header.Set("User-Agent", "olcbox-ping")
-	start := time.Now()
-	resp, err := client.Do(req)
+	delay, err := measureHTTPResponseDelay(client, req)
 	if err != nil {
 		return -1
 	}
+	return delay.Milliseconds()
+}
+
+// measureHTTPResponseDelay measures the HTTP leg, not creation of the proxy tunnel underneath it.
+// http.Client.Do includes DialContext (VLESS/Reality/XHTTP connection establishment and TLS), which
+// made a healthy server look hundreds or thousands of milliseconds slower on every GET/HEAD probe.
+// GotConn fires only after a usable connection exists; GotFirstResponseByte is the end-to-end request
+// response point. The full request duration remains a safe fallback for unusual RoundTrippers that do
+// not emit httptrace callbacks.
+func measureHTTPResponseDelay(client *http.Client, req *http.Request) (time.Duration, error) {
+	var timingMu sync.Mutex
+	var connectedAt time.Time
+	var firstByteAt time.Time
+	trace := &httptrace.ClientTrace{
+		GotConn: func(_ httptrace.GotConnInfo) {
+			timingMu.Lock()
+			connectedAt = time.Now()
+			timingMu.Unlock()
+		},
+		GotFirstResponseByte: func() {
+			timingMu.Lock()
+			firstByteAt = time.Now()
+			timingMu.Unlock()
+		},
+	}
+	requestStartedAt := time.Now()
+	resp, err := client.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	if err != nil {
+		return 0, err
+	}
 	_ = resp.Body.Close()
-	return time.Since(start).Milliseconds()
+	requestFinishedAt := time.Now()
+
+	timingMu.Lock()
+	start := connectedAt
+	end := firstByteAt
+	timingMu.Unlock()
+	if start.IsZero() {
+		start = requestStartedAt
+	}
+	if end.IsZero() {
+		end = requestFinishedAt
+	}
+	if end.Before(start) {
+		return 0, nil
+	}
+	return end.Sub(start), nil
 }
 
 // Start launches Xray with the given JSON config. Returns an error if already running or invalid.

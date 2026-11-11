@@ -126,6 +126,8 @@ object SettingsSearch {
         row("Appearance", s.appearanceTitle, s.dynamicTheme, "", "monet material you обои цвет динамическая")
         row("Appearance", s.appearanceTitle, s.lightTheme, "", "светлая тёмная темная dark light ночная")
 
+        page("Ping", s.pingSettings, s.pingSettingsSubtitle, "пинг ping задержка latency проверка серверов")
+
         if (!desktop) { // the desktop settings have no notifications page
             page("Notifications", s.notificationsSettingsTitle, s.notificationsSettingsSubtitle, "уведомления notification шторка")
             row("Notifications", s.notificationsSettingsTitle, s.notifSpeed, s.notifSpeedSubtitle, "скорость speed")

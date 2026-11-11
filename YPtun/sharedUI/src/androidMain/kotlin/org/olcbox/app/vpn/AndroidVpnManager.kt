@@ -805,6 +805,13 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             ?.let { TrustTunnelParser.endpoints(it.ttConfig).firstOrNull() }
         val server = ttEndpoint?.first ?: locationConfig.proxy?.server
         val serverPort = ttEndpoint?.second ?: locationConfig.proxy?.serverPort
+        // Mieru is a standalone subprocess rather than an Xray/sing-box outbound. While connected,
+        // probe it end-to-end through its live SOCKS; before connecting, a simple mierus:// link can
+        // still use the displayed server/port (opaque mieru:// links intentionally return unknown).
+        if (locationConfig.proxy?.type == ProxyProfile.TYPE_MIERU) {
+            return if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
+            else if (server == "mieru-config") null else tcpPing(server, serverPort)
+        }
         // olcRTC/Stealth (and other provider engines) carry no vless/proxy profile, so the proxy
         // GET/HEAD probe can't build a throwaway outbound for them. When proxy mode is selected (it's
         // now the default) but this location has no proxy, fall through to the engine-default probe
@@ -851,6 +858,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Trust Tunnel: through the live tunnel when up, else TCP to the endpoint decoded from the tt:// link.
             proxyType == ProxyProfile.TYPE_TRUSTTUNNEL ->
                 if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing() else tcpPing(server, serverPort)
+            proxyType == ProxyProfile.TYPE_OPENVPN ->
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
+                else icmpPing(locationConfig.proxy?.server.orEmpty())
             // Plain proxies: TCP latency to the (reachable) proxy server.
             locationConfig.engine == EngineType.Standard ->
                 tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
@@ -1059,7 +1069,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Hysteria2 and Naive are native sing-box protocols, not xray-serviceable; the via-proxy
             // URL test isn't available (use Auto/ICMP ping mode instead — Auto's TCP probe still
             // reaches a naive server's HTTPS port).
-            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE) {
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE ||
+                profile.type == ProxyProfile.TYPE_OPENVPN
+            ) {
                 OlcboxVpnState.addLog("Proxy $method ping: ${profile.type} not supported (use Auto/ICMP)")
                 return@withContext null
             }

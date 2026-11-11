@@ -1,0 +1,24 @@
+[package]
+name = "yptun-core"
+version = "0.1.0"
+description = "YPtun client core: share links, subscriptions, configs — shared by every platform app"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aes = "0.8"
+chacha20 = "0.9"
+ctr = "0.9"
+flate2 = "1"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex-lite = "0.1"
+sha2 = "0.10"
+getrandom = "0.2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+# Desktop only: loads the Go c-shared yptuncore (see src/yptun_core_native.rs).
+[target.'cfg(any(windows, target_os = "linux", target_os = "macos"))'.dependencies]
+libloading = "0.8"

@@ -89,7 +89,6 @@ import org.olcbox.app.ui.features.home.components.FreeServersSheet
 import org.olcbox.app.ui.features.home.components.HomeScreenAppBar
 import org.olcbox.app.ui.features.home.components.ListViewSheet
 import org.olcbox.app.ui.features.home.components.SessionSheet
-import org.olcbox.app.ui.features.home.components.PingSettingsSheet
 import org.olcbox.app.ui.features.home.components.locationSelectorContent
 import org.olcbox.app.ui.features.home.components.LogsSheet
 import org.olcbox.app.ui.features.home.components.RelayStatus
@@ -117,6 +116,7 @@ fun HomeScreen(
     // «Создать вручную»: a new location that starts on the picked engine (AmneziaWG/WG = Standard + wireguard).
     onAddLocationOfType: (engine: EngineType, wireguard: Boolean) -> Unit = { _, _ -> onAddLocation() },
     onAddVlessLocation: () -> Unit = onAddLocation,
+    onAddTurnableLocation: () -> Unit = onAddLocation,
     // The «Добавить» field: import exactly this text (subscription URLs, share links, JSON).
     onImportTextRequested: (text: String, onImported: () -> Unit, onError: (String) -> Unit) -> Unit =
         { text, onImported, onError -> viewModel.onImportFullConfig(text, onImported, onError) },
@@ -165,8 +165,8 @@ fun HomeScreen(
     extraConnectContent: (@Composable () -> Unit)? = null,
     // Desktop only: shows an exit button in the top bar.
     onExitClick: (() -> Unit)? = null,
-    // The app behaviour settings, for the ⋮ menu's «Вид списка» and «Настройки пинга» sheets
-    // (null hides both: the platform keeps those switches in its own settings).
+    // The app behaviour settings for the ⋮ menu's «Вид списка» sheet.
+    // (null hides it: the platform keeps those switches in its own settings).
     appBehavior: AppBehaviorSettings? = null,
     onAppBehaviorChanged: (AppBehaviorSettings) -> Unit = {},
     // Share a subscription (QR / link) from its sheet; null hides «Поделиться» there.
@@ -175,7 +175,6 @@ fun HomeScreen(
     var isLogsSheetOpen by remember { mutableStateOf(false) }
     var isListViewSheetOpen by remember { mutableStateOf(false) }
     var isSessionSheetOpen by remember { mutableStateOf(false) }
-    var isPingSettingsSheetOpen by remember { mutableStateOf(false) }
     var isAddSheetOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
     // Folder dialogs: create / rename (a small name dialog), "choose folder" target sheet, delete confirm.
@@ -466,9 +465,6 @@ fun HomeScreen(
                 onDeleteAllConfigs = { requestDelete(PendingDelete.AllConfigs) },
                 onListViewClick = if (appBehavior != null) {
                     { isListViewSheetOpen = true }
-                } else null,
-                onPingSettingsClick = if (appBehavior != null) {
-                    { isPingSettingsSheetOpen = true }
                 } else null,
                 onCreateGroupClick = { folderDialog = FolderDialog.Create(emptyList()) },
                 onExitClick = onExitClick
@@ -863,14 +859,6 @@ fun HomeScreen(
             )
         }
 
-        if (isPingSettingsSheetOpen && appBehavior != null) {
-            PingSettingsSheet(
-                settings = appBehavior,
-                onChanged = onAppBehaviorChanged,
-                onDismiss = { isPingSettingsSheetOpen = false }
-            )
-        }
-
         if (isAddSheetOpen) {
             AddConfigurationSheet(
                 canScanQr = canScanQr,
@@ -916,6 +904,10 @@ fun HomeScreen(
                 onCreateManual = { engine, wireguard ->
                     isAddSheetOpen = false
                     onAddLocationOfType(engine, wireguard)
+                },
+                onCreateTurnable = {
+                    isAddSheetOpen = false
+                    onAddTurnableLocation()
                 },
                 onCreateVless = {
                     isAddSheetOpen = false

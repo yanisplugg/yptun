@@ -63,23 +63,15 @@ object OlcboxVpnState {
     }
 
     fun setStatus(status: VpnStatus) {
+        val effects = RustAndroidVpn.statusEffects(
+            status = status,
+            connectedSinceMs = _connectedSinceMs.value,
+            nowMs = System.currentTimeMillis(),
+        )
         _status.value = status
-        _isConnected.value = status is VpnStatus.Connected
-        when (status) {
-            // Stamp lazily on the first Connected of a session; a value restored via
-            // setConnectedSince already wins (it's > 0) so this never overwrites it.
-            is VpnStatus.Connected -> if (_connectedSinceMs.value == 0L) _connectedSinceMs.value = System.currentTimeMillis()
-            // ONLY an explicit stop clears the running clock. Connecting / Reconnecting / Error are all
-            // TRANSIENT (recovery, network change, a settings re-apply, a probe-induced blip during a
-            // ping pass) — keep counting so the on-screen timer never resets mid-session. A genuine
-            // fresh connect always passes through Disconnected/Stopping first (or the service clears the
-            // persisted value), so the next Connected re-stamps from 0.
-            is VpnStatus.Disconnected, is VpnStatus.Stopping -> {
-                _connectedSinceMs.value = 0L
-                _speed.value = SpeedSample(0L, 0L)
-            }
-            else -> { /* Connecting / Reconnecting / Error: keep the running clock */ }
-        }
+        _isConnected.value = effects.connected
+        _connectedSinceMs.value = effects.connectedSinceMs
+        if (effects.resetSpeed) _speed.value = SpeedSample(0L, 0L)
     }
 
     /**

@@ -349,6 +349,12 @@ interface Strings {
     val routingProfileNone: String
     val routingProfileGlobalHint: String
     val routingProfileAdd: String
+    // Ready-made profiles in the "add profile" dialog. Defaulted so a locale without a translation
+    // falls back to English instead of failing the build.
+    val routingPresets: String get() = "Presets"
+    val routingPresetChina: String get() = "China direct"
+    val routingPresetChinaDesc: String get() = "Chinese sites and IPs go direct, everything else through the proxy"
+    val routingProfileDnsHint: String get() = "DNS of this profile (empty — use the traffic settings)"
     val routingProfileImportLink: String
     val routingProfilePasteHint: String
     val routingProfileNewName: String
@@ -971,6 +977,7 @@ interface Strings {
     fun addDetectedMany(n: Int): String
     fun addDetectedSubscription(host: String): String
     fun addDetectedKey(proto: String): String
+    fun addDetectedConfig(kind: String): String
     fun subscriptionExpiresIn(date: String, days: Long): String
     fun subscriptionServersCount(total: Int, alive: Int?): String
 }
@@ -1249,6 +1256,10 @@ object RuStrings : Strings {
     override val routingProfileNone = "Без профиля"
     override val routingProfileGlobalHint = "Применяется ко всем подключениям, если у локации не задан свой профиль"
     override val routingProfileAdd = "Создать профиль"
+    override val routingPresets = "Готовые пресеты"
+    override val routingPresetChina = "Китай напрямую"
+    override val routingPresetChinaDesc = "Сайты и IP Китая — напрямую, всё остальное через прокси"
+    override val routingProfileDnsHint = "DNS профиля (пусто — как в настройках трафика)"
     override val routingProfileImportLink = "Импорт по ссылке happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "Новый профиль"
@@ -1789,16 +1800,16 @@ object RuStrings : Strings {
     override val helpSection = "Помощь"
     override val deviceSection = "Устройство"
     override val addTitle = "Добавить"
-    override val addLinkLabel = "Ссылка на подписку или ключ"
+    override val addLinkLabel = "Ссылка, ключ или конфигурация"
     override val addPaste = "Вставить"
-    override val addLinkHint = "Можно несколько ссылок — каждую с новой строки"
+    override val addLinkHint = "JSON Xray/sing-box, AmneziaWG, OpenVPN .ovpn или ссылки — по одной в строке"
     override val addButton = "Добавить"
     override val addFromQr = "QR-код"
     override val addFromFile = "Из файла"
     override val addNoSubscriptionSection = "Нет подписки?"
     override val addFreeServersSubtitle = "Найдём рабочие в открытых списках"
     override val addManualTitle = "Создать вручную"
-    override val addManualSubtitle = "olcRTC, VK-TURN, WireGuard и другие"
+    override val addManualSubtitle = "olcRTC, VK-TURN, Turnable, WireGuard и другие"
     override val addDetectedJson = "Конфигурация JSON"
     override val freeServersHowMany = "Сколько проверить"
     override val freeServersSourceSection = "Источник"
@@ -1835,6 +1846,7 @@ object RuStrings : Strings {
     override fun addDetectedMany(n: Int) = "Ссылок: $n"
     override fun addDetectedSubscription(host: String) = if (host.isBlank()) "Подписка" else "Подписка · $host"
     override fun addDetectedKey(proto: String) = "Ключ $proto"
+    override fun addDetectedConfig(kind: String) = "Конфигурация $kind"
     override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "Закончилась $date" else "До $date · ещё $days ${ruPlural(days.toInt(), "день", "дня", "дней")}"
     override fun subscriptionServersCount(total: Int, alive: Int?) = "Серверов: $total" + (alive?.let { " · отвечают $it" } ?: "")
 }
@@ -2653,16 +2665,16 @@ object EnStrings : Strings {
     override val helpSection = "Help"
     override val deviceSection = "Device"
     override val addTitle = "Add"
-    override val addLinkLabel = "Subscription link or key"
+    override val addLinkLabel = "Link, key, or config"
     override val addPaste = "Paste"
-    override val addLinkHint = "Several links work too — one per line"
+    override val addLinkHint = "Xray/sing-box JSON, AmneziaWG, OpenVPN .ovpn, or links — one per line"
     override val addButton = "Add"
     override val addFromQr = "QR code"
     override val addFromFile = "From file"
     override val addNoSubscriptionSection = "No subscription?"
     override val addFreeServersSubtitle = "We'll find working ones in public lists"
     override val addManualTitle = "Create manually"
-    override val addManualSubtitle = "olcRTC, VK-TURN, WireGuard and more"
+    override val addManualSubtitle = "olcRTC, VK-TURN, Turnable, WireGuard and more"
     override val addDetectedJson = "JSON config"
     override val freeServersHowMany = "How many to check"
     override val freeServersSourceSection = "Source"
@@ -2699,6 +2711,7 @@ object EnStrings : Strings {
     override fun addDetectedMany(n: Int) = "Links: $n"
     override fun addDetectedSubscription(host: String) = if (host.isBlank()) "Subscription" else "Subscription · $host"
     override fun addDetectedKey(proto: String) = "$proto key"
+    override fun addDetectedConfig(kind: String) = "$kind config"
     override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "Ended $date" else "Until $date · $days ${if (days == 1L) "day" else "days"} left"
     override fun subscriptionServersCount(total: Int, alive: Int?) = "Servers: $total" + (alive?.let { " · answering $it" } ?: "")
 }
@@ -2977,6 +2990,10 @@ object FaStrings : Strings {
     override val routingProfileNone = "بدون نمایه"
     override val routingProfileGlobalHint = "برای همهٔ اتصال‌ها اعمال می‌شود مگر موقعیت نمایهٔ خود را داشته باشد"
     override val routingProfileAdd = "ساخت نمایه"
+    override val routingPresets = "پیش‌تنظیم‌ها"
+    override val routingPresetChina = "چین مستقیم"
+    override val routingPresetChinaDesc = "سایت‌ها و IPهای چین مستقیم، بقیه از طریق پراکسی"
+    override val routingProfileDnsHint = "DNS این نمایه (خالی — مطابق تنظیمات ترافیک)"
     override val routingProfileImportLink = "درون‌ریزی پیوند ‎happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "نمایهٔ جدید"
@@ -3517,16 +3534,16 @@ object FaStrings : Strings {
     override val helpSection = "راهنما"
     override val deviceSection = "دستگاه"
     override val addTitle = "افزودن"
-    override val addLinkLabel = "پیوند اشتراک یا کلید"
+    override val addLinkLabel = "پیوند، کلید یا پیکربندی"
     override val addPaste = "چسباندن"
-    override val addLinkHint = "چند پیوند هم می‌شود — هر کدام در یک خط"
+    override val addLinkHint = "JSON ‏Xray/sing-box، AmneziaWG، ‏OpenVPN .ovpn یا پیوندها — هر کدام در یک خط"
     override val addButton = "افزودن"
     override val addFromQr = "کد QR"
     override val addFromFile = "از فایل"
     override val addNoSubscriptionSection = "اشتراک ندارید؟"
     override val addFreeServersSubtitle = "سرورهای سالم را در فهرست‌های عمومی پیدا می‌کنیم"
     override val addManualTitle = "ساخت دستی"
-    override val addManualSubtitle = "olcRTC، VK-TURN، WireGuard و بیشتر"
+    override val addManualSubtitle = "olcRTC، VK-TURN، Turnable، WireGuard و بیشتر"
     override val addDetectedJson = "پیکربندی JSON"
     override val freeServersHowMany = "چند سرور بررسی شود"
     override val freeServersSourceSection = "منبع"
@@ -3563,6 +3580,7 @@ object FaStrings : Strings {
     override fun addDetectedMany(n: Int) = "پیوندها: $n"
     override fun addDetectedSubscription(host: String) = if (host.isBlank()) "اشتراک" else "اشتراک · $host"
     override fun addDetectedKey(proto: String) = "کلید $proto"
+    override fun addDetectedConfig(kind: String) = "پیکربندی $kind"
     override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "پایان یافت $date" else "تا $date · $days روز مانده"
     override fun subscriptionServersCount(total: Int, alive: Int?) = "سرورها: $total" + (alive?.let { " · پاسخ‌گو $it" } ?: "")
 }
@@ -3841,6 +3859,10 @@ object ZhStrings : Strings {
     override val routingProfileNone = "无方案"
     override val routingProfileGlobalHint = "除非某节点设置了自己的方案，否则应用于每个连接"
     override val routingProfileAdd = "创建方案"
+    override val routingPresets = "预设"
+    override val routingPresetChina = "中国直连"
+    override val routingPresetChinaDesc = "中国大陆网站和 IP 直连，其余走代理"
+    override val routingProfileDnsHint = "此方案的 DNS（留空则使用流量设置）"
     override val routingProfileImportLink = "导入 happ:// 链接"
     override val routingProfilePasteHint = "happ://routing/add/…"
     override val routingProfileNewName = "新方案"
@@ -4381,16 +4403,16 @@ object ZhStrings : Strings {
     override val helpSection = "帮助"
     override val deviceSection = "设备"
     override val addTitle = "添加"
-    override val addLinkLabel = "订阅链接或密钥"
+    override val addLinkLabel = "链接、密钥或配置"
     override val addPaste = "粘贴"
-    override val addLinkHint = "也可以多个链接——每行一个"
+    override val addLinkHint = "支持 Xray/sing-box JSON、AmneziaWG、OpenVPN .ovpn 或链接（每行一个）"
     override val addButton = "添加"
     override val addFromQr = "二维码"
     override val addFromFile = "从文件"
     override val addNoSubscriptionSection = "没有订阅？"
     override val addFreeServersSubtitle = "从公开列表中找出可用的"
     override val addManualTitle = "手动创建"
-    override val addManualSubtitle = "olcRTC、VK-TURN、WireGuard 等"
+    override val addManualSubtitle = "olcRTC、VK-TURN、Turnable、WireGuard 等"
     override val addDetectedJson = "JSON 配置"
     override val freeServersHowMany = "检查数量"
     override val freeServersSourceSection = "来源"
@@ -4427,6 +4449,7 @@ object ZhStrings : Strings {
     override fun addDetectedMany(n: Int) = "链接：$n"
     override fun addDetectedSubscription(host: String) = if (host.isBlank()) "订阅" else "订阅 · $host"
     override fun addDetectedKey(proto: String) = "$proto 密钥"
+    override fun addDetectedConfig(kind: String) = "$kind 配置"
     override fun subscriptionExpiresIn(date: String, days: Long) = if (days < 0) "已于 $date 到期" else "至 $date · 剩余 $days 天"
     override fun subscriptionServersCount(total: Int, alive: Int?) = "服务器：$total" + (alive?.let { " · 响应 $it" } ?: "")
 }

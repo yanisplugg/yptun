@@ -1,0 +1,87 @@
+// Copyright (C) 2024  mieru authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+syntax = "proto3";
+
+package mieru.appctl;
+
+import "appctl/proto/base.proto";
+import "appctl/proto/google/protobuf/timestamp.proto";
+import "metrics/proto/metrics.proto";
+
+option go_package = "github.com/enfein/mieru/v3/pkg/appctl/appctlpb";
+
+message Metrics {
+    // JSON dump of metrics.
+    optional string json = 1;
+}
+
+message UserWithMetrics {
+    // User information.
+    optional User user = 1;
+
+    // User runtime information.
+    repeated metrics.Metric metrics = 2;
+}
+
+message UserWithMetricsList {
+    repeated UserWithMetrics items = 1;
+}
+
+message ProfileSavePath {
+    // Location to save profile results.
+    optional string filePath = 1;
+}
+
+message SessionInfo {
+    optional string id = 1;
+    optional string protocol = 2;
+    optional string localAddr = 3;
+    optional string remoteAddr = 4;
+    optional string state = 5;
+    optional uint32 recvQ = 6;
+    optional uint32 recvBuf = 7;
+    optional uint32 sendQ = 8;
+    optional uint32 sendBuf = 9;
+    optional google.protobuf.Timestamp lastRecvTime = 10;
+    optional uint32 lastRecvSeq = 11;
+    optional google.protobuf.Timestamp lastSendTime = 12;
+    optional uint32 lastSendSeq = 13;
+}
+
+message SessionInfoList {
+    repeated SessionInfo items = 1;
+}
+
+message ThreadDump {
+    // Full thread dump of the application.
+    optional string threadDump = 1;
+}
+
+message MemoryStatistics {
+    reserved 1;
+
+    optional uint64 heapBytes = 2;
+    optional uint64 heapObjects = 3;
+    optional uint64 maxHeapBytes = 4;
+    optional uint64 targetHeapBytes = 5;
+    optional uint64 stackBytes = 6;
+}
+
+message Version {
+    optional uint32 major = 1;
+    optional uint32 minor = 2;
+    optional uint32 patch = 3;
+}

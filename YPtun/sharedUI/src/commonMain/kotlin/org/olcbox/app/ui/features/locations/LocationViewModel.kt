@@ -212,6 +212,14 @@ class LocationViewModel(
                 return@with csqttPeer.isNotBlank() &&
                     (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
             }
+            if (core.equals(VkTurnConfig.CORE_TURNABLE, ignoreCase = true)) {
+                val config = turnableConfig.trim()
+                val configOk = config.startsWith("turnable://", ignoreCase = true) ||
+                    (config.startsWith("{") && config.endsWith("}"))
+                return@with configOk &&
+                    (listenPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
+                    wgPrivateKey.isNotBlank() && wgPeerPublicKey.isNotBlank() && wgAddress.isNotBlank()
+            }
             val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
                 (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
@@ -757,11 +765,13 @@ class LocationViewModel(
     }
 
     fun onCoreChanged(core: ProxyCore) {
-        // xhttp / FakeDNS configs can only run on xray-core: silently coerce a sing-box pick to Xray.
-        val effective = if (core == ProxyCore.SingBox && editingConfig.requiresXray()) {
-            ProxyCore.Xray
-        } else {
-            core
+        val effective = when {
+            // OpenVPN exists only as a sing-box 1.14 endpoint.
+            listOfNotNull(editingConfig.proxy, editingConfig.proxy2)
+                .any { it.type == ProxyProfile.TYPE_OPENVPN } -> ProxyCore.SingBox
+            // xhttp configs can only run on xray-core: coerce a sing-box pick to Xray.
+            core == ProxyCore.SingBox && editingConfig.requiresXray() -> ProxyCore.Xray
+            else -> core
         }
         editingConfig = editingConfig.copy(core = effective)
     }

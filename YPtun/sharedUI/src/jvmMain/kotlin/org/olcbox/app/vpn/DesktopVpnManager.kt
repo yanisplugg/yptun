@@ -292,6 +292,8 @@ class DesktopVpnManager private constructor(
             // Trust Tunnel: through the live tunnel when up, else TCP to the endpoint decoded from the tt:// link.
             proxyType == ProxyProfile.TYPE_TRUSTTUNNEL ->
                 if (isActive && isConnected.value) tunnelPing() else tcpPing(server, serverPort)
+            proxyType == ProxyProfile.TYPE_OPENVPN ->
+                if (isActive && isConnected.value) tunnelPing() else icmpPing(profile?.server.orEmpty())
             config.engine == EngineType.Standard || config.engine == EngineType.Chain ->
                 tcpPing(profile?.server, profile?.serverPort)
             else -> OlcRtcConnectionChecker.ping(
@@ -466,8 +468,8 @@ class DesktopVpnManager private constructor(
             if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
                 return@withContext trustTunnelUrlTest(profile, url, method)
             }
-            if (profile.type == ProxyProfile.TYPE_HYSTERIA2) {
-                addLog("Proxy $method ping: Hysteria2 not supported (use Auto/ICMP)")
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_OPENVPN) {
+                addLog("Proxy $method ping: ${profile.type} is not supported by the Xray probe (use Auto/ICMP)")
                 return@withContext null
             }
             if (profile.server.isBlank()) return@withContext null

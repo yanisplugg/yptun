@@ -234,6 +234,15 @@ fun LocationSettingsScreen(
         )
     }
 
+    var showTurnableInstall by remember { mutableStateOf(false) }
+    if (showTurnableInstall) {
+        TurnableInstallDialog(
+            draft = viewModel.editingVkTurn,
+            onApplyDraft = { update -> viewModel.updateVkTurnDraft(update) },
+            onDismiss = { showTurnableInstall = false },
+        )
+    }
+
     var showOlcRtcInstall by remember { mutableStateOf(false) }
     if (showOlcRtcInstall) {
         OlcRtcInstallDialog(
@@ -395,7 +404,9 @@ fun LocationSettingsScreen(
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
                 // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
-                if (!viewModel.isWireguardEngine) item {
+                if (!viewModel.isWireguardEngine &&
+                    listOfNotNull(config.proxy, config.proxy2).none { it.type == ProxyProfile.TYPE_OPENVPN }
+                ) item {
                     CoreSelector(
                         selected = config.core,
                         enabled = !isSaving,
@@ -567,6 +578,7 @@ fun LocationSettingsScreen(
                     onChange = viewModel::updateVkTurnDraft,
                     onWdttAutoInstall = { showWdttInstall = true },
                     onCsqttAutoInstall = { showCsqttInstall = true },
+                    onTurnableAutoInstall = { showTurnableInstall = true },
                     onFreeturnAutoInstall = { showFreeturnInstall = true }
                 )
             }
@@ -1103,7 +1115,7 @@ private fun ProxyField(
             value = link,
             onValueChange = onChange,
             label = { Text(LocalStrings.current.proxyLinkOrConfig) },
-            placeholder = { Text("vless://…  or  { \"type\": … }") },
+            placeholder = { Text("vless://… / mieru://… / { \"type\": … }") },
             enabled = enabled,
             isError = error != null,
             supportingText = {
@@ -1273,9 +1285,10 @@ private fun LazyListScope.vkTurnSection(
     onChange: ((VkTurnDraft) -> VkTurnDraft) -> Unit,
     onWdttAutoInstall: () -> Unit,
     onCsqttAutoInstall: () -> Unit,
+    onTurnableAutoInstall: () -> Unit,
     onFreeturnAutoInstall: () -> Unit
 ) {
-    item {
+    if (draft.core != VkTurnConfig.CORE_TURNABLE) item {
         VkTurnLinksField(
             value = draft.vkLink,
             enabled = enabled,
@@ -1297,13 +1310,26 @@ private fun LazyListScope.vkTurnSection(
             SettingsDropdown(
                 label = "Ядро",
                 selectedValue = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
-                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT, VkTurnConfig.CORE_CSQTT),
+                options = listOf(
+                    VkTurnConfig.CORE_FREETURN,
+                    VkTurnConfig.CORE_WDTT,
+                    VkTurnConfig.CORE_CSQTT,
+                    VkTurnConfig.CORE_TURNABLE,
+                ),
                 enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(core = v) } },
+                onValueSelected = { v ->
+                    onChange {
+                        it.copy(
+                            core = v,
+                            outbound = if (v == VkTurnConfig.CORE_TURNABLE) VkTurnConfig.OUTBOUND_WIREGUARD else it.outbound,
+                        )
+                    }
+                },
                 valueLabel = {
                     when (it) {
                         VkTurnConfig.CORE_WDTT -> "qWDTT (агрегация по звонкам)"
                         VkTurnConfig.CORE_CSQTT -> "csqtt (TURN/RTP, Rust)"
+                        VkTurnConfig.CORE_TURNABLE -> "Turnable (relay/mpath, Android)"
                         else -> "freeturn (стандарт)"
                     }
                 }
@@ -1423,12 +1449,31 @@ private fun LazyListScope.vkTurnSection(
                     onChange = { transform -> onChange { it.copy(wdttPlus = transform(it.wdttPlus)) } }
                 )
             }
+            if (draft.core == VkTurnConfig.CORE_TURNABLE) {
+                OutlinedTextField(
+                    value = draft.turnableConfig,
+                    onValueChange = { value -> onChange { it.copy(turnableConfig = value) } },
+                    label = { Text("Turnable client config") },
+                    placeholder = { Text("turnable://… или JSON") },
+                    enabled = enabled,
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (showAutoInstall) {
+                    OutlinedButton(
+                        onClick = onTurnableAutoInstall,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Установить Turnable на VPS") }
+                }
+            }
         }
     }
 
     // freeturn-only transport/exit section — entirely hidden for the WDTT core (it connects purely by the
     // wdtt-server IP[:port] above and fetches its WireGuard config from the server).
-    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT &&
+        draft.core != VkTurnConfig.CORE_TURNABLE) item {
         val isWdtt = false
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -4071,6 +4116,8 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_TRUSTTUNNEL -> "Trust Tunnel"
     ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
     ProxyProfile.TYPE_NAIVE -> "Naive"
+    ProxyProfile.TYPE_MIERU -> "Mieru"
+    ProxyProfile.TYPE_OPENVPN -> "OpenVPN"
     else -> type.uppercase()
 }
 

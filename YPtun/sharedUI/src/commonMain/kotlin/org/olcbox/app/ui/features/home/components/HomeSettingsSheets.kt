@@ -34,8 +34,8 @@ import org.olcbox.app.ui.components.SettingsChoiceChips
 import org.olcbox.app.ui.i18n.LocalStrings
 
 /*
- * Settings that change what the home screen shows live next to it (the ⋮ menu), not three screens away
- * in the app settings: how the list looks and how servers are pinged.
+ * Settings that change what the home screen shows live next to it (the ⋮ menu): how the list looks.
+ * Ping has its own full page in application settings.
  */
 
 /** Bottom sheet with a title and a scrolling column of cards. */
@@ -163,90 +163,87 @@ fun ListViewSheet(
     }
 }
 
-/** «Настройки пинга»: how locations are probed and how the result is shown. */
+/** Reusable contents of the full «Пинг» application-settings page. */
 @Composable
-fun PingSettingsSheet(
+fun PingSettingsContent(
     settings: AppBehaviorSettings,
     onChanged: (AppBehaviorSettings) -> Unit,
-    onDismiss: () -> Unit
 ) {
     val s = LocalStrings.current
     val isProxyMode = settings.pingMode == AppBehaviorSettings.PING_PROXY_GET ||
         settings.pingMode == AppBehaviorSettings.PING_PROXY_HEAD
-    HomeSettingsSheet(title = s.pingSettingsTitle, onDismiss = onDismiss) {
-        SettingsCaption(s.pingMethod)
-        SettingsChoiceChips(
-            options = listOf(
-                AppBehaviorSettings.PING_AUTO to s.pingModeAuto,
-                AppBehaviorSettings.PING_TCP to s.pingModeTcp,
-                AppBehaviorSettings.PING_ICMP to s.pingModeIcmp,
-                AppBehaviorSettings.PING_PROXY_GET to s.pingModeProxyGet,
-                AppBehaviorSettings.PING_PROXY_HEAD to s.pingModeProxyHead,
-            ),
-            selected = settings.pingMode
-        ) { onChanged(settings.copy(pingMode = it)) }
-        // The target URL means something only for the proxy GET/HEAD probes; TCP/ICMP probe the
-        // location's own server, so the field is disabled for those modes.
-        OutlinedTextField(
-            value = settings.pingUrl,
-            onValueChange = { onChanged(settings.copy(pingUrl = it)) },
-            label = { Text(s.pingTarget) },
-            placeholder = { Text(s.pingTargetHint) },
-            singleLine = true,
-            enabled = isProxyMode,
-            modifier = Modifier.fillMaxWidth()
-        )
+    SettingsCaption(s.pingMethod)
+    SettingsChoiceChips(
+        options = listOf(
+            AppBehaviorSettings.PING_AUTO to s.pingModeAuto,
+            AppBehaviorSettings.PING_TCP to s.pingModeTcp,
+            AppBehaviorSettings.PING_ICMP to s.pingModeIcmp,
+            AppBehaviorSettings.PING_PROXY_GET to s.pingModeProxyGet,
+            AppBehaviorSettings.PING_PROXY_HEAD to s.pingModeProxyHead,
+        ),
+        selected = settings.pingMode
+    ) { onChanged(settings.copy(pingMode = it)) }
+    // The target URL means something only for the proxy GET/HEAD probes; TCP/ICMP probe the
+    // location's own server, so the field is disabled for those modes.
+    OutlinedTextField(
+        value = settings.pingUrl,
+        onValueChange = { onChanged(settings.copy(pingUrl = it)) },
+        label = { Text(s.pingTarget) },
+        placeholder = { Text(s.pingTargetHint) },
+        singleLine = true,
+        enabled = isProxyMode,
+        modifier = Modifier.fillMaxWidth()
+    )
 
-        SettingsCaption(s.pingResultLabel)
-        SettingsChoiceChips(
-            options = listOf(
-                AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
-                AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
-                AppBehaviorSettings.PING_RESULT_BOTH to s.pingResultBoth,
-            ),
-            selected = settings.pingResultDisplay
-        ) { onChanged(settings.copy(pingResultDisplay = it)) }
-        SettingsCard {
-            SettingsCardToggle(s.showAliveCountTitle, s.showAliveCountSubtitle, settings.showSubscriptionAliveCount) {
-                onChanged(settings.copy(showSubscriptionAliveCount = it))
-            }
-            SettingsCardDivider()
-            SettingsCardToggle(s.savePingResultsTitle, s.savePingResultsSubtitle, settings.savePingResults) {
-                onChanged(settings.copy(savePingResults = it))
-            }
-            SettingsCardDivider()
-            SettingsCardToggle(s.showPingControlsTitle, s.showPingControlsSubtitle, settings.showPingControls) {
-                onChanged(settings.copy(showPingControls = it))
-            }
+    SettingsCaption(s.pingResultLabel)
+    SettingsChoiceChips(
+        options = listOf(
+            AppBehaviorSettings.PING_RESULT_TIME to s.pingResultTime,
+            AppBehaviorSettings.PING_RESULT_ICON to s.pingResultIcon,
+            AppBehaviorSettings.PING_RESULT_BOTH to s.pingResultBoth,
+        ),
+        selected = settings.pingResultDisplay
+    ) { onChanged(settings.copy(pingResultDisplay = it)) }
+    SettingsCard {
+        SettingsCardToggle(s.showAliveCountTitle, s.showAliveCountSubtitle, settings.showSubscriptionAliveCount) {
+            onChanged(settings.copy(showSubscriptionAliveCount = it))
         }
-
-        SettingsCaption(s.pingSpeedSection)
-        SettingsCard {
-            PingParallelismRow(
-                value = settings.effectivePingParallelism(),
-                onChange = { onChanged(settings.copy(pingParallelism = it)) }
-            )
-            SettingsCardDivider()
-            PingTimeoutRow(
-                seconds = settings.pingTimeoutSec.coerceIn(
-                    AppBehaviorSettings.MIN_PING_TIMEOUT_SEC,
-                    AppBehaviorSettings.MAX_PING_TIMEOUT_SEC
-                ),
-                onChange = { onChanged(settings.copy(pingTimeoutSec = it)) }
-            )
+        SettingsCardDivider()
+        SettingsCardToggle(s.savePingResultsTitle, s.savePingResultsSubtitle, settings.savePingResults) {
+            onChanged(settings.copy(savePingResults = it))
         }
-
-        SettingsCaption(s.pingPrecisionTitle)
-        Text(
-            text = s.pingPrecisionSubtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        SettingsChoiceChips(
-            options = listOf(1 to s.pingPrecisionSingle, 2 to s.pingPrecisionDouble, 3 to s.pingPrecisionTriple),
-            selected = settings.effectivePingPrecision()
-        ) { onChanged(settings.copy(pingPrecision = it)) }
+        SettingsCardDivider()
+        SettingsCardToggle(s.showPingControlsTitle, s.showPingControlsSubtitle, settings.showPingControls) {
+            onChanged(settings.copy(showPingControls = it))
+        }
     }
+
+    SettingsCaption(s.pingSpeedSection)
+    SettingsCard {
+        PingParallelismRow(
+            value = settings.effectivePingParallelism(),
+            onChange = { onChanged(settings.copy(pingParallelism = it)) }
+        )
+        SettingsCardDivider()
+        PingTimeoutRow(
+            seconds = settings.pingTimeoutSec.coerceIn(
+                AppBehaviorSettings.MIN_PING_TIMEOUT_SEC,
+                AppBehaviorSettings.MAX_PING_TIMEOUT_SEC
+            ),
+            onChange = { onChanged(settings.copy(pingTimeoutSec = it)) }
+        )
+    }
+
+    SettingsCaption(s.pingPrecisionTitle)
+    Text(
+        text = s.pingPrecisionSubtitle,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    SettingsChoiceChips(
+        options = listOf(1 to s.pingPrecisionSingle, 2 to s.pingPrecisionDouble, 3 to s.pingPrecisionTriple),
+        selected = settings.effectivePingPrecision()
+    ) { onChanged(settings.copy(pingPrecision = it)) }
 }
 
 /** Slider for the ping timeout. */

@@ -4,7 +4,7 @@
 
 ### Мультипротокольный сетевой клиент · Android, Windows и Linux · iOS в бете
 
-*VLESS · Reality · XHTTP поверх **Xray** и **sing-box**, **Hysteria2** (QUIC), обфусцированный **AmneziaWG**, туннель через звонки **VK-TURN**, DNS-туннель **MasterDNS**, отдельный Telegram-прокси через **WARP** — и **olcRTC** — транспорт поверх сервисов видеосвязи.*
+*VLESS · Reality · XHTTP поверх **Xray** и **sing-box**, **OpenVPN**, **Hysteria2** (QUIC), обфусцированный **AmneziaWG**, туннель через звонки **VK-TURN**, DNS-туннель **MasterDNS**, отдельный Telegram-прокси через **WARP** — и **olcRTC** — транспорт поверх сервисов видеосвязи.*
 
 <br>
 
@@ -69,7 +69,7 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 | Ядро | Версия | Для чего |
 |---|---|---|
 | [Xray-core](https://github.com/XTLS/Xray-core) | 26.9.30 (локальные патчи) | VLESS · Reality · XHTTP |
-| [sing-box](https://github.com/SagerNet/sing-box) | 1.14.1 | Hysteria2, TUN, маршрутизация |
+| [sing-box](https://github.com/SagerNet/sing-box) | 1.14.4 | OpenVPN, Hysteria2, TUN, маршрутизация |
 | [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) | amneziawg-go | обфусцированный WireGuard |
 | [olcRTC](https://github.com/ghostlane-project/olcrtc) | форк ghostlane | трафик поверх видеозвонков |
 | [free-turn-proxy (VK-TURN)](https://github.com/samosvalishe/free-turn-proxy) | 1.3.2 | туннель через звонки VK |
@@ -89,12 +89,12 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 | | |
 |---|---|
 | **Несколько движков** | Xray, sing-box, AmneziaWG, VK-TURN, MasterDNS — ядро подбирается под протокол автоматически либо вручную. |
-| **Протоколы** | VLESS · VMess · Trojan · Shadowsocks · Hysteria2 · WireGuard / AmneziaWG |
+| **Протоколы** | VLESS · VMess · Trojan · Shadowsocks · OpenVPN · Hysteria2 · WireGuard / AmneziaWG |
 | **Транспорты** | TCP · WS · gRPC · HTTPUpgrade · XHTTP · TLS · Reality · отпечатки uTLS |
 | **MasterDNS (DNS-туннель)** | Туннель поверх DNS-запросов (MasterDnsVPN: свой ARQ-транспорт, несколько резолверов сразу, дублирование пакетов) — вариант для сетей, где доступен только DNS. Автоустановка сервера на VPS по SSH в один тап. |
 | **Telegram-прокси через WARP** | Лёгкий фоновый сервис: WARP-туннель + локальный SOCKS5 для Telegram, независимо от основного подключения. |
 | **olcRTC** | Транспорт [olcRTC](https://github.com/ghostlane-project/olcrtc) — трафик идёт через реальные сервисы видеозвонков (Jazz, MTS Link, VK Calls, Telemost, Jitsi); трафик передаётся поверх этих сервисов. |
-| **Умный импорт** | ссылки vless/vmess/trojan/ss, base64, JSON-панели, **полные сырые конфиги Xray / sing-box** (применяются как есть), AmneziaWG `.conf`/QR, olcRTC-URI, Happ-профили, массовый импорт списка ссылок. |
+| **Умный импорт** | ссылки vless/vmess/trojan/ss, base64, JSON-панели, **полные сырые конфиги Xray / sing-box**, самодостаточные OpenVPN `.ovpn`, AmneziaWG `.conf`/QR, olcRTC-URI, Happ-профили, массовый импорт списка ссылок. |
 | **DNS и маршруты** | Happ-совместимые профили маршрутизации (запретить/напрямую/через прокси по `geoip:`/`geosite:`/`asn:`/доменам/CIDR), per-rule правила v2rayNG-стиля, тумблер фильтрации РФ-доменов, свои DNS и fakedns. |
 | **Авто-выбор сервера** | Подключение к быстрейшему живому узлу в один тап, с перебором при неудаче. |
 | **HTTP-прокси** | Happ-совместимый локальный HTTP-прокси поверх активного движка. |
