@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/enfein/mieru/v3/pkg/appctl"
@@ -16,8 +17,9 @@ import (
 
 var mieruRuntime struct {
 	sync.Mutex
-	mux    *protocol.Mux
-	server *socks5.Server
+	mux     *protocol.Mux
+	server  *socks5.Server
+	running atomic.Bool
 }
 
 func mieruProfile(link string) (*appctlpb.ClientProfile, error) {
@@ -41,7 +43,7 @@ func mieruProfile(link string) (*appctlpb.ClientProfile, error) {
 func MieruStart(link, listenAddr string) error {
 	mieruRuntime.Lock()
 	defer mieruRuntime.Unlock()
-	if mieruRuntime.mux != nil {
+	if mieruRuntime.mux != nil || mieruRuntime.running.Load() {
 		return fmt.Errorf("mieru is already running")
 	}
 	profile, err := mieruProfile(link)
@@ -72,8 +74,16 @@ func MieruStart(link, listenAddr string) error {
 	}
 	mieruRuntime.mux = mux
 	mieruRuntime.server = server
+	mieruRuntime.running.Store(true)
 	go func() {
-		if err := server.Serve(listener); err != nil && MieruRunning() {
+		err := server.Serve(listener)
+		mieruRuntime.Lock()
+		isCurrent := mieruRuntime.server == server
+		if isCurrent {
+			mieruRuntime.running.Store(false)
+		}
+		mieruRuntime.Unlock()
+		if err != nil && isCurrent {
 			PushLog("mieru", "SOCKS5 server stopped: "+err.Error())
 		}
 	}()
@@ -84,6 +94,7 @@ func MieruStart(link, listenAddr string) error {
 func MieruStop() {
 	mieruRuntime.Lock()
 	defer mieruRuntime.Unlock()
+	mieruRuntime.running.Store(false)
 	if mieruRuntime.server != nil {
 		_ = mieruRuntime.server.Close()
 	}
@@ -95,7 +106,5 @@ func MieruStop() {
 }
 
 func MieruRunning() bool {
-	mieruRuntime.Lock()
-	defer mieruRuntime.Unlock()
-	return mieruRuntime.mux != nil && mieruRuntime.server != nil
+	return mieruRuntime.running.Load()
 }
