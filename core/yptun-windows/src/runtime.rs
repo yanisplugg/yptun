@@ -27,6 +27,7 @@ use yptun_core::desktop_native_assets::{
     csqtt_file_names, openflux_file_name, snolc_file_name, trust_tunnel_file_name, DesktopOs,
 };
 use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
+use yptun_core::desktop_store::device_identity;
 use yptun_core::desktop_stores::DesktopSocksSettingsStore;
 use yptun_core::desktop_vpn_manager::{
     TUNNEL_PROBE_HOST, TUNNEL_PROBE_PORT, WATCHDOG_GRACE_MS, WATCHDOG_INTERVAL_MS,
@@ -68,7 +69,6 @@ use yptun_core::{warp, warp_account};
 use crate::logging;
 use crate::proxy_windows::SystemProxy;
 use crate::sidecars::{ChildJob, CsqttSidecar, ProcessSlot};
-use crate::store::device_identity;
 
 const LOOPBACK: &str = "127.0.0.1";
 const EXTERNAL_TUN_STATE_FILE: &str = "windows_tun_state.json";

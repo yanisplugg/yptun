@@ -11,7 +11,6 @@ mod logging;
 mod proxy_windows;
 mod runtime;
 mod sidecars;
-mod store;
 
 pub use app::WindowsApp;
 pub use ffi::*;

@@ -12,6 +12,7 @@ use yptun_core::desktop_api::{
 use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
 use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
+use yptun_core::desktop_store::{device_identity, DesktopFileStore};
 use yptun_core::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
 use yptun_core::desktop_vpn_runtime::LogJournal;
 use yptun_core::home;
@@ -21,8 +22,6 @@ use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
 use yptun_core::update::AppUpdateSettings;
 use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
-
-use crate::store::{device_identity, FileStore};
 
 mod host;
 mod runtime;
@@ -62,7 +61,7 @@ impl LinuxApp {
         let runtime =
             LinuxRuntime::new(app_data_dir.clone(), identity.clone(), Arc::clone(&journal));
         let repository = Repository::new(
-            Box::new(FileStore::new(app_data_dir.clone())),
+            Box::new(DesktopFileStore::new(app_data_dir.clone())),
             fetcher,
             ClientInfo {
                 user_agent: format!("YPtun/{app_version}"),
@@ -609,7 +608,11 @@ mod tests {
         );
         drop(app);
 
-        assert!(temp.path().join(crate::store::BUNDLE_FILE).is_file());
+        assert!(
+            temp.path()
+                .join(yptun_core::desktop_store::BUNDLE_FILE)
+                .is_file()
+        );
         let reloaded = make_app(temp.path(), FakeFetcher::default());
         let snapshot = command(&reloaded, serde_json::json!({"command": "snapshot"}));
         assert_eq!(snapshot["data"]["activeProfileId"], two_id);

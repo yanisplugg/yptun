@@ -11,6 +11,7 @@ use yptun_core::desktop_api::{
 use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
 use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
+use yptun_core::desktop_store::{device_identity, DesktopFileStore};
 use yptun_core::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
 use yptun_core::desktop_vpn_runtime::{first_public_exit_ip, LogJournal};
 use yptun_core::home;
@@ -25,7 +26,6 @@ use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
 use crate::http::ReqwestFetcher;
 use crate::logging;
 use crate::runtime::WindowsRuntime;
-use crate::store::{device_identity, FileStore};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -127,7 +127,7 @@ impl WindowsApp {
     ) -> Self {
         let _ = std::fs::create_dir_all(&app_data_dir);
         let identity = device_identity(&app_data_dir);
-        let store = FileStore::new(app_data_dir.clone());
+        let store = DesktopFileStore::new(app_data_dir.clone());
         let client = ClientInfo {
             user_agent: format!("YPtun/{app_version}"),
             app_version: app_version.to_string(),

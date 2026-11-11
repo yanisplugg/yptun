@@ -19,6 +19,7 @@ pub mod desktop_proxy;
 pub mod desktop_self_update;
 pub mod desktop_settings;
 pub mod desktop_socks_settings;
+pub mod desktop_store;
 pub mod desktop_stores;
 pub mod desktop_vpn_manager;
 pub mod desktop_vpn_start;

@@ -12,7 +12,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 yptun-core = { path = "../yptun-core" }
-getrandom = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls", "socks", "gzip", "brotli", "deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

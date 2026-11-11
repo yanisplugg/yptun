@@ -5,8 +5,6 @@ mod backend;
 mod http;
 #[cfg(any(target_os = "linux", test))]
 mod linux;
-#[cfg(any(target_os = "linux", test))]
-mod store;
 
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};

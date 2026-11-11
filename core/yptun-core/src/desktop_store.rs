@@ -1,3 +1,5 @@
+//! Shared file-backed desktop repository and installation identity.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -6,14 +8,16 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
-use yptun_core::location::LocationBundleV4;
-use yptun_core::repository::Store;
-use yptun_core::settings::AppBehaviorSettings;
-use yptun_core::vpn_settings::VpnSettings;
+
+use crate::location::LocationBundleV4;
+use crate::repository::Store;
+use crate::settings::AppBehaviorSettings;
+use crate::vpn_settings::VpnSettings;
 
 pub const BUNDLE_FILE: &str = "locations_v4.json";
 pub const LEGACY_BUNDLE_FILE: &str = "locations_v3.json";
 const REPOSITORY_STATE_FILE: &str = "repository_state.json";
+const DEVICE_IDENTITY_FILE: &str = "device_identity";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RepositoryState {
@@ -21,13 +25,13 @@ struct RepositoryState {
     values: BTreeMap<String, String>,
 }
 
-/// File storage compatible with the existing Kotlin desktop client.
-pub struct FileStore {
+/// File storage compatible with the legacy Compose desktop client.
+pub struct DesktopFileStore {
     root: PathBuf,
     state_lock: Mutex<()>,
 }
 
-impl FileStore {
+impl DesktopFileStore {
     pub fn new(root: PathBuf) -> Self {
         let _ = fs::create_dir_all(&root);
         Self {
@@ -44,16 +48,14 @@ impl FileStore {
         self.root.join(LEGACY_BUNDLE_FILE)
     }
 
-    fn state_file(&self) -> PathBuf {
-        self.root.join(REPOSITORY_STATE_FILE)
-    }
-
-    fn read_bundle_file(&self) -> Option<LocationBundleV4> {
+    fn stored_bundle_file(&self) -> Option<PathBuf> {
         [self.bundle_file(), self.legacy_bundle_file()]
             .into_iter()
             .find(|path| path.is_file())
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|text| serde_json::from_str(&text).ok())
+    }
+
+    fn state_file(&self) -> PathBuf {
+        self.root.join(REPOSITORY_STATE_FILE)
     }
 
     fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
@@ -62,10 +64,14 @@ impl FileStore {
         }
         let temp = path.with_extension(format!("{}.tmp", std::process::id()));
         fs::write(&temp, text)?;
-        if path.exists() {
-            let _ = fs::remove_file(path);
+        match fs::rename(&temp, path) {
+            Ok(()) => Ok(()),
+            Err(_) if path.exists() => {
+                fs::remove_file(path)?;
+                fs::rename(temp, path)
+            }
+            Err(error) => Err(error),
         }
-        fs::rename(temp, path)
     }
 
     fn load_state(&self) -> RepositoryState {
@@ -82,9 +88,11 @@ impl FileStore {
     }
 }
 
-impl Store for FileStore {
+impl Store for DesktopFileStore {
     fn load_bundle(&self) -> Option<LocationBundleV4> {
-        self.read_bundle_file()
+        fs::read_to_string(self.stored_bundle_file()?)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
     }
 
     fn save_bundle(&self, bundle: &LocationBundleV4) {
@@ -94,14 +102,14 @@ impl Store for FileStore {
     }
 
     fn bundle_version_token(&self) -> Option<i64> {
-        let meta = fs::metadata(self.bundle_file()).ok()?;
-        let modified = meta
+        let metadata = fs::metadata(self.stored_bundle_file()?).ok()?;
+        let modified = metadata
             .modified()
             .ok()?
             .duration_since(UNIX_EPOCH)
             .ok()?
             .as_nanos() as i64;
-        Some(modified ^ meta.len() as i64)
+        Some(modified ^ metadata.len() as i64)
     }
 
     fn load_value(&self, key: &str) -> Option<String> {
@@ -128,7 +136,7 @@ impl Store for FileStore {
 }
 
 pub fn device_identity(root: &Path) -> String {
-    let path = root.join("device_identity");
+    let path = root.join(DEVICE_IDENTITY_FILE);
     if let Ok(value) = fs::read_to_string(&path) {
         let value = value.trim();
         if !value.is_empty() {
@@ -136,18 +144,45 @@ pub fn device_identity(root: &Path) -> String {
         }
     }
 
-    let mut bytes = [0u8; 16];
-    let _ = getrandom::getrandom(&mut bytes);
-    let value = hex(&bytes);
+    let value = crate::identity::generate_install_id();
     let _ = fs::create_dir_all(root);
     let _ = fs::write(path, &value);
     value
 }
 
-fn hex(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push_str(&format!("{byte:02x}"));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let base = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let path = base.join(format!(
+            "yptun-desktop-store-{name}-{}-{}",
+            std::process::id(),
+            crate::desktop_app::now_ms()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
-    output
+
+    #[test]
+    fn legacy_bundle_state_and_identity_share_one_store() {
+        let root = test_dir("compatibility");
+        fs::write(root.join(LEGACY_BUNDLE_FILE), "{}").unwrap();
+        let store = DesktopFileStore::new(root.clone());
+
+        assert!(store.load_bundle().is_some());
+        assert!(store.bundle_version_token().is_some());
+        store.save_value("key", "value");
+        assert_eq!(store.load_value("key").as_deref(), Some("value"));
+
+        let identity = device_identity(&root);
+        assert_eq!(identity.len(), 32);
+        assert!(identity.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(device_identity(&root), identity);
+
+        let _ = fs::remove_dir_all(root);
+    }
 }
