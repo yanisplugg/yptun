@@ -36,10 +36,10 @@ jobs:
           - name: Linux ARM64
             os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core -> target
@@ -60,3 +60,18 @@ jobs:
       - name: Test shared desktop client
         working-directory: core
         run: cargo test -p yptun-desktop --locked
+      - name: Build shared desktop release binary
+        working-directory: core
+        run: cargo build -p yptun-desktop --release --locked
+      - name: Verify Windows GUI subsystem
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $path = 'core/target/release/yptun.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $optionalHeader = $peOffset + 24
+          $subsystem = [BitConverter]::ToUInt16($bytes, $optionalHeader + 68)
+          if ($subsystem -ne 2) {
+            throw "Expected Windows GUI subsystem (2), found $subsystem"
+          }

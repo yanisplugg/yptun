@@ -1,10 +1,58 @@
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 #[cfg(windows)]
 use std::path::PathBuf;
 
 pub trait DesktopBackend: Send + Sync {
     fn command(&self, request_json: &str) -> String;
+}
+
+type CommandCompletion = Box<dyn FnOnce(String) + Send + 'static>;
+
+struct ActorCommand {
+    request_json: String,
+    completion: CommandCompletion,
+}
+
+#[derive(Clone)]
+pub struct DesktopActor {
+    sender: mpsc::Sender<ActorCommand>,
+}
+
+impl DesktopActor {
+    pub fn spawn() -> Self {
+        Self::with_backend(create())
+    }
+
+    fn with_backend(backend: Arc<dyn DesktopBackend>) -> Self {
+        let (sender, receiver) = mpsc::channel::<ActorCommand>();
+        std::thread::Builder::new()
+            .name("yptun-desktop-application".into())
+            .spawn(move || {
+                while let Ok(command) = receiver.recv() {
+                    let response = backend.command(&command.request_json);
+                    (command.completion)(response);
+                }
+            })
+            .expect("failed to start the desktop application actor");
+        Self { sender }
+    }
+
+    pub fn command(&self, request_json: String, completion: impl FnOnce(String) + Send + 'static) {
+        if let Err(error) = self.sender.send(ActorCommand {
+            request_json,
+            completion: Box::new(completion),
+        }) {
+            (error.0.completion)(
+                serde_json::json!({
+                    "ok": false,
+                    "data": null,
+                    "error": "Desktop application actor is not available"
+                })
+                .to_string(),
+            );
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -126,7 +174,10 @@ impl DesktopBackend for UnsupportedBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::linux_data_dir_from_home;
+    use std::sync::mpsc;
+    use std::thread;
+
+    use super::{linux_data_dir_from_home, DesktopActor, DesktopBackend};
 
     #[test]
     fn migrates_legacy_linux_data_directory() {
@@ -140,5 +191,36 @@ mod tests {
         assert_eq!(current, temp.path().join(".yptun"));
         assert!(current.join("locations_v4.json").is_file());
         assert!(!legacy.exists());
+    }
+
+    struct ThreadBackend {
+        caller: thread::ThreadId,
+    }
+
+    impl DesktopBackend for ThreadBackend {
+        fn command(&self, request_json: &str) -> String {
+            assert_ne!(thread::current().id(), self.caller);
+            request_json.to_owned()
+        }
+    }
+
+    #[test]
+    fn actor_runs_commands_in_order_off_the_caller_thread() {
+        let backend = std::sync::Arc::new(ThreadBackend {
+            caller: thread::current().id(),
+        });
+        let actor = DesktopActor::with_backend(backend);
+        let (sender, receiver) = mpsc::channel();
+
+        for value in ["first", "second", "third"] {
+            let sender = sender.clone();
+            actor.command(value.into(), move |response| sender.send(response).unwrap());
+        }
+        drop(sender);
+
+        assert_eq!(
+            receiver.iter().collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
     }
 }

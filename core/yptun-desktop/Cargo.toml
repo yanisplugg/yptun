@@ -1,6 +1,6 @@
 [package]
 name = "yptun-desktop"
-version = "0.1.0"
+version = "4.0.0"
 description = "Shared native Rust/Slint desktop client for YPtun on Windows and Linux"
 edition.workspace = true
 license.workspace = true

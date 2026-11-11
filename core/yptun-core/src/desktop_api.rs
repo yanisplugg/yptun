@@ -37,7 +37,7 @@ impl Default for CommandRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileItem {
     pub id: String,
@@ -51,7 +51,7 @@ pub struct ProfileItem {
     pub ping_tested: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionItem {
     pub url: String,
@@ -64,7 +64,7 @@ pub struct SubscriptionItem {
     pub expires_at_epoch_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeDiagnostics {
     pub active_engine: String,
@@ -77,7 +77,7 @@ pub struct RuntimeDiagnostics {
     pub watchdog_probe_failures: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoreSnapshot {
     pub status: String,
@@ -95,7 +95,7 @@ pub struct CoreSnapshot {
     pub logs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocationEditorData {
     pub storage_id: String,
@@ -104,7 +104,7 @@ pub struct LocationEditorData {
     pub is_subscription: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsSnapshot {
     pub traffic: TrafficSettings,
@@ -134,13 +134,13 @@ impl SettingsSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextPayload {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateCheckPayload {
     pub version: String,
@@ -152,8 +152,8 @@ pub struct UpdateCheckPayload {
     pub is_update_available: bool,
 }
 
-#[derive(Serialize)]
-pub struct Response<T: Serialize> {
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Response<T> {
     pub ok: bool,
     pub data: Option<T>,
     pub error: Option<String>,

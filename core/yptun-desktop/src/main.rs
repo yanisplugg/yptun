@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod backend;
 #[cfg(any(target_os = "linux", test))]
 mod http;
@@ -10,66 +12,22 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Deserialize;
 use serde_json::Value;
 use slint::{ModelRc, SharedString, Timer, TimerMode, VecModel};
+use yptun_core::desktop_api::{CoreSnapshot, Response};
 
 slint::include_modules!();
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CoreResponse<T> {
-    ok: bool,
-    data: Option<T>,
-    error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Snapshot {
-    status_label: String,
-    status_detail: String,
-    is_connected: bool,
-    runtime_available: bool,
-    connection_mode: String,
-    active_profile_id: Option<String>,
-    profiles: Vec<Profile>,
-    #[serde(default)]
-    subscriptions: Vec<Subscription>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Profile {
-    id: String,
-    name: String,
-    subtitle: String,
-    engine: String,
-    is_complete: bool,
-    ping_ms: Option<i32>,
-    ping_tested: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Subscription {
-    url: String,
-    name: String,
-    custom_name: String,
-    location_count: usize,
-    auto_update_enabled: bool,
-}
-
 fn main() -> Result<(), slint::PlatformError> {
-    let backend = backend::create();
+    let actor = backend::DesktopActor::spawn();
     let ui = AppWindow::new()?;
     let state = Arc::new(Mutex::new(UiState::default()));
 
-    refresh(&ui, backend.as_ref(), &state);
+    request_refresh(&ui, &actor, state.clone());
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_toggle_connection(move || {
             let Some(ui) = weak.upgrade() else { return };
@@ -77,35 +35,53 @@ fn main() -> Result<(), slint::PlatformError> {
             let command = if connected { "stop" } else { "start" };
             let mode = ui.get_connection_mode().to_string();
             let request = serde_json::json!({ "command": command, "mode": mode });
-            let _ = backend.command(&request.to_string());
-            refresh(&ui, backend.as_ref(), &state);
+            ui.set_status_label(
+                if connected {
+                    "Отключение"
+                } else {
+                    "Подключение"
+                }
+                .into(),
+            );
+            ui.set_status_detail("Пожалуйста, подождите…".into());
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if !response_ok(&response) {
+                    show_status_error(&ui, &response);
+                }
+                request_refresh(&ui, &refresh_actor, refresh_state);
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_delete_profile(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({ "command": "delete", "id": id.as_str() });
-            let response = backend.command(&request.to_string());
-            if response_ok(&response) {
-                ui.set_current_page(0);
-                ui.set_editor_id("".into());
-                ui.set_editor_name("".into());
-                ui.set_editor_json("".into());
-                refresh(&ui, backend.as_ref(), &state);
-            } else {
-                ui.set_current_page(3);
-                ui.set_editor_error(response_error(&response).into());
-            }
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if response_ok(&response) {
+                    ui.set_current_page(0);
+                    ui.set_editor_id("".into());
+                    ui.set_editor_name("".into());
+                    ui.set_editor_json("".into());
+                    request_refresh(&ui, &refresh_actor, refresh_state);
+                } else {
+                    ui.set_current_page(3);
+                    ui.set_editor_error(response_error(&response).into());
+                }
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_refresh_subscription(move |url| {
             let Some(ui) = weak.upgrade() else { return };
@@ -113,60 +89,67 @@ fn main() -> Result<(), slint::PlatformError> {
                 "command": "refresh_subscription",
                 "id": url.as_str(),
             });
-            let response = backend.command(&request.to_string());
-            if response_ok(&response) {
-                refresh(&ui, backend.as_ref(), &state);
-            } else {
-                ui.set_status_label("Ошибка".into());
-                ui.set_status_detail(response_error(&response).into());
-            }
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if response_ok(&response) {
+                    request_refresh(&ui, &refresh_actor, refresh_state);
+                } else {
+                    show_status_error(&ui, &response);
+                }
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         ui.on_edit_profile(move |id| {
             let Some(ui) = weak.upgrade() else { return };
-            let request = serde_json::json!({ "command": "get_profile", "id": id.as_str() });
-            let response = backend.command(&request.to_string());
-            match response_data(&response) {
-                Some(data) => {
-                    let location = data
-                        .get("location")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    let name = location
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    ui.set_editor_id(
-                        data.get("storageId")
+            let id = id.to_string();
+            let request = serde_json::json!({ "command": "get_profile", "id": id });
+            submit_to_ui(
+                &ui,
+                &actor,
+                request,
+                move |ui, response| match response_data(&response) {
+                    Some(data) => {
+                        let location = data
+                            .get("location")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({}));
+                        let name = location
+                            .get("name")
                             .and_then(Value::as_str)
-                            .unwrap_or(id.as_str())
-                            .into(),
-                    );
-                    ui.set_editor_name(name.into());
-                    ui.set_editor_json(
-                        serde_json::to_string_pretty(&location)
-                            .unwrap_or_else(|_| location.to_string())
-                            .into(),
-                    );
-                    ui.set_editor_subscription(
-                        data.get("isSubscription")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    );
-                    ui.set_editor_error("".into());
-                }
-                None => ui.set_editor_error(response_error(&response).into()),
-            }
+                            .unwrap_or_default();
+                        ui.set_editor_id(
+                            data.get("storageId")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&id)
+                                .into(),
+                        );
+                        ui.set_editor_name(name.into());
+                        ui.set_editor_json(
+                            serde_json::to_string_pretty(&location)
+                                .unwrap_or_else(|_| location.to_string())
+                                .into(),
+                        );
+                        ui.set_editor_subscription(
+                            data.get("isSubscription")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        );
+                        ui.set_editor_error("".into());
+                    }
+                    None => ui.set_editor_error(response_error(&response).into()),
+                },
+            );
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_save_profile(move |id, name, json| {
             let Some(ui) = weak.upgrade() else { return };
@@ -189,80 +172,94 @@ fn main() -> Result<(), slint::PlatformError> {
                 "id": id.as_str(),
                 "text": location.to_string(),
             });
-            let response = backend.command(&request.to_string());
-            if response_ok(&response) {
-                ui.set_current_page(0);
-                ui.set_editor_error("".into());
-                refresh(&ui, backend.as_ref(), &state);
-            } else {
-                ui.set_editor_error(response_error(&response).into());
-            }
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if response_ok(&response) {
+                    ui.set_current_page(0);
+                    ui.set_editor_error("".into());
+                    request_refresh(&ui, &refresh_actor, refresh_state);
+                } else {
+                    ui.set_editor_error(response_error(&response).into());
+                }
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_ping_profile(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({ "command": "ping", "id": id.as_str() });
-            let response = backend.command(&request.to_string());
-            if response_ok(&response) {
-                refresh(&ui, backend.as_ref(), &state);
-            } else {
-                ui.set_status_label("Ошибка".into());
-                ui.set_status_detail(response_error(&response).into());
-            }
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if response_ok(&response) {
+                    request_refresh(&ui, &refresh_actor, refresh_state);
+                } else {
+                    show_status_error(&ui, &response);
+                }
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_import_profile(move |text| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({ "command": "import", "text": text.as_str() });
-            let response = backend.command(&request.to_string());
-            if response_ok(&response) {
-                ui.set_import_text("".into());
-                ui.set_import_error("".into());
-                ui.set_current_page(0);
-                refresh(&ui, backend.as_ref(), &state);
-            } else {
-                ui.set_import_error(response_error(&response).into());
-            }
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if response_ok(&response) {
+                    ui.set_import_text("".into());
+                    ui.set_import_error("".into());
+                    ui.set_current_page(0);
+                    request_refresh(&ui, &refresh_actor, refresh_state);
+                } else {
+                    ui.set_import_error(response_error(&response).into());
+                }
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_set_connection_mode(move |mode| {
             let Some(ui) = weak.upgrade() else { return };
             let mode = mode.to_string();
             let request = serde_json::json!({ "command": "set_mode", "mode": mode });
-            let _ = backend.command(&request.to_string());
-            refresh(&ui, backend.as_ref(), &state);
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if !response_ok(&response) {
+                    show_status_error(&ui, &response);
+                }
+                request_refresh(&ui, &refresh_actor, refresh_state);
+            });
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_open_settings(move || {
             if let Some(ui) = weak.upgrade() {
-                load_settings(&ui, backend.as_ref(), &state);
+                request_settings(&ui, &actor, state.clone());
             }
         });
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_save_app_settings(
             move |auto_connect, system_proxy, telegram_proxy, energy_saver| {
@@ -284,37 +281,45 @@ fn main() -> Result<(), slint::PlatformError> {
                     "id": "app_behavior",
                     "text": app_behavior.to_string(),
                 });
-                let response = backend.command(&request.to_string());
-                if response_ok(&response) {
-                    load_settings(&ui, backend.as_ref(), &state);
-                } else {
-                    ui.set_status_label("Ошибка".into());
-                    ui.set_status_detail(response_error(&response).into());
-                }
+                let settings_actor = actor.clone();
+                let settings_state = state.clone();
+                submit_to_ui(&ui, &actor, request, move |ui, response| {
+                    if response_ok(&response) {
+                        request_settings(&ui, &settings_actor, settings_state);
+                    } else {
+                        show_status_error(&ui, &response);
+                    }
+                });
             },
         );
     }
 
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         ui.on_select_profile(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({ "command": "select", "id": id.as_str() });
-            let _ = backend.command(&request.to_string());
-            refresh(&ui, backend.as_ref(), &state);
+            let refresh_actor = actor.clone();
+            let refresh_state = state.clone();
+            submit_to_ui(&ui, &actor, request, move |ui, response| {
+                if !response_ok(&response) {
+                    show_status_error(&ui, &response);
+                }
+                request_refresh(&ui, &refresh_actor, refresh_state);
+            });
         });
     }
 
     let poll_timer = Timer::default();
     {
         let weak = ui.as_weak();
-        let backend = backend.clone();
+        let actor = actor.clone();
         let state = state.clone();
         poll_timer.start(TimerMode::Repeated, Duration::from_millis(900), move || {
             if let Some(ui) = weak.upgrade() {
-                refresh(&ui, backend.as_ref(), &state);
+                request_refresh(&ui, &actor, state.clone());
             }
         });
     }
@@ -326,18 +331,60 @@ fn main() -> Result<(), slint::PlatformError> {
 struct UiState {
     connected: bool,
     settings: Option<Value>,
+    snapshot_pending: bool,
 }
 
-fn refresh(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<UiState>) {
-    let response = backend.command(r#"{"command":"snapshot"}"#);
-    let parsed = serde_json::from_str::<CoreResponse<Snapshot>>(&response);
+fn submit_to_ui(
+    ui: &AppWindow,
+    actor: &backend::DesktopActor,
+    request: Value,
+    completion: impl FnOnce(AppWindow, String) + Send + 'static,
+) {
+    let weak = ui.as_weak();
+    actor.command(request.to_string(), move |response| {
+        let _ = weak.upgrade_in_event_loop(move |ui| completion(ui, response));
+    });
+}
+
+fn request_refresh(ui: &AppWindow, actor: &backend::DesktopActor, state: Arc<Mutex<UiState>>) {
+    let should_start = state
+        .lock()
+        .map(|mut current| {
+            if current.snapshot_pending {
+                false
+            } else {
+                current.snapshot_pending = true;
+                true
+            }
+        })
+        .unwrap_or(false);
+    if !should_start {
+        return;
+    }
+
+    let completion_state = state.clone();
+    submit_to_ui(
+        ui,
+        actor,
+        serde_json::json!({ "command": "snapshot" }),
+        move |ui, response| {
+            if let Ok(mut current) = completion_state.lock() {
+                current.snapshot_pending = false;
+            }
+            apply_snapshot_response(&ui, &response, &completion_state);
+        },
+    );
+}
+
+fn apply_snapshot_response(ui: &AppWindow, response: &str, state: &Mutex<UiState>) {
+    let parsed = serde_json::from_str::<Response<CoreSnapshot>>(response);
     let snapshot = match parsed {
-        Ok(CoreResponse {
+        Ok(Response {
             ok: true,
             data: Some(snapshot),
             ..
         }) => snapshot,
-        Ok(CoreResponse { error, .. }) => {
+        Ok(Response { error, .. }) => {
             ui.set_status_label("Ошибка".into());
             ui.set_status_detail(
                 error
@@ -415,16 +462,24 @@ fn refresh(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<
     ui.set_subscriptions(ModelRc::from(Rc::new(VecModel::from(subscriptions))));
 }
 
-fn load_settings(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<UiState>) {
-    let response = backend.command(r#"{"command":"settings"}"#);
-    let parsed = serde_json::from_str::<CoreResponse<Value>>(&response);
+fn request_settings(ui: &AppWindow, actor: &backend::DesktopActor, state: Arc<Mutex<UiState>>) {
+    submit_to_ui(
+        ui,
+        actor,
+        serde_json::json!({ "command": "settings" }),
+        move |ui, response| apply_settings_response(&ui, &response, &state),
+    );
+}
+
+fn apply_settings_response(ui: &AppWindow, response: &str, state: &Mutex<UiState>) {
+    let parsed = serde_json::from_str::<Response<Value>>(response);
     let settings = match parsed {
-        Ok(CoreResponse {
+        Ok(Response {
             ok: true,
             data: Some(settings),
             ..
         }) => settings,
-        Ok(CoreResponse { error, .. }) => {
+        Ok(Response { error, .. }) => {
             ui.set_status_label("Ошибка".into());
             ui.set_status_detail(
                 error
@@ -447,6 +502,11 @@ fn load_settings(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &
     if let Ok(mut current) = state.lock() {
         current.settings = Some(settings);
     }
+}
+
+fn show_status_error(ui: &AppWindow, response: &str) {
+    ui.set_status_label("Ошибка".into());
+    ui.set_status_detail(response_error(response).into());
 }
 
 fn json_bool(parent: Option<&Value>, name: &str, fallback: bool) -> bool {
