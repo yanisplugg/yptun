@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
+use serde_json::Value;
 use slint::{ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 slint::include_modules!();
@@ -67,6 +68,65 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let backend = backend.clone();
         let state = state.clone();
+        ui.on_set_connection_mode(move |mode| {
+            let Some(ui) = weak.upgrade() else { return };
+            let mode = mode.to_string();
+            let request = serde_json::json!({ "command": "set_mode", "mode": mode });
+            let _ = backend.command(&request.to_string());
+            refresh(&ui, backend.as_ref(), &state);
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
+        ui.on_open_settings(move || {
+            if let Some(ui) = weak.upgrade() {
+                load_settings(&ui, backend.as_ref(), &state);
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
+        ui.on_save_app_settings(
+            move |auto_connect, system_proxy, telegram_proxy, energy_saver| {
+                let Some(ui) = weak.upgrade() else { return };
+                let mut app_behavior = state
+                    .lock()
+                    .ok()
+                    .and_then(|value| value.settings.clone())
+                    .and_then(|value| value.get("appBehavior").cloned())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                if let Some(object) = app_behavior.as_object_mut() {
+                    object.insert("autoConnectOnLaunch".into(), auto_connect.into());
+                    object.insert("setSystemProxy".into(), system_proxy.into());
+                    object.insert("telegramProxyEnabled".into(), telegram_proxy.into());
+                    object.insert("energySaver".into(), energy_saver.into());
+                }
+                let request = serde_json::json!({
+                    "command": "save_settings",
+                    "id": "app_behavior",
+                    "text": app_behavior.to_string(),
+                });
+                let response = backend.command(&request.to_string());
+                if response_ok(&response) {
+                    load_settings(&ui, backend.as_ref(), &state);
+                } else {
+                    ui.set_status_label("Ошибка".into());
+                    ui.set_status_detail(response_error(&response).into());
+                }
+            },
+        );
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
         ui.on_select_profile(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({ "command": "select", "id": id.as_str() });
@@ -93,16 +153,25 @@ fn main() -> Result<(), slint::PlatformError> {
 #[derive(Default)]
 struct UiState {
     connected: bool,
+    settings: Option<Value>,
 }
 
 fn refresh(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<UiState>) {
     let response = backend.command(r#"{"command":"snapshot"}"#);
     let parsed = serde_json::from_str::<CoreResponse<Snapshot>>(&response);
     let snapshot = match parsed {
-        Ok(CoreResponse { ok: true, data: Some(snapshot), .. }) => snapshot,
+        Ok(CoreResponse {
+            ok: true,
+            data: Some(snapshot),
+            ..
+        }) => snapshot,
         Ok(CoreResponse { error, .. }) => {
             ui.set_status_label("Ошибка".into());
-            ui.set_status_detail(error.unwrap_or_else(|| "Не удалось прочитать состояние".into()).into());
+            ui.set_status_detail(
+                error
+                    .unwrap_or_else(|| "Не удалось прочитать состояние".into())
+                    .into(),
+            );
             return;
         }
         Err(error) => {
@@ -148,4 +217,59 @@ fn refresh(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<
         })
         .collect::<Vec<_>>();
     ui.set_locations(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
+fn load_settings(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<UiState>) {
+    let response = backend.command(r#"{"command":"settings"}"#);
+    let parsed = serde_json::from_str::<CoreResponse<Value>>(&response);
+    let settings = match parsed {
+        Ok(CoreResponse {
+            ok: true,
+            data: Some(settings),
+            ..
+        }) => settings,
+        Ok(CoreResponse { error, .. }) => {
+            ui.set_status_label("Ошибка".into());
+            ui.set_status_detail(
+                error
+                    .unwrap_or_else(|| "Не удалось загрузить настройки".into())
+                    .into(),
+            );
+            return;
+        }
+        Err(error) => {
+            ui.set_status_label("Ошибка".into());
+            ui.set_status_detail(format!("Некорректный ответ настроек: {error}").into());
+            return;
+        }
+    };
+    let behavior = settings.get("appBehavior");
+    ui.set_auto_connect(json_bool(behavior, "autoConnectOnLaunch", false));
+    ui.set_system_proxy(json_bool(behavior, "setSystemProxy", true));
+    ui.set_telegram_proxy(json_bool(behavior, "telegramProxyEnabled", false));
+    ui.set_energy_saver(json_bool(behavior, "energySaver", false));
+    if let Ok(mut current) = state.lock() {
+        current.settings = Some(settings);
+    }
+}
+
+fn json_bool(parent: Option<&Value>, name: &str, fallback: bool) -> bool {
+    parent
+        .and_then(|value| value.get(name))
+        .and_then(Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+fn response_ok(response: &str) -> bool {
+    serde_json::from_str::<Value>(response)
+        .ok()
+        .and_then(|value| value.get("ok")?.as_bool())
+        .unwrap_or(false)
+}
+
+fn response_error(response: &str) -> String {
+    serde_json::from_str::<Value>(response)
+        .ok()
+        .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "Не удалось сохранить настройки".into())
 }

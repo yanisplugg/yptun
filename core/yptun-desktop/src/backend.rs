@@ -44,7 +44,12 @@ impl WindowsBackend {
             });
         let native_dir = executable_dir.join("Native");
         Self {
-            app: yptun_windows::WindowsApp::new(data_dir, native_dir, "ru", env!("CARGO_PKG_VERSION")),
+            app: yptun_windows::WindowsApp::new(
+                data_dir,
+                native_dir,
+                "ru",
+                env!("CARGO_PKG_VERSION"),
+            ),
         }
     }
 }

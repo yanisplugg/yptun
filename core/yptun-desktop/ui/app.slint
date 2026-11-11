@@ -1,4 +1,4 @@
-import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import { Button, CheckBox, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 
 export struct LocationRow {
     id: string,
@@ -99,12 +99,19 @@ export component AppWindow inherits Window {
     in-out property <string> connection-mode: "tun";
     in-out property <bool> is-connected: false;
     in-out property <bool> runtime-available: false;
+    in-out property <int> current-page: 0;
+    in-out property <bool> auto-connect: false;
+    in-out property <bool> system-proxy: true;
+    in-out property <bool> telegram-proxy: false;
+    in-out property <bool> energy-saver: false;
     callback toggle-connection();
     callback select-profile(string);
     callback open-settings();
     callback add-profile();
+    callback set-connection-mode(string);
+    callback save-app-settings(bool, bool, bool, bool);
 
-    HorizontalBox {
+    if root.current-page == 0: HorizontalBox {
         padding: 28px;
         spacing: 30px;
 
@@ -180,7 +187,13 @@ export component AppWindow inherits Window {
                         Text { text: "Подключение"; color: Theme.text; font-size: 25px; font-weight: 600; }
                         Text { text: root.runtime-available ? "Rust core готов" : "Rust core недоступен"; color: Theme.text-muted; font-size: 13px; }
                     }
-                    Button { text: "Настройки"; clicked => { root.open-settings(); } }
+                    Button {
+                        text: "Настройки";
+                        clicked => {
+                            root.current-page = 1;
+                            root.open-settings();
+                        }
+                    }
                 }
 
                 Rectangle {
@@ -246,6 +259,107 @@ export component AppWindow inherits Window {
                         border-radius: 18px;
                         background: Theme.surface-high;
                         Text { text: root.connection-mode == "proxy" ? "ПРОКСИ" : "ТУННЕЛЬ"; color: Theme.accent; font-size: 12px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea {
+                            clicked => {
+                                root.set-connection-mode(root.connection-mode == "proxy" ? "tun" : "proxy");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.current-page == 1: Rectangle {
+        background: Theme.background;
+        VerticalBox {
+            padding: 34px;
+            spacing: 22px;
+
+            HorizontalBox {
+                height: 52px;
+                spacing: 16px;
+                Button { text: "Назад"; width: 86px; clicked => { root.current-page = 0; } }
+                VerticalBox {
+                    spacing: 1px;
+                    Text { text: "Настройки"; color: Theme.text; font-size: 27px; font-weight: 650; }
+                    Text { text: "Общие параметры Windows и Linux"; color: Theme.text-muted; font-size: 13px; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Сохранить";
+                    width: 126px;
+                    clicked => {
+                        root.save-app-settings(
+                            root.auto-connect,
+                            root.system-proxy,
+                            root.telegram-proxy,
+                            root.energy-saver
+                        );
+                    }
+                }
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalBox {
+                    spacing: 18px;
+
+                    Rectangle {
+                        height: 132px;
+                        border-radius: 24px;
+                        background: Theme.surface;
+                        VerticalBox {
+                            padding: 20px;
+                            spacing: 13px;
+                            Text { text: "Режим подключения"; color: Theme.text; font-size: 18px; font-weight: 650; }
+                            HorizontalBox {
+                                spacing: 10px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 48px;
+                                    border-radius: 18px;
+                                    background: root.connection-mode == "tun" ? Theme.accent-muted : Theme.surface-high;
+                                    Text { text: "ТУННЕЛЬ"; color: Theme.text; font-size: 13px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea { clicked => { root.set-connection-mode("tun"); } }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 48px;
+                                    border-radius: 18px;
+                                    background: root.connection-mode == "proxy" ? Theme.accent-muted : Theme.surface-high;
+                                    Text { text: "ПРОКСИ"; color: Theme.text; font-size: 13px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea { clicked => { root.set-connection-mode("proxy"); } }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 244px;
+                        border-radius: 24px;
+                        background: Theme.surface;
+                        VerticalBox {
+                            padding: 20px;
+                            spacing: 11px;
+                            Text { text: "Приложение"; color: Theme.text; font-size: 18px; font-weight: 650; }
+                            CheckBox { text: "Подключаться при запуске"; checked <=> root.auto-connect; }
+                            CheckBox { text: "Менять системный прокси"; checked <=> root.system-proxy; }
+                            CheckBox { text: "Telegram через отдельный WARP"; checked <=> root.telegram-proxy; }
+                            CheckBox { text: "Энергосбережение"; checked <=> root.energy-saver; }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 112px;
+                        border-radius: 24px;
+                        background: Theme.surface;
+                        VerticalBox {
+                            padding: 20px;
+                            spacing: 5px;
+                            Text { text: "Раздельное туннелирование и маршрутизация"; color: Theme.text; font-size: 18px; font-weight: 650; }
+                            Text { text: "Следующий общий экран использует те же Rust-модели на обеих ОС."; color: Theme.text-muted; font-size: 14px; }
+                        }
                     }
                 }
             }
