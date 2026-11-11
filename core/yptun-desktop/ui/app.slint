@@ -1,0 +1,254 @@
+import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+
+export struct LocationRow {
+    id: string,
+    name: string,
+    detail: string,
+    ping: string,
+    selected: bool,
+    enabled: bool,
+}
+
+global Theme {
+    out property <color> background: #120c0b;
+    out property <color> surface: #251716;
+    out property <color> surface-high: #34201e;
+    out property <color> accent: #ffaaa2;
+    out property <color> accent-muted: #7f4743;
+    out property <color> text: #fff0ed;
+    out property <color> text-muted: #cbb5b1;
+    out property <color> outline: #6b504d;
+}
+
+component PowerIcon inherits Rectangle {
+    in property <color> icon-color: Theme.text;
+    background: transparent;
+    Path {
+        width: 58px;
+        height: 58px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M12 2 L12 12 M6.35 5.35 C2.45 8.3 2.85 14.3 6.55 16.85 C10.25 19.4 15.3 18.35 17.65 14.65 C19.75 11.35 18.85 7.05 15.65 5.35";
+        fill: transparent;
+        stroke: root.icon-color;
+        stroke-width: 1.8px;
+    }
+}
+
+component CheckIcon inherits Rectangle {
+    in property <color> icon-color: Theme.text;
+    background: transparent;
+    Path {
+        width: 22px;
+        height: 22px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M4 12.5 L9.3 17.5 L20 6.5";
+        fill: transparent;
+        stroke: root.icon-color;
+        stroke-width: 2.4px;
+    }
+}
+
+component LocationCard inherits Rectangle {
+    in property <LocationRow> item;
+    callback selected(string);
+    height: 92px;
+    border-radius: 22px;
+    border-width: item.selected ? 2px : 1px;
+    border-color: item.selected ? Theme.accent : Theme.outline;
+    background: item.selected ? Theme.surface-high : Theme.surface;
+    opacity: item.enabled ? 1 : 0.48;
+
+    TouchArea { clicked => { if (root.item.enabled) { root.selected(root.item.id); } } }
+
+    VerticalBox {
+        x: 22px;
+        y: 18px;
+        width: parent.width - 104px;
+        spacing: 3px;
+        Text { text: root.item.name; color: Theme.text; font-size: 19px; font-weight: 650; overflow: elide; }
+        Text { text: root.item.detail; color: Theme.text-muted; font-size: 14px; overflow: elide; }
+        Text { text: root.item.ping; color: Theme.accent; font-size: 12px; }
+    }
+
+    Rectangle {
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        x: parent.width - 56px;
+        y: (parent.height - self.height) / 2;
+        background: root.item.selected ? Theme.accent : transparent;
+        border-width: root.item.selected ? 0 : 2px;
+        border-color: Theme.text-muted;
+        CheckIcon { visible: root.item.selected; width: 20px; height: 20px; x: 7px; y: 7px; icon-color: Theme.background; }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "YPtun";
+    width: 1100px;
+    height: 720px;
+    background: Theme.background;
+
+    in-out property <[LocationRow]> locations;
+    in-out property <string> status-label: "Отключено";
+    in-out property <string> status-detail: "Выберите конфигурацию";
+    in-out property <string> connection-mode: "tun";
+    in-out property <bool> is-connected: false;
+    in-out property <bool> runtime-available: false;
+    callback toggle-connection();
+    callback select-profile(string);
+    callback open-settings();
+    callback add-profile();
+
+    HorizontalBox {
+        padding: 28px;
+        spacing: 30px;
+
+        Rectangle {
+            width: 390px;
+            border-radius: 28px;
+            background: #1a1110;
+
+            VerticalBox {
+                padding: 24px;
+                spacing: 16px;
+
+                HorizontalBox {
+                    height: 52px;
+                    alignment: space-between;
+                    VerticalBox {
+                        spacing: 1px;
+                        Text { text: "YPtun"; color: Theme.text; font-size: 26px; font-weight: 500; }
+                        Text { text: "Локации"; color: Theme.text-muted; font-size: 13px; }
+                    }
+                    Button { text: "+"; width: 48px; clicked => { root.add-profile(); } }
+                }
+
+                HorizontalBox {
+                    height: 34px;
+                    Text { text: "Мои конфигурации"; color: Theme.text; font-size: 15px; font-weight: 650; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: root.locations.length; color: Theme.text-muted; font-size: 13px; vertical-alignment: center; }
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalBox {
+                        spacing: 12px;
+                        for item in root.locations: LocationCard {
+                            item: item;
+                            selected(id) => { root.select-profile(id); }
+                        }
+                        Rectangle {
+                            visible: root.locations.length == 0;
+                            height: 124px;
+                            border-radius: 20px;
+                            border-width: 1px;
+                            border-color: Theme.outline;
+                            background: transparent;
+                            Text {
+                                text: "Добавьте конфигурацию\nили вставьте ссылку";
+                                color: Theme.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                font-size: 15px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            background: transparent;
+
+            VerticalBox {
+                padding-top: 8px;
+                padding-bottom: 12px;
+                spacing: 22px;
+
+                HorizontalBox {
+                    height: 48px;
+                    alignment: space-between;
+                    VerticalBox {
+                        spacing: 1px;
+                        Text { text: "Подключение"; color: Theme.text; font-size: 25px; font-weight: 600; }
+                        Text { text: root.runtime-available ? "Rust core готов" : "Rust core недоступен"; color: Theme.text-muted; font-size: 13px; }
+                    }
+                    Button { text: "Настройки"; clicked => { root.open-settings(); } }
+                }
+
+                Rectangle {
+                    height: 104px;
+                    border-radius: 26px;
+                    background: root.is-connected ? #623b37 : Theme.surface;
+                    HorizontalBox {
+                        padding: 20px;
+                        spacing: 18px;
+                        Rectangle {
+                            width: 62px;
+                            height: 62px;
+                            border-radius: 31px;
+                            background: root.is-connected ? Theme.accent : #684a47;
+                            CheckIcon { width: 28px; height: 28px; x: 17px; y: 17px; icon-color: root.is-connected ? Theme.background : Theme.text; }
+                        }
+                        VerticalBox {
+                            alignment: center;
+                            spacing: 3px;
+                            Text { text: root.status-label; color: Theme.text; font-size: 25px; font-weight: 650; }
+                            Text { text: root.status-detail; color: Theme.text-muted; font-size: 14px; overflow: elide; }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+                    Rectangle {
+                        width: 286px;
+                        height: 286px;
+                        border-radius: 143px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2 - 8px;
+                        border-width: 13px;
+                        border-color: #2e1c1b;
+                        background: root.is-connected ? #6f403b : #814841;
+                        drop-shadow-blur: 22px;
+                        drop-shadow-offset-y: 9px;
+                        drop-shadow-color: #60000000;
+                        TouchArea { enabled: root.runtime-available; clicked => { root.toggle-connection(); } }
+                        PowerIcon { width: 76px; height: 76px; x: (parent.width - self.width) / 2; y: 68px; }
+                        Text {
+                            text: root.is-connected ? "СТОП" : "СТАРТ";
+                            color: Theme.text;
+                            font-size: 24px;
+                            font-weight: 500;
+                            horizontal-alignment: center;
+                            y: 173px;
+                            width: parent.width;
+                        }
+                    }
+                }
+
+                HorizontalBox {
+                    height: 42px;
+                    alignment: center;
+                    spacing: 10px;
+                    Text { text: "Режим"; color: Theme.text-muted; font-size: 14px; vertical-alignment: center; }
+                    Rectangle {
+                        width: 112px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: Theme.surface-high;
+                        Text { text: root.connection-mode == "proxy" ? "ПРОКСИ" : "ТУННЕЛЬ"; color: Theme.accent; font-size: 12px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+}
