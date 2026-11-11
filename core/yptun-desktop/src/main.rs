@@ -34,6 +34,8 @@ struct Snapshot {
     connection_mode: String,
     active_profile_id: Option<String>,
     profiles: Vec<Profile>,
+    #[serde(default)]
+    subscriptions: Vec<Subscription>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +48,16 @@ struct Profile {
     is_complete: bool,
     ping_ms: Option<i32>,
     ping_tested: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Subscription {
+    url: String,
+    name: String,
+    custom_name: String,
+    location_count: usize,
+    auto_update_enabled: bool,
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -67,6 +79,26 @@ fn main() -> Result<(), slint::PlatformError> {
             let request = serde_json::json!({ "command": command, "mode": mode });
             let _ = backend.command(&request.to_string());
             refresh(&ui, backend.as_ref(), &state);
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
+        ui.on_refresh_subscription(move |url| {
+            let Some(ui) = weak.upgrade() else { return };
+            let request = serde_json::json!({
+                "command": "refresh_subscription",
+                "id": url.as_str(),
+            });
+            let response = backend.command(&request.to_string());
+            if response_ok(&response) {
+                refresh(&ui, backend.as_ref(), &state);
+            } else {
+                ui.set_status_label("Ошибка".into());
+                ui.set_status_detail(response_error(&response).into());
+            }
         });
     }
 
@@ -337,6 +369,29 @@ fn refresh(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<
         })
         .collect::<Vec<_>>();
     ui.set_locations(ModelRc::from(Rc::new(VecModel::from(rows))));
+
+    let subscriptions = snapshot
+        .subscriptions
+        .into_iter()
+        .map(|subscription| {
+            let display_name = if subscription.custom_name.trim().is_empty() {
+                subscription.name
+            } else {
+                subscription.custom_name
+            };
+            let automatic = if subscription.auto_update_enabled {
+                "автообновление"
+            } else {
+                "вручную"
+            };
+            SubscriptionRow {
+                url: subscription.url.into(),
+                name: display_name.into(),
+                detail: format!("{} локаций · {automatic}", subscription.location_count).into(),
+            }
+        })
+        .collect::<Vec<_>>();
+    ui.set_subscriptions(ModelRc::from(Rc::new(VecModel::from(subscriptions))));
 }
 
 fn load_settings(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<UiState>) {

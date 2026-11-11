@@ -9,6 +9,12 @@ export struct LocationRow {
     enabled: bool,
 }
 
+export struct SubscriptionRow {
+    url: string,
+    name: string,
+    detail: string,
+}
+
 global Theme {
     out property <color> background: #120c0b;
     out property <color> surface: #251716;
@@ -70,6 +76,21 @@ component EditIcon inherits Rectangle {
     Rectangle { x: 13px; y: 14px; width: 4px; height: 6px; border-radius: 2px; border-width: 1.5px; border-color: root.icon-color; background: Theme.surface; }
 }
 
+component RefreshIcon inherits Rectangle {
+    in property <color> icon-color: Theme.text;
+    background: transparent;
+    Path {
+        width: 22px;
+        height: 22px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M19 8 C17.2 4.8 13.2 3.4 9.8 4.5 C6.4 5.6 4.2 8.9 4.6 12.5 C5 16.1 7.9 18.9 11.5 19.3 C15.1 19.7 18.4 17.5 19.5 14 M19 4 L19 8 L15 8";
+        fill: transparent;
+        stroke: root.icon-color;
+        stroke-width: 1.8px;
+    }
+}
+
 component LocationCard inherits Rectangle {
     in property <LocationRow> item;
     callback selected(string);
@@ -117,6 +138,35 @@ component LocationCard inherits Rectangle {
     }
 }
 
+component SubscriptionCard inherits Rectangle {
+    in property <SubscriptionRow> item;
+    callback refresh(string);
+    height: 92px;
+    border-radius: 22px;
+    border-width: 1px;
+    border-color: Theme.outline;
+    background: Theme.surface;
+
+    VerticalBox {
+        x: 22px;
+        y: 18px;
+        width: parent.width - 124px;
+        spacing: 4px;
+        Text { text: root.item.name; color: Theme.text; font-size: 18px; font-weight: 650; overflow: elide; }
+        Text { text: root.item.detail; color: Theme.text-muted; font-size: 13px; overflow: elide; }
+    }
+    Rectangle {
+        width: 48px;
+        height: 42px;
+        x: parent.width - 66px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 16px;
+        background: #3b2826;
+        RefreshIcon { width: 22px; height: 22px; x: 13px; y: 10px; }
+        TouchArea { clicked => { root.refresh(root.item.url); } }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "YPtun";
     width: 1100px;
@@ -124,6 +174,7 @@ export component AppWindow inherits Window {
     background: Theme.background;
 
     in-out property <[LocationRow]> locations;
+    in-out property <[SubscriptionRow]> subscriptions;
     in-out property <string> status-label: "Отключено";
     in-out property <string> status-detail: "Выберите конфигурацию";
     in-out property <string> connection-mode: "tun";
@@ -142,6 +193,7 @@ export component AppWindow inherits Window {
     in-out property <string> editor-json: "";
     in-out property <string> editor-error: "";
     in-out property <bool> editor-subscription: false;
+    in-out property <int> list-mode: 0;
     callback toggle-connection();
     callback select-profile(string);
     callback open-settings();
@@ -152,6 +204,7 @@ export component AppWindow inherits Window {
     callback ping-profile(string);
     callback edit-profile(string);
     callback save-profile(string, string, string);
+    callback refresh-subscription(string);
 
     if root.current-page == 0: HorizontalBox {
         padding: 28px;
@@ -187,12 +240,27 @@ export component AppWindow inherits Window {
 
                 HorizontalBox {
                     height: 34px;
-                    Text { text: "Мои конфигурации"; color: Theme.text; font-size: 15px; font-weight: 650; vertical-alignment: center; }
-                    Rectangle { horizontal-stretch: 1; }
-                    Text { text: root.locations.length; color: Theme.text-muted; font-size: 13px; vertical-alignment: center; }
+                    spacing: 8px;
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 34px;
+                        border-radius: 14px;
+                        background: root.list-mode == 0 ? Theme.accent-muted : transparent;
+                        Text { text: "Локации  " + root.locations.length; color: Theme.text; font-size: 13px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { clicked => { root.list-mode = 0; } }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 34px;
+                        border-radius: 14px;
+                        background: root.list-mode == 1 ? Theme.accent-muted : transparent;
+                        Text { text: "Подписки  " + root.subscriptions.length; color: Theme.text; font-size: 13px; font-weight: 650; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { clicked => { root.list-mode = 1; } }
+                    }
                 }
 
                 ScrollView {
+                    visible: root.list-mode == 0;
                     vertical-stretch: 1;
                     VerticalBox {
                         spacing: 12px;
@@ -214,6 +282,32 @@ export component AppWindow inherits Window {
                             background: transparent;
                             Text {
                                 text: "Добавьте конфигурацию\nили вставьте ссылку";
+                                color: Theme.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                font-size: 15px;
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    visible: root.list-mode == 1;
+                    vertical-stretch: 1;
+                    VerticalBox {
+                        spacing: 12px;
+                        for item in root.subscriptions: SubscriptionCard {
+                            item: item;
+                            refresh(url) => { root.refresh-subscription(url); }
+                        }
+                        Rectangle {
+                            visible: root.subscriptions.length == 0;
+                            height: 124px;
+                            border-radius: 20px;
+                            border-width: 1px;
+                            border-color: Theme.outline;
+                            Text {
+                                text: "Добавленные подписки\nпоявятся здесь";
                                 color: Theme.text-muted;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
