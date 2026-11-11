@@ -18,12 +18,16 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private var running = false
     private var pumpingLogs = false
+    private var watchdogFailures = 0
+    private weak var provider: NEPacketTunnelProvider?
+    private var watchdog: DispatchSourceTimer?
 
     func start(
         provider: NEPacketTunnelProvider,
         completion: @escaping (Error?) -> Void
     ) {
         do {
+            self.provider = provider
             let request = try AppleTunnelStore.loadRequest()
             let logURL = try AppleTunnelStore.url(for: AppleTunnelStore.logFileName)
             let cacheURL = try AppleTunnelStore.url(for: AppleTunnelStore.cacheFileName)
@@ -63,6 +67,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                         VPNConnectionState.connected.rawValue,
                         to: AppleTunnelStore.statusFileName
                     )
+                    self?.startWatchdog(plan)
                     completion(nil)
                 } catch {
                     self?.stop()
@@ -78,6 +83,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 
     func stop() {
+        watchdog?.cancel()
+        watchdog = nil
         setPumpingLogs(false)
         Socks5Tunnel.quit()
         CoreapiSbStop()
@@ -97,6 +104,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         var ignored: NSError?
         _ = CoreapiRtcStop(&ignored)
         setRunning(false)
+        provider = nil
         try? AppleTunnelStore.writeText(
             VPNConnectionState.disconnected.rawValue,
             to: AppleTunnelStore.statusFileName
@@ -372,6 +380,70 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         }
     }
 
+    private func startWatchdog(_ plan: AppleNativeRuntimePlan) {
+        watchdog?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let slow = !plan.auxiliary.isEmpty || plan.turnable != nil || plan.snolc != nil || plan.csqtt != nil
+        resetWatchdogFailures()
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            if self.coresRunning(plan) {
+                self.resetWatchdogFailures()
+                return
+            }
+            let limit = slow ? 6 : 3
+            let failures = self.incrementWatchdogFailures()
+            try? AppleTunnelStore.appendLog("Core health check failed (\(failures)/\(limit))")
+            guard failures >= limit else { return }
+            let error = NativeTunnelRuntimeError.coreStopped
+            let provider = self.provider
+            self.record(error: error)
+            self.stop()
+            provider?.cancelTunnelWithError(error)
+        }
+        watchdog = timer
+        timer.resume()
+    }
+
+    private func coresRunning(_ plan: AppleNativeRuntimePlan) -> Bool {
+        if let olcrtc = plan.olcrtc {
+            let up = olcrtc.roomsJson.isEmpty ? CoreapiRtcRunning() : CoreapiRtcPoolRunning()
+            if !up { return false }
+        }
+        if plan.amneziaWg != nil && !CoreapiAwgRunning() { return false }
+        if plan.turnable != nil && !CoreapiTurnableRunning() { return false }
+        if plan.deferredWireguardProxy && !CoreapiWdttRunning() { return false }
+        for runtime in plan.auxiliary {
+            let kind: String = switch runtime.kind {
+            case .freeTurn: "freeturn"
+            case .wdtt: "wdtt"
+            case .masterDns: "masterdns"
+            case .openFlux: "openflux"
+            }
+            if !CoreapiAppleEngineRunning(kind) { return false }
+        }
+#if canImport(SnolcCore)
+        if plan.snolc != nil && !snolc_ffi_is_running() { return false }
+#endif
+#if canImport(CsqttCore)
+        if plan.csqtt != nil && (!csqtt_ffi_is_running() || !CoreapiCsqttBridgeIsRunning()) {
+            return false
+        }
+#endif
+        if let proxy = plan.proxy {
+            switch proxy.kind {
+            case .singBox where !CoreapiSbRunning(): return false
+            case .xray where !CoreapiXrayRunning(): return false
+            case .mieru where !CoreapiMieruRunning(): return false
+            default: break
+            }
+        } else if plan.deferredWireguardProxy && !CoreapiSbRunning() {
+            return false
+        }
+        return true
+    }
+
     private var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -394,6 +466,20 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.lock()
         pumpingLogs = value
         lock.unlock()
+    }
+
+    private func resetWatchdogFailures() {
+        lock.lock()
+        watchdogFailures = 0
+        lock.unlock()
+    }
+
+    private func incrementWatchdogFailures() -> Int {
+        lock.lock()
+        watchdogFailures += 1
+        let value = watchdogFailures
+        lock.unlock()
+        return value
     }
 }
 
@@ -425,6 +511,7 @@ enum NativeTunnelRuntimeError: LocalizedError {
     case wdttConfigurationUnavailable
     case wdttRawModeUnavailable
     case specializedCore(String)
+    case coreStopped
 
     var errorDescription: String? {
         switch self {
@@ -436,6 +523,8 @@ enum NativeTunnelRuntimeError: LocalizedError {
             "qWDTT Raw mode is not supported by the native Apple runtime."
         case let .specializedCore(message):
             message
+        case .coreStopped:
+            "The active network core stopped unexpectedly."
         }
     }
 }

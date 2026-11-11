@@ -14,6 +14,7 @@ use yptun_core::location::{LocationBundleV4, LocationConfig, BUNDLE_VERSION};
 use yptun_core::model::{EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_MIERU};
 use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
+use yptun_core::share_link;
 use yptun_core::singbox::config::{self as singbox_config, SingBoxOptions};
 use yptun_core::warp;
 use yptun_core::xray::config::{self as xray_config, RawOptions, XrayOptions};
@@ -259,6 +260,12 @@ pub fn apple_migrate_location_bundle(
         locations_after,
         active_location_id,
     })
+}
+
+#[uniffi::export]
+pub fn apple_validate_app_behavior(app_behavior_json: String) -> Result<(), FfiError> {
+    let _: AppBehaviorSettings = from_json("AppBehaviorSettings", &app_behavior_json)?;
+    Ok(())
 }
 
 /// A compact, typed view of the location bundle for Apple lists and selection controls.
@@ -520,6 +527,86 @@ fn openflux_session_specs(config: &yptun_core::transports::OpenFluxConfig) -> St
         })).collect::<Vec<_>>(),
     })
     .to_string()
+}
+
+fn proxy_from_text(text: &str) -> Option<ProxyProfile> {
+    share_link::parse(text).or_else(|| share_link::parse_subscription(text).into_iter().next())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apple_proxy_over_tunnel(
+    profile: &ProxyProfile,
+    core: ProxyCore,
+    tunnel_port: i32,
+    socks_port: i32,
+    traffic: &TrafficSettings,
+    routing: &RoutingRules,
+    profiles: &RoutingProfilesState,
+    routing_profile: Option<yptun_core::routing::RoutingProfile>,
+    log_file_path: &str,
+    cache_file_path: &str,
+) -> Result<AppleProxyRuntimePlan, FfiError> {
+    if profile
+        .raw_xray_config
+        .as_deref()
+        .is_some_and(|raw| !raw.trim().is_empty())
+    {
+        return Err(FfiError::Unsupported(
+            "A verbatim Xray config cannot be chained over this tunnel".into(),
+        ));
+    }
+    match core {
+        ProxyCore::Xray => Ok(AppleProxyRuntimePlan {
+            kind: AppleProxyRuntimeKind::Xray,
+            listen_port: socks_port,
+            config: xray_config::build(
+                profile,
+                &XrayOptions {
+                    listen_port: socks_port,
+                    listen_host: "127.0.0.1".into(),
+                    olcrtc_chain_port: Some(tunnel_port),
+                    log_level: "warning".into(),
+                    traffic: traffic.clone(),
+                    routing_profile,
+                    block_quic: true,
+                    force_family_resolve: false,
+                    chain_via_dialer_proxy: true,
+                    direct_via_base: true,
+                    bypass_lan: routing.bypass_lan,
+                    handshake_timeout_sec: Some(30),
+                    ..XrayOptions::default()
+                },
+            ),
+        }),
+        ProxyCore::SingBox | ProxyCore::Auto => Ok(AppleProxyRuntimePlan {
+            kind: AppleProxyRuntimeKind::SingBox,
+            listen_port: socks_port,
+            config: singbox_config::build(
+                profile,
+                &SingBoxOptions {
+                    listen_port: socks_port,
+                    listen_host: "127.0.0.1".into(),
+                    olcrtc_chain_port: Some(tunnel_port),
+                    log_level: "warn".into(),
+                    routing: routing.clone(),
+                    traffic: traffic.clone(),
+                    routing_profile,
+                    singbox_geosite_base: profiles.singbox_geosite_base.clone(),
+                    singbox_geoip_base: profiles.singbox_geoip_base.clone(),
+                    block_quic: true,
+                    force_family_resolve: false,
+                    allow_local_resolve: false,
+                    direct_via_base: true,
+                    log_file_path: (!log_file_path.trim().is_empty())
+                        .then(|| log_file_path.to_string()),
+                    cache_file_path: (!cache_file_path.trim().is_empty())
+                        .then(|| cache_file_path.to_string()),
+                    ..SingBoxOptions::default()
+                },
+            )
+            .map_err(|error| FfiError::Invalid(error.to_string()))?,
+        }),
+    }
 }
 
 /// Complete native execution plan for the first in-process Apple runtimes.
@@ -935,12 +1022,20 @@ pub fn apple_native_runtime_plan(
                 .master_dns
                 .as_ref()
                 .ok_or_else(|| FfiError::Invalid("MasterDNS is not configured".into()))?;
-            if config.has_proxy() {
-                return Err(FfiError::Unsupported(
-                    "MasterDNS proxy chaining is not connected to the native Apple runtime yet"
-                        .into(),
+            let chained_proxy = config
+                .has_proxy()
+                .then(|| proxy_from_text(&config.proxy_link))
+                .flatten();
+            if config.has_proxy() && chained_proxy.is_none() {
+                return Err(FfiError::Invalid(
+                    "MasterDNS proxy link could not be parsed".into(),
                 ));
             }
+            let tunnel_port = if chained_proxy.is_some() {
+                socks_port + 1
+            } else {
+                socks_port
+            };
             auxiliary.push(AppleAuxiliaryRuntimePlan {
                 kind: AppleAuxiliaryRuntimeKind::MasterDns,
                 options_json: serde_json::json!({
@@ -949,7 +1044,7 @@ pub fn apple_native_runtime_plan(
                     "key": config.encryption_key,
                     "encryption_method": config.encryption_method,
                     "resolvers": config.resolvers,
-                    "listen_addr": format!("127.0.0.1:{socks_port}"),
+                    "listen_addr": format!("127.0.0.1:{tunnel_port}"),
                     "balancing_strategy": config.balancing_strategy,
                     "packet_duplication": config.packet_duplication,
                     "upload_compression": 0,
@@ -957,19 +1052,43 @@ pub fn apple_native_runtime_plan(
                 })
                 .to_string(),
             });
-            None
+            chained_proxy
+                .as_ref()
+                .map(|profile| {
+                    apple_proxy_over_tunnel(
+                        profile,
+                        config.resolved_proxy_core(Some(profile), behavior.global_proxy_core),
+                        tunnel_port,
+                        socks_port,
+                        &traffic,
+                        &routing,
+                        &profiles,
+                        routing_profile.clone(),
+                        &log_file_path,
+                        &cache_file_path,
+                    )
+                })
+                .transpose()?
         }
         EngineType::OpenFlux => {
             let config = location
                 .open_flux
                 .as_ref()
                 .ok_or_else(|| FfiError::Invalid("OpenFlux is not configured".into()))?;
-            if config.has_proxy() {
-                return Err(FfiError::Unsupported(
-                    "OpenFlux proxy chaining is not connected to the native Apple runtime yet"
-                        .into(),
+            let chained_proxy = config
+                .has_proxy()
+                .then(|| proxy_from_text(&config.proxy_link))
+                .flatten();
+            if config.has_proxy() && chained_proxy.is_none() {
+                return Err(FfiError::Invalid(
+                    "OpenFlux proxy link could not be parsed".into(),
                 ));
             }
+            let tunnel_port = if chained_proxy.is_some() {
+                socks_port + 1
+            } else {
+                socks_port
+            };
             auxiliary.push(AppleAuxiliaryRuntimePlan {
                 kind: AppleAuxiliaryRuntimeKind::OpenFlux,
                 options_json: serde_json::json!({
@@ -980,27 +1099,52 @@ pub fn apple_native_runtime_plan(
                     "max_uid": config.max_uid,
                     "avito_cookies": config.avito_cookies,
                     "session_specs_json": openflux_session_specs(config),
-                    "listen_addr": format!("127.0.0.1:{socks_port}"),
+                    "listen_addr": format!("127.0.0.1:{tunnel_port}"),
                     "debug": config.debug,
                 })
                 .to_string(),
             });
-            None
+            chained_proxy
+                .as_ref()
+                .map(|profile| {
+                    apple_proxy_over_tunnel(
+                        profile,
+                        config.resolved_proxy_core(Some(profile), behavior.global_proxy_core),
+                        tunnel_port,
+                        socks_port,
+                        &traffic,
+                        &routing,
+                        &profiles,
+                        routing_profile.clone(),
+                        &log_file_path,
+                        &cache_file_path,
+                    )
+                })
+                .transpose()?
         }
         EngineType::Snolc => {
             let config = location
                 .snolc
                 .as_ref()
                 .ok_or_else(|| FfiError::Invalid("snolc is not configured".into()))?;
-            if config.has_proxy() {
-                return Err(FfiError::Unsupported(
-                    "snolc proxy chaining is not connected to the native Apple runtime yet".into(),
+            let chained_proxy = config
+                .has_proxy()
+                .then(|| proxy_from_text(&config.proxy_link))
+                .flatten();
+            if config.has_proxy() && chained_proxy.is_none() {
+                return Err(FfiError::Invalid(
+                    "snolc proxy link could not be parsed".into(),
                 ));
             }
+            let tunnel_port = if chained_proxy.is_some() {
+                socks_port + 1
+            } else {
+                socks_port
+            };
             let directory = format!("{runtime_directory}/snolc");
             let mut files: Vec<AppleGeneratedFile> = yptun_core::snolc::client(
                 "127.0.0.1",
-                socks_port,
+                tunnel_port,
                 &config.host,
                 config.port,
                 config.debug,
@@ -1022,7 +1166,23 @@ pub fn apple_native_runtime_plan(
                 directory,
                 files,
             });
-            None
+            chained_proxy
+                .as_ref()
+                .map(|profile| {
+                    apple_proxy_over_tunnel(
+                        profile,
+                        config.resolved_proxy_core(Some(profile), behavior.global_proxy_core),
+                        tunnel_port,
+                        socks_port,
+                        &traffic,
+                        &routing,
+                        &profiles,
+                        routing_profile.clone(),
+                        &log_file_path,
+                        &cache_file_path,
+                    )
+                })
+                .transpose()?
         }
     };
 

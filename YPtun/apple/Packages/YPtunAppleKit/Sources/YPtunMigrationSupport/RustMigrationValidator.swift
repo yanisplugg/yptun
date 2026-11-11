@@ -29,9 +29,7 @@ public struct RustMigrationValidator: MigrationPayloadValidating {
         case .routingProfiles:
             try CoreSession().setRoutingProfiles(profilesJson: json)
         case .appBehavior:
-            // The Rust app-settings facade will own this model in the next migration slice. Preserve
-            // the current payload byte-for-byte until that codec is exported.
-            break
+            try appleValidateAppBehavior(appBehaviorJson: json)
         case .deviceIdentity:
             guard !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw RustMigrationValidationError.invalidUTF8(.deviceIdentity)

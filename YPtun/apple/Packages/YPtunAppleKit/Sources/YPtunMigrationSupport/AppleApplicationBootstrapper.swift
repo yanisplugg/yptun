@@ -226,3 +226,45 @@ public enum AppleApplicationBootstrapError: LocalizedError, Equatable, Sendable 
         }
     }
 }
+
+public enum AppleSettingsFile: String, CaseIterable, Sendable {
+    case traffic
+    case routing
+    case routingProfiles
+    case appBehavior
+
+    fileprivate var artifact: MigrationArtifact {
+        switch self {
+        case .traffic: .traffic
+        case .routing: .routing
+        case .routingProfiles: .routingProfiles
+        case .appBehavior: .appBehavior
+        }
+    }
+}
+
+public extension AppleApplicationBootstrapper {
+    func settingsText(_ file: AppleSettingsFile) throws -> String {
+        let paths = try systemPaths()
+        return try readTextIfPresent(at: paths.destination(for: file.artifact)) ?? "{}"
+    }
+
+    func saveSettingsText(_ text: String, file: AppleSettingsFile) throws {
+        guard let bytes = text.data(using: .utf8) else {
+            throw AppleApplicationBootstrapError.invalidUTF8(file.rawValue)
+        }
+        let paths = try systemPaths()
+        let destination = paths.destination(for: file.artifact)
+        let digest = AtomicFileIO.sha256(of: bytes)
+        try RustMigrationValidator().validate(
+            MigrationPayload(
+                artifact: file.artifact,
+                source: destination,
+                destination: destination,
+                bytes: bytes,
+                sha256: digest
+            )
+        )
+        try AtomicFileIO.writeBytesAtomically(bytes, to: destination)
+    }
+}

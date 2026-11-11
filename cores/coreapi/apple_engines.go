@@ -92,3 +92,18 @@ func AppleEngineStopAll() {
 	MasterDnsStop()
 	OpenFluxStop()
 }
+
+func AppleEngineRunning(kind string) bool {
+	switch kind {
+	case "freeturn":
+		return FtRunning()
+	case "wdtt":
+		return WdttRunning()
+	case "masterdns":
+		return MasterDnsRunning()
+	case "openflux":
+		return OpenFluxRunning()
+	default:
+		return false
+	}
+}

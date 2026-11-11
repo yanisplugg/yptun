@@ -1,7 +1,8 @@
 # Native Apple shell
 
-This directory contains the additive pure-Swift Apple application skeleton. It does not replace or
-modify the existing Kotlin Multiplatform iOS project in `YPtun/iosApp`.
+This directory contains the pure-Swift Apple application and packet-tunnel targets that replace the
+Kotlin Multiplatform Apple client. The previous project remains in `YPtun/iosApp` only as migration
+evidence until the native release has completed its TestFlight soak.
 
 ## Targets
 
@@ -21,17 +22,20 @@ development signing and Mac App Store distribution. A direct Developer ID releas
 need a separate system-extension target and the `packet-tunnel-provider-systemextension`
 entitlement; that distribution-specific target is intentionally outside this initial skeleton.
 
-`Packages/YPtunAppleKit` establishes two initial shared boundaries:
+`Packages/YPtunAppleKit` establishes the shared boundaries:
 
 - `YPtunShared` contains cross-target identity and state values.
 - `YPtunTunnelSupport` contains tunnel bootstrap/error surfaces and depends on the local
   `Packages/YPtunRustBridge` package.
 - `YPtunMigrationSupport` validates Kotlin-era location/settings payloads with Rust before the
   byte-preserving migration package copies them into native storage.
+- `YPtunAppUI` contains the adaptive SwiftUI app, import flow, VPN control, logs and settings.
 
-The views and packet tunnel provider are intentionally structural placeholders. In particular,
-`startTunnel` returns an implementation-pending error until the Rust session and packet flow are
-wired together.
+The packet tunnel executes Rust-generated plans through in-process Apple cores. Standard sing-box
+and Xray profiles, olcRTC, AmneziaWG, WARP chaining, Mieru, Turnable, free-turn, qWDTT, CSQTT,
+MasterDNS, OpenFlux and snolc share the same `NEPacketTunnelProvider` topology and
+hev-socks5-tunnel bridge. Unsupported or incomplete combinations fail before network settings are
+installed instead of presenting a false connected state.
 
 ## Prerequisites
 
@@ -42,11 +46,13 @@ wired together.
 
 ## Generate and build
 
-From the repository root, generate the local UniFFI bindings and XCFramework first. These build
-outputs are intentionally ignored by Git.
+From the repository root, generate the UniFFI, Go and specialized core XCFrameworks first. These
+build outputs are intentionally ignored by Git.
 
 ```bash
 bash core/scripts/build-apple.sh
+bash core/scripts/build-specialized-apple.sh
+# Build Coreapi.xcframework with gomobile as in apple-core.yml.
 cd YPtun/apple
 xcodegen generate
 open YPtunApple.xcodeproj
@@ -68,15 +74,22 @@ xcodebuild -project YPtunApple.xcodeproj \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-## macOS verification still required
+## Release candidate
+
+Run the **Native Apple release candidate** workflow with a fresh build number. It produces an
+unsigned IPA on every run and a signed `YPtun-ios-signed` artifact when the existing distribution
+certificate and three provisioning-profile secrets are configured. It never uploads to TestFlight.
+The signed artifact can be uploaded explicitly with the existing iOS workflow's
+`testflight_from_run` input after reviewing the build and device tests.
+
+## Physical-device verification still required
 
 Windows can validate the YAML and XML structure, but the following require macOS/Xcode:
 
-1. Run `core/scripts/build-apple.sh` and resolve both local Swift packages.
-2. Run `xcodegen generate` and inspect extension embedding in both host apps.
-3. Compile every target in Swift 6 mode with complete concurrency checking.
-4. Confirm provisioning accepts the Network Extension and App Group entitlements for each bundle.
-5. Install signed builds on a physical iOS 17+ device and a macOS 14+ machine; packet tunnel
+1. Confirm provisioning accepts the Network Extension and App Group entitlements for each bundle.
+2. Install signed builds on a physical iOS 17+ device and a macOS 14+ machine; packet tunnel
    extensions cannot be meaningfully activated in the unsigned simulator smoke build.
-6. Confirm the intended macOS distribution channel before adding release signing; Developer ID
+3. Exercise every in-process engine used by the release set and inspect `tunnel.log` for watchdog,
+   memory-pressure and handoff failures.
+4. Confirm the intended macOS distribution channel before adding release signing; Developer ID
    distribution requires the separate system-extension shape described above.

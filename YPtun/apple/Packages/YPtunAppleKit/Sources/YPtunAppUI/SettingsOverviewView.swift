@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct SettingsOverviewView: View {
     @Bindable private var model: YPtunApplicationModel
+    private let bootstrapper = AppleApplicationBootstrapper()
 
     public init(model: YPtunApplicationModel) {
         self.model = model
@@ -11,8 +12,24 @@ public struct SettingsOverviewView: View {
         List {
             Section("Подключение") {
                 destination("Подписки", symbol: "dot.radiowaves.left.and.right")
-                destination("Профили маршрутизации", symbol: "arrow.triangle.branch")
-                destination("Настройки трафика", symbol: "point.3.connected.trianglepath.dotted")
+                NavigationLink {
+                    RawSettingsEditorView(
+                        title: "Профили маршрутизации",
+                        file: .routingProfiles,
+                        bootstrapper: bootstrapper
+                    )
+                } label: {
+                    Label("Профили маршрутизации", systemImage: "arrow.triangle.branch")
+                }
+                NavigationLink {
+                    RawSettingsEditorView(
+                        title: "Настройки трафика",
+                        file: .traffic,
+                        bootstrapper: bootstrapper
+                    )
+                } label: {
+                    Label("Настройки трафика", systemImage: "point.3.connected.trianglepath.dotted")
+                }
             }
             Section("Приложение") {
                 NavigationLink {
@@ -21,7 +38,15 @@ public struct SettingsOverviewView: View {
                     Label("Логи", systemImage: "text.alignleft")
                 }
                 destination("Информация о сессии", symbol: "info.circle")
-                destination("Основные настройки", symbol: "gearshape")
+                NavigationLink {
+                    RawSettingsEditorView(
+                        title: "Основные настройки",
+                        file: .appBehavior,
+                        bootstrapper: bootstrapper
+                    )
+                } label: {
+                    Label("Основные настройки", systemImage: "gearshape")
+                }
             }
             Section {
                 LabeledContent("Нативный клиент", value: "iOS 17+ · macOS 14+")
