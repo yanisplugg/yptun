@@ -46,9 +46,16 @@ hide_rust_symbols() {
   local label="$4"
   local relocatable="$WORK/$label.o"
   local edited="$WORK/$label-exported.o"
+  local arch
+
+  arch="$(xcrun lipo -archs "$input")"
+  if [[ -z "$arch" || "$arch" == *" "* ]]; then
+    echo "Expected one architecture in $input, found: ${arch:-none}" >&2
+    return 1
+  fi
 
   rm -f "$relocatable" "$edited" "$output"
-  xcrun ld -r -all_load "$input" -o "$relocatable"
+  xcrun ld -r -arch "$arch" -all_load "$input" -o "$relocatable"
   xcrun nmedit -s "$exports" "$relocatable" -o "$edited"
   xcrun libtool -static -o "$output" "$edited"
 
