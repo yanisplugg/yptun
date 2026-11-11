@@ -109,6 +109,9 @@ targets:
         product: YPtunShared
       - package: YPtunAppleKit
         product: YPtunTunnelSupport
+      - package: YPtunAppleKit
+        product: YPtunAppUI
+      - sdk: AppIntents.framework
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 

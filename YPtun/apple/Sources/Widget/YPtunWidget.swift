@@ -1,6 +1,8 @@
 import Foundation
+import AppIntents
 import SwiftUI
 import WidgetKit
+import YPtunAppUI
 import YPtunShared
 import YPtunTunnelSupport
 
@@ -41,6 +43,14 @@ private struct StatusWidgetView: View {
                 .font(.headline)
             Text(statusTitle)
                 .font(.caption)
+            Button(intent: ToggleVPNIntent()) {
+                Label(
+                    entry.state == .connected ? "Отключить" : "Подключить",
+                    systemImage: entry.state == .connected ? "stop.fill" : "power"
+                )
+                .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
         }
         .containerBackground(.fill.tertiary, for: .widget)
     }
@@ -52,6 +62,24 @@ private struct StatusWidgetView: View {
         case .connected: "Защищено"
         case .disconnecting: "Отключение"
         }
+    }
+}
+
+private struct ToggleVPNIntent: AppIntent {
+    static let title: LocalizedStringResource = "Переключить YPtun"
+    static let description = IntentDescription("Подключает или отключает последнюю выбранную локацию.")
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let controller = AppleVPNController()
+        let state = await controller.currentState()
+        if state == .connected || state == .connecting {
+            await controller.stop()
+        } else {
+            try await controller.start()
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
     }
 }
 
