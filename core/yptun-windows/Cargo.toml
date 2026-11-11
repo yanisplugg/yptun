@@ -1,0 +1,22 @@
+[package]
+name = "yptun-windows"
+version = "0.1.0"
+description = "Native C ABI host for the YPtun WinUI 3 application"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "yptun_windows"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+yptun-core = { path = "../yptun-core" }
+getrandom = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls", "socks", "gzip", "brotli", "deflate"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinInet"] }
+winreg = "0.55"
