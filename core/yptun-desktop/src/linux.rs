@@ -22,7 +22,12 @@ use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
 
 use crate::store::{device_identity, FileStore};
 
-const RUNTIME_UNAVAILABLE: &str = "Linux VPN runtime is not available in this build";
+mod host;
+mod runtime;
+
+use runtime::LinuxRuntime;
+
+const AUXILIARY_RUNTIME_UNAVAILABLE: &str = "This Linux runtime command is not available yet";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -158,6 +163,7 @@ pub struct LinuxApp {
     repository: Repository,
     settings: Mutex<DesktopSettings>,
     journal: Arc<LogJournal>,
+    runtime: Mutex<LinuxRuntime>,
 }
 
 impl LinuxApp {
@@ -179,6 +185,9 @@ impl LinuxApp {
     ) -> Self {
         let _ = std::fs::create_dir_all(&app_data_dir);
         let identity = device_identity(&app_data_dir);
+        let journal = Arc::new(LogJournal::new());
+        let runtime =
+            LinuxRuntime::new(app_data_dir.clone(), identity.clone(), Arc::clone(&journal));
         let repository = Repository::new(
             Box::new(FileStore::new(app_data_dir.clone())),
             fetcher,
@@ -195,7 +204,8 @@ impl LinuxApp {
         let app = Self {
             repository,
             settings: Mutex::new(DesktopSettings::open(&app_data_dir, locale, false, false)),
-            journal: Arc::new(LogJournal::new()),
+            journal,
+            runtime: Mutex::new(runtime),
             app_data_dir,
         };
         app.log("Linux data backend initialized");
@@ -220,17 +230,10 @@ impl LinuxApp {
             "refresh_subscriptions" => self.snapshot_result(self.refresh_subscriptions()),
             "refresh_subscription" => self.snapshot_result(self.refresh_subscription(&request.id)),
             "set_mode" => self.snapshot_result(self.set_mode(&request.mode)),
-            "start" => {
-                let result = if request.mode.is_empty() {
-                    Err(RUNTIME_UNAVAILABLE.to_string())
-                } else {
-                    self.set_mode(&request.mode)
-                        .and_then(|_| Err(RUNTIME_UNAVAILABLE.to_string()))
-                };
-                self.snapshot_result(result)
-            }
-            "stop" | "ping" | "find_free_servers" | "exit_ip" => {
-                self.result_json::<CoreSnapshot>(Err(RUNTIME_UNAVAILABLE.into()))
+            "start" => self.snapshot_result(self.start(&request.mode)),
+            "stop" => self.snapshot_result(self.stop()),
+            "ping" | "find_free_servers" | "exit_ip" => {
+                self.result_json::<CoreSnapshot>(Err(AUXILIARY_RUNTIME_UNAVAILABLE.into()))
             }
             "settings" => self.result_json::<SettingsSnapshot>(Ok(self.settings_snapshot())),
             "save_settings" => self.result_json(
@@ -327,6 +330,7 @@ impl LinuxApp {
     }
 
     fn select(&self, id: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем смените конфигурацию")?;
         if id.trim().is_empty() || self.repository.load_location(id).is_none() {
             return Err("Конфигурация не найдена".into());
         }
@@ -336,6 +340,7 @@ impl LinuxApp {
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN")?;
         if id.trim().is_empty() || self.repository.load_location(id).is_none() {
             return Err("Конфигурация не найдена".into());
         }
@@ -368,6 +373,7 @@ impl LinuxApp {
     }
 
     fn set_mode(&self, mode: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем смените режим")?;
         let mode = match mode {
             CONNECTION_MODE_PROXY => CONNECTION_MODE_PROXY,
             CONNECTION_MODE_TUN | "" => CONNECTION_MODE_TUN,
@@ -379,6 +385,37 @@ impl LinuxApp {
             .select_connection_mode(mode);
         self.log(&format!("Connection mode: {mode}"));
         Ok(())
+    }
+
+    fn start(&self, requested_mode: &str) -> Result<(), String> {
+        if !requested_mode.is_empty() {
+            self.set_mode(requested_mode)?;
+        }
+        let active = self
+            .repository
+            .active_location()
+            .ok_or_else(|| "Нет активной конфигурации".to_string())?;
+        let location = active.location();
+        if !location.is_complete() {
+            return Err("Активная конфигурация заполнена не полностью".into());
+        }
+        let mode = self
+            .settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .connection_mode()
+            .to_string();
+        self.runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .start(&location, &mode)
+    }
+
+    fn stop(&self) -> Result<(), String> {
+        self.runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .stop()
     }
 
     fn get_profile(&self, id: &str) -> Result<LocationEditorData, String> {
@@ -408,6 +445,7 @@ impl LinuxApp {
     }
 
     fn save_profile(&self, id: &str, text: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем измените конфигурацию")?;
         let location: LocationConfig = serde_json::from_str(text)
             .map_err(|error| format!("Некорректный JSON конфигурации: {error}"))?;
         if location.display_name().trim().is_empty() {
@@ -423,6 +461,7 @@ impl LinuxApp {
     }
 
     fn duplicate_profile(&self, id: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN")?;
         let mut location = self
             .repository
             .load_location(id)
@@ -446,6 +485,7 @@ impl LinuxApp {
     }
 
     fn set_vk_link(&self, id: &str, text: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN")?;
         if self.repository.load_location(id).is_none() {
             return Err("Конфигурация не найдена".into());
         }
@@ -477,6 +517,7 @@ impl LinuxApp {
     }
 
     fn save_settings(&self, kind: &str, text: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем измените параметры")?;
         let vpn = VpnSettings::new(&self.app_data_dir);
         let saved = match kind {
             "traffic" => vpn.save_traffic(&decode_settings::<TrafficSettings>(text)?),
@@ -507,6 +548,19 @@ impl LinuxApp {
         Ok(())
     }
 
+    fn require_disconnected(&self, message: &str) -> Result<(), String> {
+        if self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_connected()
+        {
+            Err(message.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
     fn snapshot(&self) -> CoreSnapshot {
         let bundle = self.repository.bundle();
         let mode = self
@@ -522,16 +576,18 @@ impl LinuxApp {
                 .find(|entry| &entry.storage_id == id)
                 .map(|entry| entry.location().display_name())
         });
-        let detail = active_name
-            .map(|name| format!("{RUNTIME_UNAVAILABLE}; selected: {name}"))
-            .unwrap_or_else(|| RUNTIME_UNAVAILABLE.to_string());
+        let runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .snapshot(active_name.as_deref(), &mode);
 
         CoreSnapshot {
-            status: "disconnected".into(),
-            status_label: "Отключено".into(),
-            status_detail: detail,
-            is_connected: false,
-            runtime_available: false,
+            status: runtime.status,
+            status_label: runtime.status_label,
+            status_detail: runtime.status_detail,
+            is_connected: runtime.is_connected,
+            runtime_available: runtime.runtime_available,
             connection_mode: mode.clone(),
             active_profile_id: bundle.active_location_id.clone(),
             profiles: bundle.locations.iter().map(profile_item).collect(),
@@ -540,17 +596,17 @@ impl LinuxApp {
                 .map(|(url, entries)| subscription_item(url, &entries))
                 .collect(),
             session: RuntimeDiagnostics {
-                active_engine: String::new(),
-                connection_mode: mode,
-                engine_alive: false,
+                active_engine: runtime.active_engine,
+                connection_mode: runtime.connection_mode,
+                engine_alive: runtime.engine_alive,
                 connected_since_epoch_ms: 0,
                 in_core_tun: false,
-                external_tun: false,
+                external_tun: runtime.external_tun,
                 bypass_route_count: 0,
                 watchdog_probe_failures: 0,
             },
             telegram_proxy_status: "unavailable".into(),
-            telegram_proxy_detail: RUNTIME_UNAVAILABLE.into(),
+            telegram_proxy_detail: AUXILIARY_RUNTIME_UNAVAILABLE.into(),
             logs: self.journal.snapshot(),
         }
     }
@@ -558,6 +614,16 @@ impl LinuxApp {
     fn log(&self, message: &str) {
         let stamp = yptun_core::desktop_app::format_timestamp(yptun_core::desktop_app::now_ms());
         self.journal.add(&format!("{stamp} {message}"));
+    }
+}
+
+impl Drop for LinuxApp {
+    fn drop(&mut self) {
+        let _ = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .stop();
     }
 }
 
@@ -840,22 +906,29 @@ mod tests {
     }
 
     #[test]
-    fn runtime_commands_fail_explicitly() {
+    fn unavailable_runtime_start_fails_but_stop_cleans_up() {
         let temp = tempfile::tempdir().unwrap();
         let app = LinuxApp::new(temp.path().to_path_buf(), "en", "4.0.0");
         let snapshot = command(&app, serde_json::json!({"command": "snapshot"}));
         assert_eq!(snapshot["data"]["runtimeAvailable"], false);
 
-        for runtime_command in ["start", "stop"] {
-            let response = command(
-                &app,
-                serde_json::json!({"command": runtime_command, "mode": "tun"}),
-            );
-            assert_eq!(response["ok"], false);
-            assert!(response["error"]
-                .as_str()
-                .unwrap()
-                .contains("not available"));
-        }
+        let imported = command(
+            &app,
+            serde_json::json!({
+                "command": "import",
+                "text": "vless://11111111-1111-1111-1111-111111111111@example.com:443?security=tls#Test"
+            }),
+        );
+        assert_eq!(imported["ok"], true);
+        let started = command(&app, serde_json::json!({"command": "start", "mode": "tun"}));
+        assert_eq!(started["ok"], false);
+        assert!(started["error"]
+            .as_str()
+            .unwrap()
+            .contains("native core is unavailable"));
+
+        let stopped = command(&app, serde_json::json!({"command": "stop"}));
+        assert_eq!(stopped["ok"], true);
+        assert_eq!(stopped["data"]["status"], "disconnected");
     }
 }
