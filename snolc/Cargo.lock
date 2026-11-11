@@ -950,6 +950,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "snolc-ffi"
+version = "0.0.4"
+dependencies = [
+ "libc",
+ "snolc",
+ "snolc-adapter-direct",
+ "snolc-adapter-socks5",
+ "snolc-carrier-tcp",
+ "snolc-policy-dummy",
+ "snolc-protection-noise",
+ "snow",
+]
+
+[[package]]
 name = "snolc-policy-dummy"
 version = "0.0.4"
 dependencies = [
