@@ -53,11 +53,20 @@ public enum AtomicFileIO: Sendable {
         }
 
         do {
-            var options: Data.WritingOptions = [.atomic]
-            if !replacingExisting {
-                options.insert(.withoutOverwriting)
+            if replacingExisting {
+                try data.write(to: destination, options: .atomic)
+            } else {
+                // Foundation traps when `.atomic` and `.withoutOverwriting` are combined. Install a
+                // same-directory staging inode with a hard link instead: link(2) is atomic and fails
+                // if another process created the destination after our existence check.
+                let staging = parent.appendingPathComponent(
+                    ".\(destination.lastPathComponent).\(UUID().uuidString).staging",
+                    isDirectory: false
+                )
+                defer { try? FileManager.default.removeItem(at: staging) }
+                try data.write(to: staging, options: .atomic)
+                try FileManager.default.linkItem(at: staging, to: destination)
             }
-            try data.write(to: destination, options: options)
         } catch {
             throw AtomicFileError.writeFailed(destination, String(describing: error))
         }
