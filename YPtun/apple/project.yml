@@ -77,8 +77,6 @@ targets:
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
-      - package: YPtunAppleKit
-        product: YPtunTunnelSupport
       - package: YPtunRustBridge
         product: YPtunRustBridge
       - package: Tun2SocksKit
@@ -107,8 +105,6 @@ targets:
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
-      - package: YPtunAppleKit
-        product: YPtunTunnelSupport
       - package: YPtunAppleKit
         product: YPtunVPNControl
       - sdk: AppIntents.framework
@@ -161,8 +157,6 @@ targets:
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
-      - package: YPtunAppleKit
-        product: YPtunTunnelSupport
       - package: YPtunRustBridge
         product: YPtunRustBridge
       - package: Tun2SocksKit

@@ -1,5 +1,4 @@
 import Foundation
-import YPtunShared
 
 public struct AppleTunnelRequest: Codable, Equatable, Sendable {
     public let locationJSON: String
@@ -82,6 +81,12 @@ public enum AppleTunnelStore {
         try write(Data(value.utf8), to: fileName)
     }
 
+    public static func remove(_ fileName: String) throws {
+        let fileURL = try url(for: fileName)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        try FileManager.default.removeItem(at: fileURL)
+    }
+
     public static func appendLog(_ line: String) throws {
         let fileURL = try url(for: logFileName)
         if !FileManager.default.fileExists(atPath: fileURL.path) {
@@ -104,6 +109,10 @@ public enum AppleTunnelStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try write(encoder.encode(request), to: requestFileName)
+    }
+
+    public static func clearRequest() throws {
+        try remove(requestFileName)
     }
 }
 

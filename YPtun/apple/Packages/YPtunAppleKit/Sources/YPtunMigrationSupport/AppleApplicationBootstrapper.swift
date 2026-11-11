@@ -2,7 +2,6 @@ import Foundation
 import YPtunAppleDataMigration
 import YPtunRustBridge
 import YPtunShared
-import YPtunTunnelSupport
 
 public struct AppleApplicationSnapshot: Sendable {
     public let locations: [LocationListItem]
@@ -33,6 +32,7 @@ public actor AppleApplicationBootstrapper {
             validator: RustMigrationValidator()
         ).migrate()
         guard let bundleURL = locationBundleURL(in: paths) else {
+            try? AppleTunnelStore.clearRequest()
             return AppleApplicationSnapshot(
                 locations: [],
                 activeLocationID: nil,
@@ -46,6 +46,13 @@ public actor AppleApplicationBootstrapper {
             throw RustMigrationValidationError.invalidUTF8(.locationsV4)
         }
         let catalog = try appleLocationCatalog(bundleJson: json)
+        do {
+            try refreshTunnelRequest(for: catalog.activeLocationId)
+        } catch {
+            // Never leave a request for a previously selected location behind. The foreground UI
+            // still loads so it can explain and repair the underlying file error.
+            try? AppleTunnelStore.clearRequest()
+        }
         return AppleApplicationSnapshot(
             locations: catalog.locations.map {
                 LocationListItem(
@@ -77,6 +84,7 @@ public actor AppleApplicationBootstrapper {
             Data(selection.normalizedBundleJson.utf8),
             to: bundleURL
         )
+        try refreshTunnelRequest(for: id)
     }
 
     @discardableResult
@@ -240,6 +248,30 @@ public actor AppleApplicationBootstrapper {
         return created
     }
 
+    private func refreshTunnelRequest(for locationID: String?) throws {
+        guard let locationID = locationID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !locationID.isEmpty else {
+            try AppleTunnelStore.clearRequest()
+            return
+        }
+        do {
+            _ = try prepareTunnelRequest(locationID: locationID)
+        } catch {
+            try? AppleTunnelStore.clearRequest()
+            throw error
+        }
+    }
+
+    private func refreshActiveTunnelRequest(paths: AppleDataPaths) throws {
+        guard let bundleURL = locationBundleURL(in: paths) else {
+            try AppleTunnelStore.clearRequest()
+            return
+        }
+        let bundle = try readTextIfPresent(at: bundleURL) ?? ""
+        let catalog = try appleLocationCatalog(bundleJson: bundle)
+        try refreshTunnelRequest(for: catalog.activeLocationId)
+    }
+
     private func readTextIfPresent(at url: URL) throws -> String? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let data = try Data(contentsOf: url)
@@ -316,5 +348,6 @@ public extension AppleApplicationBootstrapper {
             )
         )
         try AtomicFileIO.writeBytesAtomically(bytes, to: destination)
+        try refreshActiveTunnelRequest(paths: paths)
     }
 }

@@ -31,7 +31,6 @@ let package = Package(
             name: "YPtunMigrationSupport",
             dependencies: [
                 "YPtunShared",
-                "YPtunTunnelSupport",
                 .product(name: "YPtunRustBridge", package: "YPtunRustBridge"),
                 .product(name: "YPtunAppleDataMigration", package: "YPtunAppleDataMigration"),
             ]
@@ -45,7 +44,6 @@ let package = Package(
             dependencies: [
                 "YPtunShared",
                 "YPtunMigrationSupport",
-                "YPtunTunnelSupport",
                 "YPtunVPNControl",
             ]
         ),

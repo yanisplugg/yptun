@@ -1,7 +1,7 @@
 import Foundation
 @preconcurrency import NetworkExtension
 import YPtunRustBridge
-import YPtunTunnelSupport
+import YPtunShared
 
 #if canImport(Coreapi) && canImport(Tun2SocksKit)
 import Coreapi

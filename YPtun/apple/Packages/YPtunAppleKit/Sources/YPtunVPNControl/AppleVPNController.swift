@@ -40,7 +40,8 @@ public final class AppleVPNController: AppleVPNControlling {
             guard let connection = notification.object as? NEVPNConnection else { return }
             let status = connection.status
             Task { @MainActor [weak self] in
-                self?.onStateChange?(Self.state(for: status))
+                guard let self, self.manager?.connection === connection else { return }
+                self.publish(Self.state(for: status))
             }
         }
     }
@@ -48,37 +49,45 @@ public final class AppleVPNController: AppleVPNControlling {
     public func currentState() async -> VPNConnectionState {
         do {
             let manager = try await loadManager(createIfMissing: false)
-            return Self.state(for: manager?.connection.status ?? .disconnected)
+            let state = Self.state(for: manager?.connection.status ?? .disconnected)
+            publish(state)
+            return state
         } catch {
+            publish(.disconnected)
             return .disconnected
         }
     }
 
     public func start() async throws {
-        guard let manager = try await loadManager(createIfMissing: true) else {
-            throw AppleVPNControllerError.profileUnavailable
+        do {
+            guard let manager = try await loadManager(createIfMissing: true) else {
+                throw AppleVPNControllerError.profileUnavailable
+            }
+            let tunnelProtocol = (manager.protocolConfiguration as? NETunnelProviderProtocol)
+                ?? NETunnelProviderProtocol()
+            tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier
+            tunnelProtocol.serverAddress = "YPtun"
+            manager.protocolConfiguration = tunnelProtocol
+            manager.localizedDescription = YPtunIdentity.displayName
+            manager.isEnabled = true
+            try await save(manager)
+            try await reload(manager)
+            self.manager = manager
+            try manager.connection.startVPNTunnel()
+            publish(.connecting)
+        } catch {
+            publish(.disconnected)
+            throw error
         }
-        let tunnelProtocol = (manager.protocolConfiguration as? NETunnelProviderProtocol)
-            ?? NETunnelProviderProtocol()
-        tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier
-        tunnelProtocol.serverAddress = "YPtun"
-        manager.protocolConfiguration = tunnelProtocol
-        manager.localizedDescription = YPtunIdentity.displayName
-        manager.isEnabled = true
-        try await save(manager)
-        try await reload(manager)
-        self.manager = manager
-        try manager.connection.startVPNTunnel()
-        onStateChange?(.connecting)
     }
 
     public func stop() async {
         guard let manager = try? await loadManager(createIfMissing: false) else {
-            onStateChange?(.disconnected)
+            publish(.disconnected)
             return
         }
         manager.connection.stopVPNTunnel()
-        onStateChange?(.disconnecting)
+        publish(.disconnecting)
     }
 
     private var providerBundleIdentifier: String {
@@ -148,6 +157,11 @@ public final class AppleVPNController: AppleVPNControlling {
         case .invalid, .disconnected: .disconnected
         @unknown default: .disconnected
         }
+    }
+
+    private func publish(_ state: VPNConnectionState) {
+        try? AppleTunnelStore.writeText(state.rawValue, to: AppleTunnelStore.statusFileName)
+        onStateChange?(state)
     }
 }
 

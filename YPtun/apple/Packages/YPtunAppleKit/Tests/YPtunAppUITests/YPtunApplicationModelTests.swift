@@ -1,9 +1,29 @@
+import Foundation
 import Testing
 @testable import YPtunAppUI
 import YPtunShared
 
 @MainActor
 struct YPtunApplicationModelTests {
+    @Test func sharedTunnelRequestRoundTripsForWidgetAndExtension() throws {
+        let request = AppleTunnelRequest(
+            locationJSON: "{\"name\":\"Primary\"}",
+            trafficJSON: "{}",
+            routingJSON: "{}",
+            routingProfilesJSON: "{}",
+            appBehaviorJSON: "{}",
+            warpConfig: "[Interface]",
+            deviceID: "device-id"
+        )
+
+        let decoded = try JSONDecoder().decode(
+            AppleTunnelRequest.self,
+            from: JSONEncoder().encode(request)
+        )
+
+        #expect(decoded == request)
+    }
+
     @Test func primaryActionAddsALocationWhenTheCatalogIsEmpty() {
         let model = YPtunApplicationModel()
 

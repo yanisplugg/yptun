@@ -3,7 +3,6 @@ import AppIntents
 import SwiftUI
 import WidgetKit
 import YPtunShared
-import YPtunTunnelSupport
 import YPtunVPNControl
 
 private struct StatusEntry: TimelineEntry {

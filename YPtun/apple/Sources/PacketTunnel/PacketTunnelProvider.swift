@@ -1,6 +1,5 @@
 import Foundation
 @preconcurrency import NetworkExtension
-import YPtunTunnelSupport
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let runtime = NativeTunnelRuntime()

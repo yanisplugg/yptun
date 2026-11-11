@@ -1,5 +1,5 @@
 import SwiftUI
-import YPtunTunnelSupport
+import YPtunShared
 
 struct TunnelLogView: View {
     @State private var text = ""
