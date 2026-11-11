@@ -6,9 +6,16 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use yptun_core::engine::machine::{Action, ConnectionMachine, Event, RetryPolicy, Status};
+use yptun_core::engine::plan::{
+    choose_core, resolve_second, singbox_blocks_quic, CoreInputs, PlatformCaps,
+};
+use yptun_core::importer;
 use yptun_core::location::{LocationBundleV4, LocationConfig, BUNDLE_VERSION};
-use yptun_core::model::EngineType;
-use yptun_core::routing::TrafficSettings;
+use yptun_core::model::{EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_MIERU};
+use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
+use yptun_core::settings::AppBehaviorSettings;
+use yptun_core::singbox::config::{self as singbox_config, SingBoxOptions};
+use yptun_core::xray::config::{self as xray_config, RawOptions, XrayOptions};
 
 use crate::{from_json, FfiError};
 
@@ -113,6 +120,83 @@ pub struct AppleLocationCatalog {
     pub locations: Vec<AppleLocationSummary>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleLocationSelection {
+    pub normalized_bundle_json: String,
+    pub selected_location_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleLocationImport {
+    pub normalized_bundle_json: String,
+    pub active_location_id: Option<String>,
+    pub imported_locations: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AppleProxyRuntimeKind {
+    SingBox,
+    Xray,
+    Mieru,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleProxyRuntimePlan {
+    pub kind: AppleProxyRuntimeKind,
+    pub listen_port: i32,
+    /// sing-box/Xray JSON or a complete Mieru share link.
+    pub config: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleOlcRtcRuntimePlan {
+    pub listen_port: i32,
+    pub provider: String,
+    pub transport: String,
+    pub room_id: String,
+    pub key_hex: String,
+    pub client_id: String,
+    pub vp8_fps: i32,
+    pub vp8_batch: i32,
+    pub sei_fps: i32,
+    pub sei_batch: i32,
+    pub sei_fragment_size: i32,
+    pub sei_ack_timeout_ms: i32,
+    pub video_width: i32,
+    pub video_height: i32,
+    pub video_fps: i32,
+    pub video_qr_size: i32,
+    pub video_qr_recovery: String,
+    pub video_codec: String,
+    pub video_tile_module: i32,
+    pub video_tile_rs: i32,
+    /// Empty for one room; otherwise the capped Apple room pool payload.
+    pub rooms_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleTurnableRuntimePlan {
+    pub config: String,
+    pub listen_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleAmneziaWgRuntimePlan {
+    pub ini_config: String,
+    pub listen_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleNativeRuntimePlan {
+    pub display_name: String,
+    pub tunnel: AppleTunnelPlan,
+    pub bridge: AppleBridgePlan,
+    pub olcrtc: Option<AppleOlcRtcRuntimePlan>,
+    pub amnezia_wg: Option<AppleAmneziaWgRuntimePlan>,
+    pub turnable: Option<AppleTurnableRuntimePlan>,
+    pub proxy: Option<AppleProxyRuntimePlan>,
+}
+
 /// Validates and normalizes a Kotlin-era location bundle before Swift replaces the original file.
 /// Swift owns the backup and atomic rename; Rust owns wire compatibility and model normalization.
 #[uniffi::export]
@@ -176,6 +260,460 @@ pub fn apple_location_catalog(bundle_json: String) -> Result<AppleLocationCatalo
     Ok(AppleLocationCatalog {
         active_location_id: normalized.active_location_id,
         locations,
+    })
+}
+
+/// Returns one normalized location payload without making Swift mirror the persisted wire model.
+#[uniffi::export]
+pub fn apple_location_json(
+    bundle_json: String,
+    location_id: String,
+) -> Result<Option<String>, FfiError> {
+    let bundle: LocationBundleV4 = from_json("LocationBundle", &bundle_json)?;
+    let normalized = bundle.normalized();
+    normalized
+        .locations
+        .iter()
+        .find(|entry| entry.storage_id == location_id)
+        .map(|entry| {
+            serde_json::to_string(&entry.location())
+                .map_err(|error| FfiError::Json(error.to_string()))
+        })
+        .transpose()
+}
+
+/// Changes only the active id and returns both values Swift needs to commit and connect.
+#[uniffi::export]
+pub fn apple_select_location(
+    bundle_json: String,
+    location_id: String,
+) -> Result<AppleLocationSelection, FfiError> {
+    let bundle: LocationBundleV4 = from_json("LocationBundle", &bundle_json)?;
+    let mut normalized = bundle.normalized();
+    let entry = normalized
+        .locations
+        .iter()
+        .find(|entry| entry.storage_id == location_id)
+        .ok_or_else(|| FfiError::Invalid(format!("Unknown location id: {location_id}")))?;
+    let selected_location_json = serde_json::to_string(&entry.location())
+        .map_err(|error| FfiError::Json(error.to_string()))?;
+    normalized.active_location_id = Some(location_id);
+    let normalized_bundle_json = serde_json::to_string_pretty(&normalized)
+        .map_err(|error| FfiError::Json(error.to_string()))?;
+    Ok(AppleLocationSelection {
+        normalized_bundle_json,
+        selected_location_json,
+    })
+}
+
+/// Imports pasted config text or a downloaded subscription body into the existing native bundle.
+#[uniffi::export]
+pub fn apple_import_locations(
+    bundle_json: String,
+    text: String,
+    subscription_url: Option<String>,
+) -> Result<AppleLocationImport, FfiError> {
+    let current = if bundle_json.trim().is_empty() {
+        LocationBundleV4::default()
+    } else {
+        from_json::<LocationBundleV4>("LocationBundle", &bundle_json)?.normalized()
+    };
+    let parsed = importer::parse_import(
+        &importer::normalized_import_text(&text),
+        subscription_url.as_deref(),
+        None,
+        None,
+    )
+    .ok_or_else(|| FfiError::Invalid("The text contains no supported locations".into()))?;
+    let imported_locations = parsed.bundle.locations.len() as u32;
+    let merged = importer::merge_imported_bundle(
+        Some(&current),
+        &parsed.bundle,
+        parsed.mode == importer::ImportMode::Restore,
+    )
+    .normalized();
+    let active_location_id = merged.active_location_id.clone();
+    let normalized_bundle_json =
+        serde_json::to_string_pretty(&merged).map_err(|error| FfiError::Json(error.to_string()))?;
+    Ok(AppleLocationImport {
+        normalized_bundle_json,
+        active_location_id,
+        imported_locations,
+    })
+}
+
+fn json_or_default<T>(what: &str, json: &str) -> Result<T, FfiError>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    if json.trim().is_empty() {
+        Ok(T::default())
+    } else {
+        from_json(what, json)
+    }
+}
+
+fn apple_olcrtc_plan(
+    location: &LocationConfig,
+    listen_port: i32,
+    device_id: &str,
+) -> AppleOlcRtcRuntimePlan {
+    let sei = location.sei_options();
+    let video = location.video_options();
+    let rooms_json = if location.uses_multi_room() {
+        let rooms: Vec<serde_json::Value> = location
+            .multi_room_specs()
+            .into_iter()
+            // Two peer connections are the safe ceiling in Apple's packet-tunnel process.
+            .take(2)
+            .map(|room| {
+                serde_json::json!({
+                    "carrier": room.provider,
+                    "transport": room.transport,
+                    "room": room.room,
+                    "key": room.key,
+                })
+            })
+            .collect();
+        serde_json::to_string(&rooms).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    AppleOlcRtcRuntimePlan {
+        listen_port,
+        provider: location.bypass_provider.clone(),
+        transport: location.transport.clone(),
+        room_id: location.id.clone(),
+        key_hex: location.key.clone(),
+        client_id: device_id.to_string(),
+        vp8_fps: location.vp8_fps,
+        vp8_batch: location.vp8_batch,
+        sei_fps: sei.fps,
+        sei_batch: sei.batch,
+        sei_fragment_size: sei.fragment_size,
+        sei_ack_timeout_ms: sei.ack_timeout_ms,
+        video_width: video.width,
+        video_height: video.height,
+        video_fps: video.fps,
+        video_qr_size: video.qr_size,
+        video_qr_recovery: video.qr_recovery,
+        video_codec: video.codec,
+        video_tile_module: video.tile_module,
+        video_tile_rs: video.tile_rs,
+        rooms_json,
+    }
+}
+
+fn apple_awg_ini(ini: &str) -> String {
+    let mut has_allowed_ips = false;
+    let mut has_dns = false;
+    let mut lines: Vec<String> = ini
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case("AllowedIPs"))
+            {
+                has_allowed_ips = true;
+                "AllowedIPs = 0.0.0.0/0, ::/0".into()
+            } else {
+                if trimmed
+                    .split_once('=')
+                    .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case("DNS"))
+                {
+                    has_dns = true;
+                }
+                line.to_string()
+            }
+        })
+        .collect();
+    if !has_allowed_ips {
+        let peer = lines
+            .iter()
+            .rposition(|line| line.trim().eq_ignore_ascii_case("[Peer]"));
+        lines.insert(
+            peer.map_or(lines.len(), |index| index + 1),
+            "AllowedIPs = 0.0.0.0/0, ::/0".into(),
+        );
+    }
+    if !has_dns {
+        if let Some(interface) = lines
+            .iter()
+            .position(|line| line.trim().eq_ignore_ascii_case("[Interface]"))
+        {
+            lines.insert(interface + 1, "DNS = 1.1.1.1, 8.8.8.8".into());
+        }
+    }
+    lines.join("\n")
+}
+
+fn local_socks_profile(name: &str, port: i32) -> ProxyProfile {
+    ProxyProfile {
+        tag: name.to_string(),
+        kind: "socks".into(),
+        server: "127.0.0.1".into(),
+        server_port: port,
+        raw_outbound: Some(format!(
+            r#"{{"type":"socks","server":"127.0.0.1","server_port":{port},"version":"5"}}"#
+        )),
+        ..ProxyProfile::default()
+    }
+}
+
+/// Complete native execution plan for the first in-process Apple runtimes.
+///
+/// Rust owns all model/config decisions. Swift applies the tunnel settings and invokes Coreapi in
+/// `olcrtc` then `proxy` order. Other engine families are added to this same typed surface.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn apple_native_runtime_plan(
+    location_json: String,
+    traffic_json: String,
+    routing_json: String,
+    routing_profiles_json: String,
+    app_behavior_json: String,
+    socks_port: i32,
+    device_id: String,
+    log_file_path: String,
+    cache_file_path: String,
+) -> Result<AppleNativeRuntimePlan, FfiError> {
+    if !(1..=65_528).contains(&socks_port) {
+        return Err(FfiError::Invalid(format!(
+            "SOCKS port {socks_port} leaves no room for Apple runtime ports"
+        )));
+    }
+    let location = from_json::<LocationConfig>("LocationConfig", &location_json)?.normalized();
+    if !location.is_complete() {
+        return Err(FfiError::Invalid("Location is incomplete".into()));
+    }
+    let traffic =
+        json_or_default::<TrafficSettings>("TrafficSettings", &traffic_json)?.normalized();
+    let routing = json_or_default::<RoutingRules>("RoutingRules", &routing_json)?;
+    let profiles =
+        json_or_default::<RoutingProfilesState>("RoutingProfilesState", &routing_profiles_json)?;
+    let behavior =
+        json_or_default::<AppBehaviorSettings>("AppBehaviorSettings", &app_behavior_json)?;
+    let routing_profile = profiles
+        .resolve(Some(&location.routing_profile_id))
+        .cloned();
+
+    if location.warp_enabled {
+        return Err(FfiError::Unsupported(
+            "WARP chaining is not connected to the native Apple runtime yet".into(),
+        ));
+    }
+
+    let olcrtc = match location.engine {
+        EngineType::Stealth => Some(apple_olcrtc_plan(&location, socks_port, &device_id)),
+        EngineType::Chain => Some(apple_olcrtc_plan(&location, socks_port + 1, &device_id)),
+        _ => None,
+    };
+
+    let mut amnezia_wg = None;
+    let mut turnable = None;
+
+    let proxy = match location.engine {
+        EngineType::Stealth => None,
+        EngineType::Standard | EngineType::Chain => {
+            let main = location
+                .proxy
+                .as_ref()
+                .ok_or_else(|| FfiError::Invalid("No proxy configured".into()))?;
+            if main.kind == TYPE_MIERU {
+                if location.engine == EngineType::Chain {
+                    return Err(FfiError::Unsupported(
+                        "Mieru over olcRTC Chain is not supported".into(),
+                    ));
+                }
+                Some(AppleProxyRuntimePlan {
+                    kind: AppleProxyRuntimeKind::Mieru,
+                    listen_port: socks_port,
+                    config: main.mieru_config.clone(),
+                })
+            } else {
+                let effective_main = if main.kind == TYPE_AMNEZIAWG {
+                    let port = socks_port + 2;
+                    amnezia_wg = Some(AppleAmneziaWgRuntimePlan {
+                        ini_config: apple_awg_ini(&main.awg_config),
+                        listen_address: format!("127.0.0.1:{port}"),
+                    });
+                    local_socks_profile(
+                        if main.tag.trim().is_empty() {
+                            "AmneziaWG"
+                        } else {
+                            &main.tag
+                        },
+                        port,
+                    )
+                } else {
+                    main.clone()
+                };
+                let (second, _) = resolve_second(main, location.proxy2.as_ref());
+                let caps = PlatformCaps::ios();
+                let choice = choose_core(
+                    &CoreInputs {
+                        location: &location,
+                        profile: &effective_main,
+                        second: second.as_ref(),
+                        routing_profile: routing_profile.as_ref(),
+                        traffic: &traffic,
+                        global_core: behavior.global_proxy_core,
+                        caps: &caps,
+                    },
+                    || true,
+                );
+                let chain_port = (location.engine == EngineType::Chain).then_some(socks_port + 1);
+                let log_file = (!log_file_path.trim().is_empty()).then_some(log_file_path);
+                let cache_file = (!cache_file_path.trim().is_empty()).then_some(cache_file_path);
+                match choice.core {
+                    ProxyCore::Xray => {
+                        let config = if let Some(raw) = effective_main
+                            .raw_xray_config
+                            .as_deref()
+                            .filter(|raw| !raw.trim().is_empty())
+                        {
+                            xray_config::prepare_raw(
+                                raw,
+                                &RawOptions {
+                                    listen_port: socks_port,
+                                    listen_host: "127.0.0.1".into(),
+                                    routing_profile: routing_profile.clone(),
+                                    fake_dns_enabled: traffic.fake_dns_enabled,
+                                    force_ipv4: traffic.domain_strategy == "ipv4_only",
+                                    second_profile: second,
+                                    ..RawOptions::new(socks_port)
+                                },
+                            )
+                        } else {
+                            xray_config::build(
+                                &effective_main,
+                                &XrayOptions {
+                                    listen_port: socks_port,
+                                    listen_host: "127.0.0.1".into(),
+                                    olcrtc_chain_port: chain_port,
+                                    log_level: "warning".into(),
+                                    traffic: traffic.clone(),
+                                    routing_profile: routing_profile.clone(),
+                                    block_quic: true,
+                                    bypass_lan: routing.bypass_lan,
+                                    second_profile: second,
+                                    fake_dns_spec: location.fake_dns.clone(),
+                                    ..XrayOptions::default()
+                                },
+                            )
+                        };
+                        let _ = log_file;
+                        Some(AppleProxyRuntimePlan {
+                            kind: AppleProxyRuntimeKind::Xray,
+                            listen_port: socks_port,
+                            config,
+                        })
+                    }
+                    ProxyCore::SingBox | ProxyCore::Auto => {
+                        let config = singbox_config::build(
+                            &effective_main,
+                            &SingBoxOptions {
+                                listen_port: socks_port,
+                                listen_host: "127.0.0.1".into(),
+                                olcrtc_chain_port: chain_port,
+                                log_level: "warn".into(),
+                                routing: routing.clone(),
+                                traffic: traffic.clone(),
+                                advanced: location.advanced.clone(),
+                                routing_profile: routing_profile.clone(),
+                                singbox_geosite_base: profiles.singbox_geosite_base.clone(),
+                                singbox_geoip_base: profiles.singbox_geoip_base.clone(),
+                                block_quic: singbox_blocks_quic(main),
+                                second_profile: second,
+                                fake_dns_spec: location.fake_dns.clone(),
+                                prefer_tcp_remote_dns: true,
+                                log_file_path: log_file,
+                                cache_file_path: cache_file,
+                                ..SingBoxOptions::default()
+                            },
+                        )
+                        .map_err(|error| FfiError::Invalid(error.to_string()))?;
+                        Some(AppleProxyRuntimePlan {
+                            kind: AppleProxyRuntimeKind::SingBox,
+                            listen_port: socks_port,
+                            config,
+                        })
+                    }
+                }
+            }
+        }
+        EngineType::VkTurn
+            if location
+                .vkturn
+                .as_ref()
+                .is_some_and(|config| config.uses_turnable()) =>
+        {
+            let vk = location.vkturn.as_ref().expect("checked above");
+            let profile = location.proxy.as_ref().ok_or_else(|| {
+                FfiError::Invalid("Turnable requires its WireGuard exit profile".into())
+            })?;
+            turnable = Some(AppleTurnableRuntimePlan {
+                config: vk.turnable_config.clone(),
+                listen_address: format!("127.0.0.1:{}", vk.listen_port),
+            });
+            let config = singbox_config::build(
+                profile,
+                &SingBoxOptions {
+                    listen_port: socks_port,
+                    listen_host: "127.0.0.1".into(),
+                    log_level: "warn".into(),
+                    routing: routing.clone(),
+                    traffic: TrafficSettings {
+                        domain_strategy: "ipv4_only".into(),
+                        ..traffic.clone()
+                    },
+                    advanced: location.advanced.clone(),
+                    routing_profile: routing_profile.clone(),
+                    singbox_geosite_base: profiles.singbox_geosite_base.clone(),
+                    singbox_geoip_base: profiles.singbox_geoip_base.clone(),
+                    block_quic: false,
+                    sniff_override_destination: true,
+                    fake_dns_spec: location.fake_dns.clone(),
+                    prefer_tcp_remote_dns: true,
+                    log_file_path: (!log_file_path.trim().is_empty()).then_some(log_file_path),
+                    cache_file_path: (!cache_file_path.trim().is_empty())
+                        .then_some(cache_file_path),
+                    ..SingBoxOptions::default()
+                },
+            )
+            .map_err(|error| FfiError::Invalid(error.to_string()))?;
+            Some(AppleProxyRuntimePlan {
+                kind: AppleProxyRuntimeKind::SingBox,
+                listen_port: socks_port,
+                config,
+            })
+        }
+        other => {
+            return Err(FfiError::Unsupported(format!(
+                "Native Apple runtime for {other:?} is not connected yet"
+            )))
+        }
+    };
+
+    let normalized_location_json =
+        serde_json::to_string(&location).map_err(|error| FfiError::Json(error.to_string()))?;
+    let normalized_traffic_json =
+        serde_json::to_string(&traffic).map_err(|error| FfiError::Json(error.to_string()))?;
+    Ok(AppleNativeRuntimePlan {
+        display_name: location.display_name(),
+        tunnel: apple_tunnel_plan(traffic.mtu, routing.bypass_lan),
+        bridge: apple_bridge_plan(
+            normalized_location_json,
+            normalized_traffic_json,
+            socks_port,
+            String::new(),
+            String::new(),
+        )?,
+        olcrtc,
+        amnezia_wg,
+        turnable,
+        proxy,
     })
 }
 

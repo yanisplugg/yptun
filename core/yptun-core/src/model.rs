@@ -37,9 +37,9 @@ impl EngineType {
             Some("standard" | "singbox" | "sing-box" | "vless") => Self::Standard,
             Some("chain" | "stealth_chain" | "stealth+vless") => Self::Chain,
             Some("vkturn" | "vk-turn" | "freeturn") => Self::VkTurn,
-            Some("masterdns" | "master-dns" | "masterdnsvpn" | "dnstt" | "dns-tt" | "dnstunnel") => {
-                Self::MasterDns
-            }
+            Some(
+                "masterdns" | "master-dns" | "masterdnsvpn" | "dnstt" | "dns-tt" | "dnstunnel",
+            ) => Self::MasterDns,
             Some("openflux" | "open-flux") => Self::OpenFlux,
             Some("snolc") => Self::Snolc,
             _ => Self::Stealth,
@@ -78,6 +78,7 @@ pub const TYPE_AMNEZIAWG: &str = "amneziawg";
 pub const TYPE_TRUSTTUNNEL: &str = "trusttunnel";
 pub const TYPE_HYSTERIA2: &str = "hysteria2";
 pub const TYPE_NAIVE: &str = "naive";
+pub const TYPE_MIERU: &str = "mieru";
 
 pub const NETWORK_TCP: &str = "tcp";
 pub const NETWORK_WS: &str = "ws";
@@ -166,6 +167,9 @@ pub struct ProxyProfile {
     /// Trust Tunnel `tt://` deep link, kept verbatim.
     #[serde(rename = "tt_config")]
     pub tt_config: String,
+    /// Complete `mieru://` or `mierus://` client link, consumed by the isolated runtime.
+    #[serde(rename = "mieru_config")]
+    pub mieru_config: String,
     #[serde(rename = "hy2_obfs")]
     pub hy2_obfs: String,
     #[serde(rename = "hy2_obfs_password")]
@@ -238,6 +242,7 @@ impl Default for ProxyProfile {
             raw_singbox_route: None,
             awg_config: String::new(),
             tt_config: String::new(),
+            mieru_config: String::new(),
             hy2_obfs: String::new(),
             hy2_obfs_password: String::new(),
             hy2_up_mbps: 0,
@@ -282,6 +287,10 @@ impl ProxyProfile {
             TYPE_HYSTERIA2 | TYPE_NAIVE => return not_blank(&self.server) && port_ok,
             TYPE_AMNEZIAWG => return not_blank(&self.awg_config),
             TYPE_TRUSTTUNNEL => return not_blank(&self.tt_config),
+            TYPE_MIERU => {
+                return crate::share_link::starts_ci(&self.mieru_config, "mieru://")
+                    || crate::share_link::starts_ci(&self.mieru_config, "mierus://")
+            }
             _ => {}
         }
         if not_blank_opt(&self.raw_xray_config) || not_blank_opt(&self.raw_outbound) {
@@ -316,7 +325,11 @@ impl ProxyProfile {
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        Self { tag: String::new(), awg_config: awg, ..self.clone() }
+        Self {
+            tag: String::new(),
+            awg_config: awg,
+            ..self.clone()
+        }
     }
 
     /// True when `other` is the same node (pasted twice, same raw config, or same server:port).

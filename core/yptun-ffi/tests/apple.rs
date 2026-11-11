@@ -2,8 +2,10 @@ use yptun_core::location::LocationConfig;
 use yptun_core::model::EngineType;
 use yptun_core::routing::TrafficSettings;
 use yptun_ffi::{
-    apple_bridge_plan, apple_location_catalog, apple_migrate_location_bundle, apple_tunnel_plan,
-    AppleActionKind, AppleConnectionRuntime, AppleStatusKind,
+    apple_bridge_plan, apple_import_locations, apple_location_catalog, apple_location_json,
+    apple_migrate_location_bundle, apple_native_runtime_plan, apple_select_location,
+    apple_tunnel_plan, AppleActionKind, AppleConnectionRuntime, AppleProxyRuntimeKind,
+    AppleStatusKind,
 };
 
 fn kinds(actions: &[yptun_ffi::AppleConnectionAction]) -> Vec<AppleActionKind> {
@@ -225,4 +227,185 @@ fn location_catalog_preserves_selection_and_returns_ui_fields() {
     assert!(location.complete);
     assert!(location.from_subscription);
     assert!(!location.needs_user_action);
+}
+
+#[test]
+fn location_selection_returns_payload_and_changes_only_the_active_id() {
+    let bundle = serde_json::json!({
+        "version": 5,
+        "active_location_id": "first",
+        "locations": [
+            {
+                "storage_id": "first",
+                "name": "First",
+                "engine": "stealth",
+                "id": "one",
+                "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            },
+            {
+                "storage_id": "second",
+                "name": "Second",
+                "engine": "stealth",
+                "id": "two",
+                "key": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }
+        ]
+    });
+
+    let second = apple_location_json(bundle.to_string(), "second".into())
+        .unwrap()
+        .expect("second location");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&second).unwrap()["name"],
+        "Second"
+    );
+
+    let selection = apple_select_location(bundle.to_string(), "second".into()).unwrap();
+    let selected: serde_json::Value =
+        serde_json::from_str(&selection.selected_location_json).unwrap();
+    let stored: serde_json::Value =
+        serde_json::from_str(&selection.normalized_bundle_json).unwrap();
+    assert_eq!(selected["name"], "Second");
+    assert_eq!(stored["active_location_id"], "second");
+    assert_eq!(stored["locations"].as_array().unwrap().len(), 2);
+    assert!(apple_select_location(bundle.to_string(), "missing".into()).is_err());
+}
+
+#[test]
+fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() {
+    let standard = serde_json::json!({
+        "name": "Standard",
+        "engine": "standard",
+        "proxy": {
+            "type": "vless",
+            "server": "example.com",
+            "server_port": 443,
+            "uuid": "11111111-2222-3333-4444-555555555555",
+            "security": "tls",
+            "sni": "example.com"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        standard.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        r#"{"globalProxyCore":"singbox"}"#.into(),
+        10_808,
+        "device".into(),
+        "tunnel.log".into(),
+        "cache.db".into(),
+    )
+    .unwrap();
+    assert!(plan.olcrtc.is_none());
+    assert_eq!(
+        plan.proxy.as_ref().unwrap().kind,
+        AppleProxyRuntimeKind::SingBox
+    );
+    assert!(plan.proxy.as_ref().unwrap().config.contains("example.com"));
+
+    let stealth = serde_json::json!({
+        "name": "Stealth",
+        "engine": "stealth",
+        "id": "room",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    });
+    let plan = apple_native_runtime_plan(
+        stealth.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert_eq!(plan.olcrtc.as_ref().unwrap().room_id, "room");
+    assert!(plan.proxy.is_none());
+
+    let chain = serde_json::json!({
+        "name": "Chain",
+        "engine": "chain",
+        "id": "room",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "proxy": {
+            "type": "vless",
+            "server": "example.com",
+            "server_port": 443,
+            "uuid": "11111111-2222-3333-4444-555555555555"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        chain.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        r#"{"globalProxyCore":"singbox"}"#.into(),
+        10_808,
+        "device".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert_eq!(plan.olcrtc.as_ref().unwrap().listen_port, 10_809);
+    assert!(plan.proxy.as_ref().unwrap().config.contains("olcrtc-out"));
+}
+
+#[test]
+fn native_runtime_plan_keeps_mieru_link_for_the_isolated_runtime() {
+    let location = serde_json::json!({
+        "name": "Mieru",
+        "engine": "standard",
+        "proxy": {
+            "type": "mieru",
+            "server": "mieru-config",
+            "server_port": 1,
+            "mieru_config": "mieru://CpsBCgdkZWZhdWx0ElgKBWJhb3pp"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        location.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.proxy.as_ref().unwrap().kind,
+        AppleProxyRuntimeKind::Mieru
+    );
+    assert!(plan.proxy.as_ref().unwrap().config.starts_with("mieru://"));
+}
+
+#[test]
+fn apple_import_adds_mieru_without_dropping_existing_locations() {
+    let current = serde_json::json!({
+        "version": 5,
+        "active_location_id": "existing",
+        "locations": [{
+            "storage_id": "existing",
+            "name": "Existing",
+            "engine": "stealth",
+            "id": "room",
+            "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }]
+    });
+    let imported = apple_import_locations(
+        current.to_string(),
+        "mierus://user:p%40ss@203.0.113.9?profile=fast&port=4443&protocol=TCP#Tokyo".into(),
+        Some("https://example.com/sub".into()),
+    )
+    .unwrap();
+    let bundle: serde_json::Value = serde_json::from_str(&imported.normalized_bundle_json).unwrap();
+    assert_eq!(imported.imported_locations, 1);
+    assert_eq!(bundle["locations"].as_array().unwrap().len(), 2);
+    assert_eq!(bundle["active_location_id"], "existing");
+    assert!(imported.normalized_bundle_json.contains("mieru_config"));
 }

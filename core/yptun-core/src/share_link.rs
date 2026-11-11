@@ -1,6 +1,6 @@
 //! Proxy share links → [`ProxyProfile`] (port of the app's `ShareLinkParser`, `VlessUriParser`,
 //! `AmneziaWgParser` and `TrustTunnelParser`): vless, vmess, trojan, ss, hysteria2/hy2, naive,
-//! amneziawg (link and raw INI) and tt:// (Trust Tunnel).
+//! amneziawg (link and raw INI), Mieru and tt:// (Trust Tunnel).
 
 use std::collections::BTreeMap;
 
@@ -28,6 +28,8 @@ pub fn parse(uri: &str) -> Option<ProxyProfile> {
         parse_hysteria2(t)
     } else if starts_ci(t, "naive+") || starts_ci(t, "naive://") {
         parse_naive(t)
+    } else if starts_ci(t, "mieru://") || starts_ci(t, "mierus://") {
+        parse_mieru(t)
     } else if starts_ci(t, "amneziawg://") {
         // amneziawg://<base64url(wg-quick INI)>#name — the `#name` (the panel's host name) wins
         // over the INI's own comment.
@@ -48,14 +50,91 @@ pub fn parse(uri: &str) -> Option<ProxyProfile> {
     }
 }
 
+/// Mieru's opaque standard link or the human-readable simple form.
+pub fn parse_mieru(uri: &str) -> Option<ProxyProfile> {
+    let t = uri.trim();
+    if starts_ci(t, "mieru://") {
+        let payload = before(&t["mieru://".len()..], '#');
+        if payload.trim().is_empty() {
+            return None;
+        }
+        let name = percent_decode(after(t, '#'));
+        return Some(ProxyProfile {
+            tag: if name.trim().is_empty() {
+                "Mieru".into()
+            } else {
+                name
+            },
+            kind: TYPE_MIERU.into(),
+            server: "mieru-config".into(),
+            server_port: 1,
+            mieru_config: t.into(),
+            ..Default::default()
+        });
+    }
+    if !starts_ci(t, "mierus://") {
+        return None;
+    }
+    let body = &t["mierus://".len()..];
+    let name = percent_decode(after(body, '#'));
+    let before_fragment = before(body, '#');
+    let query = after(before_fragment, '?');
+    let authority = before(before_fragment, '?');
+    let at = authority.rfind('@').filter(|&index| index > 0)?;
+    let credentials = &authority[..at];
+    let colon = credentials.find(':').filter(|&index| index > 0)?;
+    let username = percent_decode(&credentials[..colon]);
+    let password = percent_decode(&credentials[colon + 1..]);
+    let server = percent_decode(&authority[at + 1..])
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    if username.trim().is_empty() || password.trim().is_empty() || server.is_empty() {
+        return None;
+    }
+    let params = parse_query(query);
+    let server_port = params
+        .get("port")
+        .and_then(|value| value.split('-').next())
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|port| (1..=65535).contains(port))
+        .unwrap_or(1);
+    let profile = params.get("profile").cloned().unwrap_or_default();
+    Some(ProxyProfile {
+        tag: if !name.trim().is_empty() {
+            name
+        } else if !profile.trim().is_empty() {
+            profile
+        } else {
+            "Mieru".into()
+        },
+        kind: TYPE_MIERU.into(),
+        server,
+        server_port,
+        username,
+        password,
+        mieru_config: t.into(),
+        ..Default::default()
+    })
+}
+
 /// Parses a subscription body across every protocol, keeping complete profiles only.
 pub fn parse_subscription(body: &str) -> Vec<ProxyProfile> {
-    to_links(body).iter().filter_map(|l| parse(l)).filter(ProxyProfile::is_complete).collect()
+    to_links(body)
+        .iter()
+        .filter_map(|l| parse(l))
+        .filter(ProxyProfile::is_complete)
+        .collect()
 }
 
 /// VLESS only (the app's `VlessUriParser.parseSubscription`).
 pub fn parse_vless_subscription(body: &str) -> Vec<ProxyProfile> {
-    to_links(body).iter().filter_map(|l| parse_vless(l)).filter(ProxyProfile::is_complete).collect()
+    to_links(body)
+        .iter()
+        .filter_map(|l| parse_vless(l))
+        .filter(ProxyProfile::is_complete)
+        .collect()
 }
 
 pub(crate) fn starts_ci(s: &str, prefix: &str) -> bool {
@@ -79,7 +158,11 @@ fn get<'a>(params: &'a BTreeMap<String, String>, key: &str) -> &'a str {
 
 /// `params["sni"] ?: params["peer"]` — an empty `sni=` still wins over `peer`.
 fn sni_of(params: &BTreeMap<String, String>) -> String {
-    params.get("sni").or_else(|| params.get("peer")).cloned().unwrap_or_default()
+    params
+        .get("sni")
+        .or_else(|| params.get("peer"))
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn flag(params: &BTreeMap<String, String>, key: &str) -> bool {
@@ -93,7 +176,10 @@ pub fn parse_vless(uri: &str) -> Option<ProxyProfile> {
         return None;
     }
     let rest = &t["vless://".len()..];
-    let remark = rest.find('#').map(|i| percent_decode(&rest[i + 1..])).unwrap_or_default();
+    let remark = rest
+        .find('#')
+        .map(|i| percent_decode(&rest[i + 1..]))
+        .unwrap_or_default();
     let before_fragment = before(rest, '#');
     let (authority, query) = match before_fragment.find('?') {
         Some(i) => (&before_fragment[..i], &before_fragment[i + 1..]),
@@ -112,7 +198,11 @@ pub fn parse_vless(uri: &str) -> Option<ProxyProfile> {
         Some("reality") => SECURITY_REALITY,
         _ => SECURITY_NONE,
     };
-    let path = if network == NETWORK_GRPC { get(&params, "serviceName") } else { get(&params, "path") };
+    let path = if network == NETWORK_GRPC {
+        get(&params, "serviceName")
+    } else {
+        get(&params, "path")
+    };
     let p = ProxyProfile {
         tag: remark,
         kind: TYPE_VLESS.into(),
@@ -141,9 +231,21 @@ pub fn with_xray_params(p: ProxyProfile, params: &BTreeMap<String, String>) -> P
     let xhttp = p.network == NETWORK_XHTTP;
     let encryption = get(params, "encryption");
     ProxyProfile {
-        vless_encryption: if encryption.eq_ignore_ascii_case("none") { String::new() } else { encryption.into() },
-        xhttp_mode: if xhttp { get(params, "mode").into() } else { String::new() },
-        xhttp_extra: if xhttp { get(params, "extra").into() } else { String::new() },
+        vless_encryption: if encryption.eq_ignore_ascii_case("none") {
+            String::new()
+        } else {
+            encryption.into()
+        },
+        xhttp_mode: if xhttp {
+            get(params, "mode").into()
+        } else {
+            String::new()
+        },
+        xhttp_extra: if xhttp {
+            get(params, "extra").into()
+        } else {
+            String::new()
+        },
         final_mask: get(params, "fm").into(),
         pinned_cert_sha256: get(params, "pcs")
             .split(',')
@@ -179,10 +281,11 @@ pub fn pin_hex(pin: &str) -> String {
 fn parse_vmess(uri: &str) -> Option<ProxyProfile> {
     let payload = before(&uri["vmess://".len()..], '#');
     let json_text = decode_base64_chunk(payload)?;
-    let obj: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(&json_text).ok()? {
-        serde_json::Value::Object(o) => o,
-        _ => return None,
-    };
+    let obj: serde_json::Map<String, serde_json::Value> =
+        match serde_json::from_str(&json_text).ok()? {
+            serde_json::Value::Object(o) => o,
+            _ => return None,
+        };
     let str_of = |keys: &[&str]| -> String {
         for k in keys {
             let v = match obj.get(*k) {
@@ -204,15 +307,25 @@ fn parse_vmess(uri: &str) -> Option<ProxyProfile> {
         return None;
     }
     let network = network_of(Some(&str_of(&["net"])));
-    let security = if str_of(&["tls"]).eq_ignore_ascii_case("tls") || str_of(&["security"]).eq_ignore_ascii_case("tls") {
+    let security = if str_of(&["tls"]).eq_ignore_ascii_case("tls")
+        || str_of(&["security"]).eq_ignore_ascii_case("tls")
+    {
         SECURITY_TLS
     } else {
         SECURITY_NONE
     };
-    let path = if network == NETWORK_GRPC { str_of(&["path", "serviceName"]) } else { str_of(&["path"]) };
+    let path = if network == NETWORK_GRPC {
+        str_of(&["path", "serviceName"])
+    } else {
+        str_of(&["path"])
+    };
     let tag = {
         let ps = str_of(&["ps"]);
-        if ps.trim().is_empty() { percent_decode(after(uri, '#')) } else { ps }
+        if ps.trim().is_empty() {
+            percent_decode(after(uri, '#'))
+        } else {
+            ps
+        }
     };
     let insecure = str_of(&["allowInsecure", "skip-cert-verify", "insecure"]);
     let p = ProxyProfile {
@@ -222,7 +335,9 @@ fn parse_vmess(uri: &str) -> Option<ProxyProfile> {
         server_port: port,
         uuid,
         alter_id: str_of(&["aid"]).parse().unwrap_or(0),
-        cipher: Some(str_of(&["scy"])).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "auto".into()),
+        cipher: Some(str_of(&["scy"]))
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "auto".into()),
         network: network.into(),
         security: security.into(),
         sni: str_of(&["sni", "peer"]),
@@ -234,8 +349,10 @@ fn parse_vmess(uri: &str) -> Option<ProxyProfile> {
         allow_insecure: insecure == "1" || insecure.eq_ignore_ascii_case("true"),
         ..Default::default()
     };
-    let params: BTreeMap<String, String> =
-        ["mode", "fm", "pcs", "vcn", "ech"].iter().map(|k| (k.to_string(), str_of(&[k]))).collect();
+    let params: BTreeMap<String, String> = ["mode", "fm", "pcs", "vcn", "ech"]
+        .iter()
+        .map(|k| (k.to_string(), str_of(&[k])))
+        .collect();
     Some(with_xray_params(p, &params))
 }
 
@@ -260,7 +377,11 @@ fn parse_trojan(uri: &str) -> Option<ProxyProfile> {
         Some(s) if s.eq_ignore_ascii_case("reality") => SECURITY_REALITY,
         _ => SECURITY_TLS,
     };
-    let path = if network == NETWORK_GRPC { get(&params, "serviceName") } else { get(&params, "path") };
+    let path = if network == NETWORK_GRPC {
+        get(&params, "serviceName")
+    } else {
+        get(&params, "path")
+    };
     let p = ProxyProfile {
         tag: remark,
         kind: TYPE_TROJAN.into(),
@@ -284,12 +405,18 @@ fn parse_trojan(uri: &str) -> Option<ProxyProfile> {
 
 // --- hysteria2://auth@host:port/?sni=&insecure=&obfs=salamander&obfs-password=&mport=&up=&down=#name ---
 fn parse_hysteria2(uri: &str) -> Option<ProxyProfile> {
-    let scheme_len = if starts_ci(uri, "hy2://") { "hy2://".len() } else { "hysteria2://".len() };
+    let scheme_len = if starts_ci(uri, "hy2://") {
+        "hy2://".len()
+    } else {
+        "hysteria2://".len()
+    };
     let rest = &uri[scheme_len..];
     let remark = percent_decode(after(rest, '#'));
     let before_fragment = before(rest, '#');
     let query = after(before_fragment, '?');
-    let mut authority = before(before_fragment, '?').trim_end_matches('/').to_string();
+    let mut authority = before(before_fragment, '?')
+        .trim_end_matches('/')
+        .to_string();
 
     let mut auth = String::new();
     if let Some(at) = authority.rfind('@') {
@@ -303,7 +430,9 @@ fn parse_hysteria2(uri: &str) -> Option<ProxyProfile> {
     if colon > bracket {
         let tail = &authority[colon as usize + 1..];
         if !tail.is_empty()
-            && tail.chars().all(|c| c.is_ascii_digit() || c == ',' || c == '-')
+            && tail
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ',' || c == '-')
             && tail.parse::<i32>().is_err()
         {
             port_spec = tail.to_string();
@@ -311,9 +440,15 @@ fn parse_hysteria2(uri: &str) -> Option<ProxyProfile> {
         }
     }
     let host_port = split_host_port(&authority);
-    let host = host_port.as_ref().map(|h| h.0.clone()).unwrap_or_else(|| authority.trim_matches(['[', ']']).to_string());
+    let host = host_port
+        .as_ref()
+        .map(|h| h.0.clone())
+        .unwrap_or_else(|| authority.trim_matches(['[', ']']).to_string());
     let port = host_port.map(|h| h.1).unwrap_or_else(|| {
-        port_spec.split(',').find_map(|s| before(s, '-').parse::<i32>().ok()).unwrap_or(443)
+        port_spec
+            .split(',')
+            .find_map(|s| before(s, '-').parse::<i32>().ok())
+            .unwrap_or(443)
     });
     if host.trim().is_empty() {
         return None;
@@ -321,14 +456,21 @@ fn parse_hysteria2(uri: &str) -> Option<ProxyProfile> {
     let params = parse_query(query);
     // up/down may be "100" or "100 mbps" — take the leading integer.
     let mbps = |v: &str| -> i32 {
-        v.trim().chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0)
+        v.trim()
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0)
     };
     // pinSHA256 pins the certificate (self-signed servers); sing-box only pins the public key, so a
     // pinned link falls back to insecure like other sing-box clients do.
     let insecure = !get(&params, "pinSHA256").trim().is_empty()
         || ["insecure", "allowInsecure", "skip-cert-verify"]
             .iter()
-            .any(|k| matches!(params.get(*k), Some(v) if v == "1" || v.eq_ignore_ascii_case("true")));
+            .any(
+                |k| matches!(params.get(*k), Some(v) if v == "1" || v.eq_ignore_ascii_case("true")),
+            );
     let ports = params
         .get("mport")
         .or_else(|| params.get("ports"))
@@ -356,13 +498,17 @@ fn parse_hysteria2(uri: &str) -> Option<ProxyProfile> {
 
 // --- naive+https://user:pass@host:port?sni=#name (naive+quic:// for QUIC) ---
 fn parse_naive(uri: &str) -> Option<ProxyProfile> {
-    let scheme = ["naive+https://", "naive+quic://", "naive://"].into_iter().find(|s| starts_ci(uri, s))?;
+    let scheme = ["naive+https://", "naive+quic://", "naive://"]
+        .into_iter()
+        .find(|s| starts_ci(uri, s))?;
     let quic = scheme == "naive+quic://";
     let rest = &uri[scheme.len()..];
     let remark = percent_decode(after(rest, '#'));
     let before_fragment = before(rest, '#');
     let query = after(before_fragment, '?');
-    let mut authority = before(before_fragment, '?').trim_end_matches('/').to_string();
+    let mut authority = before(before_fragment, '?')
+        .trim_end_matches('/')
+        .to_string();
     let (mut user, mut pass) = (String::new(), String::new());
     if let Some(at) = authority.rfind('@') {
         let user_info = authority[..at].to_string();
@@ -371,7 +517,10 @@ fn parse_naive(uri: &str) -> Option<ProxyProfile> {
         authority = authority[at + 1..].to_string();
     }
     let host_port = split_host_port(&authority);
-    let host = host_port.as_ref().map(|h| h.0.clone()).unwrap_or_else(|| authority.trim_matches(['[', ']']).to_string());
+    let host = host_port
+        .as_ref()
+        .map(|h| h.0.clone())
+        .unwrap_or_else(|| authority.trim_matches(['[', ']']).to_string());
     let port = host_port.map(|h| h.1).unwrap_or(443);
     if host.trim().is_empty() {
         return None;
@@ -401,7 +550,11 @@ fn parse_shadowsocks(uri: &str) -> Option<ProxyProfile> {
     if let Some(at) = body.rfind('@').filter(|&i| i > 0) {
         // SIP002: userinfo may be base64(method:password) or plain method:password.
         let raw = &body[..at];
-        let user_info = if raw.contains(':') { raw.to_string() } else { decode_base64_chunk(raw)? };
+        let user_info = if raw.contains(':') {
+            raw.to_string()
+        } else {
+            decode_base64_chunk(raw)?
+        };
         let colon = user_info.find(':').filter(|&i| i > 0)?;
         method = user_info[..colon].to_string();
         password = user_info[colon + 1..].to_string();
@@ -443,7 +596,10 @@ pub fn looks_like_amneziawg(text: &str) -> bool {
     if !text.to_lowercase().contains("[interface]") {
         return false;
     }
-    lines(text).any(|l| l.split_once('=').is_some_and(|(k, _)| AWG_KEYS.contains(&k.trim().to_lowercase().as_str())))
+    lines(text).any(|l| {
+        l.split_once('=')
+            .is_some_and(|(k, _)| AWG_KEYS.contains(&k.trim().to_lowercase().as_str()))
+    })
 }
 
 /// The whole INI stays in [`ProxyProfile::awg_config`]; server/port come from the peer Endpoint.
@@ -460,7 +616,9 @@ pub fn parse_amneziawg(text: &str) -> Option<ProxyProfile> {
             }
             continue;
         }
-        let Some(eq) = line.find('=').filter(|&i| i > 0) else { continue };
+        let Some(eq) = line.find('=').filter(|&i| i > 0) else {
+            continue;
+        };
         if line[..eq].trim().eq_ignore_ascii_case("endpoint") {
             endpoint = line[eq + 1..].trim().to_string();
         }
@@ -511,7 +669,11 @@ pub fn parse_trust_tunnel(uri: &str) -> Option<ProxyProfile> {
         return None;
     }
     let fragment = percent_decode(after(after_scheme, '#'));
-    let tag = if fragment.trim().is_empty() { tt_name(t).unwrap_or_else(|| "Trust Tunnel".into()) } else { fragment };
+    let tag = if fragment.trim().is_empty() {
+        tt_name(t).unwrap_or_else(|| "Trust Tunnel".into())
+    } else {
+        fragment
+    };
     Some(ProxyProfile {
         tag,
         kind: TYPE_TRUSTTUNNEL.into(),
@@ -525,14 +687,20 @@ pub fn parse_trust_tunnel(uri: &str) -> Option<ProxyProfile> {
 /// Text TLV items of a `tt://` blob (tag/length are QUIC varints); empty when unreadable.
 fn tt_items(link: &str) -> Vec<(i64, String)> {
     let t = link.trim();
-    let t = if starts_ci(t, TT_SCHEME) { &t[TT_SCHEME.len()..] } else { t };
+    let t = if starts_ci(t, TT_SCHEME) {
+        &t[TT_SCHEME.len()..]
+    } else {
+        t
+    };
     let payload = before(t, '#');
     let payload = payload.strip_prefix('?').unwrap_or(payload).trim();
     let engine = GeneralPurpose::new(
         &alphabet::URL_SAFE,
         GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
     );
-    let Ok(bytes) = engine.decode(payload) else { return Vec::new() };
+    let Ok(bytes) = engine.decode(payload) else {
+        return Vec::new();
+    };
     let mut i = 0usize;
     let varint = |i: &mut usize| -> Option<i64> {
         let first = *bytes.get(*i)?;
@@ -556,7 +724,10 @@ fn tt_items(link: &str) -> Vec<(i64, String)> {
         }
         let len = len as usize;
         if tag == TT_HOSTNAME || tag == TT_ADDRESS || tag == TT_NAME {
-            out.push((tag, String::from_utf8_lossy(&bytes[i..i + len]).into_owned()));
+            out.push((
+                tag,
+                String::from_utf8_lossy(&bytes[i..i + len]).into_owned(),
+            ));
         }
         i += len;
     }
@@ -565,23 +736,39 @@ fn tt_items(link: &str) -> Vec<(i64, String)> {
 
 /// Display name inside the blob (tag 12), if any.
 pub fn tt_name(link: &str) -> Option<String> {
-    tt_items(link).into_iter().find(|(t, _)| *t == TT_NAME).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty())
+    tt_items(link)
+        .into_iter()
+        .find(|(t, _)| *t == TT_NAME)
+        .map(|(_, v)| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Real `host`/`port` endpoints inside a `tt://` blob, for pings; `hostname:443` when no address.
 pub fn tt_endpoints(link: &str) -> Vec<(String, i32)> {
     let all = tt_items(link);
-    let hostname = all.iter().find(|(t, _)| *t == TT_HOSTNAME).map(|(_, v)| v.clone()).unwrap_or_default();
-    let mut raw: Vec<String> = all.iter().filter(|(t, _)| *t == TT_ADDRESS).map(|(_, v)| v.clone()).collect();
+    let hostname = all
+        .iter()
+        .find(|(t, _)| *t == TT_HOSTNAME)
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let mut raw: Vec<String> = all
+        .iter()
+        .filter(|(t, _)| *t == TT_ADDRESS)
+        .map(|(_, v)| v.clone())
+        .collect();
     if raw.is_empty() && !hostname.trim().is_empty() {
         raw.push(format!("{hostname}:443"));
     }
     raw.iter()
         .filter_map(|addr| {
             let (h, p) = addr.rsplit_once(':')?;
-            let host = h.strip_prefix('[').and_then(|x| x.strip_suffix(']')).unwrap_or(h);
+            let host = h
+                .strip_prefix('[')
+                .and_then(|x| x.strip_suffix(']'))
+                .unwrap_or(h);
             let port: i32 = p.parse().ok()?;
-            (!host.trim().is_empty() && (1..=65535).contains(&port)).then(|| (host.to_string(), port))
+            (!host.trim().is_empty() && (1..=65535).contains(&port))
+                .then(|| (host.to_string(), port))
         })
         .collect()
 }
@@ -589,7 +776,11 @@ pub fn tt_endpoints(link: &str) -> Vec<(String, i32)> {
 /// Server to show in the UI (Trust Tunnel keeps a placeholder server; read the real one from the link).
 pub fn display_server(p: &ProxyProfile) -> String {
     if p.kind == TYPE_TRUSTTUNNEL {
-        tt_endpoints(&p.tt_config).into_iter().next().map(|e| e.0).unwrap_or_else(|| p.server.clone())
+        tt_endpoints(&p.tt_config)
+            .into_iter()
+            .next()
+            .map(|e| e.0)
+            .unwrap_or_else(|| p.server.clone())
     } else {
         p.server.clone()
     }

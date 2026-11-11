@@ -72,6 +72,7 @@ pub const OUTBOUND_PROXY: &str = "proxy";
 pub const CORE_FREETURN: &str = "freeturn";
 pub const CORE_WDTT: &str = "wdtt";
 pub const CORE_CSQTT: &str = "csqtt";
+pub const CORE_TURNABLE: &str = "turnable";
 /// Worker cap of the csqtt client since 2.5.0.
 pub const CSQTT_MAX_WORKERS: i32 = 100;
 pub const DEFAULT_WDTT_PORT: i32 = 56000;
@@ -111,9 +112,12 @@ pub struct VkTurnConfig {
     pub outbound_proxy_link: String,
     #[serde(rename = "proxy_core")]
     pub proxy_core: ProxyCore,
-    /// freeturn / wdtt / csqtt.
+    /// freeturn / wdtt / csqtt / turnable.
     #[serde(default = "default_core")]
     pub core: String,
+    /// Complete Turnable client JSON or `turnable://` URL.
+    #[serde(rename = "turnable_config")]
+    pub turnable_config: String,
     #[serde(rename = "wdtt_peer")]
     pub wdtt_peer: String,
     #[serde(rename = "wdtt_port")]
@@ -155,6 +159,7 @@ impl Default for VkTurnConfig {
             outbound_proxy_link: String::new(),
             proxy_core: ProxyCore::Auto,
             core: default_core(),
+            turnable_config: String::new(),
             wdtt_peer: String::new(),
             wdtt_port: 0,
             wdtt_password: String::new(),
@@ -193,6 +198,10 @@ impl VkTurnConfig {
         self.core.eq_ignore_ascii_case(CORE_CSQTT)
     }
 
+    pub fn uses_turnable(&self) -> bool {
+        self.core.eq_ignore_ascii_case(CORE_TURNABLE)
+    }
+
     /// wdtt-server `host:port` ([`Self::wdtt_peer`] verbatim if it already carries a port).
     pub fn wdtt_peer_addr(&self) -> String {
         let host = self.wdtt_peer.trim();
@@ -202,7 +211,11 @@ impl VkTurnConfig {
         if host.contains(':') && after_last_colon(host).parse::<i32>().is_ok() {
             return host.to_string();
         }
-        let port = if (1..=65535).contains(&self.wdtt_port) { self.wdtt_port } else { DEFAULT_WDTT_PORT };
+        let port = if (1..=65535).contains(&self.wdtt_port) {
+            self.wdtt_port
+        } else {
+            DEFAULT_WDTT_PORT
+        };
         format!("{host}:{port}")
     }
 
@@ -234,7 +247,11 @@ impl VkTurnConfig {
         if has_port {
             return host.to_string();
         }
-        let port = if (1..=65535).contains(&self.csqtt_port) { self.csqtt_port } else { DEFAULT_CSQTT_PORT };
+        let port = if (1..=65535).contains(&self.csqtt_port) {
+            self.csqtt_port
+        } else {
+            DEFAULT_CSQTT_PORT
+        };
         let bare = host.trim_start_matches('[').trim_end_matches(']');
         if bare.contains(':') {
             format!("[{bare}]:{port}")
@@ -250,13 +267,17 @@ impl VkTurnConfig {
                 not_blank(&self.wdtt_peer)
             } else if self.uses_csqtt() {
                 not_blank(&self.csqtt_peer)
+            } else if self.uses_turnable() {
+                let config = self.turnable_config.trim();
+                crate::share_link::starts_ci(config, "turnable://")
+                    || (config.starts_with('{') && config.ends_with('}'))
             } else {
                 self.uri.starts_with("freeturn://")
             }
     }
 
     pub fn is_complete(&self) -> bool {
-        self.is_storable() && not_blank(&self.vk_link)
+        self.is_storable() && (self.uses_turnable() || not_blank(&self.vk_link))
     }
 
     /// UDP payload (WireGuard/AmneziaWG) needs udprelay; a TCP proxy needs tcpfwd.
@@ -270,7 +291,11 @@ impl VkTurnConfig {
 
     /// Auto → concrete core for the exit/chain proxy: explicit choice, then Xray-only profiles,
     /// then the app-wide default, then sing-box.
-    pub fn resolved_proxy_core(&self, profile: Option<&ProxyProfile>, global: ProxyCore) -> ProxyCore {
+    pub fn resolved_proxy_core(
+        &self,
+        profile: Option<&ProxyProfile>,
+        global: ProxyCore,
+    ) -> ProxyCore {
         if self.proxy_core != ProxyCore::Auto {
             self.proxy_core
         } else if profile.is_some_and(|p| not_blank_opt(&p.raw_xray_config) || p.requires_xray()) {
@@ -308,8 +333,11 @@ impl VkTurnConfig {
     /// csqtt core options. 27 workers per VK hash (max 72) unless set; explicit values cap at 100.
     pub fn csqtt_core_options_json(&self, client: &str, listen: &str, device_id: &str) -> String {
         let o = &self.csqtt;
-        let hashes: Vec<&str> =
-            self.vk_link.split(['\n', '\r', '\t', ' ', ',', ';']).filter(|s| !s.trim().is_empty()).collect();
+        let hashes: Vec<&str> = self
+            .vk_link
+            .split(['\n', '\r', '\t', ' ', ',', ';'])
+            .filter(|s| !s.trim().is_empty())
+            .collect();
         let workers = if self.csqtt_workers > 0 {
             self.csqtt_workers.min(CSQTT_MAX_WORKERS)
         } else {
@@ -482,15 +510,25 @@ pub struct FakeDnsSpec {
 
 impl Default for FakeDnsSpec {
     fn default() -> Self {
-        Self { inet4_range: default_inet4(), inet6_range: default_inet6(), block_regex: Vec::new() }
+        Self {
+            inet4_range: default_inet4(),
+            inet6_range: default_inet6(),
+            block_regex: Vec::new(),
+        }
     }
 }
 
 // ---------------- MasterDNS ----------------
 
 pub const MASTERDNS_DEFAULT_ENCRYPTION: i32 = 1;
-pub const MASTERDNS_ENCRYPTION_LABELS: [&str; 6] =
-    ["Без шифрования", "XOR", "ChaCha20", "AES-128-GCM", "AES-192-GCM", "AES-256-GCM"];
+pub const MASTERDNS_ENCRYPTION_LABELS: [&str; 6] = [
+    "Без шифрования",
+    "XOR",
+    "ChaCha20",
+    "AES-128-GCM",
+    "AES-192-GCM",
+    "AES-256-GCM",
+];
 
 fn default_mdns_enc() -> i32 {
     MASTERDNS_DEFAULT_ENCRYPTION
@@ -549,7 +587,9 @@ fn split_entries(value: &str) -> Vec<String> {
 
 impl MasterDnsConfig {
     pub fn is_complete(&self) -> bool {
-        !self.domain_list().is_empty() && not_blank(&self.encryption_key) && !self.resolver_list().is_empty()
+        !self.domain_list().is_empty()
+            && not_blank(&self.encryption_key)
+            && !self.resolver_list().is_empty()
     }
     pub fn has_proxy(&self) -> bool {
         not_blank(&self.proxy_link)
@@ -576,7 +616,11 @@ impl MasterDnsConfig {
             .filter(|h| not_blank(h))
             .collect()
     }
-    pub fn resolved_proxy_core(&self, profile: Option<&ProxyProfile>, global: ProxyCore) -> ProxyCore {
+    pub fn resolved_proxy_core(
+        &self,
+        profile: Option<&ProxyProfile>,
+        global: ProxyCore,
+    ) -> ProxyCore {
         over_tunnel_proxy_core(self.proxy_core, profile, global)
     }
     pub fn normalized(&self) -> Self {
@@ -595,7 +639,11 @@ impl MasterDnsConfig {
 
 /// Core for a proxy chained over a tunnel's local SOCKS: like VK-TURN, but Auto means Xray
 /// (socket-level dialerProxy keeps reality/xtls-vision intact over the tunnel).
-pub fn over_tunnel_proxy_core(chosen: ProxyCore, profile: Option<&ProxyProfile>, global: ProxyCore) -> ProxyCore {
+pub fn over_tunnel_proxy_core(
+    chosen: ProxyCore,
+    profile: Option<&ProxyProfile>,
+    global: ProxyCore,
+) -> ProxyCore {
     if chosen != ProxyCore::Auto {
         chosen
     } else if profile.is_some_and(|p| not_blank_opt(&p.raw_xray_config) || p.requires_xray()) {
@@ -617,12 +665,23 @@ pub const OF_CUPS: &str = "cupsonline";
 pub const OF_TELEMOST: &str = "telemost";
 pub const OF_AVITO: &str = "avito";
 pub const OF_DIRECT: &str = "direct";
-pub const OF_TRANSPORTS: [&str; 7] = [OF_YANDEX, OF_VYANDEX, OF_MAILRU, OF_CUPS, OF_AVITO, OF_TELEMOST, OF_MAX];
-pub const OF_SESSION_CARRIERS: [&str; 6] = [OF_DIRECT, OF_YANDEX, OF_VYANDEX, OF_MAILRU, OF_CUPS, OF_AVITO];
+pub const OF_TRANSPORTS: [&str; 7] = [
+    OF_YANDEX,
+    OF_VYANDEX,
+    OF_MAILRU,
+    OF_CUPS,
+    OF_AVITO,
+    OF_TELEMOST,
+    OF_MAX,
+];
+pub const OF_SESSION_CARRIERS: [&str; 6] = [
+    OF_DIRECT, OF_YANDEX, OF_VYANDEX, OF_MAILRU, OF_CUPS, OF_AVITO,
+];
 pub const OF_DEFAULT_DNS: &str = "1.1.1.1:53";
 pub const OF_DEFAULT_PRIORITY: i32 = 50;
 
-static OF_ROOM_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new("^[A-Za-z0-9_-]{16,}$").unwrap());
+static OF_ROOM_LIST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^[A-Za-z0-9_-]{16,}$").unwrap());
 
 fn default_of_transport() -> String {
     OF_YANDEX.into()
@@ -702,7 +761,13 @@ impl OpenFluxConfig {
         let mut out = Vec::new();
         if self.is_session() {
             out.push("--transports".into());
-            out.push(self.carriers.iter().map(|c| format!("{}:{}", c.kind, c.priority)).collect::<Vec<_>>().join(","));
+            out.push(
+                self.carriers
+                    .iter()
+                    .map(|c| format!("{}:{}", c.kind, c.priority))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             for c in &self.carriers {
                 if c.kind == OF_DIRECT {
                     out.extend(["--direct-dial".to_string(), c.dial.clone()]);
@@ -724,9 +789,18 @@ impl OpenFluxConfig {
     /// Multi-transport on (the current carrier becomes the first member) or off (back to one).
     pub fn with_session(&self, on: bool) -> Self {
         if on && !self.is_session() {
-            let kind = if OF_SESSION_CARRIERS.contains(&self.transport.as_str()) { self.transport.clone() } else { OF_YANDEX.into() };
+            let kind = if OF_SESSION_CARRIERS.contains(&self.transport.as_str()) {
+                self.transport.clone()
+            } else {
+                OF_YANDEX.into()
+            };
             Self {
-                carriers: vec![OpenFluxCarrier { kind, url: self.doc_url.clone(), priority: 100, dial: String::new() }],
+                carriers: vec![OpenFluxCarrier {
+                    kind,
+                    url: self.doc_url.clone(),
+                    priority: 100,
+                    dial: String::new(),
+                }],
                 ..self.clone()
             }
         } else if !on && self.is_session() {
@@ -738,8 +812,16 @@ impl OpenFluxConfig {
                 }
             }
             match best {
-                Some(c) => Self { transport: c.kind.clone(), doc_url: c.url.clone(), carriers: Vec::new(), ..self.clone() },
-                None => Self { carriers: Vec::new(), ..self.clone() },
+                Some(c) => Self {
+                    transport: c.kind.clone(),
+                    doc_url: c.url.clone(),
+                    carriers: Vec::new(),
+                    ..self.clone()
+                },
+                None => Self {
+                    carriers: Vec::new(),
+                    ..self.clone()
+                },
             }
         } else {
             self.clone()
@@ -773,7 +855,11 @@ impl OpenFluxConfig {
         not_blank(&self.proxy_link)
     }
 
-    pub fn resolved_proxy_core(&self, profile: Option<&ProxyProfile>, global: ProxyCore) -> ProxyCore {
+    pub fn resolved_proxy_core(
+        &self,
+        profile: Option<&ProxyProfile>,
+        global: ProxyCore,
+    ) -> ProxyCore {
         over_tunnel_proxy_core(self.proxy_core, profile, global)
     }
 
@@ -782,7 +868,8 @@ impl OpenFluxConfig {
             return false;
         }
         if self.is_session() {
-            return not_blank(&self.secret) && self.carriers.iter().all(OpenFluxCarrier::is_complete);
+            return not_blank(&self.secret)
+                && self.carriers.iter().all(OpenFluxCarrier::is_complete);
         }
         let url = self.doc_url.trim();
         match self.transport.as_str() {
@@ -806,7 +893,11 @@ impl OpenFluxConfig {
             })
             .collect();
         Self {
-            transport: if OF_TRANSPORTS.contains(&self.transport.as_str()) { self.transport.clone() } else { OF_YANDEX.into() },
+            transport: if OF_TRANSPORTS.contains(&self.transport.as_str()) {
+                self.transport.clone()
+            } else {
+                OF_YANDEX.into()
+            },
             doc_url: self.doc_url.trim().into(),
             max_token: self.max_token.trim().into(),
             max_uid: self.max_uid.trim().into(),
@@ -826,7 +917,13 @@ impl OpenFluxConfig {
         if self.is_session() {
             let mut cs = self.carriers.clone();
             cs.sort_by(|a, b| b.priority.cmp(&a.priority));
-            return format!("Мультитранспорт · {}", cs.iter().map(|c| carrier_label(&c.kind)).collect::<Vec<_>>().join(" + "));
+            return format!(
+                "Мультитранспорт · {}",
+                cs.iter()
+                    .map(|c| carrier_label(&c.kind))
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            );
         }
         match self.transport.as_str() {
             OF_MAX => format!("MAX · звонок {}", self.max_uid),
@@ -868,7 +965,12 @@ pub struct OpenFluxCarrier {
 
 impl Default for OpenFluxCarrier {
     fn default() -> Self {
-        Self { kind: default_of_transport(), url: String::new(), priority: OF_DEFAULT_PRIORITY, dial: String::new() }
+        Self {
+            kind: default_of_transport(),
+            url: String::new(),
+            priority: OF_DEFAULT_PRIORITY,
+            dial: String::new(),
+        }
     }
 }
 
@@ -876,8 +978,13 @@ impl OpenFluxCarrier {
     pub fn is_complete(&self) -> bool {
         match self.kind.as_str() {
             OF_DIRECT => {
-                let port_ok = after_last_colon(&self.dial).parse::<i32>().is_ok_and(|p| (1..=65535).contains(&p));
-                let host = self.dial.rfind(':').map_or(self.dial.as_str(), |i| &self.dial[..i]);
+                let port_ok = after_last_colon(&self.dial)
+                    .parse::<i32>()
+                    .is_ok_and(|p| (1..=65535).contains(&p));
+                let host = self
+                    .dial
+                    .rfind(':')
+                    .map_or(self.dial.as_str(), |i| &self.dial[..i]);
                 port_ok && not_blank(host)
             }
             OF_CUPS | OF_AVITO => starts_http(&self.url) || self.url.chars().count() >= 16,
@@ -937,11 +1044,17 @@ impl SnolcConfig {
     pub fn has_proxy(&self) -> bool {
         not_blank(&self.proxy_link)
     }
-    pub fn resolved_proxy_core(&self, profile: Option<&ProxyProfile>, global: ProxyCore) -> ProxyCore {
+    pub fn resolved_proxy_core(
+        &self,
+        profile: Option<&ProxyProfile>,
+        global: ProxyCore,
+    ) -> ProxyCore {
         over_tunnel_proxy_core(self.proxy_core, profile, global)
     }
     pub fn is_complete(&self) -> bool {
-        not_blank(&self.host) && (1..=65535).contains(&self.port) && HEX_KEY.is_match(&self.public_key)
+        not_blank(&self.host)
+            && (1..=65535).contains(&self.port)
+            && HEX_KEY.is_match(&self.public_key)
     }
     pub fn normalized(&self) -> Self {
         Self {
@@ -956,8 +1069,16 @@ impl SnolcConfig {
     }
     /// `snolc://host:port?key=<hex>#name`.
     pub fn to_uri(&self, name: &str) -> String {
-        let h = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
-        let frag = if not_blank(name) { format!("#{}", name.replace(' ', "%20")) } else { String::new() };
+        let h = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        let frag = if not_blank(name) {
+            format!("#{}", name.replace(' ', "%20"))
+        } else {
+            String::new()
+        };
         format!("snolc://{h}:{}?key={}{frag}", self.port, self.public_key)
     }
     /// Parses `snolc://host:port?key=<hex>#name` → (config, name); None unless complete.
@@ -970,16 +1091,39 @@ impl SnolcConfig {
         let name = percent_decode(after(rest, '#'));
         let main = before(rest, '#');
         let host_port = before(main, '?').trim_end_matches('/');
-        let key = after(main, '?').split('&').find_map(|kv| kv.strip_prefix("key=")).unwrap_or("").to_string();
+        let key = after(main, '?')
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("key="))
+            .unwrap_or("")
+            .to_string();
         let (host, port) = if let Some(r) = host_port.strip_prefix('[') {
             let host = before(r, ']').to_string();
-            let port = host_port.split_once("]:").map(|(_, p)| p).unwrap_or("").parse().unwrap_or(SNOLC_DEFAULT_PORT);
+            let port = host_port
+                .split_once("]:")
+                .map(|(_, p)| p)
+                .unwrap_or("")
+                .parse()
+                .unwrap_or(SNOLC_DEFAULT_PORT);
             (host, port)
         } else {
-            let host = host_port.rfind(':').map_or(host_port, |i| &host_port[..i]).to_string();
-            (host, after_last_colon(host_port).parse().unwrap_or(SNOLC_DEFAULT_PORT))
+            let host = host_port
+                .rfind(':')
+                .map_or(host_port, |i| &host_port[..i])
+                .to_string();
+            (
+                host,
+                after_last_colon(host_port)
+                    .parse()
+                    .unwrap_or(SNOLC_DEFAULT_PORT),
+            )
         };
-        let cfg = Self { host, port, public_key: key, ..Default::default() }.normalized();
+        let cfg = Self {
+            host,
+            port,
+            public_key: key,
+            ..Default::default()
+        }
+        .normalized();
         cfg.is_complete().then_some((cfg, name))
     }
 }

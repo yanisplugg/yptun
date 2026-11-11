@@ -40,10 +40,20 @@ pub const MAX_EXTRA_ROOMS: usize = 4;
 /// Server-side bond reassembler port.
 pub const DEFAULT_BOND_PORT: i32 = 7700;
 
-pub const SUPPORTED_BYPASS_PROVIDERS: [&str; 6] =
-    [PROVIDER_MTS_LINK, PROVIDER_VK_CALLS, PROVIDER_JAZZ, PROVIDER_TELEMOST, PROVIDER_WB_STREAM, PROVIDER_JITSI];
-pub const SUPPORTED_TRANSPORTS: [&str; 4] =
-    [TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL];
+pub const SUPPORTED_BYPASS_PROVIDERS: [&str; 6] = [
+    PROVIDER_MTS_LINK,
+    PROVIDER_VK_CALLS,
+    PROVIDER_JAZZ,
+    PROVIDER_TELEMOST,
+    PROVIDER_WB_STREAM,
+    PROVIDER_JITSI,
+];
+pub const SUPPORTED_TRANSPORTS: [&str; 4] = [
+    TRANSPORT_DATACHANNEL,
+    TRANSPORT_VP8CHANNEL,
+    TRANSPORT_SEICHANNEL,
+    TRANSPORT_VIDEOCHANNEL,
+];
 
 pub fn normalize_provider(value: &str) -> &'static str {
     match value.trim().to_lowercase().as_str() {
@@ -61,12 +71,31 @@ pub fn normalize_provider(value: &str) -> &'static str {
 /// pass only some of them).
 pub fn supported_transports_for_provider(provider: &str) -> Vec<&'static str> {
     match normalize_provider(provider) {
-        PROVIDER_TELEMOST => vec![TRANSPORT_VP8CHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_DATACHANNEL],
-        PROVIDER_WB_STREAM => vec![TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL, TRANSPORT_DATACHANNEL],
-        PROVIDER_JITSI => vec![TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL],
+        PROVIDER_TELEMOST => vec![
+            TRANSPORT_VP8CHANNEL,
+            TRANSPORT_VIDEOCHANNEL,
+            TRANSPORT_SEICHANNEL,
+            TRANSPORT_DATACHANNEL,
+        ],
+        PROVIDER_WB_STREAM => vec![
+            TRANSPORT_VP8CHANNEL,
+            TRANSPORT_SEICHANNEL,
+            TRANSPORT_VIDEOCHANNEL,
+            TRANSPORT_DATACHANNEL,
+        ],
+        PROVIDER_JITSI => vec![
+            TRANSPORT_DATACHANNEL,
+            TRANSPORT_VP8CHANNEL,
+            TRANSPORT_SEICHANNEL,
+            TRANSPORT_VIDEOCHANNEL,
+        ],
         PROVIDER_JAZZ => vec![TRANSPORT_DATACHANNEL],
         PROVIDER_MTS_LINK => vec![TRANSPORT_VP8CHANNEL],
-        PROVIDER_VK_CALLS => vec![TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL, TRANSPORT_VIDEOCHANNEL],
+        PROVIDER_VK_CALLS => vec![
+            TRANSPORT_VP8CHANNEL,
+            TRANSPORT_SEICHANNEL,
+            TRANSPORT_VIDEOCHANNEL,
+        ],
         _ => SUPPORTED_TRANSPORTS.to_vec(),
     }
 }
@@ -293,7 +322,11 @@ impl LocationConfig {
     }
 
     pub fn uses_multi_room(&self) -> bool {
-        self.multi_room_enabled && self.extra_rooms.iter().any(|r| not_blank(&r.room) && not_blank(&r.key))
+        self.multi_room_enabled
+            && self
+                .extra_rooms
+                .iter()
+                .any(|r| not_blank(&r.room) && not_blank(&r.key))
     }
 
     pub fn uses_multi_room_bond(&self) -> bool {
@@ -330,13 +363,20 @@ impl LocationConfig {
 
     /// Only xray-core can serve it (an Xray-only transport/knob on either proxy).
     pub fn requires_xray(&self) -> bool {
-        self.proxy.iter().chain(self.proxy2.iter()).any(ProxyProfile::requires_xray)
+        self.proxy
+            .iter()
+            .chain(self.proxy2.iter())
+            .any(ProxyProfile::requires_xray)
     }
 
     /// Auto → concrete core: raw Xray config, then the per-location choice, then Xray-only
     /// transports, then the app-wide default, then sing-box.
     pub fn resolved_core(&self, global: ProxyCore) -> ProxyCore {
-        if self.proxy.as_ref().is_some_and(|p| not_blank_opt(&p.raw_xray_config)) {
+        if self
+            .proxy
+            .as_ref()
+            .is_some_and(|p| not_blank_opt(&p.raw_xray_config))
+        {
             ProxyCore::Xray
         } else if self.core != ProxyCore::Auto {
             self.core
@@ -352,12 +392,17 @@ impl LocationConfig {
     /// A VK-TURN location lacking nothing but the user's VK call link.
     pub fn needs_vk_link(&self) -> bool {
         self.engine == EngineType::VkTurn
-            && self.vkturn.as_ref().is_some_and(|v| v.is_storable() && !not_blank(&v.vk_link))
+            && self
+                .vkturn
+                .as_ref()
+                .is_some_and(|v| v.is_storable() && !v.uses_turnable() && !not_blank(&v.vk_link))
             && self.vk_turn_exit_present()
     }
 
     fn vk_turn_exit_present(&self) -> bool {
-        let Some(v) = &self.vkturn else { return self.vk_turn_exit_present_freeturn() };
+        let Some(v) = &self.vkturn else {
+            return self.vk_turn_exit_present_freeturn();
+        };
         // WDTT/csqtt get the tunnel from the server at runtime; nothing stored is required.
         if v.uses_wdtt() || v.uses_csqtt() {
             return true;
@@ -368,8 +413,14 @@ impl LocationConfig {
     fn vk_turn_exit_present_freeturn(&self) -> bool {
         match self.vkturn.as_ref().map(|v| v.outbound.as_str()) {
             Some(OUTBOUND_PROXY) => self.proxy.as_ref().is_some_and(ProxyProfile::is_complete),
-            Some(OUTBOUND_AMNEZIAWG) => self.proxy.as_ref().is_some_and(|p| not_blank(&p.awg_config)),
-            _ => self.proxy.as_ref().is_some_and(|p| not_blank_opt(&p.raw_outbound)),
+            Some(OUTBOUND_AMNEZIAWG) => self
+                .proxy
+                .as_ref()
+                .is_some_and(|p| not_blank(&p.awg_config)),
+            _ => self
+                .proxy
+                .as_ref()
+                .is_some_and(|p| not_blank_opt(&p.raw_outbound)),
         }
     }
 
@@ -381,9 +432,18 @@ impl LocationConfig {
             EngineType::Stealth => room,
             EngineType::Standard => proxy,
             EngineType::Chain => proxy && room,
-            EngineType::VkTurn => self.vkturn.as_ref().is_some_and(VkTurnConfig::is_complete) && self.vk_turn_exit_present(),
-            EngineType::MasterDns => self.master_dns.as_ref().is_some_and(MasterDnsConfig::is_complete),
-            EngineType::OpenFlux => self.open_flux.as_ref().is_some_and(OpenFluxConfig::is_complete),
+            EngineType::VkTurn => {
+                self.vkturn.as_ref().is_some_and(VkTurnConfig::is_complete)
+                    && self.vk_turn_exit_present()
+            }
+            EngineType::MasterDns => self
+                .master_dns
+                .as_ref()
+                .is_some_and(MasterDnsConfig::is_complete),
+            EngineType::OpenFlux => self
+                .open_flux
+                .as_ref()
+                .is_some_and(OpenFluxConfig::is_complete),
             EngineType::Snolc => self.snolc.as_ref().is_some_and(SnolcConfig::is_complete),
         }
     }
@@ -391,7 +451,10 @@ impl LocationConfig {
     /// Enough to keep in the list (VK-TURN without the VK link is kept; the user fills it in).
     pub fn is_storable(&self) -> bool {
         match self.engine {
-            EngineType::VkTurn => self.vkturn.as_ref().is_some_and(VkTurnConfig::is_storable) && self.vk_turn_exit_present(),
+            EngineType::VkTurn => {
+                self.vkturn.as_ref().is_some_and(VkTurnConfig::is_storable)
+                    && self.vk_turn_exit_present()
+            }
             _ => self.is_complete(),
         }
     }
@@ -424,16 +487,30 @@ impl LocationConfig {
     }
 
     fn option_int(&self, key: &str) -> Option<i32> {
-        self.transport_options.get(key).and_then(|v| v.trim().parse().ok())
+        self.transport_options
+            .get(key)
+            .and_then(|v| v.trim().parse().ok())
     }
 
     /// seichannel settings: the URI's payload over the olcRTC defaults.
     pub fn sei_options(&self) -> SeiOptions {
         SeiOptions {
-            fps: self.option_int("fps").unwrap_or(SeiOptions::DEFAULT_FPS).clamp(1, 120),
-            batch: self.option_int("batch").unwrap_or(SeiOptions::DEFAULT_BATCH).max(1),
-            fragment_size: self.option_int("frag").unwrap_or(SeiOptions::DEFAULT_FRAGMENT).max(1),
-            ack_timeout_ms: self.option_int("ack-ms").unwrap_or(SeiOptions::DEFAULT_ACK_MS).max(1),
+            fps: self
+                .option_int("fps")
+                .unwrap_or(SeiOptions::DEFAULT_FPS)
+                .clamp(1, 120),
+            batch: self
+                .option_int("batch")
+                .unwrap_or(SeiOptions::DEFAULT_BATCH)
+                .max(1),
+            fragment_size: self
+                .option_int("frag")
+                .unwrap_or(SeiOptions::DEFAULT_FRAGMENT)
+                .max(1),
+            ack_timeout_ms: self
+                .option_int("ack-ms")
+                .unwrap_or(SeiOptions::DEFAULT_ACK_MS)
+                .max(1),
         }
     }
 
@@ -447,9 +524,24 @@ impl LocationConfig {
             .unwrap_or_else(|| VideoOptions::CODEC_QRCODE.into());
         let tile = codec == VideoOptions::CODEC_TILE;
         VideoOptions {
-            width: if tile { 1080 } else { self.option_int("video-w").unwrap_or(VideoOptions::DEFAULT_WIDTH).max(1) },
-            height: if tile { 1080 } else { self.option_int("video-h").unwrap_or(VideoOptions::DEFAULT_HEIGHT).max(1) },
-            fps: self.option_int("video-fps").unwrap_or(VideoOptions::DEFAULT_FPS).clamp(1, 120),
+            width: if tile {
+                1080
+            } else {
+                self.option_int("video-w")
+                    .unwrap_or(VideoOptions::DEFAULT_WIDTH)
+                    .max(1)
+            },
+            height: if tile {
+                1080
+            } else {
+                self.option_int("video-h")
+                    .unwrap_or(VideoOptions::DEFAULT_HEIGHT)
+                    .max(1)
+            },
+            fps: self
+                .option_int("video-fps")
+                .unwrap_or(VideoOptions::DEFAULT_FPS)
+                .clamp(1, 120),
             qr_size: self.option_int("video-qr-size").unwrap_or(0).max(0),
             qr_recovery: self
                 .transport_options
@@ -458,7 +550,10 @@ impl LocationConfig {
                 .filter(|r| VideoOptions::QR_RECOVERY_LEVELS.contains(&r.as_str()))
                 .unwrap_or_else(|| "low".into()),
             codec,
-            tile_module: self.option_int("video-tile-module").unwrap_or(4).clamp(1, 270),
+            tile_module: self
+                .option_int("video-tile-module")
+                .unwrap_or(4)
+                .clamp(1, 270),
             tile_rs: self.option_int("video-tile-rs").unwrap_or(0).clamp(0, 200),
         }
     }
@@ -477,13 +572,19 @@ pub struct Vp8TransportConfig {
 
 impl Default for Vp8TransportConfig {
     fn default() -> Self {
-        Self { fps: DEFAULT_VP8_FPS, batch: DEFAULT_VP8_BATCH }
+        Self {
+            fps: DEFAULT_VP8_FPS,
+            batch: DEFAULT_VP8_BATCH,
+        }
     }
 }
 
 impl Vp8TransportConfig {
     pub fn normalized(&self) -> Self {
-        Self { fps: sanitize_vp8_fps(self.fps), batch: sanitize_vp8_batch(self.batch) }
+        Self {
+            fps: sanitize_vp8_fps(self.fps),
+            batch: sanitize_vp8_batch(self.batch),
+        }
     }
 }
 
@@ -498,7 +599,11 @@ pub struct LocationTransportConfig {
 
 impl Default for LocationTransportConfig {
     fn default() -> Self {
-        Self { kind: DEFAULT_TRANSPORT.into(), vp8: None, options: BTreeMap::new() }
+        Self {
+            kind: DEFAULT_TRANSPORT.into(),
+            vp8: None,
+            options: BTreeMap::new(),
+        }
     }
 }
 
@@ -513,7 +618,11 @@ struct TransportSurrogate {
 
 impl Default for TransportSurrogate {
     fn default() -> Self {
-        Self { kind: DEFAULT_TRANSPORT.into(), vp8: None, options: BTreeMap::new() }
+        Self {
+            kind: DEFAULT_TRANSPORT.into(),
+            vp8: None,
+            options: BTreeMap::new(),
+        }
     }
 }
 
@@ -521,12 +630,26 @@ impl<'de> Deserialize<'de> for LocationTransportConfig {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
         Ok(match v {
-            serde_json::Value::String(s) => Self { kind: s, ..Default::default() },
-            serde_json::Value::Number(n) => Self { kind: n.to_string(), ..Default::default() },
-            serde_json::Value::Bool(b) => Self { kind: b.to_string(), ..Default::default() },
+            serde_json::Value::String(s) => Self {
+                kind: s,
+                ..Default::default()
+            },
+            serde_json::Value::Number(n) => Self {
+                kind: n.to_string(),
+                ..Default::default()
+            },
+            serde_json::Value::Bool(b) => Self {
+                kind: b.to_string(),
+                ..Default::default()
+            },
             serde_json::Value::Object(_) => {
-                let s: TransportSurrogate = serde_json::from_value(v).map_err(serde::de::Error::custom)?;
-                Self { kind: s.kind, vp8: s.vp8, options: s.options }
+                let s: TransportSurrogate =
+                    serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+                Self {
+                    kind: s.kind,
+                    vp8: s.vp8,
+                    options: s.options,
+                }
             }
             _ => Self::default(),
         })
@@ -537,8 +660,13 @@ impl LocationTransportConfig {
     pub fn from_config(config: &LocationConfig) -> Self {
         let n = config.normalized();
         Self {
-            vp8: (n.transport == TRANSPORT_VP8CHANNEL)
-                .then(|| Vp8TransportConfig { fps: n.vp8_fps, batch: n.vp8_batch }.normalized()),
+            vp8: (n.transport == TRANSPORT_VP8CHANNEL).then(|| {
+                Vp8TransportConfig {
+                    fps: n.vp8_fps,
+                    batch: n.vp8_batch,
+                }
+                .normalized()
+            }),
             kind: n.transport,
             options: n.transport_options,
         }
@@ -562,7 +690,10 @@ pub const MIN_UPDATE_INTERVAL_HOURS: i32 = 1;
 pub const MAX_UPDATE_INTERVAL_HOURS: i32 = 720;
 
 fn clean(v: &Option<String>) -> Option<String> {
-    v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+    v.as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 fn blank(v: &Option<String>) -> bool {
@@ -716,7 +847,11 @@ impl LocationMetadata {
             comment: clean(&self.comment),
             mimo: clean(&self.mimo),
             vk_link_override: clean(&self.vk_link_override),
-            subscription: self.subscription.as_ref().map(SubscriptionMetadata::normalized).filter(|s| !s.is_empty()),
+            subscription: self
+                .subscription
+                .as_ref()
+                .map(SubscriptionMetadata::normalized)
+                .filter(|s| !s.is_empty()),
             pinned: self.pinned,
             locked: self.locked,
         }
@@ -734,7 +869,10 @@ impl LocationMetadata {
             && !self.pinned
             && !self.locked
             && blank(&self.vk_link_override)
-            && self.subscription.as_ref().is_none_or(SubscriptionMetadata::is_empty)
+            && self
+                .subscription
+                .as_ref()
+                .is_none_or(SubscriptionMetadata::is_empty)
     }
 }
 
@@ -871,7 +1009,12 @@ impl Default for LocationEntry {
 }
 
 fn first_not_blank(values: &[Option<&str>]) -> String {
-    values.iter().flatten().find(|v| not_blank(v)).map(|v| v.to_string()).unwrap_or_default()
+    values
+        .iter()
+        .flatten()
+        .find(|v| not_blank(v))
+        .map(|v| v.to_string())
+        .unwrap_or_default()
 }
 
 impl LocationEntry {
@@ -896,10 +1039,18 @@ impl LocationEntry {
                 self.legacy_room_id.as_deref(),
                 self.legacy_server.as_deref(),
             ]),
-            key: first_not_blank(&[endpoint.map(|e| e.key.as_str()), self.legacy_key.as_deref(), self.legacy_password.as_deref()]),
+            key: first_not_blank(&[
+                endpoint.map(|e| e.key.as_str()),
+                self.legacy_key.as_deref(),
+                self.legacy_password.as_deref(),
+            ]),
             bypass_provider: provider,
             transport: transport.kind.clone(),
-            vp8_fps: vp8.map(|v| v.fps).or(self.legacy_vp8_fps).or(self.legacy_vp8_fps_camel).unwrap_or(DEFAULT_VP8_FPS),
+            vp8_fps: vp8
+                .map(|v| v.fps)
+                .or(self.legacy_vp8_fps)
+                .or(self.legacy_vp8_fps_camel)
+                .unwrap_or(DEFAULT_VP8_FPS),
             vp8_batch: vp8
                 .map(|v| v.batch)
                 .or(self.legacy_vp8_batch)
@@ -936,27 +1087,53 @@ impl LocationEntry {
     /// The canonical stored form (legacy keys dropped, metadata cleaned).
     pub fn normalized(&self) -> Self {
         let c = self.location();
-        let sub = first_not_blank(&[self.subscription_url.as_deref(), self.legacy_subscription_url.as_deref()]);
+        let sub = first_not_blank(&[
+            self.subscription_url.as_deref(),
+            self.legacy_subscription_url.as_deref(),
+        ]);
         Self::build(
             self.storage_id.trim().to_string(),
             &c,
             (!sub.is_empty()).then_some(sub),
-            self.metadata.as_ref().map(LocationMetadata::normalized).filter(|m| !m.is_empty()),
+            self.metadata
+                .as_ref()
+                .map(LocationMetadata::normalized)
+                .filter(|m| !m.is_empty()),
         )
     }
 
     /// A stored entry for `location` (the app's `LocationEntry.from`).
-    pub fn from(storage_id: &str, location: &LocationConfig, subscription_url: Option<String>, metadata: Option<LocationMetadata>) -> Self {
-        Self::build(storage_id.to_string(), &location.normalized(), subscription_url, metadata).normalized()
+    pub fn from(
+        storage_id: &str,
+        location: &LocationConfig,
+        subscription_url: Option<String>,
+        metadata: Option<LocationMetadata>,
+    ) -> Self {
+        Self::build(
+            storage_id.to_string(),
+            &location.normalized(),
+            subscription_url,
+            metadata,
+        )
+        .normalized()
     }
 
-    fn build(storage_id: String, c: &LocationConfig, subscription_url: Option<String>, metadata: Option<LocationMetadata>) -> Self {
+    fn build(
+        storage_id: String,
+        c: &LocationConfig,
+        subscription_url: Option<String>,
+        metadata: Option<LocationMetadata>,
+    ) -> Self {
         Self {
             storage_id,
             name: c.name.clone(),
             description: c.description.clone(),
             subscription_url,
-            endpoint: Some(LocationEndpointConfig { room_id: c.id.clone(), key: c.key.clone(), legacy_client_id: None }),
+            endpoint: Some(LocationEndpointConfig {
+                room_id: c.id.clone(),
+                key: c.key.clone(),
+                legacy_client_id: None,
+            }),
             engine: Some(c.engine),
             proxy: c.proxy.clone(),
             proxy2: c.proxy2.clone(),
@@ -971,7 +1148,8 @@ impl LocationEntry {
             snolc: c.snolc.clone(),
             advanced: c.advanced.clone(),
             fake_dns: c.fake_dns.clone(),
-            routing_profile_id: (!c.routing_profile_id.trim().is_empty()).then(|| c.routing_profile_id.clone()),
+            routing_profile_id: (!c.routing_profile_id.trim().is_empty())
+                .then(|| c.routing_profile_id.clone()),
             auth_provider: Some(c.bypass_provider.clone()),
             transport: Some(LocationTransportConfig::from_config(c)),
             multi_room_enabled: c.multi_room_enabled,
@@ -1003,7 +1181,11 @@ pub struct LocationBundleV4 {
 
 impl Default for LocationBundleV4 {
     fn default() -> Self {
-        Self { version: BUNDLE_VERSION, active_location_id: None, locations: Vec::new() }
+        Self {
+            version: BUNDLE_VERSION,
+            active_location_id: None,
+            locations: Vec::new(),
+        }
     }
 }
 
@@ -1023,7 +1205,11 @@ impl LocationBundleV4 {
             .clone()
             .filter(|id| locations.iter().any(|e| &e.storage_id == id))
             .or_else(|| locations.first().map(|e| e.storage_id.clone()));
-        Self { version: BUNDLE_VERSION, active_location_id: active, locations }
+        Self {
+            version: BUNDLE_VERSION,
+            active_location_id: active,
+            locations,
+        }
     }
 }
 
@@ -1074,12 +1260,22 @@ impl LocationViewIndex {
                         storage_id: e.storage_id.clone(),
                         name: e.name.clone(),
                         description: e.description.clone(),
-                        subscription_url: e.subscription_url.clone().or_else(|| e.legacy_subscription_url.clone()),
+                        subscription_url: e
+                            .subscription_url
+                            .clone()
+                            .or_else(|| e.legacy_subscription_url.clone()),
                         engine: e.engine.unwrap_or_default(),
                         auth_provider: e.auth_provider.clone().unwrap_or_default(),
-                        transport: e.transport.as_ref().map(|t| t.kind.clone()).unwrap_or_default(),
+                        transport: e
+                            .transport
+                            .as_ref()
+                            .map(|t| t.kind.clone())
+                            .unwrap_or_default(),
                         proxy_type: proxy.as_ref().map(|p| p.kind.clone()).unwrap_or_default(),
-                        proxy_server: proxy.as_ref().map(crate::share_link::display_server).unwrap_or_default(),
+                        proxy_server: proxy
+                            .as_ref()
+                            .map(crate::share_link::display_server)
+                            .unwrap_or_default(),
                         metadata: e.metadata.clone(),
                     }
                 })
