@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-rust-${{ github.ref }}-${{ matrix.os }}
+  group: desktop-rust-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
