@@ -291,6 +291,7 @@ fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() 
         String::new(),
         String::new(),
         r#"{"globalProxyCore":"singbox"}"#.into(),
+        String::new(),
         10_808,
         "device".into(),
         "runtime".into(),
@@ -313,6 +314,7 @@ fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() 
     });
     let plan = apple_native_runtime_plan(
         stealth.to_string(),
+        String::new(),
         String::new(),
         String::new(),
         String::new(),
@@ -345,6 +347,7 @@ fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() 
         String::new(),
         String::new(),
         r#"{"globalProxyCore":"singbox"}"#.into(),
+        String::new(),
         10_808,
         "device".into(),
         String::new(),
@@ -370,6 +373,7 @@ fn native_runtime_plan_keeps_mieru_link_for_the_isolated_runtime() {
     });
     let plan = apple_native_runtime_plan(
         location.to_string(),
+        String::new(),
         String::new(),
         String::new(),
         String::new(),
@@ -435,6 +439,7 @@ fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
         String::new(),
         String::new(),
         String::new(),
+        String::new(),
         10_808,
         "device".into(),
         "runtime".into(),
@@ -463,6 +468,7 @@ fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
         String::new(),
         String::new(),
         String::new(),
+        String::new(),
         10_808,
         "device".into(),
         "runtime".into(),
@@ -487,6 +493,7 @@ fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
         String::new(),
         String::new(),
         String::new(),
+        String::new(),
         10_808,
         "device".into(),
         "runtime".into(),
@@ -496,4 +503,38 @@ fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
     .unwrap();
     assert_eq!(plan.auxiliary.len(), 1);
     assert!(plan.proxy.is_none());
+}
+
+#[test]
+fn native_runtime_plan_keeps_existing_warp_config_in_the_proxy_chain() {
+    let location = serde_json::json!({
+        "name": "WARP",
+        "engine": "standard",
+        "warp_enabled": true,
+        "warp_protocol": "awg",
+        "proxy": {
+            "type": "vless",
+            "server": "example.com",
+            "server_port": 443,
+            "uuid": "11111111-2222-3333-4444-555555555555"
+        }
+    });
+    let warp = "[Interface]\nPrivateKey = private\nAddress = 172.16.0.2/32\n[Peer]\nPublicKey = public\nEndpoint = engage.cloudflareclient.com:2408\n";
+    let plan = apple_native_runtime_plan(
+        location.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        r#"{"globalProxyCore":"singbox"}"#.into(),
+        warp.into(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    let awg = plan.amnezia_wg.expect("WARP AWG runtime");
+    assert!(awg.ini_config.contains("Endpoint = 127.0.0.1:10811"));
+    assert!(plan.proxy.unwrap().config.contains("warp-relay-in"));
 }

@@ -36,6 +36,10 @@ public struct RustMigrationValidator: MigrationPayloadValidating {
             guard !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw RustMigrationValidationError.invalidUTF8(.deviceIdentity)
             }
+        case .warpConfig:
+            guard json.contains("[Interface]"), json.contains("[Peer]") else {
+                throw RustMigrationValidationError.invalidUTF8(.warpConfig)
+            }
         }
     }
 }

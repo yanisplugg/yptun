@@ -14,6 +14,7 @@ import Testing
     #expect(paths.destination(for: .deviceIdentity).path.hasSuffix("YPtun/device_identity"))
     #expect(paths.destination(for: .traffic).path.hasSuffix("yptun/traffic.json"))
     #expect(paths.destination(for: .routingProfiles).path.hasSuffix("yptun/routing_profiles.json"))
+    #expect(paths.destination(for: .warpConfig).path.hasSuffix("yptun/warp.conf"))
     #expect(paths.migrationBackupDirectory.path.hasSuffix("YPtun/MigrationBackups/KotlinApple"))
 }
 

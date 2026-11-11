@@ -7,6 +7,7 @@ public struct AppleTunnelRequest: Codable, Equatable, Sendable {
     public let routingJSON: String
     public let routingProfilesJSON: String
     public let appBehaviorJSON: String
+    public let warpConfig: String
     public let deviceID: String
 
     public init(
@@ -15,6 +16,7 @@ public struct AppleTunnelRequest: Codable, Equatable, Sendable {
         routingJSON: String,
         routingProfilesJSON: String,
         appBehaviorJSON: String,
+        warpConfig: String,
         deviceID: String
     ) {
         self.locationJSON = locationJSON
@@ -22,6 +24,7 @@ public struct AppleTunnelRequest: Codable, Equatable, Sendable {
         self.routingJSON = routingJSON
         self.routingProfilesJSON = routingProfilesJSON
         self.appBehaviorJSON = appBehaviorJSON
+        self.warpConfig = warpConfig
         self.deviceID = deviceID
     }
 }

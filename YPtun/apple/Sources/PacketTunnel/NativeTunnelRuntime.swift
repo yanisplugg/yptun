@@ -28,6 +28,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 routingJson: request.routingJSON,
                 routingProfilesJson: request.routingProfilesJSON,
                 appBehaviorJson: request.appBehaviorJSON,
+                warpConfig: request.warpConfig,
                 socksPort: 10_808,
                 deviceId: request.deviceID,
                 runtimeDirectory: runtimeDirectory.path,

@@ -104,6 +104,7 @@ public actor AppleApplicationBootstrapper {
             routingJSON: try artifactText(.routing, paths: paths),
             routingProfilesJSON: try artifactText(.routingProfiles, paths: paths),
             appBehaviorJSON: try artifactText(.appBehavior, paths: paths),
+            warpConfig: try artifactText(.warpConfig, paths: paths),
             deviceID: deviceID
         )
         try AppleTunnelStore.saveRequest(request)
@@ -115,10 +116,14 @@ public actor AppleApplicationBootstrapper {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AppleApplicationBootstrapError.importTextEmpty }
         let paths = try systemPaths()
-        let subscriptionURL = URL(string: trimmed).flatMap { url in
-            guard trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-                  url.scheme == "https" || url.scheme == "http" else { return nil }
-            return url
+        let parsedURL = URL(string: trimmed)
+        let subscriptionURL: URL?
+        if let parsedURL,
+           trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+           parsedURL.scheme == "https" || parsedURL.scheme == "http" {
+            subscriptionURL = parsedURL
+        } else {
+            subscriptionURL = nil
         }
         let text: String
         if let subscriptionURL {

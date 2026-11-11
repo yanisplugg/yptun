@@ -15,6 +15,7 @@ use yptun_core::model::{EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYP
 use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
 use yptun_core::singbox::config::{self as singbox_config, SingBoxOptions};
+use yptun_core::warp;
 use yptun_core::xray::config::{self as xray_config, RawOptions, XrayOptions};
 
 use crate::{from_json, FfiError};
@@ -509,6 +510,7 @@ pub fn apple_native_runtime_plan(
     routing_json: String,
     routing_profiles_json: String,
     app_behavior_json: String,
+    warp_config: String,
     socks_port: i32,
     device_id: String,
     runtime_directory: String,
@@ -534,12 +536,6 @@ pub fn apple_native_runtime_plan(
     let routing_profile = profiles
         .resolve(Some(&location.routing_profile_id))
         .cloned();
-
-    if location.warp_enabled {
-        return Err(FfiError::Unsupported(
-            "WARP chaining is not connected to the native Apple runtime yet".into(),
-        ));
-    }
 
     let olcrtc = match location.engine {
         EngineType::Stealth => Some(apple_olcrtc_plan(&location, socks_port, &device_id)),
@@ -587,7 +583,48 @@ pub fn apple_native_runtime_plan(
                 } else {
                     main.clone()
                 };
-                let (second, _) = resolve_second(main, location.proxy2.as_ref());
+                let (mut second, _) = resolve_second(main, location.proxy2.as_ref());
+                let mut warp_relay = None;
+                let warp_eligible = location.warp_enabled
+                    && location.engine == EngineType::Standard
+                    && main.kind != TYPE_AMNEZIAWG
+                    && (main
+                        .raw_xray_config
+                        .as_deref()
+                        .is_some_and(|raw| !raw.trim().is_empty())
+                        || matches!(
+                            main.kind.as_str(),
+                            "vless" | "vmess" | "trojan" | "shadowsocks"
+                        ));
+                if warp_eligible {
+                    if warp_config.trim().is_empty() {
+                        return Err(FfiError::Invalid(
+                            "WARP is enabled but warp.conf is missing".into(),
+                        ));
+                    }
+                    let relay_port = socks_port + 3;
+                    let awg_port = socks_port + 2;
+                    let (endpoint_host, endpoint_port) = warp::endpoint_of(&warp_config);
+                    let relay = yptun_core::singbox::config::WarpRelay {
+                        listen_port: relay_port,
+                        target_host: warp::pinned_host(&endpoint_host),
+                        target_port: endpoint_port,
+                    };
+                    let engine_ini = warp::engine_ini(
+                        &warp_config,
+                        location.warp_protocol == yptun_core::transports::WarpProtocol::Awg,
+                        false,
+                    );
+                    amnezia_wg = Some(AppleAmneziaWgRuntimePlan {
+                        ini_config: warp::with_endpoint(
+                            &engine_ini,
+                            &format!("127.0.0.1:{relay_port}"),
+                        ),
+                        listen_address: format!("127.0.0.1:{awg_port}"),
+                    });
+                    second = Some(local_socks_profile("WARP", awg_port));
+                    warp_relay = Some(relay);
+                }
                 let caps = PlatformCaps::ios();
                 let choice = choose_core(
                     &CoreInputs {
@@ -620,6 +657,8 @@ pub fn apple_native_runtime_plan(
                                     fake_dns_enabled: traffic.fake_dns_enabled,
                                     force_ipv4: traffic.domain_strategy == "ipv4_only",
                                     second_profile: second,
+                                    warp_exit_port: amnezia_wg.as_ref().map(|_| socks_port + 2),
+                                    warp_relay: warp_relay.clone(),
                                     ..RawOptions::new(socks_port)
                                 },
                             )
@@ -636,6 +675,7 @@ pub fn apple_native_runtime_plan(
                                     block_quic: true,
                                     bypass_lan: routing.bypass_lan,
                                     second_profile: second,
+                                    warp_relay: warp_relay.clone(),
                                     fake_dns_spec: location.fake_dns.clone(),
                                     ..XrayOptions::default()
                                 },
@@ -664,6 +704,7 @@ pub fn apple_native_runtime_plan(
                                 singbox_geoip_base: profiles.singbox_geoip_base.clone(),
                                 block_quic: singbox_blocks_quic(main),
                                 second_profile: second,
+                                warp_relay,
                                 fake_dns_spec: location.fake_dns.clone(),
                                 prefer_tcp_remote_dns: true,
                                 log_file_path: log_file,

@@ -8,6 +8,7 @@ public enum MigrationArtifact: String, CaseIterable, Hashable, Sendable {
     case routingProfiles
     case appBehavior
     case deviceIdentity
+    case warpConfig
 
     public var fileName: String {
         switch self {
@@ -18,13 +19,14 @@ public enum MigrationArtifact: String, CaseIterable, Hashable, Sendable {
         case .routingProfiles: "routing_profiles.json"
         case .appBehavior: "app_behavior.json"
         case .deviceIdentity: "device_identity"
+        case .warpConfig: "warp.conf"
         }
     }
 
     public var isLocationBundle: Bool {
         switch self {
         case .locationsV4, .locationsV3: true
-        case .traffic, .routing, .routingProfiles, .appBehavior, .deviceIdentity: false
+        case .traffic, .routing, .routingProfiles, .appBehavior, .deviceIdentity, .warpConfig: false
         }
     }
 
