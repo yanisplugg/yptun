@@ -71,19 +71,7 @@ jobs:
         run: |
           (cd openflux && go mod tidy)
           (cd cores && go mod tidy)
-          cd cores
-          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
-          "$(go env GOPATH)/bin/gomobile" init
-          VERSION=$(grep -E '^####[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+' ../sing-box/docs/changelog.md | head -1 | awk '{print $2}')
-          mkdir -p ../YPtun/sharedUI/build/generated/cores/ios
-          "$(go env GOPATH)/bin/gomobile" bind \
-            -target=ios,macos \
-            -iosversion 17.0 \
-            -tags with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic \
-            -trimpath \
-            -ldflags "-X github.com/sagernet/sing-box/constant.Version=$VERSION -s -w -checklinkname=0" \
-            -o ../YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework \
-            ./coreapi
+          GOMOBILE_APPLE_TARGETS=ios,iossimulator,macos bash core/scripts/build-go-apple.sh
       - name: Build specialized Apple cores
         run: bash core/scripts/build-specialized-apple.sh
       - name: Generate native Apple project

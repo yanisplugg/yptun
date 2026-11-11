@@ -51,8 +51,8 @@ build outputs are intentionally ignored by Git.
 
 ```bash
 bash core/scripts/build-apple.sh
+bash core/scripts/build-go-apple.sh
 bash core/scripts/build-specialized-apple.sh
-# Build Coreapi.xcframework with gomobile as in apple-core.yml.
 cd YPtun/apple
 xcodegen generate
 open YPtunApple.xcodeproj
