@@ -56,7 +56,19 @@ jobs:
         with:
           go-version-file: cores/go.mod
           cache: false
+      - name: Restore native Apple XCFrameworks
+        id: apple-framework-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            YPtun/apple/Packages/YPtunRustBridge/Artifacts
+            YPtun/apple/Packages/YPtunRustBridge/Sources/YPtunRustBridge/Generated
+            YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework
+            YPtun/sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+            YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+          key: apple-xcframeworks-v1-${{ runner.os }}-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock', 'core/yptun-core/**', 'core/yptun-ffi/**', 'core/scripts/build-apple.sh', 'core/scripts/build-go-apple.sh', 'core/scripts/build-specialized-apple.sh') }}-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'openflux/**') }}-${{ hashFiles('snolc/**', 'csqtt/**') }}
       - name: Build XCFramework and Swift bindings
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         run: bash core/scripts/build-apple.sh
       - name: Verify Swift package
         working-directory: YPtun/apple/Packages/YPtunRustBridge
@@ -68,12 +80,25 @@ jobs:
         working-directory: YPtun/apple/Packages/YPtunAppleKit
         run: swift test
       - name: Build in-process Apple network cores
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         run: |
           (cd openflux && go mod tidy)
           (cd cores && go mod tidy)
           GOMOBILE_APPLE_TARGETS=ios,iossimulator,macos bash core/scripts/build-go-apple.sh
       - name: Build specialized Apple cores
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         run: bash core/scripts/build-specialized-apple.sh
+      - name: Save native Apple XCFrameworks
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            YPtun/apple/Packages/YPtunRustBridge/Artifacts
+            YPtun/apple/Packages/YPtunRustBridge/Sources/YPtunRustBridge/Generated
+            YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework
+            YPtun/sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+            YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+          key: ${{ steps.apple-framework-cache.outputs.cache-primary-key }}
       - name: Generate native Apple project
         working-directory: YPtun/apple
         run: |
