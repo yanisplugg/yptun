@@ -1,0 +1,62 @@
+name: Rust desktop client
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - desktop-rust-ui
+    paths:
+      - "core/**"
+      - ".github/workflows/desktop-rust.yml"
+      - "PRODUCT.md"
+  pull_request:
+    paths:
+      - "core/**"
+      - ".github/workflows/desktop-rust.yml"
+      - "PRODUCT.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-rust-${{ github.ref }}-${{ matrix.os }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+          - name: Linux x64
+            os: ubuntu-24.04
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+      - name: Install Linux UI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-dev
+      - name: Check shared desktop client
+        working-directory: core
+        run: cargo check -p yptun-desktop --locked
+      - name: Test shared desktop client
+        working-directory: core
+        run: cargo test -p yptun-desktop --locked
