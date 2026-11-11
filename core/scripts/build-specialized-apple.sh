@@ -11,6 +11,16 @@ rustup target add "${TARGETS[@]}"
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
+# These staticlibs are collapsed and linked into a larger Apple binary below. Workspace-level ThinLTO
+# leaves embedded LLVM bitcode whose symbol table cannot be localized reliably across Rust/Xcode LLVM
+# versions. Emit normal Mach-O objects here; the final application link still optimizes the result.
+build_specialized_rust() {
+  env \
+    CARGO_PROFILE_RELEASE_LTO=false \
+    CARGO_PROFILE_RELEASE_STRIP=none \
+    cargo build "$@"
+}
+
 make_headers() {
   local module="$1"
   local source_header="$2"
@@ -88,6 +98,7 @@ hide_rust_symbols() {
   "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
   if grep -Eq '^(__R|__ZN)' "$symbols"; then
     echo "Rust implementation symbols remain public in $output" >&2
+    grep -E '^(__R|__ZN)' "$symbols" | head -20 >&2
     return 1
   fi
 
@@ -123,7 +134,7 @@ EOF
 
 build_snolc() {
   for target in "${TARGETS[@]}"; do
-    cargo build --release --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target "$target"
+    build_specialized_rust --release --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target "$target"
   done
   hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-ios/release/libsnolc_ffi.a" \
@@ -165,7 +176,7 @@ build_snolc() {
 
 build_csqtt() {
   for target in "${TARGETS[@]}"; do
-    cargo build --release --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target "$target"
+    build_specialized_rust --release --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target "$target"
   done
   local target_dir="$ROOT/csqtt/rust-client/target"
   hide_rust_symbols \
