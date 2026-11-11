@@ -37,7 +37,9 @@ jobs:
         run: cargo test --workspace --locked
 
   build-apple:
-    runs-on: macos-15
+    # The macos-15 label currently resolves to scarce arm64 hosts and can remain queued for hours.
+    # Intel hosts cross-build every arm64 slice below and have materially shorter public-runner queues.
+    runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
