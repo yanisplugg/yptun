@@ -98,6 +98,30 @@ jobs:
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build/ios-smoke \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Build native iOS release for device
+        working-directory: YPtun/apple
+        run: |
+          xcodebuild -project YPtunApple.xcodeproj -scheme "YPtun iOS" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/ios-device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Capture native iOS review screenshots
+        working-directory: YPtun/apple
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for group in d.values() for x in group if "iPhone" in x["name"] and x["isAvailable"]))')
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" -b
+          APP=build/ios-smoke/Build/Products/Debug-iphonesimulator/YPtun.app
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" org.yptun.app
+          sleep 3
+          mkdir -p review
+          xcrun simctl io "$UDID" screenshot review/iphone-light.png
+          xcrun simctl ui "$UDID" appearance dark
+          sleep 1
+          xcrun simctl io "$UDID" screenshot review/iphone-dark.png
       - name: Smoke-build native macOS shell
         working-directory: YPtun/apple
         run: |
@@ -116,4 +140,11 @@ jobs:
             YPtun/apple/Packages/YPtunRustBridge/Artifacts
             YPtun/apple/Packages/YPtunRustBridge/Sources/YPtunRustBridge/Generated
           if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yptun-native-apple-review-${{ github.sha }}
+          path: YPtun/apple/review
+          if-no-files-found: ignore
           retention-days: 14

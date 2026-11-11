@@ -35,7 +35,9 @@ YPtun combines conventional sing-box/Xray proxy support with specialized transpo
 - Kotlin/Native, Compose Multiplatform, `SharedUI.framework`, and Gradle are removed from final Apple artifacts. Kotlin remains elsewhere in the repository for non-Apple clients.
 - Shared product logic comes from `yptun-core` through generated UniFFI Swift bindings. Swift remains the executor for NetworkExtension, Network.framework, Keychain, App Intents, widgets, and other Apple APIs.
 - Existing bundle identifiers, App Group identifiers, saved locations, subscriptions, routing profiles, active selection, and device identity must survive the update.
-- Turnable and Mieru are deferred until the established TestFlight feature set is stable on the new client.
+- Turnable and Mieru are part of the native Apple parity target. Because Network Extensions cannot
+  launch subprocesses, both run in-process inside the packet-tunnel extension; their GPL notices and
+  exact upstream revisions ship with the app.
 - The iOS extension must remain within realistic Network Extension memory limits and cannot depend on subprocesses.
 
 ## Brand Commitments
