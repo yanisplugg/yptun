@@ -10,7 +10,8 @@ REPO="$(cd "$ROOT/.." && pwd)"
 OUT="${OUT:-$ROOT/build/apple}"
 PACKAGE_DIR="${PACKAGE_DIR:-$REPO/YPtun/apple/Packages/YPtunRustBridge}"
 GENERATED="$OUT/generated"
-HEADERS="$OUT/headers"
+HEADER_ROOT="$OUT/headers"
+HEADERS="$HEADER_ROOT/yptun_ffiFFI"
 
 IOS_DEVICE=aarch64-apple-ios
 IOS_SIM_ARM=aarch64-apple-ios-sim
@@ -20,7 +21,7 @@ MAC_INTEL=x86_64-apple-darwin
 
 cd "$ROOT"
 # Do not let a previous generation leave stale headers or bindings in the XCFramework.
-rm -rf "$GENERATED" "$HEADERS" "$OUT/ios-simulator" "$OUT/macos"
+rm -rf "$GENERATED" "$HEADER_ROOT" "$OUT/ios-simulator" "$OUT/macos"
 mkdir -p "$OUT" "$GENERATED" "$HEADERS" "$OUT/ios-simulator" "$OUT/macos"
 
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
@@ -61,10 +62,12 @@ mkdir -p "$PACKAGE_DIR/Artifacts" "$PACKAGE_DIR/Sources/YPtunRustBridge/Generate
 rm -f "$PACKAGE_DIR/Sources/YPtunRustBridge/Generated/"*.swift
 
 xcodebuild -create-xcframework \
-  -library "$ROOT/target/$IOS_DEVICE/release/libyptun_ffi.a" -headers "$HEADERS" \
-  -library "$OUT/ios-simulator/libyptun_ffi.a" -headers "$HEADERS" \
-  -library "$OUT/macos/libyptun_ffi.a" -headers "$HEADERS" \
+  -library "$ROOT/target/$IOS_DEVICE/release/libyptun_ffi.a" -headers "$HEADER_ROOT" \
+  -library "$OUT/ios-simulator/libyptun_ffi.a" -headers "$HEADER_ROOT" \
+  -library "$OUT/macos/libyptun_ffi.a" -headers "$HEADER_ROOT" \
   -output "$PACKAGE_DIR/Artifacts/yptun_ffiFFI.xcframework"
+test -n "$(find "$PACKAGE_DIR/Artifacts/yptun_ffiFFI.xcframework" \
+  -path '*/Headers/yptun_ffiFFI/module.modulemap' -print -quit)"
 
 cp "$SWIFT" "$PACKAGE_DIR/Sources/YPtunRustBridge/Generated/yptun_ffi.swift"
 echo "Apple Rust bridge ready at $PACKAGE_DIR"

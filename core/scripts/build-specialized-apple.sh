@@ -12,8 +12,9 @@ rustup target add "${TARGETS[@]}"
 make_headers() {
   local module="$1"
   local source_header="$2"
-  local output="$WORK/$module-headers"
-  rm -rf "$output"
+  local root="$WORK/$module-headers"
+  local output="$root/$module"
+  rm -rf "$root"
   mkdir -p "$output"
   cp "$source_header" "$output/"
   local header
@@ -24,6 +25,12 @@ module $module {
   export *
 }
 EOF
+}
+
+verify_module_map() {
+  local framework="$1"
+  local module="$2"
+  test -n "$(find "$framework" -path "*/Headers/$module/module.modulemap" -print -quit)"
 }
 
 build_snolc() {
@@ -45,6 +52,7 @@ build_snolc() {
     -library "$WORK/libsnolc-simulator.a" -headers "$WORK/SnolcCore-headers" \
     -library "$WORK/libsnolc-macos.a" -headers "$WORK/SnolcCore-headers" \
     -output "$OUT/SnolcCore.xcframework"
+  verify_module_map "$OUT/SnolcCore.xcframework" SnolcCore
 }
 
 build_csqtt() {
@@ -68,6 +76,7 @@ build_csqtt() {
     -library "$WORK/libcsqtt-simulator.a" -headers "$WORK/CsqttCore-headers" \
     -library "$WORK/libcsqtt-macos.a" -headers "$WORK/CsqttCore-headers" \
     -output "$OUT/CsqttCore.xcframework"
+  verify_module_map "$OUT/CsqttCore.xcframework" CsqttCore
 }
 
 build_snolc
