@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import YPtunMigrationSupport
 import YPtunShared
+import YPtunVPNControl
 
 public enum YPtunAppSection: String, CaseIterable, Hashable, Identifiable, Sendable {
     case connection

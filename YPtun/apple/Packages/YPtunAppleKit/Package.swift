@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "YPtunShared", targets: ["YPtunShared"]),
         .library(name: "YPtunTunnelSupport", targets: ["YPtunTunnelSupport"]),
         .library(name: "YPtunMigrationSupport", targets: ["YPtunMigrationSupport"]),
+        .library(name: "YPtunVPNControl", targets: ["YPtunVPNControl"]),
         .library(name: "YPtunAppUI", targets: ["YPtunAppUI"]),
     ],
     dependencies: [
@@ -36,11 +37,16 @@ let package = Package(
             ]
         ),
         .target(
+            name: "YPtunVPNControl",
+            dependencies: ["YPtunShared"]
+        ),
+        .target(
             name: "YPtunAppUI",
             dependencies: [
                 "YPtunShared",
                 "YPtunMigrationSupport",
                 "YPtunTunnelSupport",
+                "YPtunVPNControl",
             ]
         ),
         .testTarget(

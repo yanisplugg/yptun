@@ -2,9 +2,9 @@ import Foundation
 import AppIntents
 import SwiftUI
 import WidgetKit
-import YPtunAppUI
 import YPtunShared
 import YPtunTunnelSupport
+import YPtunVPNControl
 
 private struct StatusEntry: TimelineEntry {
     let date: Date

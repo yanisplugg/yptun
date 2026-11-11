@@ -110,7 +110,7 @@ targets:
       - package: YPtunAppleKit
         product: YPtunTunnelSupport
       - package: YPtunAppleKit
-        product: YPtunAppUI
+        product: YPtunVPNControl
       - sdk: AppIntents.framework
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
