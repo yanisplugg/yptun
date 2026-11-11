@@ -1,0 +1,52 @@
+<Page
+    x:Class="YPtun.WinUI.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer>
+        <StackPanel Padding="36,28,36,40" MaxWidth="900" HorizontalAlignment="Center" Spacing="22">
+            <StackPanel>
+                <TextBlock Text="Параметры" Style="{StaticResource TitleTextBlockStyle}" />
+                <TextBlock Text="Системные возможности Windows используются напрямую" Opacity="0.64" Margin="0,5,0,0" />
+            </StackPanel>
+
+            <Border Padding="24" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="15">
+                    <TextBlock Text="Режим подключения" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="Туннель направляет трафик всей системы через WinTUN. Прокси меняет настройки текущего пользователя без прав администратора." TextWrapping="Wrap" Opacity="0.68" />
+                    <RadioButtons x:Name="ConnectionModeButtons" SelectionChanged="OnModeChanged">
+                        <x:String>Туннель (WinTUN)</x:String>
+                        <x:String>Системный прокси</x:String>
+                    </RadioButtons>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="24" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Нативное ядро" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Rust + общие Go-движки Android/Windows" Opacity="0.68" />
+                    </StackPanel>
+                    <ToggleSwitch
+                        Grid.Column="1"
+                        IsOn="{Binding NativeCoreAvailable}"
+                        IsHitTestVisible="False"
+                        OffContent="Недоступно"
+                        OnContent="Готово"
+                        VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <Border Padding="24" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Каталог данных" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" Opacity="0.68" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

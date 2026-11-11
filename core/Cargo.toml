@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["yptun-core", "yptun-ffi"]
+members = ["yptun-core", "yptun-ffi", "yptun-windows"]
 
 [workspace.package]
 edition = "2021"
