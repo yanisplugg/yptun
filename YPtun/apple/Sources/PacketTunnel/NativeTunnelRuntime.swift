@@ -1,18 +1,12 @@
 import Foundation
 @preconcurrency import NetworkExtension
+import Coreapi
+import CsqttCore
+import Darwin
+import SnolcCore
+import Tun2SocksKit
 import YPtunRustBridge
 import YPtunShared
-
-#if canImport(Coreapi) && canImport(Tun2SocksKit)
-import Coreapi
-import Darwin
-import Tun2SocksKit
-#if canImport(SnolcCore)
-import SnolcCore
-#endif
-#if canImport(CsqttCore)
-import CsqttCore
-#endif
 
 final class NativeTunnelRuntime: @unchecked Sendable {
     private let lock = NSLock()
@@ -93,12 +87,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         CoreapiTurnableStop()
         CoreapiMieruStop()
         CoreapiAppleEngineStopAll()
-#if canImport(SnolcCore)
         snolc_ffi_stop()
-#endif
-#if canImport(CsqttCore)
         csqtt_ffi_stop()
-#endif
         CoreapiCsqttBridgeStop()
         CoreapiRtcStopPool()
         var ignored: NSError?
@@ -254,7 +244,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 
     private func startSnolc(_ plan: AppleSnolcRuntimePlan) throws {
-#if canImport(SnolcCore)
         let directory = URL(fileURLWithPath: plan.directory, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for file in plan.files {
@@ -270,13 +259,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             snolc_ffi_free_string(pointer)
             throw NativeTunnelRuntimeError.specializedCore(message)
         }
-#else
-        throw NativeTunnelRuntimeError.specializedCore("SnolcCore is not linked")
-#endif
     }
 
     private func startCsqtt(_ plan: AppleCsqttRuntimePlan) throws {
-#if canImport(CsqttCore)
         try callCore {
             CoreapiCsqttBridgeStart(
                 plan.bridgeSocksAddress,
@@ -302,9 +287,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 "CSQTT tunnel handshake timed out"
             )
         }
-#else
-        throw NativeTunnelRuntimeError.specializedCore("CsqttCore is not linked")
-#endif
     }
 
     private func startBridge(yaml: String) throws {
@@ -423,14 +405,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
             if !CoreapiAppleEngineRunning(kind) { return false }
         }
-#if canImport(SnolcCore)
         if plan.snolc != nil && !snolc_ffi_is_running() { return false }
-#endif
-#if canImport(CsqttCore)
         if plan.csqtt != nil && (!csqtt_ffi_is_running() || !CoreapiCsqttBridgeIsRunning()) {
             return false
         }
-#endif
         if let proxy = plan.proxy {
             switch proxy.kind {
             case .singBox where !CoreapiSbRunning(): return false
@@ -483,31 +461,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 }
 
-#else
-
-final class NativeTunnelRuntime {
-    func start(
-        provider: NEPacketTunnelProvider,
-        completion: @escaping (Error?) -> Void
-    ) {
-        let error = NativeTunnelRuntimeError.coreFrameworkUnavailable
-        try? AppleTunnelStore.writeText(error.localizedDescription, to: AppleTunnelStore.errorFileName)
-        try? AppleTunnelStore.writeText(
-            VPNConnectionState.disconnected.rawValue,
-            to: AppleTunnelStore.statusFileName
-        )
-        completion(error)
-    }
-
-    func stop() {}
-
-    func handle(message: String) -> String { "unavailable" }
-}
-
-#endif
-
 enum NativeTunnelRuntimeError: LocalizedError {
-    case coreFrameworkUnavailable
     case wdttConfigurationUnavailable
     case wdttRawModeUnavailable
     case specializedCore(String)
@@ -515,8 +469,6 @@ enum NativeTunnelRuntimeError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .coreFrameworkUnavailable:
-            "The in-process Apple core framework is not linked."
         case .wdttConfigurationUnavailable:
             "qWDTT did not return its WireGuard configuration before the timeout."
         case .wdttRawModeUnavailable:

@@ -3,12 +3,13 @@ module kazcores
 go 1.27
 
 require (
+	github.com/enfein/mieru/v3 v3.39.0
 	github.com/olc/awgproxy v0.0.0
 	github.com/openlibrecommunity/olcrtc v0.0.0
-	github.com/enfein/mieru/v3 v3.39.0
 	github.com/sagernet/sing v0.9.7-0.20260929150544-0ad23b637bd4
 	github.com/sagernet/sing-box v1.14.2
 	github.com/samosvalishe/free-turn-proxy v0.0.0
+	github.com/theairblow/turnable v0.0.0-20261012093458-c7b9b9289b17
 	github.com/xtls/xray-core v1.260909.0
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	masterdnsvpn-go v0.0.0
@@ -238,7 +239,6 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
-	github.com/theairblow/turnable v0.0.0-20261012093458-c7b9b9289b17 // indirect
 	github.com/theodorsm/covert-dtls v1.5.2-0.20260923053106-38d973a9488c // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

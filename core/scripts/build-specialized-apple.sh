@@ -58,16 +58,12 @@ hide_rust_symbols() {
   local platform="$6"
   local deployment_target="$7"
   local relocatable="$WORK/$label.o"
-  local edited="$WORK/$label-exported.o"
   local arch
   local sdk_path
   local sdk_version
   local rust_host
   local llvm_nm
-  local llvm_objcopy
   local symbols
-  local all_symbols
-  local local_symbols
   local symbol_details
 
   arch="$(xcrun lipo -archs "$input")"
@@ -80,17 +76,14 @@ hide_rust_symbols() {
   sdk_version="$(xcrun --sdk "$sdk" --show-sdk-version)"
   rust_host="$(rustc -vV | sed -n 's/^host: //p')"
   llvm_nm="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-nm"
-  llvm_objcopy="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-objcopy"
-  if [[ ! -x "$llvm_nm" || ! -x "$llvm_objcopy" ]]; then
-    echo "Rust LLVM tools are unavailable; install rustup component llvm-tools-preview" >&2
+  if [[ ! -x "$llvm_nm" ]]; then
+    echo "Rust llvm-nm is unavailable; install rustup component llvm-tools-preview" >&2
     return 1
   fi
   symbols="$WORK/$label-symbols.txt"
-  all_symbols="$WORK/$label-all-symbols.txt"
-  local_symbols="$WORK/$label-local-symbols.txt"
   symbol_details="$WORK/$label-symbol-details.txt"
 
-  rm -f "$relocatable" "$edited" "$output"
+  rm -f "$relocatable" "$output"
   xcrun ld -r \
     -arch "$arch" \
     -platform_version "$platform" "$deployment_target" "$sdk_version" \
@@ -98,13 +91,7 @@ hide_rust_symbols() {
     -all_load "$input" \
     -exported_symbols_list "$exports" \
     -o "$relocatable"
-  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$relocatable" > "$all_symbols"
-  grep -vxFf "$exports" "$all_symbols" > "$local_symbols" || true
-  "$llvm_objcopy" \
-    --localize-symbols="$local_symbols" \
-    --keep-global-symbols="$exports" \
-    "$relocatable" "$edited"
-  xcrun libtool -static -o "$output" "$edited"
+  xcrun libtool -static -o "$output" "$relocatable"
 
   # `--extern-only` also includes Mach-O private externals. Those are deliberately hidden by
   # exported_symbols_list and do not collide at the final link. Parse Darwin metadata so the
@@ -149,7 +136,7 @@ EOF
 
 build_snolc() {
   for target in "${TARGETS[@]}"; do
-    build_specialized_rust --release --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target "$target"
+    build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target "$target"
   done
   hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-ios/release/libsnolc_ffi.a" \
@@ -191,7 +178,7 @@ build_snolc() {
 
 build_csqtt() {
   for target in "${TARGETS[@]}"; do
-    build_specialized_rust --release --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target "$target"
+    build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target "$target"
   done
   local target_dir="$ROOT/csqtt/rust-client/target"
   hide_rust_symbols \

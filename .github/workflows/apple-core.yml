@@ -4,16 +4,43 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - feat/testflight-deploy
     paths:
       - "core/**"
       - "YPtun/apple/**"
+      - "cores/**"
+      - "sing-box/**"
+      - "xray-core/**"
+      - "amneziawg-go/**"
+      - "awgproxy/**"
+      - "free-turn-proxy/**"
+      - "wdtt/**"
+      - "masterdns/**"
+      - "olcrtc/**"
+      - "openflux/**"
+      - "snolc/**"
+      - "csqtt/**"
       - ".github/workflows/apple-core.yml"
+      - ".github/workflows/apple-release.yml"
   pull_request:
     paths:
       - "core/**"
       - "YPtun/apple/**"
+      - "cores/**"
+      - "sing-box/**"
+      - "xray-core/**"
+      - "amneziawg-go/**"
+      - "awgproxy/**"
+      - "free-turn-proxy/**"
+      - "wdtt/**"
+      - "masterdns/**"
+      - "olcrtc/**"
+      - "openflux/**"
+      - "snolc/**"
+      - "csqtt/**"
       - ".github/workflows/apple-core.yml"
+      - ".github/workflows/apple-release.yml"
 
 permissions:
   contents: read
@@ -28,7 +55,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core -> target
@@ -37,6 +64,7 @@ jobs:
         run: cargo test --workspace --locked
 
   build-apple:
+    needs: test
     # The macos-15 label currently resolves to scarce arm64 hosts and can remain queued for hours.
     # Intel hosts cross-build every arm64 slice below and have materially shorter public-runner queues.
     runs-on: macos-15-intel
@@ -45,10 +73,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Select newest Xcode
         run: |
-          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          XCODE=/Applications/Xcode_26.3.app
+          if [ ! -d "$XCODE" ]; then XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1); fi
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate native Apple project (fail-fast)
+        working-directory: YPtun/apple
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+          xcodegen generate
+          plutil -lint Configuration/iOS/*.plist Configuration/macOS/*.plist
+          find . -name '*.entitlements' -print0 | xargs -0 -n1 plutil -lint
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
           components: llvm-tools-preview
@@ -69,7 +105,10 @@ jobs:
             YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework
             YPtun/sharedUI/build/generated/cores/ios/SnolcCore.xcframework
             YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
-          key: apple-xcframeworks-v1-${{ runner.os }}-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock', 'core/yptun-core/**', 'core/yptun-ffi/**', 'core/scripts/build-apple.sh', 'core/scripts/build-go-apple.sh', 'core/scripts/build-specialized-apple.sh') }}-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'openflux/**') }}-${{ hashFiles('snolc/**', 'csqtt/**') }}
+          key: apple-xcframeworks-v2-xcode-26.3-rust-1.99.1-${{ runner.os }}-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock', 'core/yptun-core/**', 'core/yptun-ffi/**', 'core/scripts/build-apple.sh', 'core/scripts/build-go-apple.sh', 'core/scripts/build-specialized-apple.sh', 'core/scripts/verify-apple-rust-link.sh', 'core/scripts/validate-apple-xcframeworks.py') }}-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'openflux/**') }}-${{ hashFiles('snolc/**', 'csqtt/**') }}
+      - name: Validate restored Apple XCFrameworks
+        if: steps.apple-framework-cache.outputs.cache-hit == 'true'
+        run: python3 core/scripts/validate-apple-xcframeworks.py
       # Keep the fragile Apple static-archive/linker stage first. It exercises every device,
       # simulator and macOS slice in a few minutes and warms Cargo for the rest of the job. A
       # linker regression must fail here, not after the much slower in-process Go core build.
@@ -79,6 +118,9 @@ jobs:
       - name: Build XCFramework and Swift bindings
         if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         run: bash core/scripts/build-apple.sh
+      - name: Probe combined Apple Rust archives
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
+        run: bash core/scripts/verify-apple-rust-link.sh
       - name: Verify Swift package
         working-directory: YPtun/apple/Packages/YPtunRustBridge
         run: swift build
@@ -91,9 +133,12 @@ jobs:
       - name: Build in-process Apple network cores
         if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         run: |
-          (cd openflux && go mod tidy)
-          (cd cores && go mod tidy)
+          (cd openflux && go mod tidy -diff)
+          (cd cores && go mod tidy -diff)
           GOMOBILE_APPLE_TARGETS=ios,iossimulator,macos bash core/scripts/build-go-apple.sh
+      - name: Validate built Apple XCFrameworks
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
+        run: python3 core/scripts/validate-apple-xcframeworks.py
       - name: Save native Apple XCFrameworks
         if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -105,28 +150,40 @@ jobs:
             YPtun/sharedUI/build/generated/cores/ios/SnolcCore.xcframework
             YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
           key: ${{ steps.apple-framework-cache.outputs.cache-primary-key }}
-      - name: Generate native Apple project
-        working-directory: YPtun/apple
-        run: |
-          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
-          xcodegen generate
+      - name: Native artifacts ready
+        id: native-ready
+        run: echo "All native Apple artifacts are ready for integration builds."
       - name: Smoke-build native iOS shell
+        id: ios-simulator
+        continue-on-error: true
         working-directory: YPtun/apple
         run: |
+          set -o pipefail
+          mkdir -p build/logs
           xcodebuild -project YPtunApple.xcodeproj -scheme "YPtun iOS" \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build/ios-smoke \
-            CODE_SIGNING_ALLOWED=NO build
+            ONLY_ACTIVE_ARCH=NO ARCHS="arm64 x86_64" \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build/logs/ios-simulator.log
       - name: Build native iOS release for device
+        id: ios-device
+        if: ${{ !cancelled() && steps.native-ready.outcome == 'success' }}
+        continue-on-error: true
         working-directory: YPtun/apple
         run: |
+          set -o pipefail
+          mkdir -p build/logs
           xcodebuild -project YPtunApple.xcodeproj -scheme "YPtun iOS" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -derivedDataPath build/ios-device \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build/logs/ios-device.log
       - name: Capture native iOS review screenshots
+        id: screenshots
+        if: steps.ios-simulator.outcome == 'success'
+        continue-on-error: true
         working-directory: YPtun/apple
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for group in d.values() for x in group if "iPhone" in x["name"] and x["isAvailable"]))')
@@ -142,17 +199,25 @@ jobs:
           sleep 1
           xcrun simctl io "$UDID" screenshot review/iphone-dark.png
       - name: Smoke-build native macOS shell
+        id: macos
+        if: ${{ !cancelled() && steps.native-ready.outcome == 'success' }}
+        continue-on-error: true
         working-directory: YPtun/apple
         run: |
+          set -o pipefail
+          mkdir -p build/logs
           xcodebuild -project YPtunApple.xcodeproj -scheme "YPtun macOS" \
             -derivedDataPath build/macos-smoke \
-            CODE_SIGNING_ALLOWED=NO build
+            ONLY_ACTIVE_ARCH=NO ARCHS="arm64 x86_64" \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee build/logs/macos.log
       - name: Verify generated artifacts
+        if: always()
         run: |
           test -d YPtun/apple/Packages/YPtunRustBridge/Artifacts/yptun_ffiFFI.xcframework
           test -s YPtun/apple/Packages/YPtunRustBridge/Sources/YPtunRustBridge/Generated/yptun_ffi.swift
           find YPtun/apple/Packages/YPtunRustBridge -maxdepth 5 -type f -print
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: yptun-apple-rust-bridge-${{ github.sha }}
           path: |
@@ -163,7 +228,26 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
+          name: yptun-apple-xcode-logs-${{ github.sha }}
+          path: YPtun/apple/build/logs
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
           name: yptun-native-apple-review-${{ github.sha }}
           path: YPtun/apple/review
           if-no-files-found: ignore
           retention-days: 14
+      - name: Gate Apple integration builds
+        if: always()
+        env:
+          IOS_SIMULATOR: ${{ steps.ios-simulator.outcome }}
+          IOS_DEVICE: ${{ steps.ios-device.outcome }}
+          SCREENSHOTS: ${{ steps.screenshots.outcome }}
+          MACOS: ${{ steps.macos.outcome }}
+        run: |
+          test "$IOS_SIMULATOR" = success
+          test "$IOS_DEVICE" = success
+          test "$SCREENSHOTS" = success
+          test "$MACOS" = success
