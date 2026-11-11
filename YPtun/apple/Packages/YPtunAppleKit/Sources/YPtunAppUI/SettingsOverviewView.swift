@@ -11,7 +11,11 @@ public struct SettingsOverviewView: View {
     public var body: some View {
         List {
             Section("Подключение") {
-                destination("Подписки", symbol: "dot.radiowaves.left.and.right")
+                NavigationLink {
+                    SubscriptionLocationsView(model: model)
+                } label: {
+                    Label("Подписки", systemImage: "dot.radiowaves.left.and.right")
+                }
                 NavigationLink {
                     RawSettingsEditorView(
                         title: "Профили маршрутизации",
@@ -37,7 +41,11 @@ public struct SettingsOverviewView: View {
                 } label: {
                     Label("Логи", systemImage: "text.alignleft")
                 }
-                destination("Информация о сессии", symbol: "info.circle")
+                NavigationLink {
+                    SessionOverviewView(model: model)
+                } label: {
+                    Label("Информация о сессии", systemImage: "info.circle")
+                }
                 NavigationLink {
                     RawSettingsEditorView(
                         title: "Основные настройки",
