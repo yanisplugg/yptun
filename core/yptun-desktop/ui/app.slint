@@ -1,4 +1,4 @@
-import { Button, CheckBox, HorizontalBox, ScrollView, TextEdit, VerticalBox } from "std-widgets.slint";
+import { Button, CheckBox, HorizontalBox, LineEdit, ScrollView, TextEdit, VerticalBox } from "std-widgets.slint";
 
 export struct LocationRow {
     id: string,
@@ -52,9 +52,28 @@ component CheckIcon inherits Rectangle {
     }
 }
 
+component EditIcon inherits Rectangle {
+    in property <color> icon-color: Theme.text;
+    background: transparent;
+    Path {
+        width: 22px;
+        height: 22px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M4 7 L14 7 M18 7 L20 7 M4 12 L7 12 M11 12 L20 12 M4 17 L13 17 M17 17 L20 17";
+        fill: transparent;
+        stroke: root.icon-color;
+        stroke-width: 1.8px;
+    }
+    Rectangle { x: 14px; y: 4px; width: 4px; height: 6px; border-radius: 2px; border-width: 1.5px; border-color: root.icon-color; background: Theme.surface; }
+    Rectangle { x: 7px; y: 9px; width: 4px; height: 6px; border-radius: 2px; border-width: 1.5px; border-color: root.icon-color; background: Theme.surface; }
+    Rectangle { x: 13px; y: 14px; width: 4px; height: 6px; border-radius: 2px; border-width: 1.5px; border-color: root.icon-color; background: Theme.surface; }
+}
+
 component LocationCard inherits Rectangle {
     in property <LocationRow> item;
     callback selected(string);
+    callback edit(string);
     height: 92px;
     border-radius: 22px;
     border-width: item.selected ? 2px : 1px;
@@ -67,11 +86,22 @@ component LocationCard inherits Rectangle {
     VerticalBox {
         x: 22px;
         y: 18px;
-        width: parent.width - 104px;
+        width: parent.width - 148px;
         spacing: 3px;
         Text { text: root.item.name; color: Theme.text; font-size: 19px; font-weight: 650; overflow: elide; }
         Text { text: root.item.detail; color: Theme.text-muted; font-size: 14px; overflow: elide; }
         Text { text: root.item.ping; color: Theme.accent; font-size: 12px; }
+    }
+
+    Rectangle {
+        width: 34px;
+        height: 34px;
+        border-radius: 17px;
+        x: parent.width - 100px;
+        y: (parent.height - self.height) / 2;
+        background: #3b2826;
+        EditIcon { width: 20px; height: 20px; x: 7px; y: 7px; }
+        TouchArea { clicked => { root.edit(root.item.id); } }
     }
 
     Rectangle {
@@ -107,6 +137,11 @@ export component AppWindow inherits Window {
     in-out property <bool> energy-saver: false;
     in-out property <string> import-text: "";
     in-out property <string> import-error: "";
+    in-out property <string> editor-id: "";
+    in-out property <string> editor-name: "";
+    in-out property <string> editor-json: "";
+    in-out property <string> editor-error: "";
+    in-out property <bool> editor-subscription: false;
     callback toggle-connection();
     callback select-profile(string);
     callback open-settings();
@@ -115,6 +150,8 @@ export component AppWindow inherits Window {
     callback save-app-settings(bool, bool, bool, bool);
     callback import-profile(string);
     callback ping-profile(string);
+    callback edit-profile(string);
+    callback save-profile(string, string, string);
 
     if root.current-page == 0: HorizontalBox {
         padding: 28px;
@@ -162,6 +199,11 @@ export component AppWindow inherits Window {
                         for item in root.locations: LocationCard {
                             item: item;
                             selected(id) => { root.select-profile(id); }
+                            edit(id) => {
+                                root.editor-error = "";
+                                root.current-page = 3;
+                                root.edit-profile(id);
+                            }
                         }
                         Rectangle {
                             visible: root.locations.length == 0;
@@ -436,6 +478,66 @@ export component AppWindow inherits Window {
                             width: 160px;
                             enabled: root.import-text != "";
                             clicked => { root.import-profile(root.import-text); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.current-page == 3: Rectangle {
+        background: Theme.background;
+        VerticalBox {
+            padding: 34px;
+            spacing: 22px;
+
+            HorizontalBox {
+                height: 52px;
+                spacing: 16px;
+                Button { text: "Назад"; width: 86px; clicked => { root.current-page = 0; } }
+                VerticalBox {
+                    spacing: 1px;
+                    Text { text: "Настройки локации"; color: Theme.text; font-size: 27px; font-weight: 650; }
+                    Text {
+                        text: root.editor-subscription
+                            ? "Локация из подписки — изменения могут быть заменены"
+                            : "Общие поля и полный совместимый JSON";
+                        color: root.editor-subscription ? Theme.accent : Theme.text-muted;
+                        font-size: 13px;
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: 26px;
+                background: Theme.surface;
+                VerticalBox {
+                    padding: 24px;
+                    spacing: 14px;
+                    Text { text: "Название"; color: Theme.text; font-size: 14px; font-weight: 650; }
+                    LineEdit { text <=> root.editor-name; height: 46px; }
+                    Text { text: "Полная конфигурация"; color: Theme.text; font-size: 14px; font-weight: 650; }
+                    TextEdit {
+                        text <=> root.editor-json;
+                        vertical-stretch: 1;
+                        wrap: no-wrap;
+                    }
+                    Text {
+                        visible: root.editor-error != "";
+                        text: root.editor-error;
+                        color: Theme.accent;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalBox {
+                        height: 48px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Сохранить";
+                            width: 150px;
+                            enabled: root.editor-json != "";
+                            clicked => { root.save-profile(root.editor-id, root.editor-name, root.editor-json); }
                         }
                     }
                 }

@@ -73,6 +73,83 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let weak = ui.as_weak();
         let backend = backend.clone();
+        ui.on_edit_profile(move |id| {
+            let Some(ui) = weak.upgrade() else { return };
+            let request = serde_json::json!({ "command": "get_profile", "id": id.as_str() });
+            let response = backend.command(&request.to_string());
+            match response_data(&response) {
+                Some(data) => {
+                    let location = data
+                        .get("location")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    let name = location
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    ui.set_editor_id(
+                        data.get("storageId")
+                            .and_then(Value::as_str)
+                            .unwrap_or(id.as_str())
+                            .into(),
+                    );
+                    ui.set_editor_name(name.into());
+                    ui.set_editor_json(
+                        serde_json::to_string_pretty(&location)
+                            .unwrap_or_else(|_| location.to_string())
+                            .into(),
+                    );
+                    ui.set_editor_subscription(
+                        data.get("isSubscription")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    );
+                    ui.set_editor_error("".into());
+                }
+                None => ui.set_editor_error(response_error(&response).into()),
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
+        ui.on_save_profile(move |id, name, json| {
+            let Some(ui) = weak.upgrade() else { return };
+            let mut location = match serde_json::from_str::<Value>(json.as_str()) {
+                Ok(value @ Value::Object(_)) => value,
+                Ok(_) => {
+                    ui.set_editor_error("Конфигурация должна быть JSON-объектом".into());
+                    return;
+                }
+                Err(error) => {
+                    ui.set_editor_error(format!("Некорректный JSON: {error}").into());
+                    return;
+                }
+            };
+            if let Some(object) = location.as_object_mut() {
+                object.insert("name".into(), name.to_string().into());
+            }
+            let request = serde_json::json!({
+                "command": "save_profile",
+                "id": id.as_str(),
+                "text": location.to_string(),
+            });
+            let response = backend.command(&request.to_string());
+            if response_ok(&response) {
+                ui.set_current_page(0);
+                ui.set_editor_error("".into());
+                refresh(&ui, backend.as_ref(), &state);
+            } else {
+                ui.set_editor_error(response_error(&response).into());
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
         let state = state.clone();
         ui.on_ping_profile(move |id| {
             let Some(ui) = weak.upgrade() else { return };
@@ -315,4 +392,13 @@ fn response_error(response: &str) -> String {
         .ok()
         .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
         .unwrap_or_else(|| "Не удалось сохранить настройки".into())
+}
+
+fn response_data(response: &str) -> Option<Value> {
+    let value = serde_json::from_str::<Value>(response).ok()?;
+    value
+        .get("ok")?
+        .as_bool()?
+        .then(|| value.get("data").cloned())
+        .flatten()
 }
