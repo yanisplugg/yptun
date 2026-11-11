@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import WidgetKit
 import YPtunShared
+import YPtunTunnelSupport
 
 private struct StatusEntry: TimelineEntry {
     let date: Date
@@ -9,17 +10,25 @@ private struct StatusEntry: TimelineEntry {
 }
 
 private struct StatusProvider: TimelineProvider {
+    private func entry() -> StatusEntry {
+        let raw = try? AppleTunnelStore.readText(AppleTunnelStore.statusFileName)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return StatusEntry(
+            date: .now,
+            state: raw.flatMap(VPNConnectionState.init(rawValue:)) ?? .disconnected
+        )
+    }
+
     func placeholder(in context: Context) -> StatusEntry {
         StatusEntry(date: .now, state: .disconnected)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (StatusEntry) -> Void) {
-        completion(StatusEntry(date: .now, state: .disconnected))
+        completion(entry())
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<StatusEntry>) -> Void) {
-        let entry = StatusEntry(date: .now, state: .disconnected)
-        completion(Timeline(entries: [entry], policy: .never))
+        completion(Timeline(entries: [entry()], policy: .after(.now.addingTimeInterval(60))))
     }
 }
 
@@ -30,10 +39,19 @@ private struct StatusWidgetView: View {
         VStack(alignment: .leading) {
             Text(YPtunIdentity.displayName)
                 .font(.headline)
-            Text(entry.state.rawValue.capitalized)
+            Text(statusTitle)
                 .font(.caption)
         }
         .containerBackground(.fill.tertiary, for: .widget)
+    }
+
+    private var statusTitle: String {
+        switch entry.state {
+        case .disconnected: "Не подключено"
+        case .connecting: "Подключение"
+        case .connected: "Защищено"
+        case .disconnecting: "Отключение"
+        }
     }
 }
 
@@ -44,8 +62,8 @@ private struct StatusWidget: Widget {
         StaticConfiguration(kind: kind, provider: StatusProvider()) { entry in
             StatusWidgetView(entry: entry)
         }
-        .configurationDisplayName("YPtun Status")
-        .description("Shows the current VPN connection state.")
+        .configurationDisplayName("Статус YPtun")
+        .description("Показывает состояние VPN-подключения.")
         .supportedFamilies([.systemSmall])
     }
 }

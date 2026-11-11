@@ -186,6 +186,20 @@ pub struct AppleAmneziaWgRuntimePlan {
     pub listen_address: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AppleAuxiliaryRuntimeKind {
+    FreeTurn,
+    Wdtt,
+    MasterDns,
+    OpenFlux,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleAuxiliaryRuntimePlan {
+    pub kind: AppleAuxiliaryRuntimeKind,
+    pub options_json: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AppleNativeRuntimePlan {
     pub display_name: String,
@@ -194,6 +208,7 @@ pub struct AppleNativeRuntimePlan {
     pub olcrtc: Option<AppleOlcRtcRuntimePlan>,
     pub amnezia_wg: Option<AppleAmneziaWgRuntimePlan>,
     pub turnable: Option<AppleTurnableRuntimePlan>,
+    pub auxiliary: Vec<AppleAuxiliaryRuntimePlan>,
     pub proxy: Option<AppleProxyRuntimePlan>,
 }
 
@@ -461,6 +476,27 @@ fn local_socks_profile(name: &str, port: i32) -> ProxyProfile {
     }
 }
 
+fn openflux_session_specs(config: &yptun_core::transports::OpenFluxConfig) -> String {
+    if !config.is_session() {
+        return String::new();
+    }
+    serde_json::json!({
+        "context": config.context,
+        "transports": config.carriers.iter().map(|carrier| serde_json::json!({
+            "name": carrier.kind,
+            "type": carrier.kind,
+            "url": carrier.url,
+            "priority": carrier.priority,
+            "params": if carrier.dial.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({ "dial": carrier.dial })
+            },
+        })).collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
 /// Complete native execution plan for the first in-process Apple runtimes.
 ///
 /// Rust owns all model/config decisions. Swift applies the tunnel settings and invokes Coreapi in
@@ -475,6 +511,7 @@ pub fn apple_native_runtime_plan(
     app_behavior_json: String,
     socks_port: i32,
     device_id: String,
+    runtime_directory: String,
     log_file_path: String,
     cache_file_path: String,
 ) -> Result<AppleNativeRuntimePlan, FfiError> {
@@ -512,6 +549,7 @@ pub fn apple_native_runtime_plan(
 
     let mut amnezia_wg = None;
     let mut turnable = None;
+    let mut auxiliary = Vec::new();
 
     let proxy = match location.engine {
         EngineType::Stealth => None,
@@ -689,6 +727,134 @@ pub fn apple_native_runtime_plan(
                 config,
             })
         }
+        EngineType::VkTurn => {
+            let vk = location
+                .vkturn
+                .as_ref()
+                .ok_or_else(|| FfiError::Invalid("VK-TURN is not configured".into()))?;
+            if vk.uses_csqtt() {
+                return Err(FfiError::Unsupported(
+                    "CSQTT is not connected to the native Apple runtime yet".into(),
+                ));
+            }
+            if vk.uses_wdtt() {
+                auxiliary.push(AppleAuxiliaryRuntimePlan {
+                    kind: AppleAuxiliaryRuntimeKind::Wdtt,
+                    options_json: serde_json::json!({
+                        "options_json": vk.wdtt_core_options_json(
+                            &format!("127.0.0.1:{}", vk.listen_port),
+                            &device_id,
+                        )
+                    })
+                    .to_string(),
+                });
+                return Err(FfiError::Unsupported(
+                    "qWDTT requires its negotiated WireGuard config before the routing core starts"
+                        .into(),
+                ));
+            }
+            auxiliary.push(AppleAuxiliaryRuntimePlan {
+                kind: AppleAuxiliaryRuntimeKind::FreeTurn,
+                options_json: serde_json::json!({
+                    "uri": vk.uri,
+                    "listen_addr": format!("127.0.0.1:{}", vk.listen_port),
+                    "vk_link": vk.vk_link,
+                    "streams": if vk.streams <= 0 { 2 } else { vk.streams.clamp(1, 3) },
+                })
+                .to_string(),
+            });
+            let profile = location.proxy.as_ref().ok_or_else(|| {
+                FfiError::Invalid("VK-TURN requires its WireGuard exit profile".into())
+            })?;
+            let config = singbox_config::build(
+                profile,
+                &SingBoxOptions {
+                    listen_port: socks_port,
+                    listen_host: "127.0.0.1".into(),
+                    log_level: "warn".into(),
+                    routing: routing.clone(),
+                    traffic: TrafficSettings {
+                        domain_strategy: "ipv4_only".into(),
+                        ..traffic.clone()
+                    },
+                    advanced: location.advanced.clone(),
+                    routing_profile: routing_profile.clone(),
+                    singbox_geosite_base: profiles.singbox_geosite_base.clone(),
+                    singbox_geoip_base: profiles.singbox_geoip_base.clone(),
+                    block_quic: false,
+                    sniff_override_destination: true,
+                    fake_dns_spec: location.fake_dns.clone(),
+                    prefer_tcp_remote_dns: true,
+                    log_file_path: (!log_file_path.trim().is_empty()).then_some(log_file_path),
+                    cache_file_path: (!cache_file_path.trim().is_empty())
+                        .then_some(cache_file_path),
+                    ..SingBoxOptions::default()
+                },
+            )
+            .map_err(|error| FfiError::Invalid(error.to_string()))?;
+            Some(AppleProxyRuntimePlan {
+                kind: AppleProxyRuntimeKind::SingBox,
+                listen_port: socks_port,
+                config,
+            })
+        }
+        EngineType::MasterDns => {
+            let config = location
+                .master_dns
+                .as_ref()
+                .ok_or_else(|| FfiError::Invalid("MasterDNS is not configured".into()))?;
+            if config.has_proxy() {
+                return Err(FfiError::Unsupported(
+                    "MasterDNS proxy chaining is not connected to the native Apple runtime yet"
+                        .into(),
+                ));
+            }
+            auxiliary.push(AppleAuxiliaryRuntimePlan {
+                kind: AppleAuxiliaryRuntimeKind::MasterDns,
+                options_json: serde_json::json!({
+                    "work_dir": format!("{runtime_directory}/masterdns"),
+                    "domains": config.domains,
+                    "key": config.encryption_key,
+                    "encryption_method": config.encryption_method,
+                    "resolvers": config.resolvers,
+                    "listen_addr": format!("127.0.0.1:{socks_port}"),
+                    "balancing_strategy": config.balancing_strategy,
+                    "packet_duplication": config.packet_duplication,
+                    "upload_compression": 0,
+                    "download_compression": 0,
+                })
+                .to_string(),
+            });
+            None
+        }
+        EngineType::OpenFlux => {
+            let config = location
+                .open_flux
+                .as_ref()
+                .ok_or_else(|| FfiError::Invalid("OpenFlux is not configured".into()))?;
+            if config.has_proxy() {
+                return Err(FfiError::Unsupported(
+                    "OpenFlux proxy chaining is not connected to the native Apple runtime yet"
+                        .into(),
+                ));
+            }
+            auxiliary.push(AppleAuxiliaryRuntimePlan {
+                kind: AppleAuxiliaryRuntimeKind::OpenFlux,
+                options_json: serde_json::json!({
+                    "transport": config.transport,
+                    "url": config.doc_url,
+                    "secret": config.secret,
+                    "max_token": config.max_token,
+                    "max_uid": config.max_uid,
+                    "avito_cookies": config.avito_cookies,
+                    "session_specs_json": openflux_session_specs(config),
+                    "listen_addr": format!("127.0.0.1:{socks_port}"),
+                    "debug": config.debug,
+                })
+                .to_string(),
+            });
+            None
+        }
         other => {
             return Err(FfiError::Unsupported(format!(
                 "Native Apple runtime for {other:?} is not connected yet"
@@ -713,6 +879,7 @@ pub fn apple_native_runtime_plan(
         olcrtc,
         amnezia_wg,
         turnable,
+        auxiliary,
         proxy,
     })
 }

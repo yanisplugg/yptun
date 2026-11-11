@@ -74,8 +74,8 @@ public struct ConnectionHomeView: View {
         .navigationTitle("YPtun")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.showPendingFeature("Логи")
+                NavigationLink {
+                    TunnelLogView()
                 } label: {
                     Label("Логи", systemImage: "text.alignleft")
                 }

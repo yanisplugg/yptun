@@ -15,7 +15,11 @@ public struct SettingsOverviewView: View {
                 destination("Настройки трафика", symbol: "point.3.connected.trianglepath.dotted")
             }
             Section("Приложение") {
-                destination("Логи", symbol: "text.alignleft")
+                NavigationLink {
+                    TunnelLogView()
+                } label: {
+                    Label("Логи", systemImage: "text.alignleft")
+                }
                 destination("Информация о сессии", symbol: "info.circle")
                 destination("Основные настройки", symbol: "gearshape")
             }

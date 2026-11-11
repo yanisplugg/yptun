@@ -31,6 +31,7 @@ public enum AppleTunnelStore {
     public static let errorFileName = "tunnel_error.txt"
     public static let logFileName = "tunnel.log"
     public static let cacheFileName = "singbox_cache.db"
+    public static let statusFileName = "tunnel_status.txt"
 
     public static func directory(fileManager: FileManager = .default) throws -> URL {
         let appGroupIdentifier: String
@@ -76,6 +77,17 @@ public enum AppleTunnelStore {
 
     public static func writeText(_ value: String, to fileName: String) throws {
         try write(Data(value.utf8), to: fileName)
+    }
+
+    public static func appendLog(_ line: String) throws {
+        let fileURL = try url(for: logFileName)
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            try write(Data(), to: logFileName)
+        }
+        let handle = try FileHandle(forWritingTo: fileURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\(line)\n".utf8))
     }
 
     public static func loadRequest() throws -> AppleTunnelRequest {

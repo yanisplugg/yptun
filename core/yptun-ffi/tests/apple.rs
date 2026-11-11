@@ -293,6 +293,7 @@ fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() 
         r#"{"globalProxyCore":"singbox"}"#.into(),
         10_808,
         "device".into(),
+        "runtime".into(),
         "tunnel.log".into(),
         "cache.db".into(),
     )
@@ -318,6 +319,7 @@ fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() 
         String::new(),
         10_808,
         "device".into(),
+        String::new(),
         String::new(),
         String::new(),
     )
@@ -347,6 +349,7 @@ fn native_runtime_plan_builds_standard_chain_and_stealth_without_swift_models() 
         "device".into(),
         String::new(),
         String::new(),
+        String::new(),
     )
     .unwrap();
     assert_eq!(plan.olcrtc.as_ref().unwrap().listen_port, 10_809);
@@ -373,6 +376,7 @@ fn native_runtime_plan_keeps_mieru_link_for_the_isolated_runtime() {
         String::new(),
         10_808,
         "device".into(),
+        String::new(),
         String::new(),
         String::new(),
     )
@@ -408,4 +412,88 @@ fn apple_import_adds_mieru_without_dropping_existing_locations() {
     assert_eq!(bundle["locations"].as_array().unwrap().len(), 2);
     assert_eq!(bundle["active_location_id"], "existing");
     assert!(imported.normalized_bundle_json.contains("mieru_config"));
+}
+
+#[test]
+fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
+    let turnable = serde_json::json!({
+        "name": "Turnable",
+        "engine": "vkturn",
+        "vkturn": {
+            "core": "turnable",
+            "listen_port": 9000,
+            "turnable_config": "turnable://user:call@vk.com/wireguard?type=relay"
+        },
+        "proxy": {
+            "type": "wireguard",
+            "rawOutbound": "{\"type\":\"wireguard\",\"server\":\"127.0.0.1\",\"server_port\":9000,\"local_address\":[\"10.9.0.2/32\"],\"private_key\":\"K\",\"peer_public_key\":\"P\"}"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        turnable.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert!(plan.turnable.is_some());
+    assert_eq!(
+        plan.proxy.as_ref().unwrap().kind,
+        AppleProxyRuntimeKind::SingBox
+    );
+
+    let master_dns = serde_json::json!({
+        "name": "MasterDNS",
+        "engine": "masterdns",
+        "masterdns": {
+            "domains": "t.example",
+            "key": "secret",
+            "resolvers": "1.1.1.1"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        master_dns.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert_eq!(plan.auxiliary.len(), 1);
+    assert!(plan.proxy.is_none());
+
+    let open_flux = serde_json::json!({
+        "name": "OpenFlux",
+        "engine": "openflux",
+        "openflux": {
+            "transport": "yandex",
+            "doc_url": "https://docs.yandex.ru/docs/view?url=test"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        open_flux.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert_eq!(plan.auxiliary.len(), 1);
+    assert!(plan.proxy.is_none());
 }

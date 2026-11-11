@@ -11,6 +11,7 @@ import Tun2SocksKit
 final class NativeTunnelRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private var running = false
+    private var pumpingLogs = false
 
     func start(
         provider: NEPacketTunnelProvider,
@@ -20,6 +21,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             let request = try AppleTunnelStore.loadRequest()
             let logURL = try AppleTunnelStore.url(for: AppleTunnelStore.logFileName)
             let cacheURL = try AppleTunnelStore.url(for: AppleTunnelStore.cacheFileName)
+            let runtimeDirectory = try AppleTunnelStore.directory()
             let plan = try appleNativeRuntimePlan(
                 locationJson: request.locationJSON,
                 trafficJson: request.trafficJSON,
@@ -28,10 +30,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 appBehaviorJson: request.appBehaviorJSON,
                 socksPort: 10_808,
                 deviceId: request.deviceID,
+                runtimeDirectory: runtimeDirectory.path,
                 logFilePath: logURL.path,
                 cacheFilePath: cacheURL.path
             )
 
+            startLogPump()
             try startEngines(plan)
             provider.setTunnelNetworkSettings(networkSettings(from: plan.tunnel)) { [weak self] error in
                 guard error == nil else {
@@ -43,6 +47,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 do {
                     try self?.startBridge(yaml: plan.bridge.yaml)
                     self?.setRunning(true)
+                    try? AppleTunnelStore.writeText(
+                        VPNConnectionState.connected.rawValue,
+                        to: AppleTunnelStore.statusFileName
+                    )
                     completion(nil)
                 } catch {
                     self?.stop()
@@ -58,16 +66,22 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 
     func stop() {
+        setPumpingLogs(false)
         Socks5Tunnel.quit()
         CoreapiSbStop()
         CoreapiXrayStop()
         CoreapiAwgStop()
         CoreapiTurnableStop()
         CoreapiMieruStop()
+        CoreapiAppleEngineStopAll()
         CoreapiRtcStopPool()
         var ignored: NSError?
         _ = CoreapiRtcStop(&ignored)
         setRunning(false)
+        try? AppleTunnelStore.writeText(
+            VPNConnectionState.disconnected.rawValue,
+            to: AppleTunnelStore.statusFileName
+        )
     }
 
     func handle(message: String) -> String {
@@ -91,6 +105,17 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         if let turnable = plan.turnable {
             try callCore {
                 CoreapiTurnableStart(turnable.config, turnable.listenAddress, $0)
+            }
+        }
+        for auxiliary in plan.auxiliary {
+            let kind: String = switch auxiliary.kind {
+            case .freeTurn: "freeturn"
+            case .wdtt: "wdtt"
+            case .masterDns: "masterdns"
+            case .openFlux: "openflux"
+            }
+            try callCore {
+                CoreapiAppleEngineStart(kind, auxiliary.optionsJson, $0)
             }
         }
         if let proxy = plan.proxy {
@@ -224,6 +249,23 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
     private func record(error: Error) {
         try? AppleTunnelStore.writeText(error.localizedDescription, to: AppleTunnelStore.errorFileName)
+        try? AppleTunnelStore.writeText(
+            VPNConnectionState.disconnected.rawValue,
+            to: AppleTunnelStore.statusFileName
+        )
+    }
+
+    private func startLogPump() {
+        setPumpingLogs(true)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            while self?.shouldPumpLogs == true {
+                let line = CoreapiPollLog(1_000)
+                guard !line.isEmpty,
+                      !line.hasPrefix("openflux: <-"),
+                      !line.hasPrefix("openflux: ->") else { continue }
+                try? AppleTunnelStore.appendLog(line)
+            }
+        }
     }
 
     private var isRunning: Bool {
@@ -237,6 +279,18 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         running = value
         lock.unlock()
     }
+
+    private var shouldPumpLogs: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pumpingLogs
+    }
+
+    private func setPumpingLogs(_ value: Bool) {
+        lock.lock()
+        pumpingLogs = value
+        lock.unlock()
+    }
 }
 
 #else
@@ -248,6 +302,10 @@ final class NativeTunnelRuntime {
     ) {
         let error = NativeTunnelRuntimeError.coreFrameworkUnavailable
         try? AppleTunnelStore.writeText(error.localizedDescription, to: AppleTunnelStore.errorFileName)
+        try? AppleTunnelStore.writeText(
+            VPNConnectionState.disconnected.rawValue,
+            to: AppleTunnelStore.statusFileName
+        )
         completion(error)
     }
 

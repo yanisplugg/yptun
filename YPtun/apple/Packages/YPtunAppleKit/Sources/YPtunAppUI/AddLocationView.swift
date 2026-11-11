@@ -1,10 +1,13 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AddLocationView: View {
     @Bindable var model: YPtunApplicationModel
     @Environment(\.dismiss) private var dismiss
     @State private var importText = ""
     @State private var isImporting = false
+    @State private var isFileImporterPresented = false
+    @State private var isScannerPresented = false
 
     var body: some View {
         NavigationStack {
@@ -18,12 +21,7 @@ struct AddLocationView: View {
                         importText = values.joined(separator: "\n")
                     }
                     Button {
-                        isImporting = true
-                        Task {
-                            let imported = await model.importLocations(from: importText)
-                            isImporting = false
-                            if imported { dismiss() }
-                        }
+                        performImport(importText)
                     } label: {
                         if isImporting {
                             ProgressView()
@@ -37,11 +35,25 @@ struct AddLocationView: View {
                     .disabled(importText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImporting)
                 }
                 Section("Быстро") {
-                    option("Сканировать QR-код", symbol: "qrcode.viewfinder")
-                    option("Импортировать файл", symbol: "doc.badge.plus")
+                    #if os(iOS)
+                    Button {
+                        isScannerPresented = true
+                    } label: {
+                        Label("Сканировать QR-код", systemImage: "qrcode.viewfinder")
+                    }
+                    #endif
+                    Button {
+                        isFileImporterPresented = true
+                    } label: {
+                        Label("Импортировать файл", systemImage: "doc.badge.plus")
+                    }
                 }
                 Section("Настроить") {
-                    option("Добавить подписку", symbol: "dot.radiowaves.left.and.right")
+                    Button {
+                        importText = "https://"
+                    } label: {
+                        Label("Добавить подписку", systemImage: "dot.radiowaves.left.and.right")
+                    }
                     option("Создать вручную", symbol: "slider.horizontal.3")
                     option("Найти бесплатные серверы", symbol: "sparkle.magnifyingglass")
                 }
@@ -53,6 +65,44 @@ struct AddLocationView: View {
                 }
             }
         }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: [.json, .plainText, .data]
+        ) { result in
+            do {
+                let url = try result.get()
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                let data = try Data(contentsOf: url)
+                guard let text = String(data: data, encoding: .utf8) else {
+                    throw CocoaError(.fileReadInapplicableStringEncoding)
+                }
+                importText = text
+                performImport(text)
+            } catch {
+                model.presentedNotice = YPtunNotice(
+                    title: "Не удалось прочитать файл",
+                    message: error.localizedDescription
+                )
+            }
+        }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $isScannerPresented) {
+            NavigationStack {
+                QRCodeScannerView { value in
+                    isScannerPresented = false
+                    importText = value
+                    performImport(value)
+                }
+                .ignoresSafeArea()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Закрыть") { isScannerPresented = false }
+                    }
+                }
+            }
+        }
+        #endif
     }
 
     private func option(_ title: String, symbol: String) -> some View {
@@ -61,6 +111,15 @@ struct AddLocationView: View {
             model.showPendingFeature(title)
         } label: {
             Label(title, systemImage: symbol)
+        }
+    }
+
+    private func performImport(_ text: String) {
+        isImporting = true
+        Task {
+            let imported = await model.importLocations(from: text)
+            isImporting = false
+            if imported { dismiss() }
         }
     }
 }

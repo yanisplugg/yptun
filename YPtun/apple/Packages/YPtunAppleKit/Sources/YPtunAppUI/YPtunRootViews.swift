@@ -26,6 +26,9 @@ public struct YPtunIOSRootView: View {
         .tint(Color(red: 59.0 / 255, green: 142.0 / 255, blue: 247.0 / 255))
         .toolbarBackground(.ultraThinMaterial, for: .tabBar)
         .task { await model.bootstrap() }
+        .onOpenURL { url in
+            Task { _ = await model.importLocations(from: url.absoluteString) }
+        }
     }
 }
 #endif
@@ -59,6 +62,9 @@ public struct YPtunMacRootView: View {
         }
         .tint(Color(red: 59.0 / 255, green: 142.0 / 255, blue: 247.0 / 255))
         .task { await model.bootstrap() }
+        .onOpenURL { url in
+            Task { _ = await model.importLocations(from: url.absoluteString) }
+        }
     }
 }
 
@@ -80,8 +86,16 @@ public struct YPtunMenuBarView: View {
         Button("Открыть YPtun") {
             openWindow(id: "main")
         }
-        Button(model.primaryActionTitle) {}
-            .disabled(true)
+        Button(model.primaryActionTitle, action: model.requestPrimaryAction)
+            .disabled(model.isBootstrapping || model.connectionState == .disconnecting)
+        if let notice = model.presentedNotice {
+            Divider()
+            Text(notice.title)
+                .font(.caption.weight(.semibold))
+            Text(notice.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 #endif

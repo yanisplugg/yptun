@@ -103,6 +103,8 @@ targets:
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
+      - package: YPtunAppleKit
+        product: YPtunTunnelSupport
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
 
