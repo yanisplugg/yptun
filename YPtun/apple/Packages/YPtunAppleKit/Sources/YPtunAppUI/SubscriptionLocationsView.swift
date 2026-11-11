@@ -1,4 +1,5 @@
 import SwiftUI
+import YPtunShared
 
 struct SubscriptionLocationsView: View {
     @Bindable var model: YPtunApplicationModel
