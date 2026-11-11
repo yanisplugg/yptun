@@ -86,6 +86,27 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let backend = backend.clone();
         let state = state.clone();
+        ui.on_delete_profile(move |id| {
+            let Some(ui) = weak.upgrade() else { return };
+            let request = serde_json::json!({ "command": "delete", "id": id.as_str() });
+            let response = backend.command(&request.to_string());
+            if response_ok(&response) {
+                ui.set_current_page(0);
+                ui.set_editor_id("".into());
+                ui.set_editor_name("".into());
+                ui.set_editor_json("".into());
+                refresh(&ui, backend.as_ref(), &state);
+            } else {
+                ui.set_current_page(3);
+                ui.set_editor_error(response_error(&response).into());
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
         ui.on_refresh_subscription(move |url| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({

@@ -204,6 +204,7 @@ export component AppWindow inherits Window {
     callback ping-profile(string);
     callback edit-profile(string);
     callback save-profile(string, string, string);
+    callback delete-profile(string);
     callback refresh-subscription(string);
 
     if root.current-page == 0: HorizontalBox {
@@ -566,6 +567,12 @@ export component AppWindow inherits Window {
                     }
                     HorizontalBox {
                         height: 48px;
+                        Button {
+                            visible: root.editor-id != "";
+                            text: "Удалить";
+                            width: 120px;
+                            clicked => { root.current-page = 4; }
+                        }
                         Rectangle { horizontal-stretch: 1; }
                         Button {
                             text: "Импортировать";
@@ -633,6 +640,44 @@ export component AppWindow inherits Window {
                             enabled: root.editor-json != "";
                             clicked => { root.save-profile(root.editor-id, root.editor-name, root.editor-json); }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.current-page == 4: Rectangle {
+        background: #b0000000;
+        Rectangle {
+            width: 480px;
+            height: 244px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 28px;
+            background: Theme.surface-high;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 9px;
+            drop-shadow-color: #70000000;
+            VerticalBox {
+                padding: 28px;
+                spacing: 14px;
+                Text { text: "Удалить конфигурацию?"; color: Theme.text; font-size: 24px; font-weight: 650; }
+                Text {
+                    text: "«" + root.editor-name + "» будет удалена с этого устройства.";
+                    color: Theme.text-muted;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalBox {
+                    height: 48px;
+                    spacing: 10px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: "Отмена"; width: 112px; clicked => { root.current-page = 3; } }
+                    Button {
+                        text: "Удалить";
+                        width: 120px;
+                        clicked => { root.delete-profile(root.editor-id); }
                     }
                 }
             }
