@@ -90,7 +90,7 @@ fun AddConfigurationSheet(
 
                 AddSheetAction(
                     title = s.pasteLink,
-                    value = "vless/vmess/trojan/ss, olcrtc, sub URL (несколько — по одной в строке), sing-box JSON",
+                    value = "Ссылки, Xray/sing-box JSON, AmneziaWG и OpenVPN .ovpn",
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )

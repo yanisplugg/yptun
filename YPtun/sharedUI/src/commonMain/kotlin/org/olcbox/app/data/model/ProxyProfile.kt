@@ -290,6 +290,8 @@ data class ProxyProfile(
         const val TYPE_HYSTERIA2 = "hysteria2"
         const val TYPE_NAIVE = "naive"
         const val TYPE_MIERU = "mieru"
+        /** sing-box 1.14 OpenVPN client endpoint (stored in [rawOutbound]). */
+        const val TYPE_OPENVPN = "openvpn-client"
 
         const val NETWORK_TCP = "tcp"
         const val NETWORK_WS = "ws"

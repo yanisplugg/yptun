@@ -70,7 +70,9 @@ object SingBoxConfig {
     )
 
     /** Raw-outbound types that do not support sing-box smux and must not get a multiplex block. */
-    private val RAW_OUTBOUND_NO_MUX = setOf("wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks", "naive")
+    private val RAW_OUTBOUND_NO_MUX = setOf(
+        "wireguard", "openvpn-client", "hysteria2", "hysteria", "tuic", "endpoint", "socks", "naive"
+    )
 
     private val json = Json { prettyPrint = true }
 
@@ -389,65 +391,58 @@ object SingBoxConfig {
                 }
             }
 
-            // WireGuard moved from an `outbound` (removed in sing-box 1.13.0) to a top-level
-            // `endpoints` entry, referenced by tag. Build them here so the outbounds below can detour
-            // to them and the endpoints array is emitted as a sibling of `outbounds`.
+            // WireGuard (since 1.13) and OpenVPN (since 1.14) are top-level `endpoints`, not
+            // `outbounds`. Build every endpoint first; route/DNS can reference its tag exactly like an
+            // outbound and ordinary cascade hops may use it as their detour.
             val wgBaseEndpoint = wireguardBase?.let {
                 buildWireguardEndpoint(it, WG_BASE_TAG, autoDetectInterface)
             }
-            val mainIsWireguard = profile.type == "wireguard"
             val second = secondProfile?.takeIf { it.isComplete() }
-            val secondIsWireguard = second?.type == "wireguard"
-            val wgExitEndpoint = when {
-                secondIsWireguard -> buildWireguardEndpoint(second, PROXY_TAG, autoDetectInterface, detour = PROXY_BASE_TAG)
-                mainIsWireguard -> buildWireguardEndpoint(profile, PROXY_TAG, autoDetectInterface)
+            val baseDetour = when {
+                wgBaseEndpoint != null -> WG_BASE_TAG
+                olcrtcChainPort != null -> OLCRTC_TAG
                 else -> null
+            }
+            val mainTag = if (second != null) PROXY_BASE_TAG else PROXY_TAG
+            val mainEndpoint = buildNativeEndpoint(
+                profile = profile,
+                tag = mainTag,
+                autoDetectInterface = autoDetectInterface,
+                detour = baseDetour,
+            )
+            val secondEndpoint = second?.let {
+                buildNativeEndpoint(
+                    profile = it,
+                    tag = PROXY_TAG,
+                    autoDetectInterface = autoDetectInterface,
+                    detour = PROXY_BASE_TAG,
+                )
             }
 
             putJsonArray("outbounds") {
-                // The main proxy dials through the WG base (VK-TURN) when present, else olcRTC (Chain).
-                val baseDetour = if (wgBaseEndpoint != null) WG_BASE_TAG else null
                 if (second != null) {
+                    // With a cascade the main hop is always `proxy-base`. It may itself be a native
+                    // endpoint (OpenVPN/WireGuard), in which case there is deliberately no outbound.
+                    if (mainEndpoint == null) {
+                        add(
+                            buildProxyOutbound(
+                                profile,
+                                chained = false,
+                                traffic = traffic,
+                                detourTagOverride = baseDetour,
+                                tag = PROXY_BASE_TAG
+                            )
+                        )
+                    }
                     if (warpRelay != null) {
                         // AWG WARP exit (Server mode): the exit is awgproxy's local SOCKS (tag PROXY_TAG, no
                         // detour — it is loopback); its UDP rides the main (tag PROXY_BASE_TAG) via the relay.
-                        add(
-                            buildProxyOutbound(
-                                profile,
-                                chained = olcrtcChainPort != null,
-                                traffic = traffic,
-                                detourTagOverride = baseDetour,
-                                tag = PROXY_BASE_TAG
-                            )
-                        )
                         add(buildProxyOutbound(second, chained = false, traffic = traffic, tag = PROXY_TAG))
-                    } else if (secondIsWireguard) {
-                        // WARP (WireGuard) as SECOND proxy (Server mode): traffic exits via the WireGuard endpoint
-                        // (tag PROXY_TAG, added to endpoints below with detour = PROXY_BASE_TAG). The main proxy
-                        // (tag PROXY_BASE_TAG) dials through olcRTC/WG base or direct.
-                        add(
-                            buildProxyOutbound(
-                                profile,
-                                chained = olcrtcChainPort != null,
-                                traffic = traffic,
-                                detourTagOverride = baseDetour,
-                                tag = PROXY_BASE_TAG
-                            )
-                        )
-                    } else {
+                    } else if (secondEndpoint == null) {
                         // Cascade: traffic exits via the SECOND proxy (tag PROXY_TAG), which dials THROUGH the
                         // main (PROXY_BASE_TAG); the main dials through olcRTC/WG. Keeping the second as
                         // PROXY_TAG means routing / DNS / route.final (all → PROXY_TAG) transparently use the
                         // real exit, so nothing else needs to know about the extra hop.
-                        add(
-                            buildProxyOutbound(
-                                profile,
-                                chained = olcrtcChainPort != null,
-                                traffic = traffic,
-                                detourTagOverride = baseDetour,
-                                tag = PROXY_BASE_TAG
-                            )
-                        )
                         add(
                             buildProxyOutbound(
                                 second,
@@ -459,12 +454,12 @@ object SingBoxConfig {
                             )
                         )
                     }
-                } else if (!mainIsWireguard) {
+                } else if (mainEndpoint == null) {
                     // Single hop: the main proxy IS the exit (tag PROXY_TAG), dialing through olcRTC/WG.
                     add(
                         buildProxyOutbound(
                             profile,
-                            chained = olcrtcChainPort != null,
+                            chained = false,
                             traffic = traffic,
                             detourTagOverride = baseDetour,
                             advanced = advanced,
@@ -472,7 +467,7 @@ object SingBoxConfig {
                         )
                     )
                 }
-                // else: the main IS WireGuard — its exit is the `endpoints` entry tagged PROXY_TAG.
+                // else: the main is an OpenVPN/WireGuard endpoint tagged PROXY_TAG.
                 // olcRTC chain detour: the main proxy dials through this local SOCKS.
                 if (olcrtcChainPort != null) {
                     add(olcrtcSocksOutbound(OLCRTC_TAG, olcrtcChainPort, olcrtcChainUser, olcrtcChainPass))
@@ -501,10 +496,9 @@ object SingBoxConfig {
                 }
             }
 
-            // WireGuard endpoints (sing-box 1.13 replacement for the removed wireguard outbound).
-            val wgEndpoints = listOfNotNull(wgExitEndpoint, wgBaseEndpoint)
-            if (wgEndpoints.isNotEmpty()) {
-                putJsonArray("endpoints") { wgEndpoints.forEach { add(it) } }
+            val endpoints = listOfNotNull(secondEndpoint, mainEndpoint, wgBaseEndpoint)
+            if (endpoints.isNotEmpty()) {
+                putJsonArray("endpoints") { endpoints.forEach { add(it) } }
             }
 
             // A sing-box JSON subscription carries its OWN `route` (normalized onto our tags at import
@@ -791,7 +785,7 @@ object SingBoxConfig {
                 // through) a WireGuard endpoint fails with "WireGuard is not ready yet" and aborts the whole
                 // core (VK-TURN, #56). Those tunnels fetch over `direct`; the cache_file keeps the sets for later starts.
                 val ruleSetDetour =
-                    if (wireguardBase != null || mainIsWireguard) "direct" else SingBoxRouting.RULE_SET_DOWNLOAD_TAG
+                    if (wireguardBase != null || mainEndpoint != null) "direct" else SingBoxRouting.RULE_SET_DOWNLOAD_TAG
                 val mergedRuleSets = buildList {
                     // Rule-sets the embedded routing references (remote .srs) must be declared too.
                     embeddedRoute?.get("rule_set")
@@ -1112,6 +1106,39 @@ object SingBoxConfig {
     private fun isLoopbackHost(host: String): Boolean {
         val h = host.trim().trim('[', ']').lowercase()
         return h == "localhost" || h == "::1" || h.startsWith("127.")
+    }
+
+    /** Native tunnel protocols represented by top-level sing-box `endpoints`, never by outbounds. */
+    private fun buildNativeEndpoint(
+        profile: ProxyProfile,
+        tag: String,
+        autoDetectInterface: Boolean,
+        detour: String? = null,
+    ): JsonObject? = when (profile.type) {
+        "wireguard" -> buildWireguardEndpoint(profile, tag, autoDetectInterface, detour)
+        ProxyProfile.TYPE_OPENVPN -> buildOpenVpnEndpoint(profile, tag, detour)
+        else -> null
+    }
+
+    /** Re-tags the imported `openvpn-client` JSON as a top-level endpoint. */
+    private fun buildOpenVpnEndpoint(
+        profile: ProxyProfile,
+        tag: String,
+        detour: String? = null,
+    ): JsonObject? {
+        val raw = profile.rawOutbound?.takeIf { it.isNotBlank() } ?: return null
+        val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != ProxyProfile.TYPE_OPENVPN) return null
+        return buildJsonObject {
+            obj.forEach { (key, value) ->
+                if (key != "tag" && key != "detour") put(key, value)
+            }
+            put("tag", tag)
+            // The app already owns the platform VPN/TUN. OpenVPN therefore runs as a userspace
+            // packet endpoint and exposes TCP/UDP flows to sing-box instead of creating another TUN.
+            if (obj["system"] == null) put("system", false)
+            if (detour != null) put("detour", detour)
+        }
     }
 
     private fun buildWireguardEndpoint(

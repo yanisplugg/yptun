@@ -439,7 +439,8 @@ fun LocationSettingsScreen(
                         }
                         // AmneziaWG/WG always runs on sing-box through awgproxy: no core to choose.
                         if ((config.engine == EngineType.Standard || config.engine == EngineType.Chain) &&
-                            !viewModel.isWireguardEngine
+                            !viewModel.isWireguardEngine &&
+                            listOfNotNull(config.proxy, config.proxy2).none { it.type == ProxyProfile.TYPE_OPENVPN }
                         ) {
                             SettingsCardDivider()
                             CoreRow(
@@ -4450,6 +4451,7 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
     ProxyProfile.TYPE_NAIVE -> "Naive"
     ProxyProfile.TYPE_MIERU -> "Mieru"
+    ProxyProfile.TYPE_OPENVPN -> "OpenVPN"
     else -> type.uppercase()
 }
 

@@ -49,7 +49,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
 }
 
 // --- sing-box checkout, consumed by the combined cores AAR below ---
-// Clone github.com/SagerNet/sing-box (pinned v1.14.0,
+// Clone github.com/SagerNet/sing-box (pinned v1.14.4,
 // see SingBoxEngine.kt which targets that PlatformInterface/CommandServer) next to this repo,
 // or set SINGBOX_REPO to its path.
 val singboxRepoPath = providers.environmentVariable("SINGBOX_REPO")
@@ -63,7 +63,7 @@ val singboxRepoDir = rootProject.file(singboxRepoPath.get())
 // with_naive_outbound adds the NaïveProxy client (matches upstream SFA); it statically links
 // Chromium cronet (libcronet.a, ~60 MB per ABI pre-strip) — drop the tag if size matters more.
 val libboxBuildTags =
-    "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_naive_outbound"
+    "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_naive_outbound,with_openvpn"
 
 // sing-box version embedded into libbox via ldflags (-X constant.Version); otherwise libbox.Version()
 // reports "unknown". Читается ИЗ вендоренного дерева (первый заголовок в docs/changelog.md), а не
@@ -151,9 +151,9 @@ val coresAndroidAarDependency = files(coresAndroidAarFile).builtBy(buildCoresAnd
 
 // iOS: every core through the flat kazcores/coreapi package (the same one the desktop DLL wraps), in
 // ONE gomobile framework linked by both the app (pings) and the packet-tunnel extension. macOS + Xcode
-// only. No with_gvisor (sing-box owns no TUN on iOS — hev does) and no with_naive_outbound (cronet
-// has no iOS build here yet).
-val coresIosBuildTags = "with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic"
+// only. OpenVPN's system:false endpoint needs gVisor even though sing-box does not own the platform
+// TUN itself. No with_naive_outbound (cronet has no iOS build here yet).
+val coresIosBuildTags = "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic,with_openvpn"
 val coresIosXcframework = layout.buildDirectory.dir("generated/cores/ios/Coreapi.xcframework")
 
 val buildCoresIosXcframework by tasks.registering(Exec::class) {

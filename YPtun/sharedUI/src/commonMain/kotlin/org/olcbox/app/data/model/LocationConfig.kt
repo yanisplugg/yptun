@@ -1024,6 +1024,9 @@ data class LocationConfig(
      * default. [globalCore]==Auto (the historical caller) keeps the original behaviour exactly.
      */
     fun resolvedCore(globalCore: ProxyCore = ProxyCore.Auto): ProxyCore = when {
+        // OpenVPN is a sing-box 1.14 endpoint, not an Xray outbound. This is absolute: even a stale
+        // stored Xray choice (or malformed legacy raw field) must not route it into Xray.
+        listOfNotNull(proxy, proxy2).any { it.type == ProxyProfile.TYPE_OPENVPN } -> ProxyCore.SingBox
         // A full raw Xray config can only be run by xray-core, regardless of the stored choice.
         !proxy?.rawXrayConfig.isNullOrBlank() -> ProxyCore.Xray
         // Explicit per-location override beats the global default.

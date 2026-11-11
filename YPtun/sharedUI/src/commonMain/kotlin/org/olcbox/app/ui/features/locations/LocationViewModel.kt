@@ -765,11 +765,13 @@ class LocationViewModel(
     }
 
     fun onCoreChanged(core: ProxyCore) {
-        // xhttp / FakeDNS configs can only run on xray-core: silently coerce a sing-box pick to Xray.
-        val effective = if (core == ProxyCore.SingBox && editingConfig.requiresXray()) {
-            ProxyCore.Xray
-        } else {
-            core
+        val effective = when {
+            // OpenVPN exists only as a sing-box 1.14 endpoint.
+            listOfNotNull(editingConfig.proxy, editingConfig.proxy2)
+                .any { it.type == ProxyProfile.TYPE_OPENVPN } -> ProxyCore.SingBox
+            // xhttp configs can only run on xray-core: coerce a sing-box pick to Xray.
+            core == ProxyCore.SingBox && editingConfig.requiresXray() -> ProxyCore.Xray
+            else -> core
         }
         editingConfig = editingConfig.copy(core = effective)
     }

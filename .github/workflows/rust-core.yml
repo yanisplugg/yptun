@@ -1,0 +1,73 @@
+name: Rust core
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - rust-core
+    paths:
+      - "core/**"
+      - ".github/workflows/rust-core.yml"
+  pull_request:
+    paths:
+      - "core/**"
+      - ".github/workflows/rust-core.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build-android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      ANDROID_NDK_VERSION: "28.2.13676358"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+
+      - name: Test workspace
+        working-directory: core
+        run: cargo test --workspace --locked
+
+      - name: Use preinstalled Android SDK
+        shell: bash
+        run: |
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned NDK and cargo-ndk
+        run: |
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Build Android libraries and Kotlin bindings
+        working-directory: core
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          bash scripts/build-android.sh
+
+      - name: Verify outputs
+        run: |
+          test -s core/build/android/jniLibs/arm64-v8a/libyptun_ffi.so
+          test -s core/build/android/jniLibs/armeabi-v7a/libyptun_ffi.so
+          test -s core/build/android/jniLibs/x86_64/libyptun_ffi.so
+          test -s core/build/android/kotlin/org/olcbox/app/core/yptun_ffi.kt
+          find core/build/android -maxdepth 5 -type f -print
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yptun-rust-android-${{ github.sha }}
+          path: core/build/android
+          if-no-files-found: error
+          retention-days: 14

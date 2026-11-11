@@ -991,12 +991,16 @@ object XrayConfig {
             val relayRule = buildJsonObject {
                 put("type", "field")
                 putJsonArray("inboundTag") { add(WARP_RELAY_IN_TAG) }
-                // A balanced JSON config has no single "main" path: preserve its load balancer for
-                // the encapsulated WARP UDP. Falling back to the first proxy keeps old single-node
-                // configs byte-for-byte compatible.
-                val balancerTag = proxyBalancerPlan.primaryTag
-                if (balancerTag != null) put("balancerTag", balancerTag)
-                else put("outboundTag", mainProxyTag)
+                // Pin the encapsulated WireGuard UDP flow to ONE concrete member of the config's
+                // catch-all balancer. Reusing a dynamic leastLoad/leastPing balancer here is unsafe:
+                // real subscriptions use `fallbackTag: block`, and before burstObservatory has its
+                // first result every WARP handshake packet is sent to that blackhole. A single WG
+                // flow cannot benefit from changing proxy nodes mid-session anyway.
+                val relayOutboundTag = proxyBalancerPlan.primaryTag
+                    ?.let(proxyBalancerPlan.selections::get)
+                    ?.firstOrNull()
+                    ?: mainProxyTag
+                put("outboundTag", relayOutboundTag)
             }
             val existingRules = (routingToWrite?.get("rules") as? JsonArray)?.toList() ?: emptyList()
             buildJsonObject {
