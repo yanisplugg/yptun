@@ -38,14 +38,16 @@ verify_module_map() {
 # Linking several Rust staticlibs into one Apple target otherwise exports a copy of Rust's std/core
 # from every archive. macOS rejects those duplicate symbols. Collapse each specialized archive into
 # one relocatable object, then keep only its C ABI global; internal cross-object references remain
-# valid because nmedit runs after the collapse.
+# valid because ld localizes symbols only after the collapse.
 hide_rust_symbols() {
   local input="$1"
   local output="$2"
   local exports="$3"
   local label="$4"
+  local sdk="$5"
+  local platform="$6"
+  local deployment_target="$7"
   local relocatable="$WORK/$label.o"
-  local edited="$WORK/$label-exported.o"
   local arch
   local sdk_path
   local sdk_version
@@ -56,23 +58,30 @@ hide_rust_symbols() {
     return 1
   fi
 
-  sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
-  sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+  sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
+  sdk_version="$(xcrun --sdk "$sdk" --show-sdk-version)"
 
-  rm -f "$relocatable" "$edited" "$output"
+  rm -f "$relocatable" "$output"
   xcrun ld -r \
     -arch "$arch" \
-    -platform_version macos "$MACOSX_DEPLOYMENT_TARGET" "$sdk_version" \
+    -platform_version "$platform" "$deployment_target" "$sdk_version" \
     -syslibroot "$sdk_path" \
     -all_load "$input" \
+    -exported_symbols_list "$exports" \
     -o "$relocatable"
-  xcrun nmedit -s "$exports" "$relocatable" -o "$edited"
-  xcrun libtool -static -o "$output" "$edited"
+  xcrun libtool -static -o "$output" "$relocatable"
 
   if xcrun nm -gUj "$output" | grep -Eq '^(__R|__ZN)'; then
     echo "Rust implementation symbols remain public in $output" >&2
     return 1
   fi
+
+  while IFS= read -r symbol; do
+    if ! xcrun nm -gUj "$output" | grep -Fxq "$symbol"; then
+      echo "Required C ABI symbol $symbol is missing from $output" >&2
+      return 1
+    fi
+  done < "$exports"
 }
 
 cat > "$WORK/SnolcCore.exports" <<'EOF'
@@ -95,16 +104,30 @@ build_snolc() {
   for target in "${TARGETS[@]}"; do
     cargo build --release --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target "$target"
   done
-  xcrun lipo -create \
+  hide_rust_symbols \
+    "$ROOT/snolc/target/aarch64-apple-ios/release/libsnolc_ffi.a" \
+    "$WORK/libsnolc-ios-arm64.a" "$WORK/SnolcCore.exports" snolc-ios-arm64 \
+    iphoneos ios "$IPHONEOS_DEPLOYMENT_TARGET"
+  hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-ios-sim/release/libsnolc_ffi.a" \
+    "$WORK/libsnolc-simulator-arm64.a" "$WORK/SnolcCore.exports" snolc-simulator-arm64 \
+    iphonesimulator ios-simulator "$IPHONEOS_DEPLOYMENT_TARGET"
+  hide_rust_symbols \
     "$ROOT/snolc/target/x86_64-apple-ios/release/libsnolc_ffi.a" \
+    "$WORK/libsnolc-simulator-x86_64.a" "$WORK/SnolcCore.exports" snolc-simulator-x86_64 \
+    iphonesimulator ios-simulator "$IPHONEOS_DEPLOYMENT_TARGET"
+  xcrun lipo -create \
+    "$WORK/libsnolc-simulator-arm64.a" \
+    "$WORK/libsnolc-simulator-x86_64.a" \
     -output "$WORK/libsnolc-simulator.a"
   hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-darwin/release/libsnolc_ffi.a" \
-    "$WORK/libsnolc-macos-arm64.a" "$WORK/SnolcCore.exports" snolc-macos-arm64
+    "$WORK/libsnolc-macos-arm64.a" "$WORK/SnolcCore.exports" snolc-macos-arm64 \
+    macosx macos "$MACOSX_DEPLOYMENT_TARGET"
   hide_rust_symbols \
     "$ROOT/snolc/target/x86_64-apple-darwin/release/libsnolc_ffi.a" \
-    "$WORK/libsnolc-macos-x86_64.a" "$WORK/SnolcCore.exports" snolc-macos-x86_64
+    "$WORK/libsnolc-macos-x86_64.a" "$WORK/SnolcCore.exports" snolc-macos-x86_64 \
+    macosx macos "$MACOSX_DEPLOYMENT_TARGET"
   xcrun lipo -create \
     "$WORK/libsnolc-macos-arm64.a" \
     "$WORK/libsnolc-macos-x86_64.a" \
@@ -112,7 +135,7 @@ build_snolc() {
   make_headers SnolcCore "$ROOT/snolc/crates/snolc-ffi/include/snolc_ffi.h"
   rm -rf "$OUT/SnolcCore.xcframework"
   xcodebuild -create-xcframework \
-    -library "$ROOT/snolc/target/aarch64-apple-ios/release/libsnolc_ffi.a" -headers "$WORK/SnolcCore-headers" \
+    -library "$WORK/libsnolc-ios-arm64.a" -headers "$WORK/SnolcCore-headers" \
     -library "$WORK/libsnolc-simulator.a" -headers "$WORK/SnolcCore-headers" \
     -library "$WORK/libsnolc-macos.a" -headers "$WORK/SnolcCore-headers" \
     -output "$OUT/SnolcCore.xcframework"
@@ -124,16 +147,30 @@ build_csqtt() {
     cargo build --release --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target "$target"
   done
   local target_dir="$ROOT/csqtt/rust-client/target"
-  xcrun lipo -create \
+  hide_rust_symbols \
+    "$target_dir/aarch64-apple-ios/release/libcsqtt_ffi.a" \
+    "$WORK/libcsqtt-ios-arm64.a" "$WORK/CsqttCore.exports" csqtt-ios-arm64 \
+    iphoneos ios "$IPHONEOS_DEPLOYMENT_TARGET"
+  hide_rust_symbols \
     "$target_dir/aarch64-apple-ios-sim/release/libcsqtt_ffi.a" \
+    "$WORK/libcsqtt-simulator-arm64.a" "$WORK/CsqttCore.exports" csqtt-simulator-arm64 \
+    iphonesimulator ios-simulator "$IPHONEOS_DEPLOYMENT_TARGET"
+  hide_rust_symbols \
     "$target_dir/x86_64-apple-ios/release/libcsqtt_ffi.a" \
+    "$WORK/libcsqtt-simulator-x86_64.a" "$WORK/CsqttCore.exports" csqtt-simulator-x86_64 \
+    iphonesimulator ios-simulator "$IPHONEOS_DEPLOYMENT_TARGET"
+  xcrun lipo -create \
+    "$WORK/libcsqtt-simulator-arm64.a" \
+    "$WORK/libcsqtt-simulator-x86_64.a" \
     -output "$WORK/libcsqtt-simulator.a"
   hide_rust_symbols \
     "$target_dir/aarch64-apple-darwin/release/libcsqtt_ffi.a" \
-    "$WORK/libcsqtt-macos-arm64.a" "$WORK/CsqttCore.exports" csqtt-macos-arm64
+    "$WORK/libcsqtt-macos-arm64.a" "$WORK/CsqttCore.exports" csqtt-macos-arm64 \
+    macosx macos "$MACOSX_DEPLOYMENT_TARGET"
   hide_rust_symbols \
     "$target_dir/x86_64-apple-darwin/release/libcsqtt_ffi.a" \
-    "$WORK/libcsqtt-macos-x86_64.a" "$WORK/CsqttCore.exports" csqtt-macos-x86_64
+    "$WORK/libcsqtt-macos-x86_64.a" "$WORK/CsqttCore.exports" csqtt-macos-x86_64 \
+    macosx macos "$MACOSX_DEPLOYMENT_TARGET"
   xcrun lipo -create \
     "$WORK/libcsqtt-macos-arm64.a" \
     "$WORK/libcsqtt-macos-x86_64.a" \
@@ -141,7 +178,7 @@ build_csqtt() {
   make_headers CsqttCore "$ROOT/csqtt/include/csqtt_ffi.h"
   rm -rf "$OUT/CsqttCore.xcframework"
   xcodebuild -create-xcframework \
-    -library "$target_dir/aarch64-apple-ios/release/libcsqtt_ffi.a" -headers "$WORK/CsqttCore-headers" \
+    -library "$WORK/libcsqtt-ios-arm64.a" -headers "$WORK/CsqttCore-headers" \
     -library "$WORK/libcsqtt-simulator.a" -headers "$WORK/CsqttCore-headers" \
     -library "$WORK/libcsqtt-macos.a" -headers "$WORK/CsqttCore-headers" \
     -output "$OUT/CsqttCore.xcframework"

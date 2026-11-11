@@ -67,6 +67,12 @@ jobs:
             YPtun/sharedUI/build/generated/cores/ios/SnolcCore.xcframework
             YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
           key: apple-xcframeworks-v1-${{ runner.os }}-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock', 'core/yptun-core/**', 'core/yptun-ffi/**', 'core/scripts/build-apple.sh', 'core/scripts/build-go-apple.sh', 'core/scripts/build-specialized-apple.sh') }}-${{ hashFiles('cores/**', 'sing-box/**', 'xray-core/**', 'amneziawg-go/**', 'awgproxy/**', 'free-turn-proxy/**', 'wdtt/**', 'masterdns/**', 'olcrtc/**', 'openflux/**') }}-${{ hashFiles('snolc/**', 'csqtt/**') }}
+      # Keep the fragile Apple static-archive/linker stage first. It exercises every device,
+      # simulator and macOS slice in a few minutes and warms Cargo for the rest of the job. A
+      # linker regression must fail here, not after the much slower in-process Go core build.
+      - name: Build specialized Apple cores (fail-fast)
+        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
+        run: bash core/scripts/build-specialized-apple.sh
       - name: Build XCFramework and Swift bindings
         if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         run: bash core/scripts/build-apple.sh
@@ -85,9 +91,6 @@ jobs:
           (cd openflux && go mod tidy)
           (cd cores && go mod tidy)
           GOMOBILE_APPLE_TARGETS=ios,iossimulator,macos bash core/scripts/build-go-apple.sh
-      - name: Build specialized Apple cores
-        if: steps.apple-framework-cache.outputs.cache-hit != 'true'
-        run: bash core/scripts/build-specialized-apple.sh
       - name: Save native Apple XCFrameworks
         if: steps.apple-framework-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
