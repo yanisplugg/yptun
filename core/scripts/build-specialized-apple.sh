@@ -68,6 +68,7 @@ hide_rust_symbols() {
   local symbols
   local all_symbols
   local local_symbols
+  local symbol_details
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -87,6 +88,7 @@ hide_rust_symbols() {
   symbols="$WORK/$label-symbols.txt"
   all_symbols="$WORK/$label-all-symbols.txt"
   local_symbols="$WORK/$label-local-symbols.txt"
+  symbol_details="$WORK/$label-symbol-details.txt"
 
   rm -f "$relocatable" "$edited" "$output"
   xcrun ld -r \
@@ -104,7 +106,11 @@ hide_rust_symbols() {
     "$relocatable" "$edited"
   xcrun libtool -static -o "$output" "$edited"
 
-  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
+  # `--extern-only` also includes Mach-O private externals. Those are deliberately hidden by
+  # exported_symbols_list and do not collide at the final link. Parse Darwin metadata so the
+  # verifier compares only genuinely public externals with the C ABI allowlist.
+  "$llvm_nm" --format=darwin --defined-only "$output" > "$symbol_details"
+  awk '/ external / && $0 !~ /private external/ { print $NF }' "$symbol_details" > "$symbols"
   if grep -Eq '^(__R|__ZN)' "$symbols"; then
     echo "Rust implementation symbols remain public in $output" >&2
     grep -E '^(__R|__ZN)' "$symbols" | head -20 >&2
