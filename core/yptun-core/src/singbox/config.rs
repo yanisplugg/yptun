@@ -30,7 +30,9 @@ const DOH_BLOCK_SUFFIXES: [&str; 10] = [
 ];
 
 /// Raw-outbound types without sing-box smux support.
-const RAW_OUTBOUND_NO_MUX: [&str; 7] = ["wireguard", "hysteria2", "hysteria", "tuic", "endpoint", "socks", "naive"];
+const RAW_OUTBOUND_NO_MUX: [&str; 8] = [
+    "wireguard", "openvpn-client", "hysteria2", "hysteria", "tuic", "endpoint", "socks", "naive",
+];
 
 /// AmneziaWG-on-server WARP: a loopback UDP listener forwarding AWG's packets to the WARP endpoint
 /// through the main proxy.
@@ -278,33 +280,35 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     config.insert("inbounds".into(), Value::Array(inbounds));
 
     // ---- outbounds + endpoints ----
+    // WireGuard (1.13+) and OpenVPN (1.14+) are native endpoints, not outbounds. An endpoint tag is
+    // routable and can be used as a cascade detour exactly like an outbound tag.
     let wg_base_endpoint = o.wireguard_base.as_ref().and_then(|p| wireguard_endpoint(p, WG_BASE_TAG, o.auto_detect_interface, None));
-    let main_is_wireguard = profile.kind == "wireguard";
     let second = o.second_profile.as_ref().filter(|p| p.is_complete());
-    let second_is_wireguard = second.is_some_and(|s| s.kind == "wireguard");
-    let wg_exit_endpoint = if second_is_wireguard {
-        wireguard_endpoint(second.unwrap(), PROXY_TAG, o.auto_detect_interface, Some(PROXY_BASE_TAG))
-    } else if main_is_wireguard {
-        wireguard_endpoint(profile, PROXY_TAG, o.auto_detect_interface, None)
+    let base_detour = if wg_base_endpoint.is_some() {
+        Some(WG_BASE_TAG)
+    } else if o.olcrtc_chain_port.is_some() {
+        Some(OLCRTC_TAG)
     } else {
         None
     };
+    let main_tag = if second.is_some() { PROXY_BASE_TAG } else { PROXY_TAG };
+    let main_endpoint = native_endpoint(profile, main_tag, o.auto_detect_interface, base_detour);
+    let second_endpoint = second.and_then(|p| native_endpoint(p, PROXY_TAG, o.auto_detect_interface, Some(PROXY_BASE_TAG)));
+    let main_is_endpoint = main_endpoint.is_some();
+    let second_is_endpoint = second_endpoint.is_some();
 
-    let chained = o.olcrtc_chain_port.is_some();
-    let base_detour = wg_base_endpoint.as_ref().map(|_| WG_BASE_TAG);
     let mut outbounds = Vec::new();
     if let Some(second) = second {
+        if !main_is_endpoint {
+            outbounds.push(proxy_outbound(profile, false, traffic, base_detour, None, PROXY_BASE_TAG)?);
+        }
         if o.warp_relay.is_some() {
-            outbounds.push(proxy_outbound(profile, chained, traffic, base_detour, None, PROXY_BASE_TAG)?);
             outbounds.push(proxy_outbound(second, false, traffic, None, None, PROXY_TAG)?);
-        } else if second_is_wireguard {
-            outbounds.push(proxy_outbound(profile, chained, traffic, base_detour, None, PROXY_BASE_TAG)?);
-        } else {
-            outbounds.push(proxy_outbound(profile, chained, traffic, base_detour, None, PROXY_BASE_TAG)?);
+        } else if !second_is_endpoint {
             outbounds.push(proxy_outbound(second, false, traffic, Some(PROXY_BASE_TAG), o.advanced.as_ref(), PROXY_TAG)?);
         }
-    } else if !main_is_wireguard {
-        outbounds.push(proxy_outbound(profile, chained, traffic, base_detour, o.advanced.as_ref(), PROXY_TAG)?);
+    } else if !main_is_endpoint {
+        outbounds.push(proxy_outbound(profile, false, traffic, base_detour, o.advanced.as_ref(), PROXY_TAG)?);
     }
     if let Some(port) = o.olcrtc_chain_port {
         outbounds.push(olcrtc_socks_outbound(OLCRTC_TAG, port, &o.olcrtc_chain_user, &o.olcrtc_chain_pass));
@@ -318,7 +322,7 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     }
     outbounds.push(Value::Object(direct));
     config.insert("outbounds".into(), Value::Array(outbounds));
-    let endpoints: Vec<Value> = wg_exit_endpoint.into_iter().chain(wg_base_endpoint).collect();
+    let endpoints: Vec<Value> = second_endpoint.into_iter().chain(main_endpoint).chain(wg_base_endpoint).collect();
     if !endpoints.is_empty() {
         config.insert("endpoints".into(), Value::Array(endpoints));
     }
@@ -435,7 +439,7 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     }
 
     // Rule-sets are fetched before endpoints start: WireGuard tunnels fetch over `direct`.
-    let rule_set_detour = if o.wireguard_base.is_some() || main_is_wireguard { "direct" } else { sbr::RULE_SET_DOWNLOAD_TAG };
+    let rule_set_detour = if o.wireguard_base.is_some() || main_is_endpoint { "direct" } else { sbr::RULE_SET_DOWNLOAD_TAG };
     let mut sets: Vec<Value> = Vec::new();
     if let Some(a) = embedded_route.as_ref().and_then(|r| r.get("rule_set")).and_then(Value::as_array) {
         sets.extend(a.iter().filter(|v| v.is_object()).cloned());
@@ -713,6 +717,31 @@ fn olcrtc_socks_outbound(tag: &str, port: i32, user: &str, pass: &str) -> Value 
 fn is_loopback_host(host: &str) -> bool {
     let h = host.trim().trim_matches(['[', ']']).to_lowercase();
     h == "localhost" || h == "::1" || h.starts_with("127.")
+}
+
+/// Native tunnel protocols represented by top-level sing-box `endpoints`, never by outbounds.
+fn native_endpoint(p: &ProxyProfile, tag: &str, auto_detect_interface: bool, detour: Option<&str>) -> Option<Value> {
+    match p.kind.as_str() {
+        "wireguard" => wireguard_endpoint(p, tag, auto_detect_interface, detour),
+        TYPE_OPENVPN => openvpn_endpoint(p, tag, detour),
+        _ => None,
+    }
+}
+
+/// Re-tag the imported sing-box 1.14 `openvpn-client` JSON as a top-level endpoint.
+fn openvpn_endpoint(p: &ProxyProfile, tag: &str, detour: Option<&str>) -> Option<Value> {
+    let obj = parse_object(p.raw_outbound.as_deref().filter(|r| not_blank(r)))?;
+    if obj.get("type").and_then(Value::as_str) != Some(TYPE_OPENVPN) {
+        return None;
+    }
+    let mut m: Obj = obj.into_iter().filter(|(k, _)| k != "tag" && k != "detour").collect();
+    m.insert("tag".into(), json!(tag));
+    // YPtun owns the platform VPN/TUN; the endpoint must expose userspace TCP/UDP flows to sing-box.
+    m.entry("system").or_insert_with(|| json!(false));
+    if let Some(d) = detour {
+        m.insert("detour".into(), json!(d));
+    }
+    Some(Value::Object(m))
 }
 
 /// A stored WireGuard outbound JSON → a sing-box 1.13+ WireGuard `endpoint`.

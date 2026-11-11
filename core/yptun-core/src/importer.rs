@@ -11,6 +11,7 @@ use crate::crypto;
 use crate::isotime;
 use crate::location::*;
 use crate::model::*;
+use crate::openvpn;
 use crate::panel;
 use crate::share_link;
 use crate::subscription::{decode_base64_chunk, to_link_text};
@@ -384,6 +385,9 @@ fn parse_import_plain(text: &str, sub_url: Option<&str>, interval: Option<i32>, 
     bundles.extend(parse_snolc_text(&link_text, sub_url));
 
     if bundles.is_empty() {
+        if let Some(b) = parse_openvpn_text(text, sub_url) {
+            return Some(ParsedImport { bundle: b, mode: ImportMode::Additive });
+        }
         if let Some(b) = parse_amneziawg_text(text, sub_url) {
             return Some(ParsedImport { bundle: b, mode: ImportMode::Additive });
         }
@@ -762,6 +766,24 @@ fn parse_amneziawg_text(text: &str, sub_url: Option<&str>) -> Option<LocationBun
     bundle_of(vec![entry(&id, &loc, sub_url, None)])
 }
 
+fn parse_openvpn_text(text: &str, sub_url: Option<&str>) -> Option<LocationBundleV4> {
+    let p = openvpn::parse(text.trim())?;
+    let name = if p.tag.trim().is_empty() { "OpenVPN".to_string() } else { p.tag.clone() };
+    let id = unique_storage_id(
+        &format!("imported_openvpn_{}", endpoint_base(&format!("{}_{}", p.server, p.server_port))),
+        &mut HashSet::new(),
+    );
+    let loc = LocationConfig {
+        name,
+        engine: EngineType::Standard,
+        proxy: Some(p),
+        core: ProxyCore::SingBox,
+        ..Default::default()
+    }
+    .normalized();
+    bundle_of(vec![entry(&id, &loc, sub_url, None)])
+}
+
 fn parse_proxy_text(text: &str, sub_url: Option<&str>, metadata: Option<&SubscriptionMetadata>) -> Option<LocationBundleV4> {
     let profiles = share_link::parse_subscription(text);
     if profiles.is_empty() {
@@ -792,7 +814,7 @@ fn parse_raw_singbox(text: &str, sub_url: Option<&str>) -> Option<LocationBundle
         return None;
     }
     let element: Value = serde_json::from_str(t).ok()?;
-    let outbounds: Vec<Obj> = match &element {
+    let mut outbounds: Vec<Obj> = match &element {
         Value::Object(o) if o.contains_key("outbounds") => {
             if !o["outbounds"].is_array() {
                 return None;
@@ -803,7 +825,19 @@ fn parse_raw_singbox(text: &str, sub_url: Option<&str>) -> Option<LocationBundle
         Value::Array(_) => json_objects(&element),
         _ => return None,
     };
-    let servers: Vec<&Obj> = outbounds.iter().filter(|o| o.contains_key("type") && o.contains_key("server")).collect();
+    if let Some(endpoints) = element.as_object().and_then(|o| o.get("endpoints")) {
+        outbounds.extend(json_objects(endpoints));
+    }
+    let servers: Vec<(Obj, String, i32, String)> = outbounds
+        .iter()
+        .filter_map(|o| {
+            let kind = s(o, "type")?.to_string();
+            let first_remote = o.get("servers").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_object);
+            let server = s(o, "server").or_else(|| first_remote.and_then(|r| s(r, "server")))?.to_string();
+            let port = i(o, "server_port").or_else(|| first_remote.and_then(|r| i(r, "server_port")))?;
+            Some((o.clone(), server, port, kind))
+        })
+        .collect();
     if servers.is_empty() {
         return None;
     }
@@ -813,15 +847,20 @@ fn parse_raw_singbox(text: &str, sub_url: Option<&str>) -> Option<LocationBundle
     let mut used = HashSet::new();
     let entries = servers
         .into_iter()
-        .filter_map(|ob| {
-            let server = s(ob, "server")?.to_string();
-            let port = i(ob, "server_port")?;
-            let kind = s(ob, "type")?.to_string();
-            let tag = s(ob, "tag").filter(|t| not_blank(t)).map(str::to_string).unwrap_or_else(|| format!("{server}:{port}"));
-            let profile = ProxyProfile { tag: tag.clone(), kind, server: server.clone(), server_port: port, raw_outbound: Some(Value::Object(ob.clone()).to_string()), raw_singbox_route: route.clone(), ..Default::default() };
-            let loc = LocationConfig { name: tag, engine: EngineType::Standard, proxy: Some(profile), fake_dns: fake.clone(), ..Default::default() }.normalized();
+        .map(|(ob, server, port, kind)| {
+            let tag = s(&ob, "tag").filter(|t| not_blank(t)).map(str::to_string).unwrap_or_else(|| format!("{server}:{port}"));
+            let profile = ProxyProfile { tag: tag.clone(), kind: kind.clone(), server: server.clone(), server_port: port, raw_outbound: Some(Value::Object(ob).to_string()), raw_singbox_route: route.clone(), ..Default::default() };
+            let loc = LocationConfig {
+                name: tag,
+                engine: EngineType::Standard,
+                proxy: Some(profile),
+                core: if kind == TYPE_OPENVPN { ProxyCore::SingBox } else { ProxyCore::Auto },
+                fake_dns: fake.clone(),
+                ..Default::default()
+            }
+            .normalized();
             let id = unique_storage_id(&format!("imported_{}", endpoint_base(&format!("{server}_{port}"))), &mut used);
-            Some(entry(&id, &loc, sub_url, None))
+            entry(&id, &loc, sub_url, None)
         })
         .collect();
     bundle_of(entries)

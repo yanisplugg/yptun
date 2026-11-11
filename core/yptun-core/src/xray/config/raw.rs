@@ -188,11 +188,18 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
         let mut relay_rule = Obj::new();
         relay_rule.insert("type".into(), json!("field"));
         relay_rule.insert("inboundTag".into(), json!([WARP_RELAY_IN_TAG]));
-        if let Some(tag) = proxy_balancers.primary_tag.as_deref() {
-            relay_rule.insert("balancerTag".into(), json!(tag));
-        } else {
-            relay_rule.insert("outboundTag".into(), json!(main_tag));
-        }
+        // One WireGuard UDP flow must stay on one concrete proxy. Reusing a leastLoad/leastPing
+        // balancer here can send the first handshakes to `fallbackTag: block` before the observatory
+        // has a result (and changing nodes mid-flow would not help either).
+        let relay_outbound = proxy_balancers
+            .primary_tag
+            .as_deref()
+            .and_then(|tag| proxy_balancers.selection(tag))
+            .and_then(|selected| selected.first())
+            .cloned()
+            .or_else(|| main_tag.clone())
+            .unwrap();
+        relay_rule.insert("outboundTag".into(), json!(relay_outbound));
         prepend(to_write, Value::Object(relay_rule))
     } else {
         to_write

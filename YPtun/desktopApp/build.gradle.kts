@@ -551,7 +551,7 @@ if (currentBuildOs.isLinux) {
     hostDesktopNativeAssetTasks.add(buildHevSocks5TunnelLinux)
 }
 
-// yptuncore: every proxy core (sing-box, xray, AmneziaWG, Hysteria2, VK-TURN, olcrtc) compiled
+// yptuncore: every proxy core (sing-box/OpenVPN, xray, AmneziaWG, Hysteria2, VK-TURN, olcrtc) compiled
 // into ONE c-shared library from cores/cmd/yptuncore, consumed from jvmMain via JNA. Mirrors the
 // Android gomobile AAR (one shared Go runtime). Same build tags as the Android libbox build.
 // with_quic is NOT an optional extra: without it sing-box still registers hysteria/hysteria2/TUIC,
@@ -573,7 +573,7 @@ if (currentBuildOs.isLinux) {
 // Android is unaffected: it links cronet's android_* archives with the NDK toolchain.
 val ypTunCoreBuildTags =
     "with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic," +
-        "with_naive_outbound,with_purego"
+        "with_naive_outbound,with_openvpn,with_purego"
 val coresRepoDir = rootProject.layout.projectDirectory.asFile.parentFile.resolve("cores")
 
 // sing-box version embedded via ldflags (-X constant.Version); otherwise YpSbVersion() reports

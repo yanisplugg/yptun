@@ -38,6 +38,7 @@ import org.olcbox.app.data.importer.FreeturnUriParser
 import org.olcbox.app.data.importer.CsqttUriParser
 import org.olcbox.app.data.importer.MasterDnsUriParser
 import org.olcbox.app.data.importer.OpenFluxUriParser
+import org.olcbox.app.data.importer.OpenVpnParser
 import org.olcbox.app.data.importer.QwdttUriParser
 import org.olcbox.app.data.importer.ShareLinkParser
 import org.olcbox.app.data.importer.SubscriptionDecoder
@@ -1464,6 +1465,13 @@ class LocationsRepositoryImpl(
         parseSnolcText(linkText, subscriptionUrl)?.let { linkBundles += it }
 
         if (linkBundles.isEmpty()) {
+            // OpenVPN `.ovpn` is a whole multi-line document, not a share-link list. Convert a
+            // self-contained profile into sing-box 1.14's native `openvpn-client` endpoint before
+            // trying JSON/line parsers (which cannot preserve its inline certificate blocks).
+            parseOpenVpnText(text, subscriptionUrl)?.let {
+                return ParsedImport(it, ImportMode.Additive)
+            }
+
             // AmneziaWG .conf (whole wg-quick INI with obf knobs) → a Standard location whose proxy is
             // the AmneziaWG transport. Checked before the proxy parser (which splits into per-line links
             // and would not see the multi-line config).
@@ -2301,6 +2309,31 @@ class LocationsRepositoryImpl(
         return LocationBundleV4(activeLocationId = entry.storageId, locations = listOf(entry))
     }
 
+    /** Parses a self-contained `.ovpn` into a sing-box/OpenVPN [EngineType.Standard] location. */
+    private fun parseOpenVpnText(text: String, subscriptionUrl: String? = null): LocationBundleV4? {
+        val profile = OpenVpnParser.parse(text.trim()) ?: return null
+        val name = profile.tag.ifBlank { "OpenVPN" }
+        val location = LocationConfig(
+            name = name,
+            engine = EngineType.Standard,
+            proxy = profile,
+            // OpenVPN is a sing-box endpoint; keeping the concrete core in persisted imports also
+            // makes the restriction explicit to older callers that don't use resolvedCore().
+            core = ProxyCore.SingBox,
+        ).normalized()
+        val base = "${profile.server}_${profile.serverPort}"
+            .lowercase()
+            .map { if (it.isLetterOrDigit()) it else '_' }
+            .joinToString("")
+        val storageId = uniqueStorageId("imported_openvpn_$base", mutableSetOf())
+        val entry = LocationEntry.from(
+            storageId = storageId,
+            location = location,
+            subscriptionUrl = subscriptionUrl,
+        )
+        return LocationBundleV4(activeLocationId = entry.storageId, locations = listOf(entry))
+    }
+
     private fun parseProxyText(
         text: String,
         subscriptionUrl: String? = null,
@@ -2339,8 +2372,8 @@ class LocationsRepositoryImpl(
 
     /**
      * Parses a raw sing-box config into Standard locations. Accepts a full config object (with
-     * an "outbounds" array), a single outbound object, or an array of outbounds. Each server
-     * outbound (has "type" + "server") is stored verbatim as [ProxyProfile.rawOutbound].
+     * `outbounds` and/or 1.14 `endpoints`), one outbound/endpoint, or an array. Each server object is
+     * stored verbatim as [ProxyProfile.rawOutbound].
      */
     private fun parseRawSingBox(
         text: String,
@@ -2358,24 +2391,41 @@ class LocationsRepositoryImpl(
             else -> runCatching { element.jsonArray }.getOrNull()
                 ?.mapNotNull { it.jsonObjectOrNull() } ?: return null
         }
+        val endpoints = (element as? JsonObject)?.get("endpoints")
+            ?.let { runCatching { it.jsonArray }.getOrNull() }
+            ?.mapNotNull { it.jsonObjectOrNull() }
+            .orEmpty()
+        val candidates = outbounds + endpoints
 
-        val servers = outbounds.filter { it["type"] != null && it["server"] != null }
+        data class ServerObject(val raw: JsonObject, val server: String, val port: Int, val type: String)
+        val servers = candidates.mapNotNull { candidate ->
+            val type = candidate.string("type") ?: return@mapNotNull null
+            val firstRemote = candidate["servers"]
+                ?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?.firstOrNull()?.jsonObjectOrNull()
+            val server = candidate.string("server") ?: firstRemote?.string("server") ?: return@mapNotNull null
+            val port = candidate["server_port"]?.jsonPrimitive?.intOrNull
+                ?: firstRemote?.get("server_port")?.jsonPrimitive?.intOrNull
+                ?: return@mapNotNull null
+            ServerObject(candidate, server, port, type)
+        }
         if (servers.isEmpty()) return null
 
         // A full sing-box config brings its own `route` — the whole point of a JSON subscription. It used
         // to be dropped on the floor (only the outbound survived), so the app's own routing profile ran
         // instead. Normalize it once for this config and hang it on every location it produces.
-        val embeddedRoute = (element as? JsonObject)?.let { normalizeSingBoxRoute(it, outbounds) }
+        val embeddedRoute = (element as? JsonObject)?.let { normalizeSingBoxRoute(it, candidates) }
         // Its FakeDNS (fakeip) was dropped too — the Xray branch has always extracted an equivalent
         // spec (fakeDnsSpecFromXray), so a sing-box JSON subscription silently lost its synthetic-IP
         // pool while the same subscription in Xray form kept it.
         val fakeDnsSpec = (element as? JsonObject)?.let { fakeDnsSpecFromSingBox(it) }
 
         val usedStorageIds = mutableSetOf<String>()
-        val entries = servers.mapIndexedNotNull { index, outbound ->
-            val server = outbound.string("server") ?: return@mapIndexedNotNull null
-            val port = outbound["server_port"]?.jsonPrimitive?.intOrNull ?: return@mapIndexedNotNull null
-            val type = outbound.string("type") ?: return@mapIndexedNotNull null
+        val entries = servers.map { candidate ->
+            val server = candidate.server
+            val port = candidate.port
+            val type = candidate.type
+            val outbound = candidate.raw
             val tag = outbound.string("tag")?.takeIf { it.isNotBlank() } ?: "$server:$port"
 
             val profile = ProxyProfile(
@@ -2390,6 +2440,7 @@ class LocationsRepositoryImpl(
                 name = tag,
                 engine = EngineType.Standard,
                 proxy = profile,
+                core = if (type == ProxyProfile.TYPE_OPENVPN) ProxyCore.SingBox else ProxyCore.Auto,
                 fakeDns = fakeDnsSpec
             ).normalized()
             val base = "${server}_$port"

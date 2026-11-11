@@ -52,6 +52,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import org.olcbox.app.data.importer.AmneziaWgParser
+import org.olcbox.app.data.importer.OpenVpnParser
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.ui.components.SettingsCaption
@@ -67,8 +74,8 @@ private enum class AddPage { Main, FreeServers, Manual }
 
 /**
  * «Добавить»: one field for a subscription link or a key (most people only ever need this), QR and file
- * under it, then the choices for people without a subscription — free public servers, Android
- * Turnable, and a hand-made location. The free-server and manual pages open inside the same sheet.
+ * under it, then the choices for people without a subscription — free public servers and a hand-made
+ * location. Turnable is one of the Android-only manual choices. The child pages open in this sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,7 +120,6 @@ fun AddConfigurationSheet(
                             if (freeServersSettings != null) page = AddPage.FreeServers
                             else onStartFreeServers(AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT)
                         },
-                        onTurnableClick = onCreateTurnable,
                         onManualClick = { page = AddPage.Manual }
                     )
                     AddPage.FreeServers -> freeServersSettings?.let { settings ->
@@ -128,6 +134,7 @@ fun AddConfigurationSheet(
                         onBack = { page = AddPage.Main },
                         onPick = onCreateManual,
                         onPickVless = onCreateVless,
+                        onPickTurnable = onCreateTurnable,
                     )
                 }
             }
@@ -142,12 +149,10 @@ private fun AddMainPage(
     onImportText: (String) -> Unit,
     onImportFileClick: () -> Unit,
     onFreeServersClick: () -> Unit,
-    onTurnableClick: () -> Unit,
     onManualClick: () -> Unit
 ) {
     val s = LocalStrings.current
     val clipboard = LocalClipboardManager.current
-    val android = remember { org.olcbox.app.update.UpdatePlatform.current().os == "android" }
     var text by remember { mutableStateOf("") }
     val detected = remember(text) { describeImportText(text, s) }
 
@@ -163,7 +168,7 @@ private fun AddMainPage(
         value = text,
         onValueChange = { text = it },
         label = { Text(s.addLinkLabel) },
-        placeholder = { Text("https://…  vless://…") },
+        placeholder = { Text("https://…  vless://…  { JSON }  [Interface]  OpenVPN client") },
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
         minLines = 2,
         maxLines = 6,
@@ -219,15 +224,6 @@ private fun AddMainPage(
             icon = Icons.Outlined.Public,
             onClick = onFreeServersClick
         )
-        if (android) {
-            SettingsCardDivider()
-            SettingsCardRow(
-                title = "Turnable",
-                subtitle = s.engineVkTurnDesc,
-                icon = Icons.Rounded.Phone,
-                onClick = onTurnableClick,
-            )
-        }
         SettingsCardDivider()
         SettingsCardRow(
             title = s.addManualTitle,
@@ -258,16 +254,47 @@ private fun AddTile(title: String, icon: ImageVector, onClick: () -> Unit, modif
 }
 
 /** What the pasted text looks like, in a few words — a hint, the importer decides for real. */
-private fun describeImportText(text: String, s: Strings): String? {
+internal fun describeImportText(text: String, s: Strings): String? {
+    val trimmed = text.trim()
+    if (OpenVpnParser.looksLikeOpenVpn(trimmed)) return s.addDetectedConfig("OpenVPN")
+    if (AmneziaWgParser.looksLikeAmneziaWg(trimmed)) return s.addDetectedConfig("AmneziaWG")
     val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
     if (lines.isEmpty()) return null
     if (lines.size > 1 && lines.all { it.contains("://") }) return s.addDetectedMany(lines.size)
     val first = lines.first()
     return when {
-        first.startsWith("{") || first.startsWith("[") -> s.addDetectedJson
+        first.startsWith("{") || first.startsWith("[") -> when (detectJsonCore(trimmed)) {
+            "xray" -> s.addDetectedConfig("Xray JSON")
+            "sing-box" -> s.addDetectedConfig("sing-box JSON")
+            else -> s.addDetectedJson
+        }
         first.startsWith("http://", true) || first.startsWith("https://", true) ->
             s.addDetectedSubscription(Regex("^https?://([^/?#:]+)", RegexOption.IGNORE_CASE).find(first)?.groupValues?.get(1).orEmpty())
         first.contains("://") -> s.addDetectedKey(first.substringBefore("://").uppercase())
+        else -> null
+    }
+}
+
+/** Recognises a full/single/array Xray or sing-box JSON without trying to import it in the UI. */
+private fun detectJsonCore(text: String): String? {
+    val element = runCatching { Json.parseToJsonElement(text) }.getOrNull() ?: return null
+    val roots = when (element) {
+        is JsonObject -> listOf(element)
+        is JsonArray -> element.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
+        else -> emptyList()
+    }
+    fun outbounds(root: JsonObject): List<JsonObject> {
+        val nested = listOf("outbounds", "endpoints").flatMap { key ->
+            root[key]?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
+                .orEmpty()
+        }
+        return nested.ifEmpty { listOf(root) }
+    }
+    val candidates = roots.flatMap(::outbounds)
+    return when {
+        candidates.any { it["protocol"] != null } -> "xray"
+        candidates.any { it["type"] != null } -> "sing-box"
         else -> null
     }
 }
@@ -349,10 +376,13 @@ private fun ManualTypePage(
     onBack: () -> Unit,
     onPick: (EngineType, Boolean) -> Unit,
     onPickVless: () -> Unit,
+    onPickTurnable: () -> Unit,
 ) {
     val s = LocalStrings.current
     // OpenFlux and Snolc have no iOS engine (same rule as the engine picker in the location screen).
-    val ios = remember { org.olcbox.app.update.UpdatePlatform.current().os == "ios" }
+    val platform = remember { org.olcbox.app.update.UpdatePlatform.current().os }
+    val ios = platform == "ios"
+    val android = platform == "android"
     AddPageHeader(title = s.addManualTitle, onBack = onBack)
     Text(
         text = s.manualIntro,
@@ -379,6 +409,10 @@ private fun ManualTypePage(
         SettingsCardRow("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickVless() }
         SettingsCardDivider()
         SettingsCardRow("AmneziaWG / WireGuard", s.engineWireguardDesc, icon = Icons.Outlined.Shield) { onPick(EngineType.Standard, true) }
+        if (android) {
+            SettingsCardDivider()
+            SettingsCardRow("Turnable", s.engineVkTurnDesc, icon = Icons.Rounded.Phone) { onPickTurnable() }
+        }
         if (!ios) {
             SettingsCardDivider()
             SettingsCardRow("Snolc", s.engineSnolcDesc, icon = Icons.Outlined.Dns) { onPick(EngineType.Snolc, false) }

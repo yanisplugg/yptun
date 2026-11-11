@@ -78,6 +78,8 @@ pub const TYPE_AMNEZIAWG: &str = "amneziawg";
 pub const TYPE_TRUSTTUNNEL: &str = "trusttunnel";
 pub const TYPE_HYSTERIA2: &str = "hysteria2";
 pub const TYPE_NAIVE: &str = "naive";
+/// sing-box 1.14 OpenVPN client endpoint (JSON is stored in `raw_outbound`).
+pub const TYPE_OPENVPN: &str = "openvpn-client";
 
 pub const NETWORK_TCP: &str = "tcp";
 pub const NETWORK_WS: &str = "ws";

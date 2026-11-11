@@ -858,6 +858,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Trust Tunnel: through the live tunnel when up, else TCP to the endpoint decoded from the tt:// link.
             proxyType == ProxyProfile.TYPE_TRUSTTUNNEL ->
                 if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing() else tcpPing(server, serverPort)
+            proxyType == ProxyProfile.TYPE_OPENVPN ->
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
+                else icmpPing(locationConfig.proxy?.server.orEmpty())
             // Plain proxies: TCP latency to the (reachable) proxy server.
             locationConfig.engine == EngineType.Standard ->
                 tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
@@ -1066,7 +1069,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // Hysteria2 and Naive are native sing-box protocols, not xray-serviceable; the via-proxy
             // URL test isn't available (use Auto/ICMP ping mode instead — Auto's TCP probe still
             // reaches a naive server's HTTPS port).
-            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE) {
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE ||
+                profile.type == ProxyProfile.TYPE_OPENVPN
+            ) {
                 OlcboxVpnState.addLog("Proxy $method ping: ${profile.type} not supported (use Auto/ICMP)")
                 return@withContext null
             }

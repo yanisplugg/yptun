@@ -284,6 +284,41 @@ fn chained_balanced_raw() -> &'static str {
 }"#
 }
 
+fn least_load_balanced_raw() -> &'static str {
+    r#"{
+  "inbounds": [{ "tag": "socks", "port": 10808, "protocol": "socks", "settings": { "udp": true } }],
+  "outbounds": [
+    { "tag": "es-ru", "protocol": "vless",
+      "settings": { "vnext": [{ "address": "edge-a.example", "port": 8446,
+        "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+      "streamSettings": { "network": "tcp", "security": "tls" } },
+    { "tag": "es-ru-2", "protocol": "vless",
+      "settings": { "vnext": [{ "address": "edge-b.example", "port": 8446,
+        "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+      "streamSettings": { "network": "tcp", "security": "tls" } },
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "block", "protocol": "blackhole" },
+    { "tag": "dns-out", "protocol": "dns", "settings": { "nonIPQuery": "skip" } }
+  ],
+  "routing": {
+    "domainStrategy": "IPOnDemand",
+    "rules": [
+      { "type": "field", "port": 53, "network": "udp", "outboundTag": "dns-out" },
+      { "type": "field", "network": "tcp,udp", "balancerTag": "QFP_ES_AUTO" }
+    ],
+    "balancers": [{ "tag": "QFP_ES_AUTO", "selector": ["es-ru"], "fallbackTag": "block",
+      "strategy": { "type": "leastLoad", "settings": {
+        "maxRTT": "10s", "expected": 1, "tolerance": 0.34
+      } } }]
+  },
+  "burstObservatory": {
+    "pingConfig": { "timeout": "10s", "interval": "15s", "sampling": 3,
+      "httpMethod": "GET", "destination": "https://speed.cloudflare.com/__down?bytes=32768" },
+    "subjectSelector": ["es-ru"]
+  }
+}"#
+}
+
 #[test]
 fn client_side_every_proxy_outbound_dials_through_the_warp_socks() {
     let json = xray::prepare_raw(
@@ -372,8 +407,8 @@ fn server_side_warp_redirects_balanced_traffic_but_relays_through_balancer() {
     );
     let o = dump("raw-balanced-server", &json);
     let rules = o["routing"]["rules"].as_array().unwrap();
-    assert_eq!(rules[0]["balancerTag"], "proxy-balance");
-    assert!(rules[0].get("outboundTag").is_none());
+    assert_eq!(rules[0]["outboundTag"], "proxy-a");
+    assert!(rules[0].get("balancerTag").is_none());
     assert_eq!(rules.last().unwrap()["outboundTag"], "cascade-exit");
     assert!(rules.last().unwrap().get("balancerTag").is_none());
     assert_eq!(rules[1]["outboundTag"], "direct");
@@ -393,10 +428,34 @@ fn server_side_warp_recognizes_balancer_over_subscription_chain_outbounds() {
     );
     let o = dump("raw-subscription-balanced-server", &json);
     let rules = o["routing"]["rules"].as_array().unwrap();
-    assert_eq!(rules[0]["balancerTag"], "subscription-balance");
+    assert_eq!(rules[0]["outboundTag"], "chain-a");
+    assert!(rules[0].get("balancerTag").is_none());
     assert_eq!(rules[1]["outboundTag"], "cascade-exit");
     assert_eq!(rules[2]["outboundTag"], "direct");
     assert_eq!(rules.last().unwrap()["outboundTag"], "cascade-exit");
     assert!(rules.last().unwrap().get("balancerTag").is_none());
     assert_eq!(o["routing"]["balancers"][1]["selector"], serde_json::json!(["chain-a", "chain-b"]));
+}
+
+#[test]
+fn server_side_warp_bypasses_least_load_blackhole_until_observatory_is_ready() {
+    let json = xray::prepare_raw(
+        least_load_balanced_raw(),
+        &RawOptions {
+            warp_exit_port: Some(18900),
+            warp_relay: Some(relay("162.159.192.1")),
+            ..RawOptions::new(18081)
+        },
+    );
+    let o = dump("raw-leastload-balanced-server", &json);
+    let rules = o["routing"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0]["outboundTag"], "es-ru");
+    assert!(rules[0].get("balancerTag").is_none());
+    assert_eq!(rules.last().unwrap()["outboundTag"], "cascade-exit");
+    assert!(rules.last().unwrap().get("balancerTag").is_none());
+    let balancer = &o["routing"]["balancers"][0];
+    assert_eq!(balancer["strategy"]["type"], "leastLoad");
+    assert_eq!(balancer["fallbackTag"], "block");
+    assert_eq!(balancer["selector"], serde_json::json!(["es-ru", "es-ru-2"]));
+    assert!(o.get("burstObservatory").is_some());
 }

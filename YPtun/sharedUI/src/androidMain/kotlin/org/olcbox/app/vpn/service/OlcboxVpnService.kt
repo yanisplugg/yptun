@@ -1782,6 +1782,9 @@ class OlcboxVpnService : VpnService() {
             // Trust Tunnel (AdGuard) — like AmneziaWG, raises a local SOCKS5 (its own native client in
             // SOCKS-only mode) that the proxy routes through; a full TCP/UDP tunnel over HTTP2/QUIC.
             val isTrustTunnel = profile.type == ProxyProfile.TYPE_TRUSTTUNNEL
+            // Native sing-box 1.14 endpoint; Xray has no OpenVPN client.
+            val isOpenVpn = profile.type == ProxyProfile.TYPE_OPENVPN
+            val hasOpenVpn = isOpenVpn || secondProfile?.type == ProxyProfile.TYPE_OPENVPN
             val effectiveProfile = when {
                 isAwg -> prepareAmneziaWgProxy(profile)
                 isTrustTunnel -> prepareTrustTunnelProxy(profile)
@@ -1811,7 +1814,7 @@ class OlcboxVpnService : VpnService() {
             // and the transport doesn't force a core — a per-location choice still wins (see resolvedCore).
             val globalCore = loadAppBehavior().globalProxyCore
             activeProxyCore =
-                if (isLocalUdpTunnel || isHy2 || isNaive) ProxyCore.SingBox else config.resolvedCore(globalCore)
+                if (isLocalUdpTunnel || isHy2 || isNaive || hasOpenVpn) ProxyCore.SingBox else config.resolvedCore(globalCore)
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1988,6 +1991,7 @@ class OlcboxVpnService : VpnService() {
                 if (isAwg) addLog("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4 (no IPv6 leak)")
                 if (isHy2) addLog("Hysteria2 outbound: native sing-box (QUIC allowed)")
                 if (isNaive) addLog("Naive outbound: native sing-box (cronet${if (effectiveProfile.naiveQuic) ", QUIC" else ""})")
+                if (hasOpenVpn) addLog("OpenVPN endpoint: native sing-box 1.14 (TCP/UDP allowed)")
                 val json = SingBoxConfig.build(
                     profile = effectiveProfile,
                     listenPort = socksListenPort,
@@ -2010,7 +2014,7 @@ class OlcboxVpnService : VpnService() {
                     singboxGeositeBase = profilesState.singboxGeositeBase,
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     // A naive+quic server needs its own QUIC uplink unblocked too.
-                    blockQuic = !(isLocalUdpTunnel || isHy2 || (isNaive && effectiveProfile.naiveQuic)),
+                    blockQuic = !(isLocalUdpTunnel || isHy2 || hasOpenVpn || (isNaive && effectiveProfile.naiveQuic)),
                     sniffOverrideDestination = isLocalUdpTunnel,
                     // STRICT "IPv4 only": forceFamilyResolve (default true) keeps the `::/0 reject` so a real
                     // IPv6 destination never leaves. This stays on EVEN with fakeip — but fakeip now also

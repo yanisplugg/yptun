@@ -23,7 +23,7 @@ use crate::desktop_vpn_manager::{
 };
 use crate::desktop_vpn_start::{DesktopVpnSession, DesktopVpnStatus};
 use crate::location::LocationConfig;
-use crate::model::{EngineType, ProxyProfile, TYPE_AMNEZIAWG, TYPE_HYSTERIA2, TYPE_TRUSTTUNNEL};
+use crate::model::{EngineType, ProxyProfile, TYPE_AMNEZIAWG, TYPE_HYSTERIA2, TYPE_OPENVPN, TYPE_TRUSTTUNNEL};
 use crate::settings::{PING_ICMP, PING_PROXY_GET, PING_PROXY_HEAD, PING_TCP};
 use crate::transports::{WarpMode, OF_AVITO, OF_CUPS, OF_DIRECT, OF_MAILRU, OF_TELEMOST, OF_VYANDEX};
 
@@ -579,6 +579,10 @@ pub fn proxy_url_test(
     }
     if profile.kind == TYPE_HYSTERIA2 {
         host.log(format!("Proxy {} ping: Hysteria2 not supported (use Auto/ICMP)", method));
+        return None;
+    }
+    if profile.kind == TYPE_OPENVPN {
+        host.log(format!("Proxy {} ping: OpenVPN is not supported by the Xray probe (use Auto/ICMP)", method));
         return None;
     }
     if profile.server.trim().is_empty() {

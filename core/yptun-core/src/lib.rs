@@ -46,6 +46,7 @@ pub mod model;
 pub mod olcrtc_check;
 pub mod olcrtc_command;
 pub mod olcrtc_native;
+pub mod openvpn;
 pub mod pac;
 pub mod panel;
 pub mod pings;

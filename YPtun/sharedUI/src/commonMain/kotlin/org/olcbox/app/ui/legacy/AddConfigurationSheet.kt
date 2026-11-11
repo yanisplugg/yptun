@@ -53,7 +53,6 @@ fun AddConfigurationSheet(
     onImportFileClick: () -> Unit,
     onUpdateSubscriptionsClick: () -> Unit,
     onAddCustomLocationClick: () -> Unit,
-    onAddTurnableClick: () -> Unit = onAddCustomLocationClick,
     onCreateGroupClick: () -> Unit = {},
     onFreeServersClick: () -> Unit = {}
 ) {
@@ -90,7 +89,7 @@ fun AddConfigurationSheet(
 
                 AddSheetAction(
                     title = s.pasteLink,
-                    value = "vless/vmess/trojan/ss, olcrtc, sub URL (несколько — по одной в строке), sing-box JSON",
+                    value = "Ссылки, Xray/sing-box JSON, AmneziaWG и OpenVPN .ovpn",
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )
@@ -115,15 +114,6 @@ fun AddConfigurationSheet(
                     icon = Icons.Outlined.Add,
                     onClick = onAddCustomLocationClick
                 )
-
-                if (org.olcbox.app.update.UpdatePlatform.current().os == "android") {
-                    AddSheetAction(
-                        title = "Turnable",
-                        value = s.engineVkTurnDesc,
-                        icon = Icons.Outlined.Public,
-                        onClick = onAddTurnableClick
-                    )
-                }
 
                 AddSheetAction(
                     title = s.createFolder,

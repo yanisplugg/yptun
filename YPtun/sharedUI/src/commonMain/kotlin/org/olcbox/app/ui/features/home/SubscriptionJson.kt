@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.xray.XrayConfig
 
@@ -23,6 +24,9 @@ fun subscriptionJson(locations: List<LocationItem>): String? {
     var size = 2
     for (location in locations) {
         val profile = location.config?.proxy ?: continue
+        // OpenVPN is a sing-box endpoint and has no Xray representation; emitting it as
+        // `protocol: openvpn-client` would create a JSON item that Xray cannot load.
+        if (profile.type == ProxyProfile.TYPE_OPENVPN && profile.rawXrayConfig.isNullOrBlank()) continue
         val element = profile.rawXrayConfig?.takeIf { it.isNotBlank() }
             ?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() }
             ?: runCatching {

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::model::{EngineType, ProxyCore, ProxyProfile};
+use crate::model::{EngineType, ProxyCore, ProxyProfile, TYPE_OPENVPN};
 use crate::transports::*;
 
 fn not_blank(s: &str) -> bool {
@@ -333,10 +333,12 @@ impl LocationConfig {
         self.proxy.iter().chain(self.proxy2.iter()).any(ProxyProfile::requires_xray)
     }
 
-    /// Auto → concrete core: raw Xray config, then the per-location choice, then Xray-only
-    /// transports, then the app-wide default, then sing-box.
+    /// Auto → concrete core: raw Xray config, sing-box-only endpoint, then the per-location choice,
+    /// Xray-only transports, the app-wide default, and finally sing-box.
     pub fn resolved_core(&self, global: ProxyCore) -> ProxyCore {
-        if self.proxy.as_ref().is_some_and(|p| not_blank_opt(&p.raw_xray_config)) {
+        if self.proxy.iter().chain(self.proxy2.iter()).any(|p| p.kind == TYPE_OPENVPN) {
+            ProxyCore::SingBox
+        } else if self.proxy.as_ref().is_some_and(|p| not_blank_opt(&p.raw_xray_config)) {
             ProxyCore::Xray
         } else if self.core != ProxyCore::Auto {
             self.core

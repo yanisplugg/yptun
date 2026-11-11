@@ -328,7 +328,9 @@ class IosVpnManager(
      * works while disconnected. A verbatim config is probed through its own proxy outbound.
      */
     private fun proxyUrlTest(profile: ProxyProfile, url: String, method: String): Long? {
-        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2) return null
+        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2 ||
+            profile.type == ProxyProfile.TYPE_OPENVPN
+        ) return null
         val listenPort = (20_000..60_000).random()
         val raw = profile.rawXrayConfig
         val configJson = if (!raw.isNullOrBlank()) {

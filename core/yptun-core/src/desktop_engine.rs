@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 
 use crate::location::{normalize_provider, LocationConfig, PROVIDER_TELEMOST};
 use crate::model::{
-    EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_HYSTERIA2, TYPE_SHADOWSOCKS, TYPE_TROJAN,
-    TYPE_TRUSTTUNNEL, TYPE_VLESS, TYPE_VMESS,
+    EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_HYSTERIA2, TYPE_OPENVPN, TYPE_SHADOWSOCKS,
+    TYPE_TROJAN, TYPE_TRUSTTUNNEL, TYPE_VLESS, TYPE_VMESS,
 };
 use crate::room_pool::RoomSpec;
 use crate::routing::{asn, RoutingProfile, RoutingProfilesState, RoutingRules, SingBoxRule, TrafficSettings};
@@ -940,6 +940,8 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
         let is_awg = profile.kind == TYPE_AMNEZIAWG;
         let is_hy2 = profile.kind == TYPE_HYSTERIA2;
         let is_trust_tunnel = profile.kind == TYPE_TRUSTTUNNEL;
+        let is_openvpn = profile.kind == TYPE_OPENVPN;
+        let has_openvpn = is_openvpn || second_profile.as_ref().is_some_and(|p| p.kind == TYPE_OPENVPN);
         let effective = if is_awg {
             self.prepare_amnezia_wg_proxy(&profile, listen_port)?
         } else if is_trust_tunnel {
@@ -949,7 +951,7 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
         } else {
             self.dial_by_server_ip(&profile)
         };
-        let is_local_udp_tunnel = is_awg || is_hy2 || is_trust_tunnel;
+        let is_local_udp_tunnel = is_awg || is_hy2 || is_trust_tunnel || has_openvpn;
 
         let traffic = self.host.load_traffic();
         let routing = self.load_routing_expanding_asn();
@@ -1115,6 +1117,9 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
             }
             if is_hy2 {
                 self.log("Hysteria2 outbound: QUIC allowed + sniff-override→IPv4");
+            }
+            if has_openvpn {
+                self.log("OpenVPN endpoint: native sing-box 1.14 (TCP/UDP allowed)");
             }
             let options = SingBoxOptions {
                 listen_port,

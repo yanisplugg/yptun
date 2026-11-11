@@ -529,6 +529,21 @@ fn xray_only_configs_cannot_pick_sing_box() {
     assert_eq!(vm.editing_config.core, ProxyCore::Auto);
 }
 
+#[test]
+fn openvpn_cannot_pick_xray() {
+    let mut vm = editor();
+    vm.editing_config.engine = EngineType::Standard;
+    vm.editing_config.proxy = Some(ProxyProfile {
+        kind: TYPE_OPENVPN.into(),
+        server: "vpn.example".into(),
+        server_port: 1194,
+        raw_outbound: Some(r#"{"type":"openvpn-client","server":"vpn.example","server_port":1194}"#.into()),
+        ..Default::default()
+    });
+    vm.on_core_changed(ProxyCore::Xray);
+    assert_eq!(vm.editing_config.core, ProxyCore::SingBox);
+}
+
 // ---------------- olcRTC services and rooms ----------------
 
 #[test]

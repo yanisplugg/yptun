@@ -159,8 +159,6 @@ class SingBoxEngine(
             throw UnsupportedOperationException("sing-box TUN is not used; hev-socks5-tunnel owns the TUN")
         }
 
-        override fun useProcFS(): Boolean = false
-
         override fun findConnectionOwner(
             ipProtocol: Int,
             sourceAddress: String,

@@ -11,7 +11,7 @@ use crate::location::{
     DEFAULT_UPDATE_INTERVAL_HOURS, MAX_EXTRA_ROOMS, PROVIDER_JITSI,
 };
 use crate::location_list::{is_locked, LocationItem};
-use crate::model::{EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_VLESS};
+use crate::model::{EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_OPENVPN, TYPE_VLESS};
 use crate::panel;
 use crate::repository::Repository;
 use crate::transports::{
@@ -551,9 +551,17 @@ impl LocationEditor {
 
     // ---------------- cores, WARP, routing, advanced ----------------
 
-    /// xhttp / FakeDNS configs only run on xray-core: a sing-box pick becomes Xray for them.
+    /// OpenVPN is sing-box-only; xhttp is Xray-only. Coerce stale/programmatic choices too.
     pub fn on_core_changed(&mut self, core: ProxyCore) {
-        let effective = if core == ProxyCore::SingBox && self.editing_config.requires_xray() {
+        let has_openvpn = self
+            .editing_config
+            .proxy
+            .iter()
+            .chain(self.editing_config.proxy2.iter())
+            .any(|p| p.kind == TYPE_OPENVPN);
+        let effective = if has_openvpn {
+            ProxyCore::SingBox
+        } else if core == ProxyCore::SingBox && self.editing_config.requires_xray() {
             ProxyCore::Xray
         } else {
             core

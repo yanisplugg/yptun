@@ -7,8 +7,8 @@
 
 use crate::location::LocationConfig;
 use crate::model::{
-    EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_HYSTERIA2, TYPE_NAIVE, TYPE_SHADOWSOCKS,
-    TYPE_TROJAN, TYPE_TRUSTTUNNEL, TYPE_VLESS, TYPE_VMESS,
+    EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_HYSTERIA2, TYPE_NAIVE, TYPE_OPENVPN,
+    TYPE_SHADOWSOCKS, TYPE_TROJAN, TYPE_TRUSTTUNNEL, TYPE_VLESS, TYPE_VMESS,
 };
 use crate::routing::{RoutingProfile, TrafficSettings};
 use crate::util::is_blank;
@@ -304,7 +304,7 @@ pub struct CoreChoice {
 
 /// Types that run as a local UDP-capable tunnel and therefore always on sing-box.
 pub fn forces_singbox(kind: &str) -> bool {
-    matches!(kind, TYPE_AMNEZIAWG | TYPE_HYSTERIA2 | TYPE_NAIVE | TYPE_TRUSTTUNNEL)
+    matches!(kind, TYPE_AMNEZIAWG | TYPE_HYSTERIA2 | TYPE_NAIVE | TYPE_TRUSTTUNNEL | TYPE_OPENVPN)
 }
 
 pub struct CoreInputs<'a> {
@@ -378,6 +378,7 @@ pub fn singbox_blocks_quic(profile: &ProxyProfile) -> bool {
     !(profile.kind == TYPE_AMNEZIAWG
         || profile.kind == TYPE_HYSTERIA2
         || profile.kind == TYPE_TRUSTTUNNEL
+        || profile.kind == TYPE_OPENVPN
         || (profile.kind == TYPE_NAIVE && profile.naive_quic))
 }
 

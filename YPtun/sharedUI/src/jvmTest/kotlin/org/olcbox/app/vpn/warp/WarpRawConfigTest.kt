@@ -96,6 +96,44 @@ class WarpRawConfigTest {
         }
     """.trimIndent()
 
+    /** Real Quofortpost-style shape: leastLoad waits for burstObservatory and fails closed to block. */
+    private fun leastLoadBalancedRaw() = """
+        {
+          "inbounds": [{ "tag": "socks", "port": 10808, "protocol": "socks", "settings": { "udp": true } }],
+          "outbounds": [
+            { "tag": "es-ru", "protocol": "vless",
+              "settings": { "vnext": [{ "address": "edge-a.example", "port": 8446,
+                "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+              "streamSettings": { "network": "tcp", "security": "tls" } },
+            { "tag": "es-ru-2", "protocol": "vless",
+              "settings": { "vnext": [{ "address": "edge-b.example", "port": 8446,
+                "users": [{ "id": "11111111-2222-3333-4444-555555555555", "encryption": "none" }] }] },
+              "streamSettings": { "network": "tcp", "security": "tls" } },
+            { "tag": "direct", "protocol": "freedom" },
+            { "tag": "block", "protocol": "blackhole" },
+            { "tag": "dns-out", "protocol": "dns", "settings": { "nonIPQuery": "skip" } }
+          ],
+          "routing": {
+            "domainStrategy": "IPOnDemand",
+            "rules": [
+              { "type": "field", "port": 53, "network": "udp", "outboundTag": "dns-out" },
+              { "type": "field", "network": "tcp,udp", "balancerTag": "QFP_ES_AUTO" }
+            ],
+            "balancers": [{
+              "tag": "QFP_ES_AUTO", "selector": ["es-ru"], "fallbackTag": "block",
+              "strategy": { "type": "leastLoad", "settings": {
+                "maxRTT": "10s", "expected": 1, "tolerance": 0.34
+              } }
+            }]
+          },
+          "burstObservatory": {
+            "pingConfig": { "timeout": "10s", "interval": "15s", "sampling": 3,
+              "httpMethod": "GET", "destination": "https://speed.cloudflare.com/__down?bytes=32768" },
+            "subjectSelector": ["es-ru"]
+          }
+        }
+    """.trimIndent()
+
     private val dir: File? = System.getenv("WARP_DUMP_DIR")?.let { File(it).apply { mkdirs() } }
 
     private fun JsonObject.outbound(tag: String) =
@@ -174,9 +212,9 @@ class WarpRawConfigTest {
         val routing = root["routing"]!!.jsonObject
         val rules = routing["rules"]!!.jsonArray.map { it.jsonObject }
         val relay = rules.first()
-        assertEquals("proxy-balance", relay["balancerTag"]!!.jsonPrimitive.content,
-            "WARP UDP must retain the JSON config's load balancer")
-        assertTrue(relay["outboundTag"] == null)
+        assertEquals("proxy-a", relay["outboundTag"]!!.jsonPrimitive.content,
+            "one WireGuard flow must be pinned to one concrete proxy member")
+        assertTrue(relay["balancerTag"] == null)
         assertEquals("cascade-exit", rules.last()["outboundTag"]!!.jsonPrimitive.content,
             "balanced application traffic must exit through WARP")
         assertTrue(rules.last()["balancerTag"] == null)
@@ -198,8 +236,9 @@ class WarpRawConfigTest {
         dir?.resolve("raw-subscription-balanced-server.json")?.writeText(json)
         val routing = Json.parseToJsonElement(json).jsonObject["routing"]!!.jsonObject
         val rules = routing["rules"]!!.jsonArray.map { it.jsonObject }
-        assertEquals("subscription-balance", rules.first()["balancerTag"]!!.jsonPrimitive.content,
-            "WARP UDP must use the last balancer referenced by the imported routing")
+        assertEquals("chain-a", rules.first()["outboundTag"]!!.jsonPrimitive.content,
+            "WARP UDP must pin the first member of the last routed balancer")
+        assertTrue(rules.first()["balancerTag"] == null)
         assertEquals("cascade-exit", rules[1]["outboundTag"]!!.jsonPrimitive.content,
             "every routed proxy balancer must be redirected through WARP")
         assertEquals("direct", rules[2]["outboundTag"]!!.jsonPrimitive.content)
@@ -209,5 +248,30 @@ class WarpRawConfigTest {
         val selector = routing["balancers"]!!.jsonArray.last().jsonObject["selector"]!!.jsonArray
             .map { it.jsonPrimitive.content }
         assertEquals(listOf("chain-a", "chain-b"), selector)
+    }
+
+    @Test
+    fun serverSideWarpBypassesLeastLoadBlackholeUntilObservatoryIsReady() {
+        val json = XrayConfig.prepareRaw(
+            rawConfigJson = leastLoadBalancedRaw(),
+            listenPort = 18081,
+            warpExitPort = 18900,
+            warpRelay = WarpRelay(18993, "162.159.192.1", 2408),
+        )
+        dir?.resolve("raw-leastload-balanced-server.json")?.writeText(json)
+        val root = Json.parseToJsonElement(json).jsonObject
+        val routing = root["routing"]!!.jsonObject
+        val rules = routing["rules"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("es-ru", rules.first()["outboundTag"]!!.jsonPrimitive.content,
+            "the WARP handshake must not hit fallbackTag=block before burstObservatory has results")
+        assertTrue(rules.first()["balancerTag"] == null)
+        assertEquals("cascade-exit", rules.last()["outboundTag"]!!.jsonPrimitive.content)
+        assertTrue(rules.last()["balancerTag"] == null)
+        val balancer = routing["balancers"]!!.jsonArray.single().jsonObject
+        assertEquals("leastLoad", balancer["strategy"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("block", balancer["fallbackTag"]!!.jsonPrimitive.content,
+            "the imported config remains intact for its own observatory")
+        assertEquals(listOf("es-ru", "es-ru-2"), balancer["selector"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertTrue(root["burstObservatory"] != null)
     }
 }
