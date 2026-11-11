@@ -66,6 +66,15 @@ public struct ConnectionHomeView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                model.locationEditorRequest = LocationEditorRequest(
+                                    locationID: location.id
+                                )
+                            } label: {
+                                Label("Редактировать", systemImage: "pencil")
+                            }
+                        }
                     }
                 }
             }
@@ -88,6 +97,9 @@ public struct ConnectionHomeView: View {
         }
         .sheet(isPresented: $model.isAddLocationPresented) {
             AddLocationView(model: model)
+        }
+        .sheet(item: $model.locationEditorRequest) { request in
+            RawLocationEditorView(model: model, request: request)
         }
         .alert(item: $model.presentedNotice) { notice in
             Alert(title: Text(notice.title), message: Text(notice.message))

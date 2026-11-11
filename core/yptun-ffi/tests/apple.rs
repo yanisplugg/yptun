@@ -3,9 +3,9 @@ use yptun_core::model::EngineType;
 use yptun_core::routing::TrafficSettings;
 use yptun_ffi::{
     apple_bridge_plan, apple_import_locations, apple_location_catalog, apple_location_json,
-    apple_migrate_location_bundle, apple_native_runtime_plan, apple_select_location,
-    apple_tunnel_plan, AppleActionKind, AppleConnectionRuntime, AppleProxyRuntimeKind,
-    AppleStatusKind,
+    apple_migrate_location_bundle, apple_native_runtime_plan, apple_save_location,
+    apple_select_location, apple_tunnel_plan, AppleActionKind, AppleConnectionRuntime,
+    AppleProxyRuntimeKind, AppleStatusKind,
 };
 
 fn kinds(actions: &[yptun_ffi::AppleConnectionAction]) -> Vec<AppleActionKind> {
@@ -416,6 +416,37 @@ fn apple_import_adds_mieru_without_dropping_existing_locations() {
     assert_eq!(bundle["locations"].as_array().unwrap().len(), 2);
     assert_eq!(bundle["active_location_id"], "existing");
     assert!(imported.normalized_bundle_json.contains("mieru_config"));
+}
+
+#[test]
+fn apple_save_location_preserves_subscription_metadata_when_editing() {
+    let current = serde_json::json!({
+        "version": 5,
+        "active_location_id": "node",
+        "locations": [{
+            "storage_id": "node",
+            "name": "Before",
+            "engine": "stealth",
+            "id": "room",
+            "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "subscription_url": "https://example.com/sub"
+        }]
+    });
+    let edited = serde_json::json!({
+        "name": "After",
+        "engine": "stealth",
+        "id": "room",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    });
+    let saved =
+        apple_save_location(current.to_string(), Some("node".into()), edited.to_string()).unwrap();
+    let bundle: serde_json::Value = serde_json::from_str(&saved.normalized_bundle_json).unwrap();
+    assert_eq!(bundle["locations"][0]["name"], "After");
+    assert_eq!(
+        bundle["locations"][0]["subscription_url"],
+        "https://example.com/sub"
+    );
+    assert_eq!(bundle["active_location_id"], "node");
 }
 
 #[test]

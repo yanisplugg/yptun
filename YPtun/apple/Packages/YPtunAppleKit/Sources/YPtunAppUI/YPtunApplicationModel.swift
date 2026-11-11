@@ -35,6 +35,15 @@ public struct YPtunNotice: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct LocationEditorRequest: Identifiable, Sendable {
+    public let id = UUID()
+    public let locationID: String?
+
+    public init(locationID: String?) {
+        self.locationID = locationID
+    }
+}
+
 @MainActor
 @Observable
 public final class YPtunApplicationModel {
@@ -45,6 +54,7 @@ public final class YPtunApplicationModel {
     public private(set) var startupMessage: String?
     public var isAddLocationPresented = false
     public var presentedNotice: YPtunNotice?
+    public var locationEditorRequest: LocationEditorRequest?
 
     private let bootstrapper: AppleApplicationBootstrapper
     private let vpnController: any AppleVPNControlling
@@ -181,6 +191,36 @@ public final class YPtunApplicationModel {
         } catch {
             presentedNotice = YPtunNotice(
                 title: "Не удалось импортировать",
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
+    public func locationText(id: String?) async -> String {
+        guard let id else {
+            return "{\n  \"name\": \"\",\n  \"engine\": \"standard\",\n  \"proxy\": {\n    \"type\": \"vless\",\n    \"server\": \"\",\n    \"server_port\": 443,\n    \"uuid\": \"\"\n  }\n}"
+        }
+        do {
+            return try await bootstrapper.locationText(id: id)
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Не удалось открыть локацию",
+                message: error.localizedDescription
+            )
+            return "{}"
+        }
+    }
+
+    public func saveLocation(text: String, id: String?) async -> Bool {
+        do {
+            let snapshot = try await bootstrapper.saveLocationText(text, id: id)
+            locations = snapshot.locations
+            selectedLocationID = snapshot.activeLocationID
+            return true
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Не удалось сохранить локацию",
                 message: error.localizedDescription
             )
             return false

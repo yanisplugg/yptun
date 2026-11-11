@@ -10,7 +10,7 @@ use yptun_core::engine::plan::{
     choose_core, resolve_second, singbox_blocks_quic, CoreInputs, PlatformCaps,
 };
 use yptun_core::importer;
-use yptun_core::location::{LocationBundleV4, LocationConfig, BUNDLE_VERSION};
+use yptun_core::location::{LocationBundleV4, LocationConfig, LocationEntry, BUNDLE_VERSION};
 use yptun_core::model::{EngineType, ProxyCore, ProxyProfile, TYPE_AMNEZIAWG, TYPE_MIERU};
 use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
@@ -386,6 +386,59 @@ pub fn apple_import_locations(
         normalized_bundle_json,
         active_location_id,
         imported_locations,
+    })
+}
+
+/// Creates or edits one location while preserving subscription metadata on edits.
+#[uniffi::export]
+pub fn apple_save_location(
+    bundle_json: String,
+    location_id: Option<String>,
+    location_json: String,
+) -> Result<AppleLocationSelection, FfiError> {
+    let mut bundle = if bundle_json.trim().is_empty() {
+        LocationBundleV4::default()
+    } else {
+        from_json::<LocationBundleV4>("LocationBundle", &bundle_json)?.normalized()
+    };
+    let location = from_json::<LocationConfig>("LocationConfig", &location_json)?.normalized();
+    if !location.is_storable() {
+        return Err(FfiError::Invalid(
+            "The location is incomplete and cannot be saved".into(),
+        ));
+    }
+    let id = location_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(yptun_core::identity::generate_install_id);
+    if let Some(index) = bundle
+        .locations
+        .iter()
+        .position(|entry| entry.storage_id == id)
+    {
+        let old = &bundle.locations[index];
+        bundle.locations[index] = LocationEntry::from(
+            &id,
+            &location,
+            old.subscription_url.clone(),
+            old.metadata.clone(),
+        );
+    } else {
+        bundle
+            .locations
+            .push(LocationEntry::from(&id, &location, None, None));
+    }
+    bundle.active_location_id = Some(id);
+    let normalized = bundle.normalized();
+    let selected_location_json =
+        serde_json::to_string(&location).map_err(|error| FfiError::Json(error.to_string()))?;
+    let normalized_bundle_json = serde_json::to_string_pretty(&normalized)
+        .map_err(|error| FfiError::Json(error.to_string()))?;
+    Ok(AppleLocationSelection {
+        normalized_bundle_json,
+        selected_location_json,
     })
 }
 

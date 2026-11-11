@@ -162,6 +162,42 @@ public actor AppleApplicationBootstrapper {
         return try await load()
     }
 
+    public func locationText(id: String) throws -> String {
+        let paths = try systemPaths()
+        guard let bundleURL = locationBundleURL(in: paths) else {
+            throw AppleApplicationBootstrapError.locationBundleMissing
+        }
+        let bundle = try readTextIfPresent(at: bundleURL) ?? ""
+        guard let location = try appleLocationJson(bundleJson: bundle, locationId: id) else {
+            throw AppleApplicationBootstrapError.locationMissing(id)
+        }
+        return location
+    }
+
+    public func saveLocationText(
+        _ locationJSON: String,
+        id: String?
+    ) async throws -> AppleApplicationSnapshot {
+        let paths = try systemPaths()
+        let bundleURL = locationBundleURL(in: paths)
+        let existing: String
+        if let bundleURL {
+            existing = try readTextIfPresent(at: bundleURL) ?? ""
+        } else {
+            existing = ""
+        }
+        let saved = try appleSaveLocation(
+            bundleJson: existing,
+            locationId: id,
+            locationJson: locationJSON
+        )
+        try AtomicFileIO.writeBytesAtomically(
+            Data(saved.normalizedBundleJson.utf8),
+            to: paths.destination(for: .locationsV4)
+        )
+        return try await load()
+    }
+
     private func systemPaths() throws -> AppleDataPaths {
         try AppleDataPaths.system(appGroupIdentifier: appGroupIdentifier)
     }

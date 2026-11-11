@@ -54,7 +54,12 @@ struct AddLocationView: View {
                     } label: {
                         Label("Добавить подписку", systemImage: "dot.radiowaves.left.and.right")
                     }
-                    option("Создать вручную", symbol: "slider.horizontal.3")
+                    Button {
+                        dismiss()
+                        model.locationEditorRequest = LocationEditorRequest(locationID: nil)
+                    } label: {
+                        Label("Создать вручную", systemImage: "slider.horizontal.3")
+                    }
                     option("Найти бесплатные серверы", symbol: "sparkle.magnifyingglass")
                 }
             }
