@@ -1,0 +1,6 @@
+.native/
+artifacts/
+**/bin/
+**/obj/
+src/YPtun.Windows/Native/*
+!src/YPtun.Windows/Native/.gitkeep

@@ -1,0 +1,20 @@
+<Application
+    x:Class="YPtun.WinUI.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:YPtun.WinUI.Converters">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <Color x:Key="YPtunAccentColor">#7C5CFC</Color>
+            <SolidColorBrush x:Key="YPtunAccentBrush" Color="{StaticResource YPtunAccentColor}" />
+            <SolidColorBrush x:Key="YPtunCardBrush" Color="#0DFFFFFF" />
+            <CornerRadius x:Key="YPtunCardCornerRadius">16</CornerRadius>
+            <converters:InvertedBooleanConverter x:Key="InvertedBooleanConverter" />
+            <converters:ConnectionActionConverter x:Key="ConnectionActionConverter" />
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

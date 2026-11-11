@@ -1,0 +1,43 @@
+<Window
+    x:Class="YPtun.WinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:views="using:YPtun.WinUI.Views"
+    mc:Ignorable="d"
+    Title="YPtun">
+
+    <Grid>
+        <NavigationView
+            x:Name="RootNavigation"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="True"
+            IsPaneToggleButtonVisible="True"
+            IsTitleBarAutoPaddingEnabled="False"
+            OpenPaneLength="240"
+            PaneDisplayMode="Auto"
+            SelectionChanged="OnNavigationSelectionChanged">
+
+            <NavigationView.PaneHeader>
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="8,8,0,12">
+                    <Border Width="34" Height="34" CornerRadius="10" Background="{StaticResource YPtunAccentBrush}">
+                        <FontIcon Glyph="&#xE774;" FontSize="18" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="YPtun" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Windows" Opacity="0.62" FontSize="11" />
+                    </StackPanel>
+                </StackPanel>
+            </NavigationView.PaneHeader>
+
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="Подключение" Tag="connection" Icon="Home" />
+                <NavigationViewItem Content="Конфигурации" Tag="profiles" Icon="World" />
+                <NavigationViewItem Content="Журнал" Tag="logs" Icon="Document" />
+            </NavigationView.MenuItems>
+
+            <Frame x:Name="ContentFrame" />
+        </NavigationView>
+    </Grid>
+</Window>

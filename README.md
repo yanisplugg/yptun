@@ -205,15 +205,20 @@ cd YPtun
 APK появятся в `YPtun/androidApp/build/outputs/apk/release/`.
 Хочешь только под свой телефон и быстрее — добавь `-Polcbox.android.abiFilters=arm64-v8a`.
 
-Десктопная сборка (Windows, нужен **Go** в `PATH`, Android SDK всё равно требуется — Gradle
-конфигурирует общие модули):
+Нативная сборка Windows использует **C# + WinUI 3 (.NET)**, а модели, импорт, генерация конфигов и
+оркестрация VPN остаются в общем Rust-ядре. Нужны .NET 9 SDK, Rust, Go и MinGW-совместимый C-компилятор:
 
-```bash
-cd YPtun
-./gradlew :desktopApp:createDistributable          # готовый образ приложения
-powershell -File desktopApp/packaging/windows/build-portable.ps1    # портативный .exe (СНАЧАЛА: нормализует образ на месте)
-powershell -File desktopApp/packaging/windows/build-installer.ps1   # установщик
+```powershell
+powershell -File windowsApp/build.ps1 -Architecture x64
+powershell -File windowsApp/package.ps1 -Architecture x64 -Version 4.0.0
 ```
+
+Как и раньше, Windows выдаёт два EXE: установщик и один самораспаковывающийся portable. Portable
+хранит всё в каталоге `Data` рядом с собой; установщик использует совместимый с прежним клиентом
+`%APPDATA%\YPtun`.
+
+Compose-модуль `YPtun/desktopApp` пока остаётся оболочкой Linux/macOS и резервным Windows-клиентом
+на время достижения полного функционального паритета нативного WinUI-приложения.
 
 <details>
 <summary>Подпись своих релизных сборок (опционально, для мейнтейнеров)</summary>
@@ -237,12 +242,15 @@ keyPassword=твой-пароль
 
 ## Процесс разработки
 
-YPtun — **Kotlin Multiplatform**: вся логика (импорт, сборка конфигов, движки, состояние UI) живёт в `commonMain`, платформенные мелочи — в `androidMain`. Тот же код крутится и на JVM-десктопе.
+YPtun использует родной UI каждой платформы и одно сетевое ядро:
 
-- **UI** — Jetpack Compose, единый дизайн на всех платформах.
+- **Android** — Kotlin + Jetpack Compose.
+- **Windows** — C# + WinUI 3 (.NET), мост к `core/yptun-core` через компактный C ABI.
+- **Linux/macOS** — существующий Compose Desktop остаётся рабочим до отдельных нативных оболочек.
 - **Локализация** — русский, английский, فارسی и 简体中文 в одном файле строк.
-- **Native-ядра** — Go, собираются в один gomobile-AAR таском `buildCoresAndroidAar`; входы ядер отслеживаются, AAR пересобирается только при правке Go-кода.
-- **Тесты** — модульные тесты на парсеры/конвертеры маршрутизации (`./gradlew :sharedUI:jvmTest`).
+- **Общая логика** — Rust (`core/yptun-core`): модели, импорт, подписки, маршрутизация и конфигурации движков.
+- **Native-движки** — Go: Android получает gomobile-AAR, Windows — `yptuncore` DLL с тем же набором движков.
+- **Тесты** — Kotlin/JVM и Rust (`./gradlew :sharedUI:jvmTest`, `cargo test --manifest-path core/Cargo.toml`).
 - **Ветки** — стабильное в `main`, активная разработка в `Beta`, десктопная — в `pc-client-beta`; релизы тегируются `vX.Y.Z`.
 
 Нашёл баг или хочешь фичу — открывай issue или PR, см. **[CONTRIBUTING.md](CONTRIBUTING.md)**.
@@ -253,6 +261,8 @@ YPtun — **Kotlin Multiplatform**: вся логика (импорт, сбор�
 
 ```
 YPtun/            Kotlin Multiplatform приложение — Compose UI, Android VpnService, движки
+windowsApp/       Нативное Windows-приложение — C#, WinUI 3, упаковка installer/portable
+core/             Общее Rust-ядро + Android/Apple/Windows FFI
 cores/            Go-связка: один gomobile-AAR из sing-box + olcRTC + Xray + AmneziaWG + VK-TURN + MasterDNS
 olcrtc/           olcRTC — транспорт поверх видеозвонков          (сторонний, вендорено)
 sing-box/         sing-box / libbox                                (вендорено)
