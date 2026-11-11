@@ -66,6 +66,8 @@ hide_rust_symbols() {
   local llvm_nm
   local llvm_objcopy
   local symbols
+  local all_symbols
+  local local_symbols
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -83,6 +85,8 @@ hide_rust_symbols() {
     return 1
   fi
   symbols="$WORK/$label-symbols.txt"
+  all_symbols="$WORK/$label-all-symbols.txt"
+  local_symbols="$WORK/$label-local-symbols.txt"
 
   rm -f "$relocatable" "$edited" "$output"
   xcrun ld -r \
@@ -92,7 +96,12 @@ hide_rust_symbols() {
     -all_load "$input" \
     -exported_symbols_list "$exports" \
     -o "$relocatable"
-  "$llvm_objcopy" --keep-global-symbols="$exports" "$relocatable" "$edited"
+  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$relocatable" > "$all_symbols"
+  grep -vxFf "$exports" "$all_symbols" > "$local_symbols" || true
+  "$llvm_objcopy" \
+    --localize-symbols="$local_symbols" \
+    --keep-global-symbols="$exports" \
+    "$relocatable" "$edited"
   xcrun libtool -static -o "$output" "$edited"
 
   "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
