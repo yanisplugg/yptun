@@ -47,16 +47,24 @@ public final class YPtunApplicationModel {
     public var presentedNotice: YPtunNotice?
 
     private let bootstrapper: AppleApplicationBootstrapper
+    private let vpnController: any AppleVPNControlling
     private var didBootstrap = false
+    private var selectionTask: Task<Void, Never>?
+    private var connectionTask: Task<Void, Never>?
 
     public init(
         locations: [LocationListItem] = [],
         selectedLocationID: String? = nil,
-        bootstrapper: AppleApplicationBootstrapper = AppleApplicationBootstrapper()
+        bootstrapper: AppleApplicationBootstrapper = AppleApplicationBootstrapper(),
+        vpnController: any AppleVPNControlling = AppleVPNController()
     ) {
         self.locations = locations
         self.selectedLocationID = selectedLocationID
         self.bootstrapper = bootstrapper
+        self.vpnController = vpnController
+        vpnController.onStateChange = { [weak self] state in
+            self?.connectionState = state
+        }
     }
 
     public var selectedLocation: LocationListItem? {
@@ -93,6 +101,7 @@ public final class YPtunApplicationModel {
             } else if snapshot.migrationMadeChanges {
                 startupMessage = "Данные предыдущей версии перенесены без изменения исходных файлов."
             }
+            connectionState = await vpnController.currentState()
         } catch {
             startupMessage = "Не удалось прочитать сохранённые локации. Исходные данные не изменены."
         }
@@ -100,6 +109,17 @@ public final class YPtunApplicationModel {
 
     public func select(_ location: LocationListItem) {
         selectedLocationID = location.id
+        selectionTask?.cancel()
+        selectionTask = Task { [bootstrapper] in
+            do {
+                try await bootstrapper.selectLocation(id: location.id)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard selectedLocationID == location.id else { return }
+                startupMessage = "Не удалось сохранить выбранную локацию. Исходные данные не изменены."
+            }
+        }
     }
 
     public func requestPrimaryAction() {
@@ -116,10 +136,32 @@ public final class YPtunApplicationModel {
             )
             return
         }
-        presentedNotice = YPtunNotice(
-            title: "Подключение пока недоступно",
-            message: "Нативный Packet Tunnel ещё подключается к движкам. Сохранённая локация уже перенесена и не будет потеряна."
-        )
+        guard connectionState != .disconnecting else { return }
+        connectionTask?.cancel()
+        if connectionState == .connected || connectionState == .connecting {
+            connectionState = .disconnecting
+            connectionTask = Task { [vpnController] in
+                await vpnController.stop()
+            }
+            return
+        }
+
+        connectionState = .connecting
+        connectionTask = Task { [bootstrapper, vpnController] in
+            do {
+                try await bootstrapper.prepareTunnelRequest(locationID: selectedLocation.id)
+                try Task.checkCancellation()
+                try await vpnController.start()
+            } catch is CancellationError {
+                connectionState = .disconnected
+            } catch {
+                connectionState = .disconnected
+                presentedNotice = YPtunNotice(
+                    title: "Не удалось подключиться",
+                    message: error.localizedDescription
+                )
+            }
+        }
     }
 
     public func showPendingFeature(_ title: String) {
@@ -127,5 +169,21 @@ public final class YPtunApplicationModel {
             title: title,
             message: "Раздел уже заложен в нативную структуру и будет подключён к Rust-ядру следующим этапом."
         )
+    }
+
+    public func importLocations(from text: String) async -> Bool {
+        do {
+            let snapshot = try await bootstrapper.importLocations(from: text)
+            locations = snapshot.locations
+            selectedLocationID = snapshot.activeLocationID
+                ?? snapshot.locations.first(where: \.isComplete)?.id
+            return true
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Не удалось импортировать",
+                message: error.localizedDescription
+            )
+            return false
+        }
     }
 }

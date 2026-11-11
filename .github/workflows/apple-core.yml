@@ -38,7 +38,7 @@ jobs:
 
   build-apple:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Select newest Xcode
@@ -52,6 +52,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core -> target
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cores/go.mod
+          cache: false
       - name: Build XCFramework and Swift bindings
         run: bash core/scripts/build-apple.sh
       - name: Verify Swift package
@@ -63,6 +67,23 @@ jobs:
       - name: Build shared Apple packages
         working-directory: YPtun/apple/Packages/YPtunAppleKit
         run: swift test
+      - name: Build in-process Apple network cores
+        run: |
+          (cd openflux && go mod tidy)
+          (cd cores && go mod tidy)
+          cd cores
+          go install golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+          "$(go env GOPATH)/bin/gomobile" init
+          VERSION=$(grep -E '^####[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+' ../sing-box/docs/changelog.md | head -1 | awk '{print $2}')
+          mkdir -p ../YPtun/sharedUI/build/generated/cores/ios
+          "$(go env GOPATH)/bin/gomobile" bind \
+            -target=ios,macos \
+            -iosversion 17.0 \
+            -tags with_gvisor,with_dhcp,with_wireguard,with_utls,with_clash_api,with_quic \
+            -trimpath \
+            -ldflags "-X github.com/sagernet/sing-box/constant.Version=$VERSION -s -w -checklinkname=0" \
+            -o ../YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework \
+            ./coreapi
       - name: Generate native Apple project
         working-directory: YPtun/apple
         run: |

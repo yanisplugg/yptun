@@ -33,7 +33,7 @@ struct YPtunApplicationModelTests {
         #expect(model.presentedNotice?.message.contains("привязку аккаунта") == true)
     }
 
-    @Test func readyLocationDoesNotPretendThatTheTunnelConnected() {
+    @Test func readyLocationStillStartsDisconnected() {
         let location = LocationListItem(
             id: "ready",
             name: "Основная",
@@ -47,9 +47,8 @@ struct YPtunApplicationModelTests {
             selectedLocationID: location.id
         )
 
-        model.requestPrimaryAction()
-
         #expect(model.connectionState == .disconnected)
-        #expect(model.presentedNotice?.title == "Подключение пока недоступно")
+        #expect(model.primaryActionTitle == "Подключить")
+        #expect(model.presentedNotice == nil)
     }
 }

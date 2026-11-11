@@ -8,8 +8,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "3.5.0"
-    CURRENT_PROJECT_VERSION: "353"
+    MARKETING_VERSION: "4.0.0"
+    CURRENT_PROJECT_VERSION: "500"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -24,6 +24,9 @@ packages:
     path: Packages/YPtunAppleKit
   YPtunRustBridge:
     path: Packages/YPtunRustBridge
+  Tun2SocksKit:
+    url: https://github.com/EbrahimTahernejad/Tun2SocksKit
+    exactVersion: 5.16.0
 
 targets:
   YPtunIOS:
@@ -32,6 +35,7 @@ targets:
     sources:
       - path: Sources/iOSApp
       - path: Resources/Assets.xcassets
+      - path: Resources/Licenses
     settings:
       base:
         PRODUCT_NAME: YPtun
@@ -39,6 +43,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app
         INFOPLIST_FILE: Configuration/iOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: Configuration/iOS/YPtun.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
     dependencies:
@@ -76,6 +81,10 @@ targets:
         product: YPtunTunnelSupport
       - package: YPtunRustBridge
         product: YPtunRustBridge
+      - package: Tun2SocksKit
+        product: Tun2SocksKit
+      - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
+        embed: false
 
   YPtunWidget:
     type: app-extension
@@ -103,6 +112,7 @@ targets:
     sources:
       - path: Sources/macOSApp
       - path: Resources/Assets.xcassets
+      - path: Resources/Licenses
     settings:
       base:
         PRODUCT_NAME: YPtun
@@ -110,6 +120,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.yptun.app.macos
         INFOPLIST_FILE: Configuration/macOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: Configuration/macOS/YPtun.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: MacAppIcon
         ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - package: YPtunAppleKit
@@ -145,6 +156,10 @@ targets:
         product: YPtunTunnelSupport
       - package: YPtunRustBridge
         product: YPtunRustBridge
+      - package: Tun2SocksKit
+        product: Tun2SocksKit
+      - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
+        embed: false
 
 schemes:
   YPtun iOS:
