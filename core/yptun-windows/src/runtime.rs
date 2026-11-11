@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use yptun_core::desktop_api::RuntimeDiagnostics;
 use yptun_core::desktop_cores::{
     openflux_command, openflux_env, openflux_needs_key_file, openflux_start_log, snolc_command,
     snolc_files, snolc_start_log, tt_await_tunnel_ready, tt_client_command, tt_compose_config,
@@ -1083,19 +1084,6 @@ pub struct WindowsRuntime {
     connected_since_epoch_ms: u64,
     watchdog_last_poll: Option<Instant>,
     watchdog_probe_failures: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RuntimeDiagnostics {
-    pub active_engine: String,
-    pub connection_mode: String,
-    pub engine_alive: bool,
-    pub connected_since_epoch_ms: u64,
-    pub in_core_tun: bool,
-    pub external_tun: bool,
-    pub bypass_route_count: usize,
-    pub watchdog_probe_failures: u32,
 }
 
 impl WindowsRuntime {

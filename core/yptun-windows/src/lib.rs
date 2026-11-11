@@ -13,5 +13,6 @@ mod runtime;
 mod sidecars;
 mod store;
 
-pub use app::{CommandRequest, CoreSnapshot, WindowsApp};
+pub use app::WindowsApp;
 pub use ffi::*;
+pub use yptun_core::desktop_api::{CommandRequest, CoreSnapshot};

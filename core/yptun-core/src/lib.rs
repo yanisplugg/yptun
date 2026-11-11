@@ -9,6 +9,7 @@ pub mod conflicting_vpn;
 pub mod core_versions;
 pub mod crypto;
 pub mod delta_bundle;
+pub mod desktop_api;
 pub mod desktop_app_image;
 pub mod desktop_cores;
 pub mod desktop_extension_bridge;

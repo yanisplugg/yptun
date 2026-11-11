@@ -4,74 +4,28 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 use serde::{Deserialize, Serialize};
+use yptun_core::desktop_api::{
+    profile_item, subscription_item, CommandRequest, CoreSnapshot, LocationEditorData, Response,
+    SettingsSnapshot, TextPayload, UpdateCheckPayload,
+};
 use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
 use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
 use yptun_core::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
 use yptun_core::desktop_vpn_runtime::{first_public_exit_ip, LogJournal};
 use yptun_core::home;
-use yptun_core::location::{
-    LocationConfig, LocationEntry, LocationMetadata, DEFAULT_UPDATE_INTERVAL_HOURS,
-};
-use yptun_core::model::EngineType;
+use yptun_core::location::LocationConfig;
 use yptun_core::repository::{ClientInfo, HttpFetcher, HttpRequest, Repository};
 use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
+use yptun_core::update::AppUpdateSettings;
 use yptun_core::update::{AppUpdateService, ReleaseChannel};
-use yptun_core::update::{AppUpdateSettings, AppUpdateSettingsStore};
 use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
 
 use crate::http::ReqwestFetcher;
 use crate::logging;
-use crate::runtime::{RuntimeDiagnostics, WindowsRuntime};
+use crate::runtime::WindowsRuntime;
 use crate::store::{device_identity, FileStore};
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct CommandRequest {
-    pub command: String,
-    pub text: String,
-    pub id: String,
-    pub mode: String,
-}
-
-impl Default for CommandRequest {
-    fn default() -> Self {
-        Self {
-            command: "snapshot".into(),
-            text: String::new(),
-            id: String::new(),
-            mode: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProfileItem {
-    pub id: String,
-    pub name: String,
-    pub subtitle: String,
-    pub engine: String,
-    pub is_complete: bool,
-    pub is_subscription: bool,
-    pub subscription_name: Option<String>,
-    pub ping_ms: Option<i32>,
-    pub ping_tested: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionItem {
-    pub url: String,
-    pub name: String,
-    pub custom_name: String,
-    pub cascade_link: String,
-    pub update_interval_hours: i32,
-    pub auto_update_enabled: bool,
-    pub location_count: usize,
-    pub expires_at_epoch_ms: Option<i64>,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -93,63 +47,6 @@ impl Default for SubscriptionEditRequest {
             auto_update_enabled: true,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoreSnapshot {
-    pub status: String,
-    pub status_label: String,
-    pub status_detail: String,
-    pub is_connected: bool,
-    pub runtime_available: bool,
-    pub connection_mode: String,
-    pub active_profile_id: Option<String>,
-    pub profiles: Vec<ProfileItem>,
-    pub subscriptions: Vec<SubscriptionItem>,
-    pub session: RuntimeDiagnostics,
-    pub telegram_proxy_status: String,
-    pub telegram_proxy_detail: String,
-    pub logs: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocationEditorData {
-    pub storage_id: String,
-    pub location: LocationConfig,
-    pub is_new: bool,
-    pub is_subscription: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SettingsSnapshot {
-    pub traffic: TrafficSettings,
-    pub routing: RoutingRules,
-    pub routing_profiles: RoutingProfilesState,
-    pub split_tunnel: SplitTunnelState,
-    pub app_behavior: AppBehaviorSettings,
-    pub socks: DesktopSocksProxySettings,
-    pub updates: AppUpdateSettings,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextPayload {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCheckPayload {
-    pub version: String,
-    pub html_url: String,
-    pub asset_name: String,
-    pub download_url: String,
-    pub size_bytes: Option<i64>,
-    pub sha256: Option<String>,
-    pub is_update_available: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -206,31 +103,6 @@ impl RuntimeStatus {
 
     fn is_connected(&self) -> bool {
         matches!(self, Self::Connected)
-    }
-}
-
-#[derive(Serialize)]
-struct Response<T: Serialize> {
-    ok: bool,
-    data: Option<T>,
-    error: Option<String>,
-}
-
-impl<T: Serialize> Response<T> {
-    fn success(data: T) -> Self {
-        Self {
-            ok: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    fn error(message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            data: None,
-            error: Some(message.into()),
-        }
     }
 }
 
@@ -525,16 +397,7 @@ impl WindowsApp {
     }
 
     fn settings_snapshot(&self) -> SettingsSnapshot {
-        let vpn = VpnSettings::new(&self.app_data_dir);
-        SettingsSnapshot {
-            traffic: vpn.load_traffic(),
-            routing: vpn.load_routing(),
-            routing_profiles: vpn.load_routing_profiles(),
-            split_tunnel: vpn.load_split_tunnel(),
-            app_behavior: vpn.load_app_behavior(),
-            socks: DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Windows).load(),
-            updates: FileAppUpdateSettingsStore::new(&self.app_data_dir).load(),
-        }
+        SettingsSnapshot::load(&self.app_data_dir, DesktopOs::Windows)
     }
 
     fn check_update(&self) -> Result<UpdateCheckPayload, String> {
@@ -1131,99 +994,6 @@ impl Drop for WindowsApp {
     }
 }
 
-fn profile_item(
-    entry: &LocationEntry,
-    ping_results: &BTreeMap<String, Option<i32>>,
-) -> ProfileItem {
-    let location = entry.location();
-    let subscription = entry.metadata.as_ref().and_then(subscription_name);
-    let subtitle = match location.engine {
-        EngineType::Stealth | EngineType::Chain => format!(
-            "{} · {}",
-            location.provider_name(),
-            location.transport_name()
-        ),
-        EngineType::Standard => location
-            .proxy
-            .as_ref()
-            .map(|proxy| format!("{} · {}:{}", proxy.kind, proxy.server, proxy.server_port))
-            .unwrap_or_else(|| "Прокси не настроен".into()),
-        EngineType::VkTurn => "VK-TURN".into(),
-        EngineType::MasterDns => "MasterDNS".into(),
-        EngineType::OpenFlux => "OpenFlux".into(),
-        EngineType::Snolc => "snolc".into(),
-    };
-    ProfileItem {
-        id: entry.storage_id.clone(),
-        name: location.display_name(),
-        subtitle,
-        engine: engine_name(location.engine).into(),
-        is_complete: location.is_complete(),
-        is_subscription: entry
-            .subscription_url
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()),
-        subscription_name: subscription,
-        ping_ms: ping_results.get(&entry.storage_id).copied().flatten(),
-        ping_tested: ping_results.contains_key(&entry.storage_id),
-    }
-}
-
-fn subscription_name(metadata: &LocationMetadata) -> Option<String> {
-    metadata
-        .subscription
-        .as_ref()
-        .and_then(|subscription| subscription.name.clone())
-        .filter(|name| !name.trim().is_empty())
-}
-
-fn subscription_item(url: String, entries: &[LocationEntry]) -> SubscriptionItem {
-    let metadata = entries
-        .iter()
-        .find_map(|entry| entry.metadata.as_ref()?.subscription.as_ref());
-    let name = metadata
-        .and_then(|subscription| subscription.name.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&url)
-        .to_string();
-    SubscriptionItem {
-        url,
-        name,
-        custom_name: metadata
-            .and_then(|subscription| subscription.custom_name.clone())
-            .unwrap_or_default(),
-        cascade_link: metadata
-            .and_then(|subscription| subscription.cascade_link.clone())
-            .unwrap_or_default(),
-        update_interval_hours: metadata
-            .and_then(|subscription| subscription.update_interval_hours)
-            .unwrap_or(DEFAULT_UPDATE_INTERVAL_HOURS),
-        auto_update_enabled: metadata.is_none_or(|subscription| subscription.auto_update_enabled),
-        location_count: entries.len(),
-        expires_at_epoch_ms: entries.iter().find_map(|entry| {
-            entry
-                .metadata
-                .as_ref()?
-                .subscription
-                .as_ref()?
-                .expires_at_epoch_ms
-        }),
-    }
-}
-
-fn engine_name(engine: EngineType) -> &'static str {
-    match engine {
-        EngineType::Stealth => "Stealth",
-        EngineType::Standard => "Proxy",
-        EngineType::Chain => "Chain",
-        EngineType::VkTurn => "VK-TURN",
-        EngineType::MasterDns => "MasterDNS",
-        EngineType::OpenFlux => "OpenFlux",
-        EngineType::Snolc => "snolc",
-    }
-}
-
 fn json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|error| {
         format!(
@@ -1249,7 +1019,7 @@ fn is_elevated() -> bool {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use yptun_core::location::SubscriptionMetadata;
+    use yptun_core::location::{LocationMetadata, SubscriptionMetadata};
     use yptun_core::routing::RoutingProfile;
 
     fn temp_dir() -> PathBuf {

@@ -1,23 +1,25 @@
+use std::collections::BTreeMap;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use yptun_core::desktop_api::{
+    profile_item, subscription_item, CommandRequest, CoreSnapshot, LocationEditorData, Response,
+    RuntimeDiagnostics, SettingsSnapshot, TextPayload,
+};
 use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
 use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
 use yptun_core::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
 use yptun_core::desktop_vpn_runtime::LogJournal;
 use yptun_core::home;
-use yptun_core::location::{
-    LocationConfig, LocationEntry, LocationMetadata, DEFAULT_UPDATE_INTERVAL_HOURS,
-};
-use yptun_core::model::EngineType;
+use yptun_core::location::LocationConfig;
 use yptun_core::repository::{ClientInfo, HttpFetcher, Repository};
 use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
-use yptun_core::update::{AppUpdateSettings, AppUpdateSettingsStore};
+use yptun_core::update::AppUpdateSettings;
 use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
 
 use crate::store::{device_identity, FileStore};
@@ -28,135 +30,6 @@ mod runtime;
 use runtime::LinuxRuntime;
 
 const AUXILIARY_RUNTIME_UNAVAILABLE: &str = "This Linux runtime command is not available yet";
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct CommandRequest {
-    command: String,
-    text: String,
-    id: String,
-    mode: String,
-}
-
-impl Default for CommandRequest {
-    fn default() -> Self {
-        Self {
-            command: "snapshot".into(),
-            text: String::new(),
-            id: String::new(),
-            mode: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileItem {
-    id: String,
-    name: String,
-    subtitle: String,
-    engine: String,
-    is_complete: bool,
-    is_subscription: bool,
-    subscription_name: Option<String>,
-    ping_ms: Option<i32>,
-    ping_tested: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SubscriptionItem {
-    url: String,
-    name: String,
-    custom_name: String,
-    cascade_link: String,
-    update_interval_hours: i32,
-    auto_update_enabled: bool,
-    location_count: usize,
-    expires_at_epoch_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeDiagnostics {
-    active_engine: String,
-    connection_mode: String,
-    engine_alive: bool,
-    connected_since_epoch_ms: u64,
-    in_core_tun: bool,
-    external_tun: bool,
-    bypass_route_count: usize,
-    watchdog_probe_failures: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CoreSnapshot {
-    status: String,
-    status_label: String,
-    status_detail: String,
-    is_connected: bool,
-    runtime_available: bool,
-    connection_mode: String,
-    active_profile_id: Option<String>,
-    profiles: Vec<ProfileItem>,
-    subscriptions: Vec<SubscriptionItem>,
-    session: RuntimeDiagnostics,
-    telegram_proxy_status: String,
-    telegram_proxy_detail: String,
-    logs: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LocationEditorData {
-    storage_id: String,
-    location: LocationConfig,
-    is_new: bool,
-    is_subscription: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingsSnapshot {
-    traffic: TrafficSettings,
-    routing: RoutingRules,
-    routing_profiles: RoutingProfilesState,
-    split_tunnel: SplitTunnelState,
-    app_behavior: AppBehaviorSettings,
-    socks: DesktopSocksProxySettings,
-    updates: AppUpdateSettings,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct TextPayload {
-    text: String,
-}
-
-#[derive(Serialize)]
-struct Response<T: Serialize> {
-    ok: bool,
-    data: Option<T>,
-    error: Option<String>,
-}
-
-impl<T: Serialize> Response<T> {
-    fn success(data: T) -> Self {
-        Self {
-            ok: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-
-    fn error(message: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            data: None,
-            error: Some(message.into()),
-        }
-    }
-}
 
 pub struct LinuxApp {
     app_data_dir: PathBuf,
@@ -504,16 +377,7 @@ impl LinuxApp {
     }
 
     fn settings_snapshot(&self) -> SettingsSnapshot {
-        let vpn = VpnSettings::new(&self.app_data_dir);
-        SettingsSnapshot {
-            traffic: vpn.load_traffic(),
-            routing: vpn.load_routing(),
-            routing_profiles: vpn.load_routing_profiles(),
-            split_tunnel: vpn.load_split_tunnel(),
-            app_behavior: vpn.load_app_behavior(),
-            socks: DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Linux).load(),
-            updates: FileAppUpdateSettingsStore::new(&self.app_data_dir).load(),
-        }
+        SettingsSnapshot::load(&self.app_data_dir, DesktopOs::Linux)
     }
 
     fn save_settings(&self, kind: &str, text: &str) -> Result<(), String> {
@@ -590,7 +454,14 @@ impl LinuxApp {
             runtime_available: runtime.runtime_available,
             connection_mode: mode.clone(),
             active_profile_id: bundle.active_location_id.clone(),
-            profiles: bundle.locations.iter().map(profile_item).collect(),
+            profiles: {
+                let ping_results = BTreeMap::new();
+                bundle
+                    .locations
+                    .iter()
+                    .map(|entry| profile_item(entry, &ping_results))
+                    .collect()
+            },
             subscriptions: yptun_core::importer::subscription_groups(&bundle)
                 .into_iter()
                 .map(|(url, entries)| subscription_item(url, &entries))
@@ -624,96 +495,6 @@ impl Drop for LinuxApp {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .stop();
-    }
-}
-
-fn profile_item(entry: &LocationEntry) -> ProfileItem {
-    let location = entry.location();
-    let subscription = entry.metadata.as_ref().and_then(subscription_name);
-    let subtitle = match location.engine {
-        EngineType::Stealth | EngineType::Chain => format!(
-            "{} · {}",
-            location.provider_name(),
-            location.transport_name()
-        ),
-        EngineType::Standard => location
-            .proxy
-            .as_ref()
-            .map(|proxy| format!("{} · {}:{}", proxy.kind, proxy.server, proxy.server_port))
-            .unwrap_or_else(|| "Прокси не настроен".into()),
-        EngineType::VkTurn => "VK-TURN".into(),
-        EngineType::MasterDns => "MasterDNS".into(),
-        EngineType::OpenFlux => "OpenFlux".into(),
-        EngineType::Snolc => "snolc".into(),
-    };
-    ProfileItem {
-        id: entry.storage_id.clone(),
-        name: location.display_name(),
-        subtitle,
-        engine: engine_name(location.engine).into(),
-        is_complete: location.is_complete(),
-        is_subscription: entry
-            .subscription_url
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()),
-        subscription_name: subscription,
-        ping_ms: None,
-        ping_tested: false,
-    }
-}
-
-fn subscription_name(metadata: &LocationMetadata) -> Option<String> {
-    metadata
-        .subscription
-        .as_ref()
-        .and_then(|subscription| subscription.name.clone())
-        .filter(|name| !name.trim().is_empty())
-}
-
-fn subscription_item(url: String, entries: &[LocationEntry]) -> SubscriptionItem {
-    let metadata = entries
-        .iter()
-        .find_map(|entry| entry.metadata.as_ref()?.subscription.as_ref());
-    let name = metadata
-        .and_then(|subscription| subscription.name.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&url)
-        .to_string();
-    SubscriptionItem {
-        url,
-        name,
-        custom_name: metadata
-            .and_then(|subscription| subscription.custom_name.clone())
-            .unwrap_or_default(),
-        cascade_link: metadata
-            .and_then(|subscription| subscription.cascade_link.clone())
-            .unwrap_or_default(),
-        update_interval_hours: metadata
-            .and_then(|subscription| subscription.update_interval_hours)
-            .unwrap_or(DEFAULT_UPDATE_INTERVAL_HOURS),
-        auto_update_enabled: metadata.is_none_or(|subscription| subscription.auto_update_enabled),
-        location_count: entries.len(),
-        expires_at_epoch_ms: entries.iter().find_map(|entry| {
-            entry
-                .metadata
-                .as_ref()?
-                .subscription
-                .as_ref()?
-                .expires_at_epoch_ms
-        }),
-    }
-}
-
-fn engine_name(engine: EngineType) -> &'static str {
-    match engine {
-        EngineType::Stealth => "Stealth",
-        EngineType::Standard => "Proxy",
-        EngineType::Chain => "Chain",
-        EngineType::VkTurn => "VK-TURN",
-        EngineType::MasterDns => "MasterDNS",
-        EngineType::OpenFlux => "OpenFlux",
-        EngineType::Snolc => "snolc",
     }
 }
 

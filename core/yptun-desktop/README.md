@@ -8,13 +8,15 @@ remain available only as migration references until this crate passes parity and
 
 - `ui/`: one visual implementation for both operating systems. Its visual authority is the legacy
   Compose client, not the temporary WinUI layout.
-- `src/backend.rs`: the narrow UI-to-application command boundary. Windows currently delegates to
-  the recovered Rust Windows host; Linux is the next platform adapter.
+- `src/backend.rs`: the narrow UI-to-application command boundary. Windows delegates to the
+  recovered Rust Windows host; Linux uses the shared engine controller through its native adapter.
 - `yptun-core`: profile, subscription, routing, engine and persistence logic shared with Android.
 - platform adapters: TUN, system proxy, tray, global hotkey, startup and update installation only.
 
-The command boundary is temporary migration scaffolding. Models and commands will move into a new
-platform-neutral `yptun-desktop-runtime` crate so Windows and Linux cannot drift.
+Linux currently runs Standard, Stealth, Chain, MasterDNS, OpenFlux and snolc in proxy or TUN mode.
+VK-TURN/Trust Tunnel/Mieru, Telegram proxy, probing and automatic reconnect remain explicit Linux
+gaps. The command boundary is temporary migration scaffolding: models and commands will move into a
+platform-neutral runtime layer so Windows and Linux cannot drift.
 
 ## Development
 
