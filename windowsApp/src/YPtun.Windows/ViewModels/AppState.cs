@@ -606,7 +606,7 @@ public sealed partial class AppState : ObservableObject, IAsyncDisposable
         }
     }
 
-    public void RecordUiError(Exception exception) => RecordUiError(exception.Message);
+    public void RecordUiError(Exception exception) => RecordUiError(exception.ToString());
 
     public void RecordUiError(string message)
     {

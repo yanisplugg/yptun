@@ -44,4 +44,11 @@
     <Content Include="Assets\WindowsIcon.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(NativeAssetsDir)\**\*" CopyToOutputDirectory="PreserveNewest" TargetPath="Native\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
+
+  <Target Name="CopyApplicationPriToPublishDirectory" AfterTargets="Publish">
+    <Copy
+      SourceFiles="$(TargetDir)$(AssemblyName).pri"
+      DestinationFiles="$(PublishDir)$(AssemblyName).pri"
+      Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+  </Target>
 </Project>
