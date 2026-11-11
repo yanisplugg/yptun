@@ -51,6 +51,9 @@ hide_rust_symbols() {
   local arch
   local sdk_path
   local sdk_version
+  local rust_host
+  local llvm_nm
+  local symbols
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -60,6 +63,13 @@ hide_rust_symbols() {
 
   sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
   sdk_version="$(xcrun --sdk "$sdk" --show-sdk-version)"
+  rust_host="$(rustc -vV | sed -n 's/^host: //p')"
+  llvm_nm="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-nm"
+  if [[ ! -x "$llvm_nm" ]]; then
+    echo "Rust llvm-nm is unavailable; install rustup component llvm-tools-preview" >&2
+    return 1
+  fi
+  symbols="$WORK/$label-symbols.txt"
 
   rm -f "$relocatable" "$output"
   xcrun ld -r \
@@ -71,13 +81,14 @@ hide_rust_symbols() {
     -o "$relocatable"
   xcrun libtool -static -o "$output" "$relocatable"
 
-  if xcrun nm -gUj "$output" | grep -Eq '^(__R|__ZN)'; then
+  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
+  if grep -Eq '^(__R|__ZN)' "$symbols"; then
     echo "Rust implementation symbols remain public in $output" >&2
     return 1
   fi
 
   while IFS= read -r symbol; do
-    if ! xcrun nm -gUj "$output" | grep -Fxq "$symbol"; then
+    if ! grep -Fxq "$symbol" "$symbols"; then
       echo "Required C ABI symbol $symbol is missing from $output" >&2
       return 1
     fi
