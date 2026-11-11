@@ -37,6 +37,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="Assets\WindowsIcon.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(NativeAssetsDir)\**\*" CopyToOutputDirectory="PreserveNewest" TargetPath="Native\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>

@@ -1,16 +1,29 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 
 use serde::{Deserialize, Serialize};
+use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
-use yptun_core::desktop_vpn_runtime::LogJournal;
-use yptun_core::location::{LocationEntry, LocationMetadata};
+use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
+use yptun_core::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
+use yptun_core::desktop_vpn_runtime::{first_public_exit_ip, LogJournal};
+use yptun_core::home;
+use yptun_core::location::{
+    LocationConfig, LocationEntry, LocationMetadata, DEFAULT_UPDATE_INTERVAL_HOURS,
+};
 use yptun_core::model::EngineType;
-use yptun_core::repository::{ClientInfo, Repository};
+use yptun_core::repository::{ClientInfo, HttpFetcher, HttpRequest, Repository};
+use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
+use yptun_core::settings::AppBehaviorSettings;
+use yptun_core::update::{AppUpdateService, ReleaseChannel};
+use yptun_core::update::{AppUpdateSettings, AppUpdateSettingsStore};
+use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
 
 use crate::http::ReqwestFetcher;
 use crate::logging;
-use crate::runtime::WindowsRuntime;
+use crate::runtime::{RuntimeDiagnostics, WindowsRuntime};
 use crate::store::{device_identity, FileStore};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +56,43 @@ pub struct ProfileItem {
     pub is_complete: bool,
     pub is_subscription: bool,
     pub subscription_name: Option<String>,
+    pub ping_ms: Option<i32>,
+    pub ping_tested: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionItem {
+    pub url: String,
+    pub name: String,
+    pub custom_name: String,
+    pub cascade_link: String,
+    pub update_interval_hours: i32,
+    pub auto_update_enabled: bool,
+    pub location_count: usize,
+    pub expires_at_epoch_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SubscriptionEditRequest {
+    url: String,
+    custom_name: String,
+    cascade_link: String,
+    update_interval_hours: i32,
+    auto_update_enabled: bool,
+}
+
+impl Default for SubscriptionEditRequest {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            custom_name: String::new(),
+            cascade_link: String::new(),
+            update_interval_hours: 24,
+            auto_update_enabled: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,13 +106,57 @@ pub struct CoreSnapshot {
     pub connection_mode: String,
     pub active_profile_id: Option<String>,
     pub profiles: Vec<ProfileItem>,
+    pub subscriptions: Vec<SubscriptionItem>,
+    pub session: RuntimeDiagnostics,
+    pub telegram_proxy_status: String,
+    pub telegram_proxy_detail: String,
     pub logs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationEditorData {
+    pub storage_id: String,
+    pub location: LocationConfig,
+    pub is_new: bool,
+    pub is_subscription: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSnapshot {
+    pub traffic: TrafficSettings,
+    pub routing: RoutingRules,
+    pub routing_profiles: RoutingProfilesState,
+    pub split_tunnel: SplitTunnelState,
+    pub app_behavior: AppBehaviorSettings,
+    pub socks: DesktopSocksProxySettings,
+    pub updates: AppUpdateSettings,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPayload {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckPayload {
+    pub version: String,
+    pub html_url: String,
+    pub asset_name: String,
+    pub download_url: String,
+    pub size_bytes: Option<i64>,
+    pub sha256: Option<String>,
+    pub is_update_available: bool,
 }
 
 #[derive(Debug, Clone)]
 enum RuntimeStatus {
     Disconnected,
     Connecting,
+    Reconnecting,
     Connected,
     Stopping,
     Error(String),
@@ -73,6 +167,7 @@ impl RuntimeStatus {
         match self {
             Self::Disconnected => "disconnected",
             Self::Connecting => "connecting",
+            Self::Reconnecting => "reconnecting",
             Self::Connected => "connected",
             Self::Stopping => "stopping",
             Self::Error(_) => "error",
@@ -83,6 +178,7 @@ impl RuntimeStatus {
         match self {
             Self::Disconnected => "Отключено",
             Self::Connecting => "Подключение…",
+            Self::Reconnecting => "Переподключение…",
             Self::Connected => "Подключено",
             Self::Stopping => "Отключение…",
             Self::Error(_) => "Ошибка",
@@ -97,6 +193,9 @@ impl RuntimeStatus {
             Self::Connecting => active_name
                 .map(|name| format!("Запуск {name}"))
                 .unwrap_or_else(|| "Запуск VPN".into()),
+            Self::Reconnecting => active_name
+                .map(|name| format!("Восстановление {name}"))
+                .unwrap_or_else(|| "Восстановление VPN".into()),
             Self::Connected => active_name
                 .map(|name| format!("Трафик идёт через {name}"))
                 .unwrap_or_else(|| "VPN активен".into()),
@@ -138,11 +237,13 @@ impl<T: Serialize> Response<T> {
 pub struct WindowsApp {
     app_data_dir: PathBuf,
     native_dir: PathBuf,
+    app_version: String,
     repository: Repository,
     settings: Mutex<DesktopSettings>,
     journal: Arc<LogJournal>,
     status: RwLock<RuntimeStatus>,
     runtime: Mutex<WindowsRuntime>,
+    ping_results: Mutex<BTreeMap<String, Option<i32>>>,
 }
 
 impl WindowsApp {
@@ -169,14 +270,22 @@ impl WindowsApp {
         let journal = Arc::new(LogJournal::new());
         let runtime =
             WindowsRuntime::new(app_data_dir.clone(), native_dir.clone(), journal.clone());
+        let behavior = VpnSettings::new(&app_data_dir).load_app_behavior();
+        let ping_results = if behavior.save_ping_results {
+            behavior.last_ping_results
+        } else {
+            BTreeMap::new()
+        };
         let app = Self {
             app_data_dir,
             native_dir,
+            app_version: app_version.to_string(),
             repository,
             settings: Mutex::new(settings),
             journal,
             status: RwLock::new(RuntimeStatus::Disconnected),
             runtime: Mutex::new(runtime),
+            ping_results: Mutex::new(ping_results),
         };
         app.log("WinUI 3 native host initialized");
         app
@@ -199,7 +308,66 @@ impl WindowsApp {
                 )))
             }
         };
-        json(&self.command(request))
+        match request.command.as_str() {
+            "get_profile" => self.result_json(self.get_profile(&request.id)),
+            "save_profile" => self.result_json(
+                self.save_profile(&request.id, &request.text)
+                    .map(|_| self.snapshot()),
+            ),
+            "duplicate_profile" => {
+                self.result_json(self.duplicate_profile(&request.id).map(|_| self.snapshot()))
+            }
+            "set_pinned" => self.result_json(
+                self.set_pinned(&request.id, &request.text)
+                    .map(|_| self.snapshot()),
+            ),
+            "set_vk_link" => self.result_json(
+                self.set_vk_link(&request.id, &request.text)
+                    .map(|_| self.snapshot()),
+            ),
+            "settings" => self.result_json::<SettingsSnapshot>(Ok(self.settings_snapshot())),
+            "save_settings" => self.result_json(
+                self.save_settings(&request.id, &request.text)
+                    .map(|_| self.settings_snapshot()),
+            ),
+            "export_profile" => self.result_json(self.export_profile(&request.id)),
+            "export_bundle" => self.result_json::<TextPayload>(Ok(TextPayload {
+                text: self.repository.export_bundle(),
+            })),
+            "check_update" => self.result_json(self.check_update()),
+            "exit_ip" => self.result_json(self.check_exit_ip()),
+            "ping" => self.result_json(self.ping(&request.id).map(|_| self.snapshot())),
+            "find_free_servers" => {
+                self.result_json(self.find_free_servers().map(|_| self.snapshot()))
+            }
+            "save_subscription" => self.result_json(
+                self.save_subscription(&request.id, &request.text)
+                    .map(|_| self.snapshot()),
+            ),
+            "delete_subscription" => self.result_json(
+                self.delete_subscription(&request.id)
+                    .map(|_| self.snapshot()),
+            ),
+            "refresh_subscription" => self.result_json(
+                self.refresh_subscription(&request.id)
+                    .map(|_| self.snapshot()),
+            ),
+            "clear_logs" => {
+                self.journal.clear();
+                self.result_json::<CoreSnapshot>(Ok(self.snapshot()))
+            }
+            _ => json(&self.command(request)),
+        }
+    }
+
+    fn result_json<T: Serialize>(&self, result: Result<T, String>) -> String {
+        match result {
+            Ok(data) => json(&Response::success(data)),
+            Err(error) => {
+                self.log(&format!("ERROR: {error}"));
+                json(&Response::<T>::error(error))
+            }
+        }
     }
 
     fn command(&self, request: CommandRequest) -> Response<CoreSnapshot> {
@@ -225,13 +393,242 @@ impl WindowsApp {
     }
 
     fn import(&self, text: &str) -> Result<(), String> {
-        if text.trim().is_empty() {
+        let text = text.trim();
+        if text.is_empty() {
             return Err("Вставленный текст пуст".into());
         }
-        if !self.repository.import_text(text, None) {
-            return Err("Конфигурация или подписка не распознана".into());
+
+        let vpn = VpnSettings::new(&self.app_data_dir);
+        let routing = vpn.load_routing_profiles();
+        if let Some(imported) =
+            yptun_core::desktop_settings::import_routing_profile_link(&routing, text)
+        {
+            if !vpn.save_routing_profiles(&imported) {
+                return Err("Не удалось сохранить профиль маршрутизации".into());
+            }
+            self.log("Routing profile imported");
+            return Ok(());
+        }
+
+        match home::plan_import(text) {
+            home::ImportPlan::Empty => return Err("Вставленный текст пуст".into()),
+            home::ImportPlan::RoutingProfile(_) => {
+                return Err("Профиль маршрутизации повреждён".into())
+            }
+            home::ImportPlan::Single(value) => {
+                if !self.repository.import_text(&value, None) {
+                    return Err(home::import_failure_reason(&value).into());
+                }
+            }
+            home::ImportPlan::Batch(values) => {
+                let mut added = 0;
+                let mut failed = 0;
+                for value in values {
+                    if self.repository.import_text(&value, None) {
+                        added += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+                if let Some(note) = home::import_many_outcome(added, failed)? {
+                    self.log(&note);
+                }
+            }
         }
         self.log("Configuration imported");
+        Ok(())
+    }
+
+    fn get_profile(&self, id: &str) -> Result<LocationEditorData, String> {
+        if id.trim().is_empty() {
+            return Ok(LocationEditorData {
+                storage_id: String::new(),
+                location: LocationConfig::default(),
+                is_new: true,
+                is_subscription: false,
+            });
+        }
+        let bundle = self.repository.bundle();
+        let entry = bundle
+            .locations
+            .iter()
+            .find(|entry| entry.storage_id == id)
+            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
+        Ok(LocationEditorData {
+            storage_id: entry.storage_id.clone(),
+            location: entry.location(),
+            is_new: false,
+            is_subscription: entry
+                .subscription_url
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+        })
+    }
+
+    fn save_profile(&self, id: &str, text: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем измените конфигурацию")?;
+        let location: LocationConfig = serde_json::from_str(text)
+            .map_err(|error| format!("Некорректный JSON конфигурации: {error}"))?;
+        if location.display_name().trim().is_empty() {
+            return Err("Укажите название конфигурации или идентификатор комнаты".into());
+        }
+        self.repository.save_location(id, &location.normalized());
+        self.log(if id.trim().is_empty() {
+            "Created location"
+        } else {
+            "Updated location"
+        });
+        Ok(())
+    }
+
+    fn duplicate_profile(&self, id: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN")?;
+        let mut location = self
+            .repository
+            .load_location(id)
+            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
+        location.name = format!("{} — копия", location.display_name());
+        self.repository.save_location("", &location);
+        self.log(&format!("Duplicated location {id}"));
+        Ok(())
+    }
+
+    fn set_pinned(&self, id: &str, text: &str) -> Result<(), String> {
+        let pinned = text
+            .trim()
+            .parse::<bool>()
+            .map_err(|_| "Некорректное значение закрепления".to_string())?;
+        if self.repository.load_location(id).is_none() {
+            return Err("Конфигурация не найдена".into());
+        }
+        self.repository.set_location_pinned(id, pinned);
+        Ok(())
+    }
+
+    fn set_vk_link(&self, id: &str, text: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN")?;
+        if self.repository.load_location(id).is_none() {
+            return Err("Конфигурация не найдена".into());
+        }
+        self.repository.set_location_vk_link(id, text);
+        Ok(())
+    }
+
+    fn export_profile(&self, id: &str) -> Result<TextPayload, String> {
+        let location = self
+            .repository
+            .load_location(id)
+            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
+        Ok(TextPayload {
+            text: yptun_core::panel::compose_inbound(&location),
+        })
+    }
+
+    fn settings_snapshot(&self) -> SettingsSnapshot {
+        let vpn = VpnSettings::new(&self.app_data_dir);
+        SettingsSnapshot {
+            traffic: vpn.load_traffic(),
+            routing: vpn.load_routing(),
+            routing_profiles: vpn.load_routing_profiles(),
+            split_tunnel: vpn.load_split_tunnel(),
+            app_behavior: vpn.load_app_behavior(),
+            socks: DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Windows).load(),
+            updates: FileAppUpdateSettingsStore::new(&self.app_data_dir).load(),
+        }
+    }
+
+    fn check_update(&self) -> Result<UpdateCheckPayload, String> {
+        let portable = std::env::var("YPTUN_PORTABLE_EXE")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty());
+        let service = AppUpdateService::new(Box::new(ReqwestFetcher::new()), &self.app_version)
+            .prefer_portable_asset(portable);
+        let info = service
+            .check(ReleaseChannel::Stable, None)
+            .map_err(|error| error.to_string())?;
+        Ok(UpdateCheckPayload {
+            version: info.version,
+            html_url: info.html_url,
+            asset_name: info.asset.name,
+            download_url: info.asset.download_url,
+            size_bytes: info.asset.size_bytes,
+            sha256: info.asset.sha256,
+            is_update_available: info.is_update_available,
+        })
+    }
+
+    fn check_exit_ip(&self) -> Result<TextPayload, String> {
+        let connected = self
+            .status
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_connected();
+        let proxy_mode = self
+            .settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .connection_mode()
+            == CONNECTION_MODE_PROXY;
+        let proxy = if connected && proxy_mode {
+            self.subscription_proxy()?
+        } else {
+            None
+        };
+        let fetcher = ReqwestFetcher::new();
+        let mut fetch = |url: &str| {
+            fetcher
+                .get(&HttpRequest {
+                    url: url.to_string(),
+                    headers: vec![("User-Agent".into(), format!("YPtun/{}", self.app_version))],
+                    proxy: proxy.clone(),
+                })
+                .filter(|response| response.ok())
+                .map(|response| response.body)
+        };
+        first_public_exit_ip(&mut fetch)
+            .map(|text| TextPayload { text })
+            .ok_or_else(|| "Не удалось определить внешний IPv4-адрес".into())
+    }
+
+    fn save_settings(&self, kind: &str, text: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем измените параметры")?;
+        let vpn = VpnSettings::new(&self.app_data_dir);
+        let saved = match kind {
+            "traffic" => vpn.save_traffic(&decode_settings::<TrafficSettings>(text)?),
+            "routing" => vpn.save_routing(&decode_settings::<RoutingRules>(text)?),
+            "routing_profiles" => {
+                vpn.save_routing_profiles(&decode_settings::<RoutingProfilesState>(text)?)
+            }
+            "split_tunnel" => vpn.save_split_tunnel(&decode_settings::<SplitTunnelState>(text)?),
+            "app_behavior" => {
+                let value = decode_settings::<AppBehaviorSettings>(text)?;
+                let saved = vpn.save_app_behavior(&value);
+                if saved {
+                    self.runtime
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .configure_telegram_proxy(value.telegram_proxy_enabled);
+                }
+                saved
+            }
+            "socks" => {
+                DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Windows)
+                    .save(&decode_settings::<DesktopSocksProxySettings>(text)?)
+                    .map_err(|error| error.to_string())?;
+                true
+            }
+            "updates" => {
+                FileAppUpdateSettingsStore::new(&self.app_data_dir)
+                    .try_save(&decode_settings::<AppUpdateSettings>(text)?)
+                    .map_err(|error| error.to_string())?;
+                true
+            }
+            _ => return Err(format!("Неизвестная группа параметров: {kind}")),
+        };
+        if !saved {
+            return Err("Не удалось сохранить параметры".into());
+        }
+        self.log(&format!("Saved settings: {kind}"));
         Ok(())
     }
 
@@ -242,6 +639,121 @@ impl WindowsApp {
         }
         self.repository.set_active_location_id(Some(id));
         self.log(&format!("Selected location {id}"));
+        Ok(())
+    }
+
+    fn ping(&self, id: &str) -> Result<(), String> {
+        let location = self
+            .repository
+            .load_location(id)
+            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
+        let active = self.repository.active_location_id().as_deref() == Some(id);
+        let result = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .ping(&location, active)
+            .and_then(|value| i32::try_from(value).ok());
+        self.ping_results
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(id.to_string(), result);
+        let vpn = VpnSettings::new(&self.app_data_dir);
+        let mut behavior = vpn.load_app_behavior();
+        if behavior.save_ping_results {
+            behavior.last_ping_results.insert(id.to_string(), result);
+            let _ = vpn.save_app_behavior(&behavior);
+        }
+        let message = match result {
+            Some(ms) => format!("Ping {id}: {ms} ms"),
+            None => format!("Ping {id}: unreachable"),
+        };
+        self.log(&message);
+        Ok(())
+    }
+
+    fn find_free_servers(&self) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем запустите поиск")?;
+        let behavior = VpnSettings::new(&self.app_data_dir).load_app_behavior();
+        let sources: Vec<(usize, String, usize)> = if behavior.free_servers_from_pages {
+            vec![(0, home::FREE_SERVERS_PAGES_URL.to_string(), 0)]
+        } else {
+            home::free_sources_for("ru")
+                .into_iter()
+                .enumerate()
+                .map(|(index, source)| (index, source.url.to_string(), source.max_count))
+                .collect()
+        };
+        self.log(&format!(
+            "Free servers: fetching {} source(s)",
+            sources.len()
+        ));
+        let fetched = Arc::new(Mutex::new(Vec::<(usize, String, usize)>::new()));
+        thread::scope(|scope| {
+            for (index, url, max_count) in sources {
+                let fetched = fetched.clone();
+                scope.spawn(move || {
+                    let request = HttpRequest {
+                        url,
+                        headers: vec![("User-Agent".into(), "YPtun/4.0.0".into())],
+                        proxy: None,
+                    };
+                    if let Some(response) = ReqwestFetcher::new().get(&request) {
+                        if response.ok() {
+                            fetched
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .push((index, response.body, max_count));
+                        }
+                    }
+                });
+            }
+        });
+        let mut fetched = fetched
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        fetched.sort_by_key(|value| value.0);
+        let source_texts: Vec<(String, usize)> = fetched
+            .into_iter()
+            .map(|(_, body, max_count)| (body, max_count))
+            .collect();
+        if source_texts.is_empty() {
+            return Err("Источники бесплатных серверов недоступны".into());
+        }
+        let limit = behavior.free_servers_limit.max(0) as usize;
+        let candidates = home::pick_free_servers(&source_texts, limit);
+        if candidates.is_empty() {
+            return Err("В источниках не найдено поддерживаемых серверов".into());
+        }
+        self.log(&format!(
+            "Free servers: checking {} candidate(s)",
+            candidates.len()
+        ));
+        let selected = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .check_free_servers(
+                candidates,
+                behavior.ping_parallelism.max(1) as usize,
+                &behavior.effective_ping_url(),
+                behavior.effective_ping_timeout_ms(),
+            );
+        if selected.is_empty() {
+            return Err("Ни один бесплатный сервер не ответил".into());
+        }
+        let bundle = self.repository.bundle();
+        let previous = home::previous_free_subscription(&bundle);
+        let entries = home::free_server_entries(
+            &selected,
+            &BTreeSet::new(),
+            previous.as_ref(),
+            yptun_core::desktop_app::now_ms() as i64,
+        );
+        let (bundle, added) = home::merge_free_servers(&bundle, entries);
+        self.repository.save_bundle(bundle);
+        self.log(&format!("Free servers: saved {added} working server(s)"));
         Ok(())
     }
 
@@ -262,11 +774,143 @@ impl WindowsApp {
         Ok(())
     }
 
+    fn save_subscription(&self, old_url: &str, text: &str) -> Result<(), String> {
+        let old_url = old_url.trim();
+        if old_url.is_empty() {
+            return Err("Подписка не найдена".into());
+        }
+        if !self
+            .repository
+            .bundle()
+            .locations
+            .iter()
+            .any(|entry| entry.subscription_url.as_deref().map(str::trim) == Some(old_url))
+        {
+            return Err("Подписка не найдена".into());
+        }
+
+        let edit: SubscriptionEditRequest = serde_json::from_str(text)
+            .map_err(|error| format!("Некорректные параметры подписки: {error}"))?;
+        let new_url = if edit.url.trim().is_empty() {
+            old_url
+        } else {
+            edit.url.trim()
+        };
+        let parsed_url = reqwest::Url::parse(new_url)
+            .map_err(|_| "Укажите корректный HTTP(S)-адрес подписки".to_string())?;
+        if !matches!(parsed_url.scheme(), "http" | "https")
+            || new_url.chars().any(char::is_whitespace)
+        {
+            return Err("Укажите корректный HTTP(S)-адрес подписки".into());
+        }
+
+        let cascade = edit.cascade_link.trim();
+        if !cascade.is_empty()
+            && yptun_core::share_link::parse(cascade)
+                .filter(|profile| profile.is_complete())
+                .is_none()
+        {
+            return Err("Каскадная конфигурация не распознана".into());
+        }
+
+        if new_url != old_url && !self.repository.change_subscription_url(old_url, new_url) {
+            return Err("Не удалось изменить адрес: возможно, такая подписка уже добавлена".into());
+        }
+        self.repository
+            .set_subscription_custom_name(new_url, edit.custom_name.trim());
+        self.repository
+            .set_subscription_update_interval(new_url, edit.update_interval_hours);
+        self.repository
+            .set_subscription_auto_update(new_url, edit.auto_update_enabled);
+        if !self.repository.set_subscription_cascade(new_url, cascade) {
+            return Err("Не удалось сохранить каскадную конфигурацию".into());
+        }
+        self.log(&format!("Updated subscription {new_url}"));
+        Ok(())
+    }
+
+    fn delete_subscription(&self, url: &str) -> Result<(), String> {
+        self.require_disconnected("Сначала отключите VPN, затем удалите подписку")?;
+        let url = url.trim();
+        let ids: Vec<String> = self
+            .repository
+            .bundle()
+            .locations
+            .iter()
+            .filter(|entry| entry.subscription_url.as_deref().map(str::trim) == Some(url))
+            .map(|entry| entry.storage_id.clone())
+            .collect();
+        if ids.is_empty() {
+            return Err("Подписка не найдена".into());
+        }
+        self.repository.delete_locations(&ids);
+        let mut pings = self
+            .ping_results
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for id in &ids {
+            pings.remove(id);
+        }
+        drop(pings);
+        self.log(&format!("Deleted subscription {url}"));
+        Ok(())
+    }
+
+    fn refresh_subscription(&self, url: &str) -> Result<(), String> {
+        let url = url.trim();
+        if url.is_empty()
+            || !self
+                .repository
+                .bundle()
+                .locations
+                .iter()
+                .any(|entry| entry.subscription_url.as_deref().map(str::trim) == Some(url))
+        {
+            return Err("Подписка не найдена".into());
+        }
+        let proxy = self.subscription_proxy()?;
+        let count = self.repository.refresh_subscription(url, proxy.as_deref());
+        self.log(&format!("Refreshed subscription {url}: {count}"));
+        Ok(())
+    }
+
     fn refresh_subscriptions(&self) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN, затем обновите подписки")?;
-        let count = self.repository.refresh_subscriptions(None, None);
+        let proxy = self.subscription_proxy()?;
+        let count = self
+            .repository
+            .refresh_subscriptions(None, proxy.as_deref());
         self.log(&format!("Refreshed {count} subscription(s)"));
         Ok(())
+    }
+
+    fn subscription_proxy(&self) -> Result<Option<String>, String> {
+        if self
+            .status
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_connected()
+        {
+            let socks = DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Windows)
+                .load()
+                .normalized(DesktopOs::Windows);
+            let mut url =
+                reqwest::Url::parse("socks5h://127.0.0.1").map_err(|error| error.to_string())?;
+            url.set_host(Some(&socks.host))
+                .map_err(|_| "Некорректный адрес SOCKS".to_string())?;
+            let port =
+                u16::try_from(socks.port).map_err(|_| "Некорректный порт SOCKS".to_string())?;
+            url.set_port(Some(port))
+                .map_err(|_| "Некорректный порт SOCKS".to_string())?;
+            if !socks.username.is_empty() {
+                url.set_username(&socks.username)
+                    .map_err(|_| "Некорректный логин SOCKS".to_string())?;
+                url.set_password(Some(&socks.password))
+                    .map_err(|_| "Некорректный пароль SOCKS".to_string())?;
+            }
+            Ok(Some(url.to_string()))
+        } else {
+            Ok(None)
+        }
     }
 
     fn set_mode(&self, mode: &str) -> Result<(), String> {
@@ -363,6 +1007,7 @@ impl WindowsApp {
     }
 
     pub fn snapshot(&self) -> CoreSnapshot {
+        self.maintain_connection();
         let bundle = self.repository.bundle();
         let active_name = bundle
             .active_location_id
@@ -386,19 +1031,39 @@ impl WindowsApp {
             .connection_mode()
             .to_string();
 
+        let runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let runtime_available = runtime.is_available();
+        let (telegram_proxy_status, telegram_proxy_detail) = runtime.telegram_proxy_status();
+        let session = runtime.diagnostics();
+        drop(runtime);
+        let ping_results = self
+            .ping_results
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         CoreSnapshot {
             status: status.wire_name().into(),
             status_label: status.label().into(),
             status_detail: status.detail(active_name.as_deref()),
             is_connected: status.is_connected(),
-            runtime_available: self
-                .runtime
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_available(),
+            runtime_available,
             connection_mode: mode,
-            active_profile_id: bundle.active_location_id,
-            profiles: bundle.locations.iter().map(profile_item).collect(),
+            active_profile_id: bundle.active_location_id.clone(),
+            profiles: bundle
+                .locations
+                .iter()
+                .map(|entry| profile_item(entry, &ping_results))
+                .collect(),
+            subscriptions: yptun_core::importer::subscription_groups(&bundle)
+                .into_iter()
+                .map(|(url, entries)| subscription_item(url, &entries))
+                .collect(),
+            session,
+            telegram_proxy_status,
+            telegram_proxy_detail,
             logs: self.journal.snapshot(),
         }
     }
@@ -409,6 +1074,55 @@ impl WindowsApp {
         self.journal.add(&line);
         logging::append(&self.app_data_dir, message);
     }
+
+    fn maintain_connection(&self) {
+        if !matches!(
+            *self
+                .status
+                .read()
+                .unwrap_or_else(|error| error.into_inner()),
+            RuntimeStatus::Connected
+        ) {
+            return;
+        }
+        let reason = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .watchdog_reason();
+        let Some(reason) = reason else { return };
+        self.log(&reason);
+        let Some(active) = self.repository.active_location() else {
+            *self
+                .status
+                .write()
+                .unwrap_or_else(|error| error.into_inner()) =
+                RuntimeStatus::Error("Активная конфигурация исчезла".into());
+            return;
+        };
+        let mode = self
+            .settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .connection_mode()
+            .to_string();
+        *self
+            .status
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = RuntimeStatus::Reconnecting;
+        let result = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .start(&active.location(), &mode);
+        *self
+            .status
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = match result {
+            Ok(()) => RuntimeStatus::Connected,
+            Err(error) => RuntimeStatus::Error(error),
+        };
+    }
 }
 
 impl Drop for WindowsApp {
@@ -417,7 +1131,10 @@ impl Drop for WindowsApp {
     }
 }
 
-fn profile_item(entry: &LocationEntry) -> ProfileItem {
+fn profile_item(
+    entry: &LocationEntry,
+    ping_results: &BTreeMap<String, Option<i32>>,
+) -> ProfileItem {
     let location = entry.location();
     let subscription = entry.metadata.as_ref().and_then(subscription_name);
     let subtitle = match location.engine {
@@ -447,6 +1164,8 @@ fn profile_item(entry: &LocationEntry) -> ProfileItem {
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
         subscription_name: subscription,
+        ping_ms: ping_results.get(&entry.storage_id).copied().flatten(),
+        ping_tested: ping_results.contains_key(&entry.storage_id),
     }
 }
 
@@ -456,6 +1175,41 @@ fn subscription_name(metadata: &LocationMetadata) -> Option<String> {
         .as_ref()
         .and_then(|subscription| subscription.name.clone())
         .filter(|name| !name.trim().is_empty())
+}
+
+fn subscription_item(url: String, entries: &[LocationEntry]) -> SubscriptionItem {
+    let metadata = entries
+        .iter()
+        .find_map(|entry| entry.metadata.as_ref()?.subscription.as_ref());
+    let name = metadata
+        .and_then(|subscription| subscription.name.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&url)
+        .to_string();
+    SubscriptionItem {
+        url,
+        name,
+        custom_name: metadata
+            .and_then(|subscription| subscription.custom_name.clone())
+            .unwrap_or_default(),
+        cascade_link: metadata
+            .and_then(|subscription| subscription.cascade_link.clone())
+            .unwrap_or_default(),
+        update_interval_hours: metadata
+            .and_then(|subscription| subscription.update_interval_hours)
+            .unwrap_or(DEFAULT_UPDATE_INTERVAL_HOURS),
+        auto_update_enabled: metadata.is_none_or(|subscription| subscription.auto_update_enabled),
+        location_count: entries.len(),
+        expires_at_epoch_ms: entries.iter().find_map(|entry| {
+            entry
+                .metadata
+                .as_ref()?
+                .subscription
+                .as_ref()?
+                .expires_at_epoch_ms
+        }),
+    }
 }
 
 fn engine_name(engine: EngineType) -> &'static str {
@@ -479,6 +1233,10 @@ fn json<T: Serialize>(value: &T) -> String {
     })
 }
 
+fn decode_settings<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, String> {
+    serde_json::from_str(text).map_err(|error| format!("Некорректный JSON параметров: {error}"))
+}
+
 fn windows_version() -> String {
     std::env::var("OS").unwrap_or_else(|_| "Windows".into())
 }
@@ -491,6 +1249,8 @@ fn is_elevated() -> bool {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use yptun_core::location::SubscriptionMetadata;
+    use yptun_core::routing::RoutingProfile;
 
     fn temp_dir() -> PathBuf {
         let nonce = SystemTime::now()
@@ -522,6 +1282,99 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["ok"], false);
         assert!(value["error"].as_str().unwrap().contains("unknown command"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn imports_routing_profile_through_the_same_import_command() {
+        let root = temp_dir();
+        let app = WindowsApp::new(root.clone(), root.join("native"), "ru", "4.0.0");
+        let profile = RoutingProfile {
+            name: "Direct example".into(),
+            direct_sites: vec!["example.com".into()],
+            ..RoutingProfile::default()
+        };
+        let request = serde_json::json!({
+            "command": "import",
+            "text": serde_json::to_string(&profile).unwrap(),
+        });
+        let response = app.command_json(&request.to_string());
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["ok"], true);
+
+        let settings = app.command_json(r#"{"command":"settings"}"#);
+        let value: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        assert_eq!(
+            value["data"]["routingProfiles"]["profiles"][0]["name"],
+            "Direct example"
+        );
+        assert_eq!(
+            value["data"]["routingProfiles"]["profiles"][0]["directsites"][0],
+            "example.com"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn edits_and_deletes_a_subscription_as_one_group() {
+        let root = temp_dir();
+        let app = WindowsApp::new(root.clone(), root.join("native"), "ru", "4.0.0");
+        assert!(app.repository.import_text(
+            "vless://11111111-1111-1111-1111-111111111111@example.com:443?security=tls#One",
+            None,
+        ));
+        let url = "https://subscription.example.test/token";
+        let mut bundle = app.repository.bundle();
+        bundle.locations[0].subscription_url = Some(url.into());
+        bundle.locations[0].metadata = Some(LocationMetadata {
+            subscription: Some(SubscriptionMetadata {
+                name: Some("Panel name".into()),
+                update_interval_hours: Some(24),
+                ..SubscriptionMetadata::default()
+            }),
+            ..LocationMetadata::default()
+        });
+        app.repository.save_bundle(bundle);
+
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&app.command_json(r#"{"command":"snapshot"}"#)).unwrap();
+        assert_eq!(snapshot["data"]["subscriptions"][0]["locationCount"], 1);
+        assert_eq!(snapshot["data"]["subscriptions"][0]["name"], "Panel name");
+
+        let edit = serde_json::json!({
+            "url": url,
+            "customName": "Work",
+            "cascadeLink": "",
+            "updateIntervalHours": 12,
+            "autoUpdateEnabled": false,
+        });
+        let request = serde_json::json!({
+            "command": "save_subscription",
+            "id": url,
+            "text": edit.to_string(),
+        });
+        let edited: serde_json::Value =
+            serde_json::from_str(&app.command_json(&request.to_string())).unwrap();
+        assert_eq!(edited["ok"], true);
+        assert_eq!(edited["data"]["subscriptions"][0]["customName"], "Work");
+        assert_eq!(
+            edited["data"]["subscriptions"][0]["updateIntervalHours"],
+            12
+        );
+        assert_eq!(
+            edited["data"]["subscriptions"][0]["autoUpdateEnabled"],
+            false
+        );
+
+        let request = serde_json::json!({ "command": "delete_subscription", "id": url });
+        let deleted: serde_json::Value =
+            serde_json::from_str(&app.command_json(&request.to_string())).unwrap();
+        assert_eq!(deleted["ok"], true);
+        assert_eq!(deleted["data"]["profiles"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            deleted["data"]["subscriptions"].as_array().unwrap().len(),
+            0
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

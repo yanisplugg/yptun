@@ -14,6 +14,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="22" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="22" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <StackPanel>
@@ -71,6 +73,29 @@
                     </StackPanel>
                 </Grid>
             </Border>
+
+            <Grid Grid.Row="6" ColumnSpacing="18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="Состояние сеанса" Opacity="0.62" FontSize="12" />
+                        <TextBlock Text="{Binding EngineHealth}" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding SessionDetail}" TextWrapping="Wrap" Opacity="0.68" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="Прокси Telegram" Opacity="0.62" FontSize="12" />
+                        <TextBlock Text="{Binding TelegramProxyStatus}" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding TelegramProxyDetail}" TextWrapping="Wrap" Opacity="0.68" />
+                    </StackPanel>
+                </Border>
+            </Grid>
         </Grid>
     </ScrollViewer>
 </Page>

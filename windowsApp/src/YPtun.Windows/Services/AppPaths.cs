@@ -10,6 +10,8 @@ public sealed class AppPaths
 
     public string LogsFile => Path.Combine(DataDirectory, "yptun-winui.log");
 
+    public string HotKeySettingsFile => Path.Combine(DataDirectory, "windows_hotkey.json");
+
     public AppPaths()
     {
         var portableExecutable = Environment.GetEnvironmentVariable("YPTUN_PORTABLE_EXE");

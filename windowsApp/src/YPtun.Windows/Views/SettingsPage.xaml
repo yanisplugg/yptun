@@ -4,48 +4,198 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <ScrollViewer>
-        <StackPanel Padding="36,28,36,40" MaxWidth="900" HorizontalAlignment="Center" Spacing="22">
-            <StackPanel>
-                <TextBlock Text="Параметры" Style="{StaticResource TitleTextBlockStyle}" />
-                <TextBlock Text="Системные возможности Windows используются напрямую" Opacity="0.64" Margin="0,5,0,0" />
-            </StackPanel>
+        <StackPanel Padding="36,28,36,40" MaxWidth="960" HorizontalAlignment="Center" Spacing="18">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Параметры" Style="{StaticResource TitleTextBlockStyle}" />
+                    <TextBlock Text="Трафик, маршрутизация, приложения и фоновые возможности" Opacity="0.64" Margin="0,5,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Bottom">
+                    <Button Content="Проверить обновления" Click="OnCheckUpdate" />
+                    <Button Content="Сохранить всё" Style="{StaticResource AccentButtonStyle}" Click="OnSaveAll" />
+                </StackPanel>
+            </Grid>
 
-            <Border Padding="24" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
-                <StackPanel Spacing="15">
-                    <TextBlock Text="Режим подключения" FontSize="18" FontWeight="SemiBold" />
-                    <TextBlock Text="Туннель направляет трафик всей системы через WinTUN. Прокси меняет настройки текущего пользователя без прав администратора." TextWrapping="Wrap" Opacity="0.68" />
+            <InfoBar x:Name="MessageBar" IsOpen="False" IsClosable="True" />
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Подключение" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="Туннель направляет системный трафик через Wintun; прокси включает локальный HTTP/SOCKS без обязательного UAC." TextWrapping="Wrap" Opacity="0.68" />
                     <RadioButtons x:Name="ConnectionModeButtons" SelectionChanged="OnModeChanged">
-                        <x:String>Туннель (WinTUN)</x:String>
+                        <x:String>Туннель (Wintun / встроенный TUN)</x:String>
                         <x:String>Системный прокси</x:String>
                     </RadioButtons>
                 </StackPanel>
             </Border>
 
-            <Border Padding="24" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="Нативное ядро" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Text="Rust + общие Go-движки Android/Windows" Opacity="0.68" />
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Приложение" FontSize="18" FontWeight="SemiBold" />
+                    <Grid ColumnSpacing="28" RowSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ToggleSwitch x:Name="AutoConnectSwitch" Header="Подключаться при запуске" />
+                        <ToggleSwitch x:Name="SystemProxySwitch" Grid.Column="1" Header="Менять системный прокси" />
+                        <ToggleSwitch x:Name="TelegramSwitch" Grid.Row="1" Header="Telegram через отдельный WARP" />
+                        <ToggleSwitch x:Name="EnergySaverSwitch" Grid.Row="1" Grid.Column="1" Header="Энергосбережение" />
+                        <ToggleSwitch x:Name="SpeedSwitch" Grid.Row="2" Header="Показывать скорость" />
+                        <ToggleSwitch x:Name="EditingSwitch" Grid.Row="2" Grid.Column="1" Header="Разрешить редактирование" />
+                        <ToggleSwitch x:Name="TelemostSwitch" Grid.Row="3" Header="Cookies Telemost" />
+                        <TextBox x:Name="TelemostCookiesBox" Grid.Row="3" Grid.Column="1" Header="Cookies" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Локальный SOCKS и проверка серверов" FontSize="18" FontWeight="SemiBold" />
+                    <Grid ColumnSpacing="14" RowSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="SocksHostBox" Header="Адрес" />
+                        <NumberBox x:Name="SocksPortBox" Grid.Column="1" Header="Порт" Minimum="1" Maximum="65535" SpinButtonPlacementMode="Compact" />
+                        <TextBox x:Name="SocksUserBox" Grid.Column="2" Header="Логин" />
+                        <PasswordBox x:Name="SocksPasswordBox" Grid.Column="3" Header="Пароль" />
+                    </Grid>
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="PingModeBox" Header="Метод пинга" HorizontalAlignment="Stretch">
+                            <ComboBoxItem Content="Автоматически" Tag="auto" />
+                            <ComboBoxItem Content="TCP" Tag="tcp" />
+                            <ComboBoxItem Content="ICMP" Tag="icmp" />
+                            <ComboBoxItem Content="Proxy GET" Tag="proxy_get" />
+                            <ComboBoxItem Content="Proxy HEAD" Tag="proxy_head" />
+                        </ComboBox>
+                        <TextBox x:Name="PingUrlBox" Grid.Column="1" Header="URL проверки" />
+                        <NumberBox x:Name="PingTimeoutBox" Grid.Column="2" Header="Таймаут, с" Minimum="2" Maximum="15" SpinButtonPlacementMode="Compact" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Трафик и DNS" FontSize="18" FontWeight="SemiBold" />
+                    <Grid ColumnSpacing="14" RowSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBox x:Name="RemoteDnsBox" Header="Удалённый DNS" />
+                        <TextBox x:Name="RemoteDns2Box" Grid.Column="1" Header="Резервный DNS" />
+                        <TextBox x:Name="DirectDnsBox" Grid.Column="2" Header="Прямой DNS" />
+                        <ComboBox x:Name="DomainStrategyBox" Grid.Row="1" Header="Стратегия IP" HorizontalAlignment="Stretch">
+                            <x:String>prefer_ipv4</x:String><x:String>prefer_ipv6</x:String><x:String>ipv4_only</x:String><x:String>ipv6_only</x:String>
+                        </ComboBox>
+                        <NumberBox x:Name="MtuBox" Grid.Row="1" Grid.Column="1" Header="MTU" Minimum="1280" Maximum="9000" SpinButtonPlacementMode="Compact" />
+                        <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="18" VerticalAlignment="Center">
+                            <ToggleSwitch x:Name="MuxSwitch" Header="Mux" />
+                            <ToggleSwitch x:Name="FragmentSwitch" Header="TLS fragment" />
+                            <ToggleSwitch x:Name="BlockRuSwitch" Header="Блок RU" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Маршрутизация" FontSize="18" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal" Spacing="24">
+                        <ToggleSwitch x:Name="BypassLanSwitch" Header="Обход локальной сети" />
+                        <ToggleSwitch x:Name="BlockAdsSwitch" Header="Блокировать рекламу" />
+                        <ToggleSwitch x:Name="BypassRussiaSwitch" Header="Россия напрямую" />
                     </StackPanel>
-                    <ToggleSwitch
-                        Grid.Column="1"
-                        IsOn="{Binding NativeCoreAvailable}"
-                        IsHitTestVisible="False"
-                        OffContent="Недоступно"
-                        OnContent="Готово"
-                        VerticalAlignment="Center" />
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="DirectDomainsBox" Header="Домены напрямую (по одному в строке)" AcceptsReturn="True" MinHeight="110" />
+                        <TextBox x:Name="BlockDomainsBox" Grid.Column="1" Header="Заблокированные домены" AcceptsReturn="True" MinHeight="110" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="Раздельное туннелирование" FontSize="18" FontWeight="SemiBold" />
+                    <ComboBox x:Name="SplitModeBox" Header="Режим" Width="280" HorizontalAlignment="Left">
+                        <ComboBoxItem Content="Все приложения" Tag="all_apps" />
+                        <ComboBoxItem Content="Только выбранные через VPN" Tag="proxy_selected" />
+                        <ComboBoxItem Content="Выбранные в обход VPN" Tag="bypass_selected" />
+                    </ComboBox>
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="ProxyProcessesBox" Header="Через VPN: имена EXE" AcceptsReturn="True" MinHeight="100" />
+                        <TextBox x:Name="BypassProcessesBox" Grid.Column="1" Header="В обход VPN: имена EXE" AcceptsReturn="True" MinHeight="100" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Расширенный JSON" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="Полный редактор структурированных правил, профилей маршрутизации и всех совместимых с прежним клиентом параметров." TextWrapping="Wrap" Opacity="0.66" />
+                    <ComboBox x:Name="AdvancedKindBox" SelectionChanged="OnAdvancedKindChanged" Width="300" HorizontalAlignment="Left">
+                        <ComboBoxItem Content="Поведение приложения" Tag="app_behavior" />
+                        <ComboBoxItem Content="Трафик" Tag="traffic" />
+                        <ComboBoxItem Content="Маршрутизация" Tag="routing" />
+                        <ComboBoxItem Content="Профили маршрутизации" Tag="routing_profiles" />
+                        <ComboBoxItem Content="Split tunnel" Tag="split_tunnel" />
+                        <ComboBoxItem Content="SOCKS" Tag="socks" />
+                        <ComboBoxItem Content="Обновления" Tag="updates" />
+                    </ComboBox>
+                    <TextBox x:Name="AdvancedJsonBox" AcceptsReturn="True" FontFamily="Cascadia Mono, Consolas" FontSize="12" MinHeight="300" TextWrapping="NoWrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                        <Button Content="Форматировать" Click="OnFormatAdvanced" />
+                        <Button Content="Сохранить раздел" Click="OnSaveAdvanced" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <Grid ColumnSpacing="20">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="Глобальная горячая клавиша" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock x:Name="HotKeyStatusText" Text="Не задана" Opacity="0.68" />
+                        <TextBlock Text="Переключает VPN, даже когда окно скрыто в область уведомлений." TextWrapping="Wrap" Opacity="0.62" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Настроить" Click="OnConfigureHotKey" VerticalAlignment="Center" />
                 </Grid>
             </Border>
 
-            <Border Padding="24" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
-                <StackPanel Spacing="6">
-                    <TextBlock Text="Каталог данных" FontSize="18" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" Opacity="0.68" />
-                </StackPanel>
+            <Border Padding="22" CornerRadius="18" Background="{StaticResource YPtunCardBrush}">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel Spacing="5">
+                        <TextBlock Text="Нативное ядро и данные" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" Opacity="0.68" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" IsOn="{Binding NativeCoreAvailable}" IsHitTestVisible="False" OffContent="Недоступно" OnContent="Готово" VerticalAlignment="Center" />
+                </Grid>
             </Border>
         </StackPanel>
     </ScrollViewer>

@@ -55,5 +55,18 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Name: "{autoprograms}\YPtun"; Filename: "{app}\YPtun.exe"
 Name: "{autodesktop}\YPtun"; Filename: "{app}\YPtun.exe"; Tasks: desktopicon
 
+[Registry]
+Root: HKCR; Subkey: "yptun"; ValueType: string; ValueName: ""; ValueData: "URL:YPtun Protocol"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "yptun"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "yptun\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\YPtun.exe,0"
+Root: HKCR; Subkey: "yptun\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\YPtun.exe"" ""%1"""
+Root: HKCR; Subkey: "olcbox"; ValueType: string; ValueName: ""; ValueData: "URL:YPtun Legacy Protocol"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "olcbox"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "olcbox\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\YPtun.exe"" ""%1"""
+Root: HKCR; Subkey: ".yptun"; ValueType: string; ValueName: ""; ValueData: "YPtun.Configuration"; Flags: uninsdeletevalue
+Root: HKCR; Subkey: "YPtun.Configuration"; ValueType: string; ValueName: ""; ValueData: "YPtun configuration"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "YPtun.Configuration\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\YPtun.exe,0"
+Root: HKCR; Subkey: "YPtun.Configuration\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\YPtun.exe"" ""%1"""
+
 [Run]
 Filename: "{app}\YPtun.exe"; Description: "{cm:LaunchProgram,YPtun}"; Flags: nowait postinstall skipifsilent

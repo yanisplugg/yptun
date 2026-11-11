@@ -9,4 +9,8 @@ public sealed record CoreSnapshot(
     string ConnectionMode,
     string? ActiveProfileId,
     IReadOnlyList<ProfileItem> Profiles,
+    IReadOnlyList<SubscriptionItem> Subscriptions,
+    SessionDiagnostics Session,
+    string TelegramProxyStatus,
+    string TelegramProxyDetail,
     IReadOnlyList<string> Logs);

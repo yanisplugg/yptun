@@ -1,10 +1,15 @@
 use yptun_core::desktop_proxy::{
-    proxy_enable_text, RegistryEdit, WindowsProxyController, WindowsProxyPlan, WindowsProxyState,
+    proxy_enable_text, PerConnectionOptions, RegistryEdit, WindowsProxyController,
+    WindowsProxyPlan, WindowsProxyState, INTERNET_OPTION_PER_CONNECTION_OPTION,
     INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED, REGISTRY_KEY,
 };
 
 #[cfg(windows)]
-use windows_sys::Win32::Networking::WinInet::InternetSetOptionW;
+use windows_sys::Win32::Networking::WinInet::{
+    InternetSetOptionW, INTERNET_PER_CONN_FLAGS, INTERNET_PER_CONN_OPTIONW,
+    INTERNET_PER_CONN_OPTIONW_0, INTERNET_PER_CONN_OPTION_LISTW, INTERNET_PER_CONN_PROXY_BYPASS,
+    INTERNET_PER_CONN_PROXY_SERVER,
+};
 #[cfg(windows)]
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
 #[cfg(windows)]
@@ -98,6 +103,7 @@ fn apply_plan(plan: &WindowsProxyPlan) -> Result<(), String> {
             }
         }
     }
+    apply_per_connection_options(&plan.per_connection)?;
     notify_wininet();
     Ok(())
 }
@@ -105,6 +111,66 @@ fn apply_plan(plan: &WindowsProxyPlan) -> Result<(), String> {
 #[cfg(not(windows))]
 fn apply_plan(_plan: &WindowsProxyPlan) -> Result<(), String> {
     Err("Windows system proxy is unavailable on this platform".into())
+}
+
+#[cfg(windows)]
+fn apply_per_connection_options(options: &PerConnectionOptions) -> Result<(), String> {
+    let mut server = options.proxy_server.as_deref().map(wide_string);
+    let mut bypass = (!options.bypass.trim().is_empty()).then(|| wide_string(&options.bypass));
+    let mut values = Vec::with_capacity(options.option_count() as usize);
+    values.push(INTERNET_PER_CONN_OPTIONW {
+        dwOption: INTERNET_PER_CONN_FLAGS,
+        Value: INTERNET_PER_CONN_OPTIONW_0 {
+            dwValue: options.flags() as u32,
+        },
+    });
+    if let Some(value) = server.as_mut() {
+        values.push(INTERNET_PER_CONN_OPTIONW {
+            dwOption: INTERNET_PER_CONN_PROXY_SERVER,
+            Value: INTERNET_PER_CONN_OPTIONW_0 {
+                pszValue: value.as_mut_ptr(),
+            },
+        });
+        if let Some(value) = bypass.as_mut() {
+            values.push(INTERNET_PER_CONN_OPTIONW {
+                dwOption: INTERNET_PER_CONN_PROXY_BYPASS,
+                Value: INTERNET_PER_CONN_OPTIONW_0 {
+                    pszValue: value.as_mut_ptr(),
+                },
+            });
+        }
+    }
+
+    let mut list = INTERNET_PER_CONN_OPTION_LISTW {
+        dwSize: std::mem::size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
+        pszConnection: std::ptr::null_mut(),
+        dwOptionCount: values.len() as u32,
+        dwOptionError: 0,
+        pOptions: values.as_mut_ptr(),
+    };
+    // SAFETY: `list`, `values`, and both UTF-16 buffers remain alive and writable for the full
+    // synchronous WinINet call. `pszConnection = NULL` selects the default LAN connection.
+    let applied = unsafe {
+        InternetSetOptionW(
+            std::ptr::null(),
+            INTERNET_OPTION_PER_CONNECTION_OPTION as u32,
+            (&mut list as *mut INTERNET_PER_CONN_OPTION_LISTW).cast(),
+            std::mem::size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
+        )
+    };
+    if applied == 0 {
+        Err(format!(
+            "WinINet rejected per-connection proxy option {}",
+            list.dwOptionError
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn wide_string(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(windows)]

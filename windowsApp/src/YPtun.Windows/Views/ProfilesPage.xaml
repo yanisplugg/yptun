@@ -23,42 +23,88 @@
                 <TextBlock Text="Подписки, ссылки и локальные профили" Opacity="0.64" Margin="0,5,0,0" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Bottom">
+                <Button Content="Новая" Click="OnNew" />
                 <Button Content="Обновить" Click="OnRefresh" />
+                <Button Content="Пинг всех" Click="OnPingAll" />
+                <Button Content="Бесплатные серверы" Click="OnFindFreeServers" />
                 <Button Content="Вставить" Click="OnPaste" />
+                <Button Content="Резервная копия" Click="OnExportBundle" />
                 <Button Content="Импортировать файл" Style="{StaticResource AccentButtonStyle}" Click="OnImportFile" />
             </StackPanel>
         </Grid>
 
-        <ListView
-            x:Name="ProfilesList"
-            Grid.Row="2"
-            ItemsSource="{Binding Profiles}"
-            SelectedItem="{Binding SelectedProfile, Mode=OneWay}"
-            IsItemClickEnabled="True"
-            ItemClick="OnProfileClick"
-            SelectionMode="Single">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <Grid Padding="14,12" MinHeight="72">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="46" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Border Width="36" Height="36" CornerRadius="11" Background="#147C5CFC" VerticalAlignment="Center">
-                            <FontIcon Glyph="&#xE774;" FontSize="17" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
-                            <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{Binding Subtitle}" Opacity="0.64" TextTrimming="CharacterEllipsis" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding Engine}" Opacity="0.58" VerticalAlignment="Center" />
-                            <Button Content="Удалить" Tag="{Binding}" Click="OnDelete" />
-                        </StackPanel>
-                    </Grid>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Expander Header="Подписки" IsExpanded="True">
+                <ListView ItemsSource="{Binding Subscriptions}" SelectionMode="None" MaxHeight="230">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="12,9" MinHeight="64" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="40" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="32" Height="32" CornerRadius="10" Background="#147C5CFC" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE8E5;" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Detail}" Opacity="0.62" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Url}" FontSize="11" Opacity="0.48" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button Content="Обновить" Tag="{Binding}" Click="OnRefreshSubscription" />
+                                    <Button Content="Настроить" Tag="{Binding}" Click="OnEditSubscription" />
+                                    <Button Content="Удалить" Tag="{Binding}" Click="OnDeleteSubscription" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Expander>
+
+            <ListView
+                x:Name="ProfilesList"
+                Grid.Row="2"
+                ItemsSource="{Binding Profiles}"
+                SelectedItem="{Binding SelectedProfile, Mode=OneWay}"
+                IsItemClickEnabled="True"
+                ItemClick="OnProfileClick"
+                SelectionMode="Single">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Padding="14,12" MinHeight="72">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="46" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="36" Height="36" CornerRadius="11" Background="#147C5CFC" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xE774;" FontSize="17" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                                <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Subtitle}" Opacity="0.64" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Engine}" Opacity="0.58" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding PingLabel}" MinWidth="64" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                <Button Content="Пинг" Tag="{Binding}" Click="OnPing" />
+                                <Button Content="Изменить" Tag="{Binding}" Click="OnEdit" />
+                                <Button Content="Копия" Tag="{Binding}" Click="OnDuplicate" />
+                                <Button Content="Поделиться" Tag="{Binding}" Click="OnShare" />
+                                <Button Content="Удалить" Tag="{Binding}" Click="OnDelete" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
     </Grid>
 </Page>
