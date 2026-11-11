@@ -161,6 +161,7 @@ func everySharedSettingsFileMigratesFromTheHistoricalFallback(
     defer { fixture.remove() }
     let routingProfiles = Data(#"{"globalProfileId":"main","profiles":[]}"#.utf8)
     let identity = Data("legacy-device-id\n".utf8)
+    let warp = Data("[Interface]\nPrivateKey = key\n[Peer]\nPublicKey = peer\n".utf8)
     let appGroupDirectory = try #require(fixture.paths.appGroupYPtunDirectory)
     try fixture.write(
         routingProfiles,
@@ -171,6 +172,10 @@ func everySharedSettingsFileMigratesFromTheHistoricalFallback(
         identity,
         to: fixture.paths.legacyOlcboxDirectory
             .appendingPathComponent(MigrationArtifact.deviceIdentity.fileName)
+    )
+    try fixture.write(
+        warp,
+        to: appGroupDirectory.appendingPathComponent(MigrationArtifact.warpConfig.fileName)
     )
 
     let report = await AppleDataMigrator(paths: fixture.paths).migrate()
@@ -183,6 +188,9 @@ func everySharedSettingsFileMigratesFromTheHistoricalFallback(
     #expect(
         try AtomicFileIO.readBytes(at: fixture.paths.destination(for: .deviceIdentity))
             == identity
+    )
+    #expect(
+        try AtomicFileIO.readBytes(at: fixture.paths.destination(for: .warpConfig)) == warp
     )
 }
 
