@@ -132,8 +132,9 @@ Write-Host "Creating installer..."
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
 $hashFile = Join-Path $OutputDirectory "SHA256SUMS-windows-$Architecture.txt"
-Get-ChildItem $OutputDirectory -File |
-    Where-Object { $_.Name -ne (Split-Path -Leaf $hashFile) } |
+$installerExe = Join-Path $OutputDirectory "YPtun-$Version-$Architecture-installer.exe"
+@($installerExe, $portableExe) |
+    Get-Item |
     Sort-Object Name |
     ForEach-Object {
         $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
