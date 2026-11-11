@@ -47,6 +47,8 @@ hide_rust_symbols() {
   local relocatable="$WORK/$label.o"
   local edited="$WORK/$label-exported.o"
   local arch
+  local sdk_path
+  local sdk_version
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -54,8 +56,16 @@ hide_rust_symbols() {
     return 1
   fi
 
+  sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+  sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+
   rm -f "$relocatable" "$edited" "$output"
-  xcrun ld -r -arch "$arch" -all_load "$input" -o "$relocatable"
+  xcrun ld -r \
+    -arch "$arch" \
+    -platform_version macos "$MACOSX_DEPLOYMENT_TARGET" "$sdk_version" \
+    -syslibroot "$sdk_path" \
+    -all_load "$input" \
+    -o "$relocatable"
   xcrun nmedit -s "$exports" "$relocatable" -o "$edited"
   xcrun libtool -static -o "$output" "$edited"
 
