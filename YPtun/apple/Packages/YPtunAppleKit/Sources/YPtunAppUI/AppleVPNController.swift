@@ -1,6 +1,20 @@
 import Foundation
-import NetworkExtension
+@preconcurrency import NetworkExtension
 import YPtunShared
+
+private struct UncheckedTransfer<Value>: @unchecked Sendable {
+    let value: Value
+}
+
+private final class NotificationToken: @unchecked Sendable {
+    var value: NSObjectProtocol?
+
+    deinit {
+        if let value {
+            NotificationCenter.default.removeObserver(value)
+        }
+    }
+}
 
 @MainActor
 public protocol AppleVPNControlling: AnyObject {
@@ -15,24 +29,19 @@ public final class AppleVPNController: AppleVPNControlling {
     public var onStateChange: ((VPNConnectionState) -> Void)?
 
     private var manager: NETunnelProviderManager?
-    private var statusObserver: NSObjectProtocol?
+    private let statusObserver = NotificationToken()
 
     public init() {
-        statusObserver = NotificationCenter.default.addObserver(
+        statusObserver.value = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             guard let connection = notification.object as? NEVPNConnection else { return }
+            let status = connection.status
             Task { @MainActor [weak self] in
-                self?.onStateChange?(Self.state(for: connection.status))
+                self?.onStateChange?(Self.state(for: status))
             }
-        }
-    }
-
-    deinit {
-        if let statusObserver {
-            NotificationCenter.default.removeObserver(statusObserver)
         }
     }
 
@@ -81,16 +90,17 @@ public final class AppleVPNController: AppleVPNControlling {
     }
 
     private func loadManager(createIfMissing: Bool) async throws -> NETunnelProviderManager? {
-        let managers = try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<[NETunnelProviderManager], Error>) in
+        let transfer = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<UncheckedTransfer<[NETunnelProviderManager]>, Error>) in
             NETunnelProviderManager.loadAllFromPreferences { managers, error in
                 if let error {
                     continuation.resume(throwing: error)
                 } else {
-                    continuation.resume(returning: managers ?? [])
+                    continuation.resume(returning: UncheckedTransfer(value: managers ?? []))
                 }
             }
         }
+        let managers = transfer.value
         if let current = managers.first(where: {
             ($0.protocolConfiguration as? NETunnelProviderProtocol)?
                 .providerBundleIdentifier == providerBundleIdentifier

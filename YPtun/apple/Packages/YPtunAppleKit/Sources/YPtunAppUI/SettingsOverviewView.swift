@@ -1,4 +1,5 @@
 import SwiftUI
+import YPtunMigrationSupport
 
 public struct SettingsOverviewView: View {
     @Bindable private var model: YPtunApplicationModel
