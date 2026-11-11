@@ -23,7 +23,18 @@ public struct AppleApplicationSnapshot: Sendable {
 }
 
 public actor AppleApplicationBootstrapper {
-    public init() {}
+    private let subscriptionSession: URLSession
+
+    public init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 60
+        subscriptionSession = URLSession(configuration: configuration)
+    }
 
     public func load() async throws -> AppleApplicationSnapshot {
         let paths = try systemPaths()
@@ -135,11 +146,14 @@ public actor AppleApplicationBootstrapper {
         }
         let text: String
         if let subscriptionURL {
-            var request = URLRequest(url: subscriptionURL)
-            request.timeoutInterval = 30
+            var request = URLRequest(
+                url: subscriptionURL,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+                timeoutInterval: 30
+            )
             request.setValue("YPtun/4.0.0", forHTTPHeaderField: "User-Agent")
             request.setValue(try deviceIdentity(paths: paths), forHTTPHeaderField: "x-hwid")
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await subscriptionSession.data(for: request)
             if let response = response as? HTTPURLResponse,
                !(200..<300).contains(response.statusCode) {
                 throw AppleApplicationBootstrapError.subscriptionHTTPStatus(response.statusCode)

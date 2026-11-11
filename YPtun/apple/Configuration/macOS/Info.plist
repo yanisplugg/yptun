@@ -28,11 +28,31 @@
 				<string>yptun</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.yptun.app.macos.links</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>qwdtt</string>
+				<string>openflux</string>
+				<string>masterdns</string>
+				<string>snolc</string>
+				<string>csqtt</string>
+				<string>freeturn</string>
+				<string>olcrtc</string>
+				<string>amneziawg</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
