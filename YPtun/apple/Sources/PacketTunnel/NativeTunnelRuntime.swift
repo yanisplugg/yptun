@@ -7,6 +7,12 @@ import YPtunTunnelSupport
 import Coreapi
 import Darwin
 import Tun2SocksKit
+#if canImport(SnolcCore)
+import SnolcCore
+#endif
+#if canImport(CsqttCore)
+import CsqttCore
+#endif
 
 final class NativeTunnelRuntime: @unchecked Sendable {
     private let lock = NSLock()
@@ -37,7 +43,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             )
 
             startLogPump()
-            try startEngines(plan)
+            try startEngines(
+                plan,
+                request: request,
+                logFilePath: logURL.path,
+                cacheFilePath: cacheURL.path
+            )
             provider.setTunnelNetworkSettings(networkSettings(from: plan.tunnel)) { [weak self] error in
                 guard error == nil else {
                     self?.stop()
@@ -75,6 +86,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         CoreapiTurnableStop()
         CoreapiMieruStop()
         CoreapiAppleEngineStopAll()
+#if canImport(SnolcCore)
+        snolc_ffi_stop()
+#endif
+#if canImport(CsqttCore)
+        csqtt_ffi_stop()
+#endif
+        CoreapiCsqttBridgeStop()
         CoreapiRtcStopPool()
         var ignored: NSError?
         _ = CoreapiRtcStop(&ignored)
@@ -94,7 +112,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         }
     }
 
-    private func startEngines(_ plan: AppleNativeRuntimePlan) throws {
+    private func startEngines(
+        _ plan: AppleNativeRuntimePlan,
+        request: AppleTunnelRequest,
+        logFilePath: String,
+        cacheFilePath: String
+    ) throws {
         if let olcrtc = plan.olcrtc {
             try startOlcRtc(olcrtc)
         }
@@ -102,6 +125,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             try callCore {
                 CoreapiAwgStart(amneziaWg.iniConfig, amneziaWg.listenAddress, $0)
             }
+        }
+        if let snolc = plan.snolc {
+            try startSnolc(snolc)
+        }
+        if let csqtt = plan.csqtt {
+            try startCsqtt(csqtt)
         }
         if let turnable = plan.turnable {
             try callCore {
@@ -118,6 +147,26 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             try callCore {
                 CoreapiAppleEngineStart(kind, auxiliary.optionsJson, $0)
             }
+        }
+        if plan.deferredWireguardProxy {
+            let negotiated = CoreapiWdttWaitConfig(45_000)
+            guard !negotiated.isEmpty, !negotiated.hasPrefix("ERROR:") else {
+                throw NativeTunnelRuntimeError.wdttConfigurationUnavailable
+            }
+            guard !negotiated.hasPrefix("RAWCONF:") else {
+                throw NativeTunnelRuntimeError.wdttRawModeUnavailable
+            }
+            let proxy = try appleWireguardRuntimeProxy(
+                wireguardIni: negotiated,
+                trafficJson: request.trafficJSON,
+                routingJson: request.routingJSON,
+                routingProfilesJson: request.routingProfilesJSON,
+                locationJson: request.locationJSON,
+                socksPort: 10_808,
+                logFilePath: logFilePath,
+                cacheFilePath: cacheFilePath
+            )
+            try callCore { CoreapiSbStart(proxy.config, $0) }
         }
         if let proxy = plan.proxy {
             switch proxy.kind {
@@ -194,6 +243,60 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
             try callCore { CoreapiRtcWaitReady(20_000, $0) }
         }
+    }
+
+    private func startSnolc(_ plan: AppleSnolcRuntimePlan) throws {
+#if canImport(SnolcCore)
+        let directory = URL(fileURLWithPath: plan.directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for file in plan.files {
+            let url = directory.appendingPathComponent(file.relativePath)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(file.contents.utf8).write(to: url, options: .atomic)
+        }
+        if let pointer = snolc_ffi_start(plan.configPath) {
+            let message = String(cString: pointer)
+            snolc_ffi_free_string(pointer)
+            throw NativeTunnelRuntimeError.specializedCore(message)
+        }
+#else
+        throw NativeTunnelRuntimeError.specializedCore("SnolcCore is not linked")
+#endif
+    }
+
+    private func startCsqtt(_ plan: AppleCsqttRuntimePlan) throws {
+#if canImport(CsqttCore)
+        try callCore {
+            CoreapiCsqttBridgeStart(
+                plan.bridgeSocksAddress,
+                plan.clientUdpAddress,
+                Int(plan.mtu),
+                $0
+            )
+        }
+        if let pointer = csqtt_ffi_start(plan.optionsJson, { configuration in
+            guard let configuration else { return }
+            var error: NSError?
+            _ = CoreapiCsqttBridgeSetTunnel(String(cString: configuration), &error)
+        }, { line in
+            guard let line else { return }
+            CoreapiPushLog("csqtt", String(cString: line))
+        }) {
+            let message = String(cString: pointer)
+            csqtt_ffi_free_string(pointer)
+            throw NativeTunnelRuntimeError.specializedCore(message)
+        }
+        guard CoreapiCsqttBridgeWaitTunnel(35_000) else {
+            throw NativeTunnelRuntimeError.specializedCore(
+                "CSQTT tunnel handshake timed out"
+            )
+        }
+#else
+        throw NativeTunnelRuntimeError.specializedCore("CsqttCore is not linked")
+#endif
     }
 
     private func startBridge(yaml: String) throws {
@@ -319,11 +422,20 @@ final class NativeTunnelRuntime {
 
 enum NativeTunnelRuntimeError: LocalizedError {
     case coreFrameworkUnavailable
+    case wdttConfigurationUnavailable
+    case wdttRawModeUnavailable
+    case specializedCore(String)
 
     var errorDescription: String? {
         switch self {
         case .coreFrameworkUnavailable:
             "The in-process Apple core framework is not linked."
+        case .wdttConfigurationUnavailable:
+            "qWDTT did not return its WireGuard configuration before the timeout."
+        case .wdttRawModeUnavailable:
+            "qWDTT Raw mode is not supported by the native Apple runtime."
+        case let .specializedCore(message):
+            message
         }
     }
 }

@@ -69,6 +69,9 @@ jobs:
             -o ../YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework \
             ./coreapi
 
+      - name: Build specialized iOS cores
+        run: bash core/scripts/build-specialized-apple.sh
+
       - name: Generate native Xcode project
         working-directory: YPtun/apple
         run: |

@@ -202,6 +202,27 @@ pub struct AppleAuxiliaryRuntimePlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleGeneratedFile {
+    pub relative_path: String,
+    pub contents: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleSnolcRuntimePlan {
+    pub directory: String,
+    pub config_path: String,
+    pub files: Vec<AppleGeneratedFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AppleCsqttRuntimePlan {
+    pub options_json: String,
+    pub bridge_socks_address: String,
+    pub client_udp_address: String,
+    pub mtu: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct AppleNativeRuntimePlan {
     pub display_name: String,
     pub tunnel: AppleTunnelPlan,
@@ -210,6 +231,9 @@ pub struct AppleNativeRuntimePlan {
     pub amnezia_wg: Option<AppleAmneziaWgRuntimePlan>,
     pub turnable: Option<AppleTurnableRuntimePlan>,
     pub auxiliary: Vec<AppleAuxiliaryRuntimePlan>,
+    pub snolc: Option<AppleSnolcRuntimePlan>,
+    pub csqtt: Option<AppleCsqttRuntimePlan>,
+    pub deferred_wireguard_proxy: bool,
     pub proxy: Option<AppleProxyRuntimePlan>,
 }
 
@@ -546,6 +570,9 @@ pub fn apple_native_runtime_plan(
     let mut amnezia_wg = None;
     let mut turnable = None;
     let mut auxiliary = Vec::new();
+    let mut snolc = None;
+    let mut csqtt = None;
+    let mut deferred_wireguard_proxy = false;
 
     let proxy = match location.engine {
         EngineType::Stealth => None,
@@ -774,9 +801,74 @@ pub fn apple_native_runtime_plan(
                 .as_ref()
                 .ok_or_else(|| FfiError::Invalid("VK-TURN is not configured".into()))?;
             if vk.uses_csqtt() {
-                return Err(FfiError::Unsupported(
-                    "CSQTT is not connected to the native Apple runtime yet".into(),
-                ));
+                let internal_port = socks_port + 1;
+                let client_udp_port = internal_port + 4;
+                let mut apple_vk = vk.clone();
+                apple_vk.csqtt_workers = if vk.csqtt_workers <= 0 {
+                    9
+                } else {
+                    vk.csqtt_workers.clamp(9, 18)
+                };
+                csqtt = Some(AppleCsqttRuntimePlan {
+                    options_json: apple_vk.csqtt_core_options_json(
+                        "in-process",
+                        &format!("127.0.0.1:{client_udp_port}"),
+                        &device_id,
+                    ),
+                    bridge_socks_address: format!("127.0.0.1:{internal_port}"),
+                    client_udp_address: format!("127.0.0.1:{client_udp_port}"),
+                    mtu: 1_300,
+                });
+                let profile = local_socks_profile("CSQTT", internal_port);
+                let config = singbox_config::build(
+                    &profile,
+                    &SingBoxOptions {
+                        listen_port: socks_port,
+                        listen_host: "127.0.0.1".into(),
+                        log_level: "warn".into(),
+                        routing: routing.clone(),
+                        traffic: TrafficSettings {
+                            domain_strategy: "ipv4_only".into(),
+                            ..traffic.clone()
+                        },
+                        routing_profile: routing_profile.clone(),
+                        singbox_geosite_base: profiles.singbox_geosite_base.clone(),
+                        singbox_geoip_base: profiles.singbox_geoip_base.clone(),
+                        block_quic: true,
+                        sniff_override_destination: true,
+                        prefer_tcp_remote_dns: true,
+                        log_file_path: (!log_file_path.trim().is_empty()).then_some(log_file_path),
+                        cache_file_path: (!cache_file_path.trim().is_empty())
+                            .then_some(cache_file_path),
+                        ..SingBoxOptions::default()
+                    },
+                )
+                .map_err(|error| FfiError::Invalid(error.to_string()))?;
+                return Ok(AppleNativeRuntimePlan {
+                    display_name: location.display_name(),
+                    tunnel: apple_tunnel_plan(traffic.mtu, routing.bypass_lan),
+                    bridge: apple_bridge_plan(
+                        serde_json::to_string(&location)
+                            .map_err(|error| FfiError::Json(error.to_string()))?,
+                        serde_json::to_string(&traffic)
+                            .map_err(|error| FfiError::Json(error.to_string()))?,
+                        socks_port,
+                        String::new(),
+                        String::new(),
+                    )?,
+                    olcrtc,
+                    amnezia_wg,
+                    turnable,
+                    auxiliary,
+                    snolc,
+                    csqtt,
+                    deferred_wireguard_proxy,
+                    proxy: Some(AppleProxyRuntimePlan {
+                        kind: AppleProxyRuntimeKind::SingBox,
+                        listen_port: socks_port,
+                        config,
+                    }),
+                });
             }
             if vk.uses_wdtt() {
                 auxiliary.push(AppleAuxiliaryRuntimePlan {
@@ -789,55 +881,54 @@ pub fn apple_native_runtime_plan(
                     })
                     .to_string(),
                 });
-                return Err(FfiError::Unsupported(
-                    "qWDTT requires its negotiated WireGuard config before the routing core starts"
-                        .into(),
-                ));
-            }
-            auxiliary.push(AppleAuxiliaryRuntimePlan {
-                kind: AppleAuxiliaryRuntimeKind::FreeTurn,
-                options_json: serde_json::json!({
-                    "uri": vk.uri,
-                    "listen_addr": format!("127.0.0.1:{}", vk.listen_port),
-                    "vk_link": vk.vk_link,
-                    "streams": if vk.streams <= 0 { 2 } else { vk.streams.clamp(1, 3) },
-                })
-                .to_string(),
-            });
-            let profile = location.proxy.as_ref().ok_or_else(|| {
-                FfiError::Invalid("VK-TURN requires its WireGuard exit profile".into())
-            })?;
-            let config = singbox_config::build(
-                profile,
-                &SingBoxOptions {
-                    listen_port: socks_port,
-                    listen_host: "127.0.0.1".into(),
-                    log_level: "warn".into(),
-                    routing: routing.clone(),
-                    traffic: TrafficSettings {
-                        domain_strategy: "ipv4_only".into(),
-                        ..traffic.clone()
+                deferred_wireguard_proxy = true;
+                None
+            } else {
+                auxiliary.push(AppleAuxiliaryRuntimePlan {
+                    kind: AppleAuxiliaryRuntimeKind::FreeTurn,
+                    options_json: serde_json::json!({
+                        "uri": vk.uri,
+                        "listen_addr": format!("127.0.0.1:{}", vk.listen_port),
+                        "vk_link": vk.vk_link,
+                        "streams": if vk.streams <= 0 { 2 } else { vk.streams.clamp(1, 3) },
+                    })
+                    .to_string(),
+                });
+                let profile = location.proxy.as_ref().ok_or_else(|| {
+                    FfiError::Invalid("VK-TURN requires its WireGuard exit profile".into())
+                })?;
+                let config = singbox_config::build(
+                    profile,
+                    &SingBoxOptions {
+                        listen_port: socks_port,
+                        listen_host: "127.0.0.1".into(),
+                        log_level: "warn".into(),
+                        routing: routing.clone(),
+                        traffic: TrafficSettings {
+                            domain_strategy: "ipv4_only".into(),
+                            ..traffic.clone()
+                        },
+                        advanced: location.advanced.clone(),
+                        routing_profile: routing_profile.clone(),
+                        singbox_geosite_base: profiles.singbox_geosite_base.clone(),
+                        singbox_geoip_base: profiles.singbox_geoip_base.clone(),
+                        block_quic: false,
+                        sniff_override_destination: true,
+                        fake_dns_spec: location.fake_dns.clone(),
+                        prefer_tcp_remote_dns: true,
+                        log_file_path: (!log_file_path.trim().is_empty()).then_some(log_file_path),
+                        cache_file_path: (!cache_file_path.trim().is_empty())
+                            .then_some(cache_file_path),
+                        ..SingBoxOptions::default()
                     },
-                    advanced: location.advanced.clone(),
-                    routing_profile: routing_profile.clone(),
-                    singbox_geosite_base: profiles.singbox_geosite_base.clone(),
-                    singbox_geoip_base: profiles.singbox_geoip_base.clone(),
-                    block_quic: false,
-                    sniff_override_destination: true,
-                    fake_dns_spec: location.fake_dns.clone(),
-                    prefer_tcp_remote_dns: true,
-                    log_file_path: (!log_file_path.trim().is_empty()).then_some(log_file_path),
-                    cache_file_path: (!cache_file_path.trim().is_empty())
-                        .then_some(cache_file_path),
-                    ..SingBoxOptions::default()
-                },
-            )
-            .map_err(|error| FfiError::Invalid(error.to_string()))?;
-            Some(AppleProxyRuntimePlan {
-                kind: AppleProxyRuntimeKind::SingBox,
-                listen_port: socks_port,
-                config,
-            })
+                )
+                .map_err(|error| FfiError::Invalid(error.to_string()))?;
+                Some(AppleProxyRuntimePlan {
+                    kind: AppleProxyRuntimeKind::SingBox,
+                    listen_port: socks_port,
+                    config,
+                })
+            }
         }
         EngineType::MasterDns => {
             let config = location
@@ -896,10 +987,42 @@ pub fn apple_native_runtime_plan(
             });
             None
         }
-        other => {
-            return Err(FfiError::Unsupported(format!(
-                "Native Apple runtime for {other:?} is not connected yet"
-            )))
+        EngineType::Snolc => {
+            let config = location
+                .snolc
+                .as_ref()
+                .ok_or_else(|| FfiError::Invalid("snolc is not configured".into()))?;
+            if config.has_proxy() {
+                return Err(FfiError::Unsupported(
+                    "snolc proxy chaining is not connected to the native Apple runtime yet".into(),
+                ));
+            }
+            let directory = format!("{runtime_directory}/snolc");
+            let mut files: Vec<AppleGeneratedFile> = yptun_core::snolc::client(
+                "127.0.0.1",
+                socks_port,
+                &config.host,
+                config.port,
+                config.debug,
+                "",
+                "",
+            )
+            .into_iter()
+            .map(|(relative_path, contents)| AppleGeneratedFile {
+                relative_path,
+                contents,
+            })
+            .collect();
+            files.push(AppleGeneratedFile {
+                relative_path: "pub.hex".into(),
+                contents: config.public_key.clone(),
+            });
+            snolc = Some(AppleSnolcRuntimePlan {
+                config_path: format!("{directory}/snolc.toml"),
+                directory,
+                files,
+            });
+            None
         }
     };
 
@@ -921,7 +1044,64 @@ pub fn apple_native_runtime_plan(
         amnezia_wg,
         turnable,
         auxiliary,
+        snolc,
+        csqtt,
+        deferred_wireguard_proxy,
         proxy,
+    })
+}
+
+/// Builds the routing front after qWDTT returns its negotiated WireGuard configuration.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub fn apple_wireguard_runtime_proxy(
+    wireguard_ini: String,
+    traffic_json: String,
+    routing_json: String,
+    routing_profiles_json: String,
+    location_json: String,
+    socks_port: i32,
+    log_file_path: String,
+    cache_file_path: String,
+) -> Result<AppleProxyRuntimePlan, FfiError> {
+    let profile = warp::parse_warp_ini(&wireguard_ini, "qWDTT")
+        .ok_or_else(|| FfiError::Invalid("qWDTT returned an invalid WireGuard config".into()))?;
+    let traffic =
+        json_or_default::<TrafficSettings>("TrafficSettings", &traffic_json)?.normalized();
+    let routing = json_or_default::<RoutingRules>("RoutingRules", &routing_json)?;
+    let profiles =
+        json_or_default::<RoutingProfilesState>("RoutingProfilesState", &routing_profiles_json)?;
+    let location = from_json::<LocationConfig>("LocationConfig", &location_json)?.normalized();
+    let routing_profile = profiles
+        .resolve(Some(&location.routing_profile_id))
+        .cloned();
+    let config = singbox_config::build(
+        &profile,
+        &SingBoxOptions {
+            listen_port: socks_port,
+            listen_host: "127.0.0.1".into(),
+            log_level: "warn".into(),
+            routing,
+            traffic: TrafficSettings {
+                domain_strategy: "ipv4_only".into(),
+                ..traffic
+            },
+            routing_profile,
+            singbox_geosite_base: profiles.singbox_geosite_base,
+            singbox_geoip_base: profiles.singbox_geoip_base,
+            block_quic: false,
+            sniff_override_destination: true,
+            prefer_tcp_remote_dns: true,
+            log_file_path: (!log_file_path.trim().is_empty()).then_some(log_file_path),
+            cache_file_path: (!cache_file_path.trim().is_empty()).then_some(cache_file_path),
+            ..SingBoxOptions::default()
+        },
+    )
+    .map_err(|error| FfiError::Invalid(error.to_string()))?;
+    Ok(AppleProxyRuntimePlan {
+        kind: AppleProxyRuntimeKind::SingBox,
+        listen_port: socks_port,
+        config,
     })
 }
 

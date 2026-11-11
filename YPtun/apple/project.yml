@@ -85,6 +85,10 @@ targets:
         product: Tun2SocksKit
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+        embed: false
 
   YPtunWidget:
     type: app-extension
@@ -161,6 +165,10 @@ targets:
       - package: Tun2SocksKit
         product: Tun2SocksKit
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
         embed: false
 
 schemes:

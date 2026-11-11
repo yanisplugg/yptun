@@ -503,6 +503,66 @@ fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
     .unwrap();
     assert_eq!(plan.auxiliary.len(), 1);
     assert!(plan.proxy.is_none());
+
+    let snolc = serde_json::json!({
+        "name": "snolc",
+        "engine": "snolc",
+        "snolc": {
+            "host": "203.0.113.10",
+            "port": 443,
+            "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        snolc.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert!(plan
+        .snolc
+        .as_ref()
+        .unwrap()
+        .config_path
+        .ends_with("snolc/snolc.toml"));
+
+    let csqtt = serde_json::json!({
+        "name": "CSQTT",
+        "engine": "vkturn",
+        "vkturn": {
+            "core": "csqtt",
+            "listen_port": 9000,
+            "csqtt_peer": "203.0.113.20:46000",
+            "vk_link": "hash"
+        }
+    });
+    let plan = apple_native_runtime_plan(
+        csqtt.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    assert!(plan.csqtt.is_some());
+    assert_eq!(
+        plan.proxy.as_ref().unwrap().kind,
+        AppleProxyRuntimeKind::SingBox
+    );
 }
 
 #[test]

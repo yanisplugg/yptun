@@ -84,6 +84,8 @@ jobs:
             -ldflags "-X github.com/sagernet/sing-box/constant.Version=$VERSION -s -w -checklinkname=0" \
             -o ../YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework \
             ./coreapi
+      - name: Build specialized Apple cores
+        run: bash core/scripts/build-specialized-apple.sh
       - name: Generate native Apple project
         working-directory: YPtun/apple
         run: |
