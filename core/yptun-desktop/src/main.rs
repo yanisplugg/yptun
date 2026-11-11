@@ -74,6 +74,23 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let backend = backend.clone();
         let state = state.clone();
+        ui.on_ping_profile(move |id| {
+            let Some(ui) = weak.upgrade() else { return };
+            let request = serde_json::json!({ "command": "ping", "id": id.as_str() });
+            let response = backend.command(&request.to_string());
+            if response_ok(&response) {
+                refresh(&ui, backend.as_ref(), &state);
+            } else {
+                ui.set_status_label("Ошибка".into());
+                ui.set_status_detail(response_error(&response).into());
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
         ui.on_import_profile(move |text| {
             let Some(ui) = weak.upgrade() else { return };
             let request = serde_json::json!({ "command": "import", "text": text.as_str() });
@@ -216,6 +233,7 @@ fn refresh(ui: &AppWindow, backend: &dyn backend::DesktopBackend, state: &Mutex<
     ui.set_connection_mode(snapshot.connection_mode.into());
 
     let selected = snapshot.active_profile_id.unwrap_or_default();
+    ui.set_selected_profile_id(selected.clone().into());
     let rows = snapshot
         .profiles
         .into_iter()

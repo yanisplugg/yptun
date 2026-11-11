@@ -97,6 +97,7 @@ export component AppWindow inherits Window {
     in-out property <string> status-label: "Отключено";
     in-out property <string> status-detail: "Выберите конфигурацию";
     in-out property <string> connection-mode: "tun";
+    in-out property <string> selected-profile-id: "";
     in-out property <bool> is-connected: false;
     in-out property <bool> runtime-available: false;
     in-out property <int> current-page: 0;
@@ -113,6 +114,7 @@ export component AppWindow inherits Window {
     callback set-connection-mode(string);
     callback save-app-settings(bool, bool, bool, bool);
     callback import-profile(string);
+    callback ping-profile(string);
 
     if root.current-page == 0: HorizontalBox {
         padding: 28px;
@@ -226,6 +228,13 @@ export component AppWindow inherits Window {
                             spacing: 3px;
                             Text { text: root.status-label; color: Theme.text; font-size: 25px; font-weight: 650; }
                             Text { text: root.status-detail; color: Theme.text-muted; font-size: 14px; overflow: elide; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            visible: root.selected-profile-id != "";
+                            text: "Пинг";
+                            width: 76px;
+                            clicked => { root.ping-profile(root.selected-profile-id); }
                         }
                     }
                 }
