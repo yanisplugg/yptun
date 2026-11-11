@@ -74,6 +74,11 @@ public struct ConnectionHomeView: View {
                             } label: {
                                 Label("Редактировать", systemImage: "pencil")
                             }
+                            Button(role: .destructive) {
+                                model.locationPendingDeletion = location
+                            } label: {
+                                Label("Удалить", systemImage: "trash")
+                            }
                         }
                     }
                 }
@@ -103,6 +108,23 @@ public struct ConnectionHomeView: View {
         }
         .alert(item: $model.presentedNotice) { notice in
             Alert(title: Text(notice.title), message: Text(notice.message))
+        }
+        .alert(
+            "Удалить локацию?",
+            isPresented: Binding(
+                get: { model.locationPendingDeletion != nil },
+                set: { if !$0 { model.locationPendingDeletion = nil } }
+            ),
+            presenting: model.locationPendingDeletion
+        ) { _ in
+            Button("Удалить", role: .destructive) {
+                Task { await model.deletePendingLocation() }
+            }
+            Button("Отмена", role: .cancel) {
+                model.locationPendingDeletion = nil
+            }
+        } message: { location in
+            Text("«\(location.name)» будет удалена с этого устройства.")
         }
     }
 }

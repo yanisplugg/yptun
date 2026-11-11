@@ -55,6 +55,7 @@ public final class YPtunApplicationModel {
     public var isAddLocationPresented = false
     public var presentedNotice: YPtunNotice?
     public var locationEditorRequest: LocationEditorRequest?
+    public var locationPendingDeletion: LocationListItem?
 
     private let bootstrapper: AppleApplicationBootstrapper
     private let vpnController: any AppleVPNControlling
@@ -224,6 +225,22 @@ public final class YPtunApplicationModel {
                 message: error.localizedDescription
             )
             return false
+        }
+    }
+
+    public func deletePendingLocation() async {
+        guard let location = locationPendingDeletion else { return }
+        do {
+            let snapshot = try await bootstrapper.deleteLocation(id: location.id)
+            locations = snapshot.locations
+            selectedLocationID = snapshot.activeLocationID
+            locationPendingDeletion = nil
+        } catch {
+            locationPendingDeletion = nil
+            presentedNotice = YPtunNotice(
+                title: "Не удалось удалить локацию",
+                message: error.localizedDescription
+            )
         }
     }
 }

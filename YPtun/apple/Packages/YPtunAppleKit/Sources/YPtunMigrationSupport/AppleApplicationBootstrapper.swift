@@ -198,6 +198,20 @@ public actor AppleApplicationBootstrapper {
         return try await load()
     }
 
+    public func deleteLocation(id: String) async throws -> AppleApplicationSnapshot {
+        let paths = try systemPaths()
+        guard let bundleURL = locationBundleURL(in: paths) else {
+            throw AppleApplicationBootstrapError.locationBundleMissing
+        }
+        let existing = try readTextIfPresent(at: bundleURL) ?? ""
+        let deleted = try appleDeleteLocation(bundleJson: existing, locationId: id)
+        try AtomicFileIO.writeBytesAtomically(
+            Data(deleted.normalizedBundleJson.utf8),
+            to: paths.destination(for: .locationsV4)
+        )
+        return try await load()
+    }
+
     private func systemPaths() throws -> AppleDataPaths {
         try AppleDataPaths.system(appGroupIdentifier: appGroupIdentifier)
     }

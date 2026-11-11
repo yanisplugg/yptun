@@ -442,6 +442,31 @@ pub fn apple_save_location(
     })
 }
 
+#[uniffi::export]
+pub fn apple_delete_location(
+    bundle_json: String,
+    location_id: String,
+) -> Result<AppleLocationImport, FfiError> {
+    let mut bundle = from_json::<LocationBundleV4>("LocationBundle", &bundle_json)?.normalized();
+    let before = bundle.locations.len();
+    bundle
+        .locations
+        .retain(|entry| entry.storage_id != location_id);
+    if bundle.locations.len() == before {
+        return Err(FfiError::Invalid(format!(
+            "Unknown location id: {location_id}"
+        )));
+    }
+    let normalized = bundle.normalized();
+    let normalized_bundle_json = serde_json::to_string_pretty(&normalized)
+        .map_err(|error| FfiError::Json(error.to_string()))?;
+    Ok(AppleLocationImport {
+        normalized_bundle_json,
+        active_location_id: normalized.active_location_id,
+        imported_locations: 0,
+    })
+}
+
 fn json_or_default<T>(what: &str, json: &str) -> Result<T, FfiError>
 where
     T: serde::de::DeserializeOwned + Default,

@@ -2,10 +2,10 @@ use yptun_core::location::LocationConfig;
 use yptun_core::model::EngineType;
 use yptun_core::routing::TrafficSettings;
 use yptun_ffi::{
-    apple_bridge_plan, apple_import_locations, apple_location_catalog, apple_location_json,
-    apple_migrate_location_bundle, apple_native_runtime_plan, apple_save_location,
-    apple_select_location, apple_tunnel_plan, AppleActionKind, AppleConnectionRuntime,
-    AppleProxyRuntimeKind, AppleStatusKind,
+    apple_bridge_plan, apple_delete_location, apple_import_locations, apple_location_catalog,
+    apple_location_json, apple_migrate_location_bundle, apple_native_runtime_plan,
+    apple_save_location, apple_select_location, apple_tunnel_plan, AppleActionKind,
+    AppleConnectionRuntime, AppleProxyRuntimeKind, AppleStatusKind,
 };
 
 fn kinds(actions: &[yptun_ffi::AppleConnectionAction]) -> Vec<AppleActionKind> {
@@ -447,6 +447,11 @@ fn apple_save_location_preserves_subscription_metadata_when_editing() {
         "https://example.com/sub"
     );
     assert_eq!(bundle["active_location_id"], "node");
+
+    let deleted = apple_delete_location(saved.normalized_bundle_json, "node".into()).unwrap();
+    let empty: serde_json::Value = serde_json::from_str(&deleted.normalized_bundle_json).unwrap();
+    assert!(empty["locations"].as_array().unwrap().is_empty());
+    assert!(deleted.active_location_id.is_none());
 }
 
 #[test]
