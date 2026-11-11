@@ -12,8 +12,12 @@ Windows client reaches feature parity.
 - Windows 10 1809 or newer
 - .NET 9 SDK
 - Visual Studio 2022 with Desktop development with C++
-- Rust toolchain with `x86_64-pc-windows-msvc` and/or `aarch64-pc-windows-msvc`
+- Rust toolchain with `x86_64-pc-windows-msvc` (the ARM64 target is installed automatically)
 - Go and a MinGW-compatible C compiler for the bundled `yptuncore` runtime
+
+On an x64 host, `build.ps1 -Architecture arm64` automatically downloads an x64-hosted LLVM-MinGW
+cross toolchain and uses Rust's `aarch64-pc-windows-gnullvm` target. Every staged native file is
+therefore ARM64; no x64 runtime is copied into the ARM64 package.
 
 ## Build
 
