@@ -14,44 +14,59 @@ $coreRoot = Join-Path $root "core"
 $project = Join-Path $PSScriptRoot "src\YPtun.Windows\YPtun.Windows.csproj"
 $staging = Join-Path $PSScriptRoot ".native\$Architecture"
 $artifacts = Join-Path $PSScriptRoot "artifacts\$Architecture"
+$downloadDir = if ($env:YPTUN_BUILD_CACHE_DIR) {
+    [IO.Path]::GetFullPath($env:YPTUN_BUILD_CACHE_DIR)
+} else {
+    Join-Path $PSScriptRoot ".native\downloads"
+}
+$cargoTargetRoot = if ($env:CARGO_TARGET_DIR) {
+    [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+} else {
+    Join-Path $coreRoot "target"
+}
 
-$target = if ($Architecture -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+$target = if ($Architecture -eq "arm64") { "aarch64-pc-windows-gnullvm" } else { "x86_64-pc-windows-msvc" }
 $rid = if ($Architecture -eq "arm64") { "win-arm64" } else { "win-x64" }
 $goArch = if ($Architecture -eq "arm64") { "arm64" } else { "amd64" }
 
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
+New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
 
-function Import-VsDevEnvironment([string]$TargetArchitecture) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vswhere)) { return }
-    $installation = (& $vswhere -latest -products * -property installationPath).Trim()
-    if ([string]::IsNullOrWhiteSpace($installation)) { return }
-    $devCmd = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
-    if (-not (Test-Path $devCmd)) { return }
-    $hostArchitecture = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-    $target = if ($TargetArchitecture -eq "arm64") { "arm64" } else { "amd64" }
-    $environment = & $env:ComSpec /d /s /c "`"$devCmd`" -no_logo -arch=$target -host_arch=$hostArchitecture && set"
-    foreach ($line in $environment) {
-        $separator = $line.IndexOf('=')
-        if ($separator -le 0) { continue }
-        $name = $line.Substring(0, $separator)
-        $value = $line.Substring($separator + 1)
-        [Environment]::SetEnvironmentVariable($name, $value, "Process")
+function Resolve-Arm64CrossCompiler {
+    $version = "20260616"
+    $hostPackageArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "aarch64" } else { "x86_64" }
+    $package = "llvm-mingw-$version-ucrt-$hostPackageArch"
+    $archive = Join-Path $downloadDir "$package.zip"
+    $extract = Join-Path $downloadDir $package
+    if (-not (Test-Path $archive)) {
+        Write-Host "Downloading LLVM-MinGW ARM64 cross toolchain ($hostPackageArch host)..."
+        Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/$package.zip" -OutFile $archive
     }
+    $compiler = Get-ChildItem $extract -Recurse -Filter "aarch64-w64-mingw32-clang.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $compiler) {
+        if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+        Expand-Archive $archive -DestinationPath $extract -Force
+        $compiler = Get-ChildItem $extract -Recurse -Filter "aarch64-w64-mingw32-clang.exe" | Select-Object -First 1
+    }
+    if ($null -eq $compiler) { throw "LLVM-MinGW ARM64 compiler was not found in $archive" }
+    return $compiler.FullName
 }
 
 if ($Architecture -eq "arm64") {
-    Import-VsDevEnvironment $Architecture
-    $arm64Crt = if ($env:VCToolsInstallDir) { Join-Path $env:VCToolsInstallDir "lib\arm64\msvcrt.lib" } else { "" }
-    if ([string]::IsNullOrWhiteSpace($arm64Crt) -or -not (Test-Path $arm64Crt)) {
-        throw "Visual Studio ARM64 C++ build tools are required (msvcrt.lib for ARM64 was not found)."
-    }
+    $crossCc = Resolve-Arm64CrossCompiler
+    $crossBin = Split-Path -Parent $crossCc
+    $env:PATH = "$crossBin;$env:PATH"
+    $env:CC = $crossCc
+    $env:CXX = Join-Path $crossBin "aarch64-w64-mingw32-clang++.exe"
+    $env:CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER = $crossCc
+    rustup target add $target | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Rust target $target could not be installed" }
 }
 
 Write-Host "Building Rust WinUI bridge ($target)..."
 cargo build --manifest-path (Join-Path $coreRoot "Cargo.toml") -p yptun-windows --release --target $target
 if ($LASTEXITCODE -ne 0) { throw "Rust bridge build failed" }
-Copy-Item (Join-Path $coreRoot "target\$target\release\yptun_windows.dll") (Join-Path $staging "yptun_windows.dll") -Force
+Copy-Item (Join-Path $cargoTargetRoot "$target\release\yptun_windows.dll") (Join-Path $staging "yptun_windows.dll") -Force
 
 if (-not $SkipGoCore) {
     Write-Host "Building shared YPtun engine core ($goArch)..."
@@ -69,9 +84,6 @@ if (-not $SkipGoCore) {
         $env:GOOS = "windows"
         $env:GOARCH = $goArch
         $env:CGO_ENABLED = "1"
-        if ($Architecture -eq "arm64" -and [string]::IsNullOrWhiteSpace($env:CC)) {
-            throw "ARM64 yptuncore needs a native/cross MinGW CC. Set CC and CXX before running this script."
-        }
         & go -C $cores build -buildmode=c-shared -trimpath -tags $tags `
             -ldflags "-X github.com/sagernet/sing-box/constant.Version=$singBoxVersion -s -w" `
             -o $engine ./cmd/yptuncore
@@ -88,10 +100,8 @@ if (-not $SkipGoCore) {
 
     Write-Host "Staging Wintun runtime..."
     $wintunVersion = "0.14.1"
-    $downloadDir = Join-Path $PSScriptRoot ".native\downloads"
     $wintunZip = Join-Path $downloadDir "wintun-$wintunVersion.zip"
     $wintunExtract = Join-Path $downloadDir "wintun-$wintunVersion"
-    New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
     if (-not (Test-Path $wintunZip)) {
         Invoke-WebRequest "https://www.wintun.net/builds/wintun-$wintunVersion.zip" -OutFile $wintunZip
     }

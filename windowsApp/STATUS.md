@@ -15,14 +15,14 @@ Windows release never silently loses features during the migration.
 - System proxy mode with backup/restore and crash cleanup
 - MasterDNS and non-csqtt VK-TURN paths supported by the in-process core
 - UAC only when TUN is requested
-- Runtime logs, x64 self-contained publishing, single portable EXE with local `Data`, and Inno Setup installer
+- Runtime logs, x64/ARM64 self-contained publishing, single portable EXE with local `Data`, and Inno Setup installer
 
 ## Still using the legacy desktop client
 
 - OpenFlux, snolc, Trust Tunnel and csqtt subprocess hosts
 - Full location editor and the complete routing/traffic/settings UI
 - Tray menu, global hotkey, updater, session diagnostics and free-server search
-- ARM64 release verification/signing in CI
+- ARM64 live-device execution and release signing in CI
 
 The release workflow must stay on the established desktop application until those items are ported
 and live Windows VPN tests pass. Local native artifacts are development builds and must not be
