@@ -1,4 +1,4 @@
-import { Button, CheckBox, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import { Button, CheckBox, HorizontalBox, ScrollView, TextEdit, VerticalBox } from "std-widgets.slint";
 
 export struct LocationRow {
     id: string,
@@ -104,12 +104,15 @@ export component AppWindow inherits Window {
     in-out property <bool> system-proxy: true;
     in-out property <bool> telegram-proxy: false;
     in-out property <bool> energy-saver: false;
+    in-out property <string> import-text: "";
+    in-out property <string> import-error: "";
     callback toggle-connection();
     callback select-profile(string);
     callback open-settings();
     callback add-profile();
     callback set-connection-mode(string);
     callback save-app-settings(bool, bool, bool, bool);
+    callback import-profile(string);
 
     if root.current-page == 0: HorizontalBox {
         padding: 28px;
@@ -132,7 +135,15 @@ export component AppWindow inherits Window {
                         Text { text: "YPtun"; color: Theme.text; font-size: 26px; font-weight: 500; }
                         Text { text: "Локации"; color: Theme.text-muted; font-size: 13px; }
                     }
-                    Button { text: "+"; width: 48px; clicked => { root.add-profile(); } }
+                    Button {
+                        text: "+";
+                        width: 48px;
+                        clicked => {
+                            root.import-error = "";
+                            root.current-page = 2;
+                            root.add-profile();
+                        }
+                    }
                 }
 
                 HorizontalBox {
@@ -359,6 +370,63 @@ export component AppWindow inherits Window {
                             spacing: 5px;
                             Text { text: "Раздельное туннелирование и маршрутизация"; color: Theme.text; font-size: 18px; font-weight: 650; }
                             Text { text: "Следующий общий экран использует те же Rust-модели на обеих ОС."; color: Theme.text-muted; font-size: 14px; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.current-page == 2: Rectangle {
+        background: Theme.background;
+        VerticalBox {
+            padding: 34px;
+            spacing: 22px;
+
+            HorizontalBox {
+                height: 52px;
+                spacing: 16px;
+                Button { text: "Назад"; width: 86px; clicked => { root.current-page = 0; } }
+                VerticalBox {
+                    spacing: 1px;
+                    Text { text: "Добавить конфигурацию"; color: Theme.text; font-size: 27px; font-weight: 650; }
+                    Text { text: "Ссылка, подписка, JSON, WireGuard или OpenVPN"; color: Theme.text-muted; font-size: 13px; }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: 26px;
+                background: Theme.surface;
+                VerticalBox {
+                    padding: 24px;
+                    spacing: 14px;
+                    Text { text: "Вставьте конфигурацию"; color: Theme.text; font-size: 18px; font-weight: 650; }
+                    Text {
+                        text: "Поддерживаются те же форматы, что в прежнем desktop-клиенте.";
+                        color: Theme.text-muted;
+                        font-size: 14px;
+                    }
+                    TextEdit {
+                        vertical-stretch: 1;
+                        text <=> root.import-text;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        visible: root.import-error != "";
+                        text: root.import-error;
+                        color: Theme.accent;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalBox {
+                        height: 48px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: "Импортировать";
+                            width: 160px;
+                            enabled: root.import-text != "";
+                            clicked => { root.import-profile(root.import-text); }
                         }
                     }
                 }

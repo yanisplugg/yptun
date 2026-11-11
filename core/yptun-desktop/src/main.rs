@@ -68,6 +68,25 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = ui.as_weak();
         let backend = backend.clone();
         let state = state.clone();
+        ui.on_import_profile(move |text| {
+            let Some(ui) = weak.upgrade() else { return };
+            let request = serde_json::json!({ "command": "import", "text": text.as_str() });
+            let response = backend.command(&request.to_string());
+            if response_ok(&response) {
+                ui.set_import_text("".into());
+                ui.set_import_error("".into());
+                ui.set_current_page(0);
+                refresh(&ui, backend.as_ref(), &state);
+            } else {
+                ui.set_import_error(response_error(&response).into());
+            }
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        let backend = backend.clone();
+        let state = state.clone();
         ui.on_set_connection_mode(move |mode| {
             let Some(ui) = weak.upgrade() else { return };
             let mode = mode.to_string();
