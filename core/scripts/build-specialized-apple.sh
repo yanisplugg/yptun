@@ -64,8 +64,11 @@ hide_rust_symbols() {
   local sdk_version
   local rust_host
   local llvm_nm
+  local llvm_objcopy
   local symbols
-  local symbol_details
+  local all_symbols
+  local renamed_symbols
+  local symbol_prefix
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -77,12 +80,15 @@ hide_rust_symbols() {
   sdk_version="$(xcrun --sdk "$sdk" --show-sdk-version)"
   rust_host="$(rustc -vV | sed -n 's/^host: //p')"
   llvm_nm="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-nm"
-  if [[ ! -x "$llvm_nm" ]]; then
-    echo "Rust llvm-nm is unavailable; install rustup component llvm-tools-preview" >&2
+  llvm_objcopy="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-objcopy"
+  if [[ ! -x "$llvm_nm" || ! -x "$llvm_objcopy" ]]; then
+    echo "Rust LLVM tools are unavailable; install rustup component llvm-tools-preview" >&2
     return 1
   fi
   symbols="$WORK/$label-symbols.txt"
-  symbol_details="$WORK/$label-symbol-details.txt"
+  all_symbols="$WORK/$label-all-symbols.txt"
+  renamed_symbols="$WORK/$label-renamed-symbols.txt"
+  symbol_prefix="__yptun_${label//-/_}_"
 
   rm -f "$relocatable" "$edited" "$output"
   xcrun ld -r \
@@ -92,26 +98,32 @@ hide_rust_symbols() {
     -all_load "$input" \
     -exported_symbols_list "$exports" \
     -o "$relocatable"
-  # `ld -exported_symbols_list` does not consistently set N_PEXT on every Rust definition in a
-  # relocatable link. With LTO disabled above, nmedit can safely make every non-ABI definition a
-  # Mach-O private external while preserving references inside the collapsed object.
-  xcrun nmedit -s "$exports" "$relocatable" -o "$edited"
+
+  # Mach-O coalesced Rust definitions cannot be reliably converted to local/private symbols by
+  # nmedit or llvm-objcopy. Xcode's final application link force-loads these static frameworks, so
+  # every embedded copy of Rust std/core would otherwise collide with yptun_ffi and the other
+  # specialized runtime. Rename every defined non-ABI symbol in the already-collapsed object;
+  # llvm-objcopy updates its internal references at the same time. Undefined Apple SDK symbols and
+  # the public C ABI remain untouched.
+  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$relocatable" \
+    | sort -u > "$all_symbols"
+  grep -vxFf "$exports" "$all_symbols" \
+    | awk -v prefix="$symbol_prefix" '{ print $0, prefix $0 }' \
+    > "$renamed_symbols"
+  test -s "$renamed_symbols"
+  "$llvm_objcopy" --redefine-syms="$renamed_symbols" "$relocatable" "$edited"
   xcrun libtool -static -o "$output" "$edited"
 
-  # `--extern-only` also includes Mach-O private externals. Those are deliberately hidden by
-  # exported_symbols_list and do not collide at the final link. Parse Darwin metadata so the
-  # verifier compares only genuinely public externals with the C ABI allowlist.
-  "$llvm_nm" --format=darwin --defined-only "$output" > "$symbol_details"
-  awk '/ external / && $0 !~ /private external/ { print $NF }' "$symbol_details" > "$symbols"
+  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
   if grep -Eq '^(__R|__ZN)' "$symbols"; then
-    echo "Rust implementation symbols remain public in $output" >&2
+    echo "Unnamespaced Rust implementation symbols remain in $output" >&2
     grep -E '^(__R|__ZN)' "$symbols" | head -20 >&2
     return 1
   fi
 
-  if grep -vxFf "$exports" "$symbols" | grep -q .; then
-    echo "Unexpected public symbols remain in $output:" >&2
-    grep -vxFf "$exports" "$symbols" >&2
+  if grep -vxFf "$exports" "$symbols" | grep -v "^$symbol_prefix" | grep -q .; then
+    echo "Unexpected unnamespaced symbols remain in $output:" >&2
+    grep -vxFf "$exports" "$symbols" | grep -v "^$symbol_prefix" >&2
     return 1
   fi
 
