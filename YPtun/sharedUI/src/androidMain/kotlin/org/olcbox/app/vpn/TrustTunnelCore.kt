@@ -1,6 +1,7 @@
 package org.olcbox.app.vpn
 
 import android.content.Context
+import android.os.Build
 import com.adguard.trusttunnel.DeepLink
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -15,8 +16,22 @@ import org.olcbox.app.vpn.service.OlcboxVpnState
  * (the real connection) and the ping probes (a throwaway instance).
  */
 object TrustTunnelCore {
+    private const val MIN_SDK = Build.VERSION_CODES.O
+
+    /**
+     * The bundled Trust Tunnel JNI client was built for API 26.  The app itself supports API 23,
+     * so keep every interaction with that AAR behind this check: loading its native library on
+     * Android 6/7 terminates the process before Kotlin can recover from the linker error.
+     */
+    private fun requireSupportedPlatform() {
+        check(Build.VERSION.SDK_INT >= MIN_SDK) {
+            "Trust Tunnel is available on Android 8.0 and newer"
+        }
+    }
+
     /** Full client config for [ttLink]: SOCKS listener on 127.0.0.1:[port], no TUN, kill switch off. */
     suspend fun configToml(ttLink: String, port: Int): String {
+        requireSupportedPlatform()
         val endpointToml = runCatching { DeepLink.decode(ttLink.substringBefore('#')) } // the native decoder takes the whole string as payload
             .getOrElse { throw IllegalStateException("Trust Tunnel: invalid tt:// link: ${it.message}") }
             .let { resolveHosts(it) }
@@ -39,6 +54,7 @@ object TrustTunnelCore {
      * off the TUN (no protect() needed). The pinned endpoint certificate is part of the config.
      */
     fun start(context: Context, dirName: String, toml: String): Process {
+        requireSupportedPlatform()
         val exe = File(context.applicationInfo.nativeLibraryDir, "libtrusttunnel_client.so")
         if (!exe.canExecute()) throw IllegalStateException("Trust Tunnel core is not included in this build for this CPU")
         val dir = File(context.filesDir, dirName).apply { mkdirs() }
