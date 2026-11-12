@@ -9,9 +9,10 @@ use crate::desktop_api::{LocationEditorData, SettingsSnapshot, TextPayload};
 use crate::desktop_native_assets::DesktopOs;
 use crate::desktop_socks_settings::DesktopSocksProxySettings;
 use crate::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
+use crate::desktop_vpn_runtime::first_public_exit_ip;
 use crate::home;
 use crate::location::LocationConfig;
-use crate::repository::Repository;
+use crate::repository::{HttpFetcher, HttpRequest, Repository};
 use crate::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use crate::settings::AppBehaviorSettings;
 use crate::update::AppUpdateSettings;
@@ -213,6 +214,27 @@ impl<'a> DesktopData<'a> {
 
     pub fn settings(&self) -> SettingsSnapshot {
         SettingsSnapshot::load(self.app_data_dir, self.os)
+    }
+
+    pub fn check_exit_ip(
+        &self,
+        fetcher: &dyn HttpFetcher,
+        app_version: &str,
+        proxy: Option<String>,
+    ) -> Result<TextPayload, String> {
+        let mut fetch = |url: &str| {
+            fetcher
+                .get(&HttpRequest {
+                    url: url.to_string(),
+                    headers: vec![("User-Agent".into(), format!("YPtun/{app_version}"))],
+                    proxy: proxy.clone(),
+                })
+                .filter(|response| response.ok())
+                .map(|response| response.body)
+        };
+        first_public_exit_ip(&mut fetch)
+            .map(|text| TextPayload { text })
+            .ok_or_else(|| "Не удалось определить внешний IPv4-адрес".into())
     }
 
     pub fn save_settings(&self, kind: &str, text: &str) -> Result<SettingsEffect, String> {

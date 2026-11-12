@@ -33,10 +33,16 @@ fn unsecured_uses_standard_port_and_drops_credentials() {
 
 #[test]
 fn custom_port_only_when_valid() {
-    let ok = DesktopSocksProxySettings { custom_port: Some(2000), ..Default::default() };
+    let ok = DesktopSocksProxySettings {
+        custom_port: Some(2000),
+        ..Default::default()
+    };
     let n = ok.normalized(DesktopOs::Windows);
     assert_eq!((n.port, n.custom_port), (2000, Some(2000)));
-    let bad = DesktopSocksProxySettings { custom_port: Some(80), ..Default::default() };
+    let bad = DesktopSocksProxySettings {
+        custom_port: Some(80),
+        ..Default::default()
+    };
     let n = bad.normalized(DesktopOs::Windows);
     assert_eq!((n.port, n.custom_port), (8080, None));
 }
@@ -55,15 +61,27 @@ fn secured_sanitizes_port_and_truncates_credentials() {
     assert_eq!(n.username.len(), 64);
     assert_eq!(n.password.chars().count(), 32);
     assert!(n.secured);
-    let kept = DesktopSocksProxySettings { secured: true, port: 5000, ..Default::default() };
+    let kept = DesktopSocksProxySettings {
+        secured: true,
+        port: 5000,
+        ..Default::default()
+    };
     assert_eq!(kept.normalized(DesktopOs::Linux).port, 5000);
 }
 
 #[test]
 fn configured_and_ports() {
-    let s = DesktopSocksProxySettings { username: "u".into(), password: "p".into(), ..Default::default() };
+    let s = DesktopSocksProxySettings {
+        username: "u".into(),
+        password: "p".into(),
+        ..Default::default()
+    };
     assert!(s.is_configured());
-    let blank = DesktopSocksProxySettings { username: " ".into(), password: "p".into(), ..Default::default() };
+    let blank = DesktopSocksProxySettings {
+        username: " ".into(),
+        password: "p".into(),
+        ..Default::default()
+    };
     assert!(!blank.is_configured());
     assert!(!is_valid_port(1023));
     assert!(is_valid_port(1024));
@@ -71,4 +89,30 @@ fn configured_and_ports() {
     assert!(!is_valid_port(65536));
     assert_eq!(sanitize_port(None), 10808);
     assert_eq!(sanitize_port(Some(3000)), 3000);
+}
+
+#[test]
+fn proxy_url_uses_normalized_platform_settings_and_auth() {
+    let plain = DesktopSocksProxySettings::default();
+    assert_eq!(
+        plain.proxy_url(DesktopOs::Linux).unwrap(),
+        "socks5h://127.0.0.1:10808"
+    );
+    assert_eq!(
+        plain.proxy_url(DesktopOs::Windows).unwrap(),
+        "socks5h://127.0.0.1:8080"
+    );
+
+    let secured = DesktopSocksProxySettings {
+        host: "::1".into(),
+        port: 12000,
+        username: "user name".into(),
+        password: "p@ss".into(),
+        secured: true,
+        custom_port: None,
+    };
+    assert_eq!(
+        secured.proxy_url(DesktopOs::Linux).unwrap(),
+        "socks5h://user%20name:p%40ss@[::1]:12000"
+    );
 }

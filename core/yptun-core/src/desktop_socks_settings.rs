@@ -77,6 +77,31 @@ impl DesktopSocksProxySettings {
             custom_port,
         }
     }
+
+    pub fn proxy_url(&self, os: DesktopOs) -> Result<String, String> {
+        let settings = self.normalized(os);
+        let mut url = url::Url::parse("socks5h://127.0.0.1")
+            .map_err(|error| format!("Некорректный адрес SOCKS: {error}"))?;
+        match settings.host.parse::<std::net::IpAddr>() {
+            Ok(address) => url
+                .set_ip_host(address)
+                .map_err(|_| "Некорректный адрес SOCKS".to_string())?,
+            Err(_) => url
+                .set_host(Some(&settings.host))
+                .map_err(|_| "Некорректный адрес SOCKS".to_string())?,
+        }
+        let port =
+            u16::try_from(settings.port).map_err(|_| "Некорректный порт SOCKS".to_string())?;
+        url.set_port(Some(port))
+            .map_err(|_| "Некорректный порт SOCKS".to_string())?;
+        if !settings.username.is_empty() {
+            url.set_username(&settings.username)
+                .map_err(|_| "Некорректный логин SOCKS".to_string())?;
+            url.set_password(Some(&settings.password))
+                .map_err(|_| "Некорректный пароль SOCKS".to_string())?;
+        }
+        Ok(url.to_string())
+    }
 }
 
 /// UNSECURED_PORT, except Linux: Steam's steamwebhelper holds 8080 there (Steam Deck).

@@ -13,7 +13,7 @@ use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
 use yptun_core::desktop_store::{device_identity, DesktopFileStore};
 use yptun_core::desktop_stores::DesktopSocksSettingsStore;
-use yptun_core::desktop_vpn_runtime::{first_public_exit_ip, LogJournal};
+use yptun_core::desktop_vpn_runtime::LogJournal;
 use yptun_core::home;
 use yptun_core::repository::{ClientInfo, HttpFetcher, HttpRequest, Repository};
 use yptun_core::update::{AppUpdateService, ReleaseChannel};
@@ -332,20 +332,8 @@ impl WindowsApp {
         } else {
             None
         };
-        let fetcher = ReqwestFetcher::new();
-        let mut fetch = |url: &str| {
-            fetcher
-                .get(&HttpRequest {
-                    url: url.to_string(),
-                    headers: vec![("User-Agent".into(), format!("YPtun/{}", self.app_version))],
-                    proxy: proxy.clone(),
-                })
-                .filter(|response| response.ok())
-                .map(|response| response.body)
-        };
-        first_public_exit_ip(&mut fetch)
-            .map(|text| TextPayload { text })
-            .ok_or_else(|| "Не удалось определить внешний IPv4-адрес".into())
+        self.data()
+            .check_exit_ip(&ReqwestFetcher::new(), &self.app_version, proxy)
     }
 
     fn save_settings(&self, kind: &str, text: &str) -> Result<(), String> {
@@ -527,24 +515,9 @@ impl WindowsApp {
             .unwrap_or_else(|error| error.into_inner())
             .is_connected()
         {
-            let socks = DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Windows)
-                .load()
-                .normalized(DesktopOs::Windows);
-            let mut url =
-                reqwest::Url::parse("socks5h://127.0.0.1").map_err(|error| error.to_string())?;
-            url.set_host(Some(&socks.host))
-                .map_err(|_| "Некорректный адрес SOCKS".to_string())?;
-            let port =
-                u16::try_from(socks.port).map_err(|_| "Некорректный порт SOCKS".to_string())?;
-            url.set_port(Some(port))
-                .map_err(|_| "Некорректный порт SOCKS".to_string())?;
-            if !socks.username.is_empty() {
-                url.set_username(&socks.username)
-                    .map_err(|_| "Некорректный логин SOCKS".to_string())?;
-                url.set_password(Some(&socks.password))
-                    .map_err(|_| "Некорректный пароль SOCKS".to_string())?;
-            }
-            Ok(Some(url.to_string()))
+            let socks =
+                DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Windows).load();
+            Ok(Some(socks.proxy_url(DesktopOs::Windows)?))
         } else {
             Ok(None)
         }

@@ -13,6 +13,7 @@ use yptun_core::desktop_data::DesktopData;
 use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
 use yptun_core::desktop_store::{device_identity, DesktopFileStore};
+use yptun_core::desktop_stores::DesktopSocksSettingsStore;
 use yptun_core::desktop_vpn_runtime::LogJournal;
 use yptun_core::repository::{ClientInfo, HttpFetcher, Repository};
 
@@ -25,6 +26,7 @@ const AUXILIARY_RUNTIME_UNAVAILABLE: &str = "This Linux runtime command is not a
 
 pub struct LinuxApp {
     app_data_dir: PathBuf,
+    app_version: String,
     repository: Repository,
     settings: Mutex<DesktopSettings>,
     journal: Arc<LogJournal>,
@@ -67,6 +69,7 @@ impl LinuxApp {
             },
         );
         let app = Self {
+            app_version: app_version.to_string(),
             repository,
             settings: Mutex::new(DesktopSettings::open(&app_data_dir, locale, false, false)),
             journal,
@@ -115,7 +118,8 @@ impl LinuxApp {
             "set_mode" => self.snapshot_result(self.set_mode(&request.mode)),
             "start" => self.snapshot_result(self.start(&request.mode)),
             "stop" => self.snapshot_result(self.stop()),
-            "ping" | "find_free_servers" | "exit_ip" => {
+            "exit_ip" => self.result_json(self.check_exit_ip()),
+            "ping" | "find_free_servers" => {
                 self.result_json::<CoreSnapshot>(Err(AUXILIARY_RUNTIME_UNAVAILABLE.into()))
             }
             "settings" => self.result_json::<SettingsSnapshot>(Ok(self.settings_snapshot())),
@@ -185,13 +189,15 @@ impl LinuxApp {
     }
 
     fn refresh_subscriptions(&self) -> Result<(), String> {
-        let count = self.data().refresh_subscriptions(None);
+        let proxy = self.subscription_proxy()?;
+        let count = self.data().refresh_subscriptions(proxy.as_deref());
         self.log(&format!("Refreshed {count} subscription(s)"));
         Ok(())
     }
 
     fn refresh_subscription(&self, url: &str) -> Result<(), String> {
-        let count = self.data().refresh_subscription(url, None)?;
+        let proxy = self.subscription_proxy()?;
+        let count = self.data().refresh_subscription(url, proxy.as_deref())?;
         self.log(&format!("Refreshed subscription {url}: {count}"));
         Ok(())
     }
@@ -206,6 +212,44 @@ impl LinuxApp {
         self.data().delete_subscription(url)?;
         self.log(&format!("Deleted subscription {}", url.trim()));
         Ok(())
+    }
+
+    fn subscription_proxy(&self) -> Result<Option<String>, String> {
+        if self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_connected()
+        {
+            let socks = DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Linux).load();
+            Ok(Some(socks.proxy_url(DesktopOs::Linux)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn check_exit_ip(&self) -> Result<TextPayload, String> {
+        let connected = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_connected();
+        let proxy_mode = self
+            .settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .connection_mode()
+            == CONNECTION_MODE_PROXY;
+        let proxy = if connected && proxy_mode {
+            self.subscription_proxy()?
+        } else {
+            None
+        };
+        self.data().check_exit_ip(
+            &crate::http::ReqwestFetcher::new(),
+            &self.app_version,
+            proxy,
+        )
     }
 
     fn set_mode(&self, mode: &str) -> Result<(), String> {
