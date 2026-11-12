@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="${1:-3.7.3}"
+version="${1:-4.0.0}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="${OUT_DIR:-${root}/../YPtun/linux-rust-release}"
 rm -rf "$out"
