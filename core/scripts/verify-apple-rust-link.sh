@@ -18,20 +18,48 @@ probe_slice() {
   local sdk_path
   local sdk_version
   local output="$WORK/rust-link-probe-$suffix.o"
+  local undefined="$WORK/rust-link-probe-$suffix-undefined.txt"
+  local rust_host
+  local llvm_nm
 
   sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
   sdk_version="$(xcrun --sdk "$sdk" --show-sdk-version)"
-  rm -f "$output"
+  rust_host="$(rustc -vV | sed -n 's/^host: //p')"
+  llvm_nm="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-nm"
+  if [[ ! -x "$llvm_nm" ]]; then
+    echo "Rust llvm-nm is unavailable; install rustup component llvm-tools-preview" >&2
+    return 1
+  fi
+  rm -f "$output" "$undefined"
+
+  # Match the real Xcode link: pull each staticlib through its public C entrypoints instead of
+  # force-loading every archive member. `-all_load` creates artificial compiler_builtins clashes
+  # that normal archive resolution deliberately coalesces.
   xcrun ld -r \
     -arch "$arch" \
     -platform_version "$platform" "$deployment_target" "$sdk_version" \
     -syslibroot "$sdk_path" \
-    -all_load \
+    -u _snolc_ffi_version \
+    -u _snolc_ffi_start \
+    -u _snolc_ffi_stop \
+    -u _snolc_ffi_is_running \
+    -u _snolc_ffi_free_string \
+    -u _csqtt_ffi_version \
+    -u _csqtt_ffi_start \
+    -u _csqtt_ffi_stop \
+    -u _csqtt_ffi_is_running \
+    -u _csqtt_ffi_free_string \
     "$TARGET_ROOT/$target/release/libyptun_ffi.a" \
     "$WORK/libsnolc-$suffix.a" \
     "$WORK/libcsqtt-$suffix.a" \
     -o "$output"
   test -s "$output"
+  "$llvm_nm" --undefined-only --just-symbol-name "$output" > "$undefined"
+  if grep -Eq '^___.*[._]rs[[:xdigit:]]{8,}$' "$undefined"; then
+    echo "Unresolved namespaced Rust helpers remain after combined link: $suffix" >&2
+    grep -E '^___.*[._]rs[[:xdigit:]]{8,}$' "$undefined" | head -20 >&2
+    return 1
+  fi
   echo "Rust archive link probe passed: $suffix"
 }
 
