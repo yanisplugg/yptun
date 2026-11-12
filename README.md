@@ -68,7 +68,7 @@ UQAPC9J9UY8oaYV4AwjEAYIIJMswo7qVzJDkf4pzY8kVtzJ-
 
 | Ядро | Версия | Для чего |
 |---|---|---|
-| [Xray-core](https://github.com/XTLS/Xray-core) | 26.9.30 (локальные патчи) | VLESS · Reality · XHTTP |
+| [Xray-core](https://github.com/XTLS/Xray-core) | 26.11.9 (локальные патчи) | VLESS · Reality · XHTTP |
 | [sing-box](https://github.com/SagerNet/sing-box) | 1.14.4 | OpenVPN, Hysteria2, TUN, маршрутизация |
 | [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) | amneziawg-go | обфусцированный WireGuard |
 | [olcRTC](https://github.com/ghostlane-project/olcrtc) | форк ghostlane | трафик поверх видеозвонков |
