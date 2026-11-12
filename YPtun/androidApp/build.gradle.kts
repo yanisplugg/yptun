@@ -111,7 +111,9 @@ android {
             }
 
             isMinifyEnabled = true
-            isShrinkResources = true
+            // Compose Multiplatform resolves bundled fonts from assets at runtime. Android's resource
+            // shrinker cannot see those dynamic paths and removes the fonts, crashing the first frame.
+            isShrinkResources = false
 
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -154,6 +156,20 @@ android {
         }
     }
 }
+
+// The Android KMP dependency exposes Compose resource accessors but does not package its common
+// resources into this application. Compose resolves them from this asset path at runtime.
+val packageSharedUiComposeResources by tasks.registering(Sync::class) {
+    from(rootProject.file("sharedUI/src/commonMain/composeResources"))
+    into(layout.buildDirectory.dir("generated/composeResources/composeResources/multiplatform_app.sharedui.generated.resources"))
+}
+android.sourceSets.getByName("main").assets.srcDir(
+    layout.buildDirectory.dir("generated/composeResources").get().asFile
+)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(packageSharedUiComposeResources) }
+tasks.matching { it.name.contains("lint", ignoreCase = true) }
+    .configureEach { dependsOn(packageSharedUiComposeResources) }
 
 // --- OpenFlux client executable (../openflux), packaged as lib/<abi>/libopenflux.so ---
 // It runs as a SUBPROCESS started from nativeLibraryDir (useLegacyPackaging extracts it there), not as
