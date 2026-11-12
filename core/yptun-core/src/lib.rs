@@ -12,6 +12,7 @@ pub mod delta_bundle;
 pub mod desktop_api;
 pub mod desktop_app_image;
 pub mod desktop_cores;
+pub mod desktop_data;
 pub mod desktop_extension_bridge;
 pub mod desktop_net;
 pub mod desktop_native_assets;

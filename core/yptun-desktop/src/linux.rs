@@ -9,19 +9,12 @@ use yptun_core::desktop_api::{
     profile_item, subscription_item, CommandRequest, CoreSnapshot, LocationEditorData, Response,
     RuntimeDiagnostics, SettingsSnapshot, TextPayload,
 };
+use yptun_core::desktop_data::DesktopData;
 use yptun_core::desktop_native_assets::DesktopOs;
 use yptun_core::desktop_settings::{DesktopSettings, CONNECTION_MODE_PROXY, CONNECTION_MODE_TUN};
-use yptun_core::desktop_socks_settings::DesktopSocksProxySettings;
 use yptun_core::desktop_store::{device_identity, DesktopFileStore};
-use yptun_core::desktop_stores::{DesktopSocksSettingsStore, FileAppUpdateSettingsStore};
 use yptun_core::desktop_vpn_runtime::LogJournal;
-use yptun_core::home;
-use yptun_core::location::LocationConfig;
 use yptun_core::repository::{ClientInfo, HttpFetcher, Repository};
-use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
-use yptun_core::settings::AppBehaviorSettings;
-use yptun_core::update::AppUpdateSettings;
-use yptun_core::vpn_settings::{SplitTunnelState, VpnSettings};
 
 mod host;
 mod runtime;
@@ -84,6 +77,20 @@ impl LinuxApp {
         app
     }
 
+    fn data(&self) -> DesktopData<'_> {
+        let connected = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_connected();
+        DesktopData::new(
+            &self.app_data_dir,
+            &self.repository,
+            DesktopOs::Linux,
+            connected,
+        )
+    }
+
     pub fn command_json(&self, request_json: &str) -> String {
         let request: CommandRequest = match serde_json::from_str(request_json) {
             Ok(value) => value,
@@ -101,6 +108,10 @@ impl LinuxApp {
             "delete" => self.snapshot_result(self.delete(&request.id)),
             "refresh_subscriptions" => self.snapshot_result(self.refresh_subscriptions()),
             "refresh_subscription" => self.snapshot_result(self.refresh_subscription(&request.id)),
+            "save_subscription" => {
+                self.snapshot_result(self.save_subscription(&request.id, &request.text))
+            }
+            "delete_subscription" => self.snapshot_result(self.delete_subscription(&request.id)),
             "set_mode" => self.snapshot_result(self.set_mode(&request.mode)),
             "start" => self.snapshot_result(self.start(&request.mode)),
             "stop" => self.snapshot_result(self.stop()),
@@ -155,92 +166,45 @@ impl LinuxApp {
     }
 
     fn import(&self, text: &str) -> Result<(), String> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err("Вставленный текст пуст".into());
+        for message in self.data().import(text)? {
+            self.log(&message);
         }
-
-        let vpn = VpnSettings::new(&self.app_data_dir);
-        let routing = vpn.load_routing_profiles();
-        if let Some(imported) =
-            yptun_core::desktop_settings::import_routing_profile_link(&routing, text)
-        {
-            if !vpn.save_routing_profiles(&imported) {
-                return Err("Не удалось сохранить профиль маршрутизации".into());
-            }
-            self.log("Routing profile imported");
-            return Ok(());
-        }
-
-        match home::plan_import(text) {
-            home::ImportPlan::Empty => return Err("Вставленный текст пуст".into()),
-            home::ImportPlan::RoutingProfile(_) => {
-                return Err("Профиль маршрутизации повреждён".into())
-            }
-            home::ImportPlan::Single(value) => {
-                if !self.repository.import_text(&value, None) {
-                    return Err(home::import_failure_reason(&value).into());
-                }
-            }
-            home::ImportPlan::Batch(values) => {
-                let mut added = 0;
-                let mut failed = 0;
-                for value in values {
-                    if self.repository.import_text(&value, None) {
-                        added += 1;
-                    } else {
-                        failed += 1;
-                    }
-                }
-                if let Some(note) = home::import_many_outcome(added, failed)? {
-                    self.log(&note);
-                }
-            }
-        }
-        self.log("Configuration imported");
         Ok(())
     }
 
     fn select(&self, id: &str) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN, затем смените конфигурацию")?;
-        if id.trim().is_empty() || self.repository.load_location(id).is_none() {
-            return Err("Конфигурация не найдена".into());
-        }
-        self.repository.set_active_location_id(Some(id));
+        self.data().select(id)?;
         self.log(&format!("Selected location {id}"));
         Ok(())
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN")?;
-        if id.trim().is_empty() || self.repository.load_location(id).is_none() {
-            return Err("Конфигурация не найдена".into());
-        }
-        self.repository.delete_location(id);
+        self.data().delete(id)?;
         self.log(&format!("Deleted location {id}"));
         Ok(())
     }
 
     fn refresh_subscriptions(&self) -> Result<(), String> {
-        let count = self.repository.refresh_subscriptions(None, None);
+        let count = self.data().refresh_subscriptions(None);
         self.log(&format!("Refreshed {count} subscription(s)"));
         Ok(())
     }
 
     fn refresh_subscription(&self, url: &str) -> Result<(), String> {
-        let url = url.trim();
-        if url.is_empty()
-            || !self
-                .repository
-                .bundle()
-                .locations
-                .iter()
-                .any(|entry| entry.subscription_url.as_deref().map(str::trim) == Some(url))
-        {
-            return Err("Подписка не найдена".into());
-        }
-        let count = self.repository.refresh_subscription(url, None);
+        let count = self.data().refresh_subscription(url, None)?;
         self.log(&format!("Refreshed subscription {url}: {count}"));
+        Ok(())
+    }
+
+    fn save_subscription(&self, old_url: &str, text: &str) -> Result<(), String> {
+        let new_url = self.data().save_subscription(old_url, text)?;
+        self.log(&format!("Updated subscription {new_url}"));
+        Ok(())
+    }
+
+    fn delete_subscription(&self, url: &str) -> Result<(), String> {
+        self.data().delete_subscription(url)?;
+        self.log(&format!("Deleted subscription {}", url.trim()));
         Ok(())
     }
 
@@ -291,39 +255,11 @@ impl LinuxApp {
     }
 
     fn get_profile(&self, id: &str) -> Result<LocationEditorData, String> {
-        if id.trim().is_empty() {
-            return Ok(LocationEditorData {
-                storage_id: String::new(),
-                location: LocationConfig::default(),
-                is_new: true,
-                is_subscription: false,
-            });
-        }
-        let bundle = self.repository.bundle();
-        let entry = bundle
-            .locations
-            .iter()
-            .find(|entry| entry.storage_id == id)
-            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
-        Ok(LocationEditorData {
-            storage_id: entry.storage_id.clone(),
-            location: entry.location(),
-            is_new: false,
-            is_subscription: entry
-                .subscription_url
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
-        })
+        self.data().get_profile(id)
     }
 
     fn save_profile(&self, id: &str, text: &str) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN, затем измените конфигурацию")?;
-        let location: LocationConfig = serde_json::from_str(text)
-            .map_err(|error| format!("Некорректный JSON конфигурации: {error}"))?;
-        if location.display_name().trim().is_empty() {
-            return Err("Укажите название конфигурации или идентификатор комнаты".into());
-        }
-        self.repository.save_location(id, &location.normalized());
+        self.data().save_profile(id, text)?;
         self.log(if id.trim().is_empty() {
             "Created location"
         } else {
@@ -333,80 +269,29 @@ impl LinuxApp {
     }
 
     fn duplicate_profile(&self, id: &str) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN")?;
-        let mut location = self
-            .repository
-            .load_location(id)
-            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
-        location.name = format!("{} — копия", location.display_name());
-        self.repository.save_location("", &location);
+        self.data().duplicate_profile(id)?;
         self.log(&format!("Duplicated location {id}"));
         Ok(())
     }
 
     fn set_pinned(&self, id: &str, text: &str) -> Result<(), String> {
-        let pinned = text
-            .trim()
-            .parse::<bool>()
-            .map_err(|_| "Некорректное значение закрепления".to_string())?;
-        if self.repository.load_location(id).is_none() {
-            return Err("Конфигурация не найдена".into());
-        }
-        self.repository.set_location_pinned(id, pinned);
-        Ok(())
+        self.data().set_pinned(id, text)
     }
 
     fn set_vk_link(&self, id: &str, text: &str) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN")?;
-        if self.repository.load_location(id).is_none() {
-            return Err("Конфигурация не найдена".into());
-        }
-        self.repository.set_location_vk_link(id, text);
-        Ok(())
+        self.data().set_vk_link(id, text)
     }
 
     fn export_profile(&self, id: &str) -> Result<TextPayload, String> {
-        let location = self
-            .repository
-            .load_location(id)
-            .ok_or_else(|| "Конфигурация не найдена".to_string())?;
-        Ok(TextPayload {
-            text: yptun_core::panel::compose_inbound(&location),
-        })
+        self.data().export_profile(id)
     }
 
     fn settings_snapshot(&self) -> SettingsSnapshot {
-        SettingsSnapshot::load(&self.app_data_dir, DesktopOs::Linux)
+        self.data().settings()
     }
 
     fn save_settings(&self, kind: &str, text: &str) -> Result<(), String> {
-        self.require_disconnected("Сначала отключите VPN, затем измените параметры")?;
-        let vpn = VpnSettings::new(&self.app_data_dir);
-        let saved = match kind {
-            "traffic" => vpn.save_traffic(&decode_settings::<TrafficSettings>(text)?),
-            "routing" => vpn.save_routing(&decode_settings::<RoutingRules>(text)?),
-            "routing_profiles" => {
-                vpn.save_routing_profiles(&decode_settings::<RoutingProfilesState>(text)?)
-            }
-            "split_tunnel" => vpn.save_split_tunnel(&decode_settings::<SplitTunnelState>(text)?),
-            "app_behavior" => vpn.save_app_behavior(&decode_settings::<AppBehaviorSettings>(text)?),
-            "socks" => {
-                DesktopSocksSettingsStore::new(&self.app_data_dir, DesktopOs::Linux)
-                    .save(&decode_settings::<DesktopSocksProxySettings>(text)?)
-                    .map_err(|error| error.to_string())?;
-                true
-            }
-            "updates" => {
-                FileAppUpdateSettingsStore::new(&self.app_data_dir)
-                    .try_save(&decode_settings::<AppUpdateSettings>(text)?)
-                    .map_err(|error| error.to_string())?;
-                true
-            }
-            _ => return Err(format!("Неизвестная группа параметров: {kind}")),
-        };
-        if !saved {
-            return Err("Не удалось сохранить параметры".into());
-        }
+        self.data().save_settings(kind, text)?;
         self.log(&format!("Saved settings: {kind}"));
         Ok(())
     }
@@ -519,10 +404,6 @@ fn json<T: Serialize>(value: &T) -> String {
     })
 }
 
-fn decode_settings<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, String> {
-    serde_json::from_str(text).map_err(|error| format!("Некорректный JSON параметров: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,11 +489,10 @@ mod tests {
         );
         drop(app);
 
-        assert!(
-            temp.path()
-                .join(yptun_core::desktop_store::BUNDLE_FILE)
-                .is_file()
-        );
+        assert!(temp
+            .path()
+            .join(yptun_core::desktop_store::BUNDLE_FILE)
+            .is_file());
         let reloaded = make_app(temp.path(), FakeFetcher::default());
         let snapshot = command(&reloaded, serde_json::json!({"command": "snapshot"}));
         assert_eq!(snapshot["data"]["activeProfileId"], two_id);
@@ -687,6 +567,36 @@ mod tests {
         );
         assert_eq!(refreshed["ok"], true);
         assert_eq!(refreshed["data"]["profiles"][0]["name"], "After");
+
+        let edited = command(
+            &app,
+            serde_json::json!({
+                "command": "save_subscription",
+                "id": url,
+                "text": serde_json::json!({
+                    "customName": "Work",
+                    "updateIntervalHours": 12,
+                    "autoUpdateEnabled": false,
+                }).to_string(),
+            }),
+        );
+        assert_eq!(edited["ok"], true);
+        assert_eq!(edited["data"]["subscriptions"][0]["customName"], "Work");
+        assert_eq!(
+            edited["data"]["subscriptions"][0]["updateIntervalHours"],
+            12
+        );
+
+        let deleted = command(
+            &app,
+            serde_json::json!({"command": "delete_subscription", "id": url}),
+        );
+        assert_eq!(deleted["ok"], true);
+        assert!(deleted["data"]["profiles"].as_array().unwrap().is_empty());
+        assert!(deleted["data"]["subscriptions"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -6807,6 +6807,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "url",
  "x25519-dalek",
 ]
 
