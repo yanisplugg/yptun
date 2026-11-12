@@ -675,10 +675,11 @@ object SingBoxConfig {
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
-                    if (allowLocalResolve &&
+                    val userRulesPresent = routing.customRulesJson.isNotBlank() || routing.rules.any { it.enabled && it.hasMatcher() }
+                    if (allowLocalResolve && !userRulesPresent &&
                         (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
                             manualRulesUseIp || embeddedUsesIpRules ||
-                            (sbExpert && routingProfile!!.singboxResolve))
+                            (sbExpert && routingProfile?.singboxResolve == true))
                     ) {
                         addJsonObject {
                             put("action", "resolve")
@@ -730,6 +731,19 @@ object SingBoxConfig {
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
                     SingBoxRouting.manualRules(routing.rules, matchAppsByProcess, directTag).forEach { add(it) }
+                    // Resolve only after user rules have had a chance to match the original domain.
+                    // Otherwise Bypass Russia's broad resolve action sends LAN-only names (for
+                    // example myserver.lan) to public DNS before their Direct rule can fire.
+                    if (allowLocalResolve && userRulesPresent &&
+                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                            manualRulesUseIp || embeddedUsesIpRules ||
+                            (sbExpert && routingProfile?.singboxResolve == true))
+                    ) {
+                        addJsonObject {
+                            put("action", "resolve")
+                            put("strategy", expertStrategy)
+                        }
+                    }
                     // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
                     if (routing.blockDomains.isNotEmpty()) {
                         addJsonObject {
