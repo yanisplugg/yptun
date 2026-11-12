@@ -58,8 +58,15 @@ hide_rust_symbols() {
   local arch
   local rust_host
   local llvm_nm
+  local llvm_ar
   local symbols
   local internal_symbols
+  local target
+  local target_libdir
+  local compiler_builtins
+  local archive_members
+  local builtin_members
+  local duplicate_builtin_members
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -69,15 +76,42 @@ hide_rust_symbols() {
 
   rust_host="$(rustc -vV | sed -n 's/^host: //p')"
   llvm_nm="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-nm"
-  if [[ ! -x "$llvm_nm" ]]; then
-    echo "Rust llvm-nm is unavailable; install rustup component llvm-tools-preview" >&2
+  llvm_ar="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-ar"
+  if [[ ! -x "$llvm_nm" || ! -x "$llvm_ar" ]]; then
+    echo "Rust LLVM tools are unavailable; install rustup component llvm-tools-preview" >&2
     return 1
   fi
   symbols="$WORK/$label-symbols.txt"
   internal_symbols="$WORK/$label-internal-symbols.txt"
+  archive_members="$WORK/$label-archive-members.txt"
+  builtin_members="$WORK/$label-compiler-builtins-members.txt"
+  duplicate_builtin_members="$WORK/$label-duplicate-compiler-builtins-members.txt"
 
   rm -f "$output"
   cp "$input" "$output"
+
+  # `staticlib-rename-internal-symbols` handles Rust definitions, but compiler_builtins also embeds
+  # native assembly/C objects with intentionally fixed ABI names (atomic fallbacks, arithmetic
+  # helpers, etc.). Every Rust staticlib carries the same objects and Xcode force-loads them all.
+  # Keep the canonical copy in the always-linked yptun_ffi archive and remove those exact members
+  # from the two specialized archives; their undefined references resolve from yptun_ffi.
+  target="$(basename "$(dirname "$(dirname "$input")")")"
+  target_libdir="$(rustc --print target-libdir --target "$target")"
+  compiler_builtins="$(find "$target_libdir" -maxdepth 1 -name 'libcompiler_builtins-*.rlib' -print -quit)"
+  if [[ -z "$compiler_builtins" ]]; then
+    echo "compiler_builtins rlib is unavailable for $target" >&2
+    return 1
+  fi
+  "$llvm_ar" t "$output" | sort -u > "$archive_members"
+  "$llvm_ar" t "$compiler_builtins" | sort -u > "$builtin_members"
+  comm -12 "$archive_members" "$builtin_members" > "$duplicate_builtin_members"
+  if [[ ! -s "$duplicate_builtin_members" ]]; then
+    echo "No bundled compiler_builtins members found in $output" >&2
+    return 1
+  fi
+  xargs -n 100 "$llvm_ar" d "$output" < "$duplicate_builtin_members"
+  "$llvm_ar" s "$output"
+
   "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
   grep -vxFf "$exports" "$symbols" > "$internal_symbols" || true
   if ! grep -Eq '[._]rs[[:xdigit:]]{8,}$' "$internal_symbols"; then

@@ -90,7 +90,11 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: core -> target
+          workspaces: |
+            core -> target
+            snolc -> target
+            csqtt/rust-client -> target
+          cache-on-failure: true
       - uses: actions/setup-go@v5
         with:
           go-version-file: cores/go.mod
