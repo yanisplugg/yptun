@@ -11,14 +11,18 @@ rustup target add "${TARGETS[@]}"
 export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
-# These staticlibs are collapsed and linked into a larger Apple binary below. Workspace-level ThinLTO
-# leaves embedded LLVM bitcode whose symbol table cannot be localized reliably across Rust/Xcode LLVM
-# versions. Emit normal Mach-O objects here; the final application link still optimizes the result.
+# Multiple Rust staticlibs normally contain colliding copies of std/core. Rust 1.99 has a
+# purpose-built (currently unstable) archive post-processor that renames and hides every internal
+# symbol while preserving #[no_mangle] C exports. RUSTC_BOOTSTRAP is deliberately scoped to these
+# pinned staticlib builds; the final application link still verifies that all archives coexist.
 build_specialized_rust() {
   env \
     CARGO_PROFILE_RELEASE_LTO=false \
     CARGO_PROFILE_RELEASE_STRIP=none \
-    cargo build "$@"
+    RUSTC_BOOTSTRAP=1 \
+    cargo rustc "$@" -- \
+      -Zstaticlib-rename-internal-symbols \
+      -Zstaticlib-hide-internal-symbols
 }
 
 make_headers() {
@@ -45,30 +49,17 @@ verify_module_map() {
   test -n "$(find "$framework" -path "*/Headers/$module/module.modulemap" -print -quit)"
 }
 
-# Linking several Rust staticlibs into one Apple target otherwise exports a copy of Rust's std/core
-# from every archive. macOS rejects those duplicate symbols. Collapse each specialized archive into
-# one relocatable object, then keep only its C ABI global; internal cross-object references remain
-# valid because ld localizes symbols only after the collapse.
+# Verify rustc's staticlib symbol isolation before packaging the archive as an XCFramework.
 hide_rust_symbols() {
   local input="$1"
   local output="$2"
   local exports="$3"
   local label="$4"
-  local sdk="$5"
-  local platform="$6"
-  local deployment_target="$7"
-  local relocatable="$WORK/$label.o"
-  local edited="$WORK/$label-exported.o"
   local arch
-  local sdk_path
-  local sdk_version
   local rust_host
   local llvm_nm
-  local llvm_objcopy
   local symbols
-  local all_symbols
-  local renamed_symbols
-  local symbol_prefix
+  local internal_symbols
 
   arch="$(xcrun lipo -archs "$input")"
   if [[ -z "$arch" || "$arch" == *" "* ]]; then
@@ -76,54 +67,21 @@ hide_rust_symbols() {
     return 1
   fi
 
-  sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
-  sdk_version="$(xcrun --sdk "$sdk" --show-sdk-version)"
   rust_host="$(rustc -vV | sed -n 's/^host: //p')"
   llvm_nm="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-nm"
-  llvm_objcopy="$(rustc --print sysroot)/lib/rustlib/$rust_host/bin/llvm-objcopy"
-  if [[ ! -x "$llvm_nm" || ! -x "$llvm_objcopy" ]]; then
-    echo "Rust LLVM tools are unavailable; install rustup component llvm-tools-preview" >&2
+  if [[ ! -x "$llvm_nm" ]]; then
+    echo "Rust llvm-nm is unavailable; install rustup component llvm-tools-preview" >&2
     return 1
   fi
   symbols="$WORK/$label-symbols.txt"
-  all_symbols="$WORK/$label-all-symbols.txt"
-  renamed_symbols="$WORK/$label-renamed-symbols.txt"
-  symbol_prefix="__yptun_${label//-/_}_"
+  internal_symbols="$WORK/$label-internal-symbols.txt"
 
-  rm -f "$relocatable" "$edited" "$output"
-  xcrun ld -r \
-    -arch "$arch" \
-    -platform_version "$platform" "$deployment_target" "$sdk_version" \
-    -syslibroot "$sdk_path" \
-    -all_load "$input" \
-    -exported_symbols_list "$exports" \
-    -o "$relocatable"
-
-  # Mach-O coalesced Rust definitions cannot be reliably converted to local/private symbols by
-  # nmedit or llvm-objcopy. Xcode's final application link force-loads these static frameworks, so
-  # every embedded copy of Rust std/core would otherwise collide with yptun_ffi and the other
-  # specialized runtime. Rename every defined non-ABI symbol in the already-collapsed object;
-  # llvm-objcopy updates its internal references at the same time. Undefined Apple SDK symbols and
-  # the public C ABI remain untouched.
-  "$llvm_nm" --extern-only --defined-only --just-symbol-name "$relocatable" \
-    | sort -u > "$all_symbols"
-  grep -vxFf "$exports" "$all_symbols" \
-    | awk -v prefix="$symbol_prefix" '{ print $0, prefix $0 }' \
-    > "$renamed_symbols"
-  test -s "$renamed_symbols"
-  "$llvm_objcopy" --redefine-syms="$renamed_symbols" "$relocatable" "$edited"
-  xcrun libtool -static -o "$output" "$edited"
-
+  rm -f "$output"
+  cp "$input" "$output"
   "$llvm_nm" --extern-only --defined-only --just-symbol-name "$output" > "$symbols"
-  if grep -Eq '^(__R|__ZN)' "$symbols"; then
-    echo "Unnamespaced Rust implementation symbols remain in $output" >&2
-    grep -E '^(__R|__ZN)' "$symbols" | head -20 >&2
-    return 1
-  fi
-
-  if grep -vxFf "$exports" "$symbols" | grep -v "^$symbol_prefix" | grep -q .; then
-    echo "Unexpected unnamespaced symbols remain in $output:" >&2
-    grep -vxFf "$exports" "$symbols" | grep -v "^$symbol_prefix" >&2
+  grep -vxFf "$exports" "$symbols" > "$internal_symbols" || true
+  if ! grep -Eq '[._]rs[[:xdigit:]]{8,}$' "$internal_symbols"; then
+    echo "rustc did not rename internal staticlib symbols in $output" >&2
     return 1
   fi
 
