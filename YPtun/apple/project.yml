@@ -74,6 +74,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Configuration/iOS/PacketTunnel.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-Wl,-no_compact_unwind"
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
@@ -156,6 +159,9 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         ENABLE_HARDENED_RUNTIME: YES
         SKIP_INSTALL: YES
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-Wl,-no_compact_unwind"
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
