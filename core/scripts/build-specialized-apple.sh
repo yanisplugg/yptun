@@ -58,6 +58,7 @@ hide_rust_symbols() {
   local platform="$6"
   local deployment_target="$7"
   local relocatable="$WORK/$label.o"
+  local edited="$WORK/$label-exported.o"
   local arch
   local sdk_path
   local sdk_version
@@ -83,7 +84,7 @@ hide_rust_symbols() {
   symbols="$WORK/$label-symbols.txt"
   symbol_details="$WORK/$label-symbol-details.txt"
 
-  rm -f "$relocatable" "$output"
+  rm -f "$relocatable" "$edited" "$output"
   xcrun ld -r \
     -arch "$arch" \
     -platform_version "$platform" "$deployment_target" "$sdk_version" \
@@ -91,7 +92,11 @@ hide_rust_symbols() {
     -all_load "$input" \
     -exported_symbols_list "$exports" \
     -o "$relocatable"
-  xcrun libtool -static -o "$output" "$relocatable"
+  # `ld -exported_symbols_list` does not consistently set N_PEXT on every Rust definition in a
+  # relocatable link. With LTO disabled above, nmedit can safely make every non-ABI definition a
+  # Mach-O private external while preserving references inside the collapsed object.
+  xcrun nmedit -s "$exports" "$relocatable" -o "$edited"
+  xcrun libtool -static -o "$output" "$edited"
 
   # `--extern-only` also includes Mach-O private externals. Those are deliberately hidden by
   # exported_symbols_list and do not collide at the final link. Parse Darwin metadata so the
@@ -135,17 +140,17 @@ _csqtt_ffi_free_string
 EOF
 
 build_snolc() {
-  for target in "${TARGETS[@]}"; do
-    build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target "$target"
-  done
+  build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target aarch64-apple-ios
   hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-ios/release/libsnolc_ffi.a" \
     "$WORK/libsnolc-ios-arm64.a" "$WORK/SnolcCore.exports" snolc-ios-arm64 \
     iphoneos ios "$IPHONEOS_DEPLOYMENT_TARGET"
+  build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target aarch64-apple-ios-sim
   hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-ios-sim/release/libsnolc_ffi.a" \
     "$WORK/libsnolc-simulator-arm64.a" "$WORK/SnolcCore.exports" snolc-simulator-arm64 \
     iphonesimulator ios-simulator "$IPHONEOS_DEPLOYMENT_TARGET"
+  build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target x86_64-apple-ios
   hide_rust_symbols \
     "$ROOT/snolc/target/x86_64-apple-ios/release/libsnolc_ffi.a" \
     "$WORK/libsnolc-simulator-x86_64.a" "$WORK/SnolcCore.exports" snolc-simulator-x86_64 \
@@ -154,10 +159,12 @@ build_snolc() {
     "$WORK/libsnolc-simulator-arm64.a" \
     "$WORK/libsnolc-simulator-x86_64.a" \
     -output "$WORK/libsnolc-simulator.a"
+  build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target aarch64-apple-darwin
   hide_rust_symbols \
     "$ROOT/snolc/target/aarch64-apple-darwin/release/libsnolc_ffi.a" \
     "$WORK/libsnolc-macos-arm64.a" "$WORK/SnolcCore.exports" snolc-macos-arm64 \
     macosx macos "$MACOSX_DEPLOYMENT_TARGET"
+  build_specialized_rust --release --locked --manifest-path "$ROOT/snolc/Cargo.toml" -p snolc-ffi --target x86_64-apple-darwin
   hide_rust_symbols \
     "$ROOT/snolc/target/x86_64-apple-darwin/release/libsnolc_ffi.a" \
     "$WORK/libsnolc-macos-x86_64.a" "$WORK/SnolcCore.exports" snolc-macos-x86_64 \
@@ -177,18 +184,18 @@ build_snolc() {
 }
 
 build_csqtt() {
-  for target in "${TARGETS[@]}"; do
-    build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target "$target"
-  done
   local target_dir="$ROOT/csqtt/rust-client/target"
+  build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target aarch64-apple-ios
   hide_rust_symbols \
     "$target_dir/aarch64-apple-ios/release/libcsqtt_ffi.a" \
     "$WORK/libcsqtt-ios-arm64.a" "$WORK/CsqttCore.exports" csqtt-ios-arm64 \
     iphoneos ios "$IPHONEOS_DEPLOYMENT_TARGET"
+  build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target aarch64-apple-ios-sim
   hide_rust_symbols \
     "$target_dir/aarch64-apple-ios-sim/release/libcsqtt_ffi.a" \
     "$WORK/libcsqtt-simulator-arm64.a" "$WORK/CsqttCore.exports" csqtt-simulator-arm64 \
     iphonesimulator ios-simulator "$IPHONEOS_DEPLOYMENT_TARGET"
+  build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target x86_64-apple-ios
   hide_rust_symbols \
     "$target_dir/x86_64-apple-ios/release/libcsqtt_ffi.a" \
     "$WORK/libcsqtt-simulator-x86_64.a" "$WORK/CsqttCore.exports" csqtt-simulator-x86_64 \
@@ -197,10 +204,12 @@ build_csqtt() {
     "$WORK/libcsqtt-simulator-arm64.a" \
     "$WORK/libcsqtt-simulator-x86_64.a" \
     -output "$WORK/libcsqtt-simulator.a"
+  build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target aarch64-apple-darwin
   hide_rust_symbols \
     "$target_dir/aarch64-apple-darwin/release/libcsqtt_ffi.a" \
     "$WORK/libcsqtt-macos-arm64.a" "$WORK/CsqttCore.exports" csqtt-macos-arm64 \
     macosx macos "$MACOSX_DEPLOYMENT_TARGET"
+  build_specialized_rust --release --locked --lib --manifest-path "$ROOT/csqtt/rust-client/Cargo.toml" -p csqtt-client --target x86_64-apple-darwin
   hide_rust_symbols \
     "$target_dir/x86_64-apple-darwin/release/libcsqtt_ffi.a" \
     "$WORK/libcsqtt-macos-x86_64.a" "$WORK/CsqttCore.exports" csqtt-macos-x86_64 \
