@@ -14,6 +14,27 @@ on:
         required: false
         type: string
         default: ""
+      upload_to_testflight:
+        description: Upload the signed IPA to TestFlight
+        required: false
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      build_number:
+        description: TestFlight build number
+        required: true
+        type: string
+      comment:
+        description: Build comment
+        required: false
+        type: string
+        default: ""
+      upload_to_testflight:
+        description: Upload the signed IPA to TestFlight
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -253,6 +274,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Apple Distribution" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          test -n "$IDENTITY"
 
           echo "$PROVISIONING_PROFILE_APP_BASE64" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
           echo "$PROVISIONING_PROFILE_TUNNEL_BASE64" | base64 --decode > "$RUNNER_TEMP/tunnel.mobileprovision"
@@ -289,6 +311,31 @@ jobs:
           codesign -d --entitlements :- Payload/YPtun.app/PlugIns/YPtunWidget.appex > build/signed-entitlements/widget.plist
           plutil -lint build/signed-entitlements/*.plist
           zip -qry "YPtun-4.0.0-$BUILD_NUMBER-signed.ipa" Payload
+
+      - name: Upload signed IPA to TestFlight
+        if: inputs.upload_to_testflight == true
+        working-directory: YPtun/apple
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          IPA="YPtun-4.0.0-$BUILD_NUMBER-signed.ipa"
+          test -s "$IPA"
+          test -n "$APP_STORE_CONNECT_KEY_ID"
+          test -n "$APP_STORE_CONNECT_ISSUER_ID"
+          test -n "$APP_STORE_CONNECT_PRIVATE_KEY"
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          chmod 600 "$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            --apiKey "$APP_STORE_CONNECT_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --show-progress
 
       - uses: actions/upload-artifact@v4
         if: always()
