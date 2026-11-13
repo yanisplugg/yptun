@@ -83,7 +83,6 @@ struct SavedState {
     selected_location: usize,
     #[serde(default)]
     bundle: LocationBundleV4,
-    connected_at: Option<Instant>,
 }
 
 struct YpTunApp {
@@ -103,6 +102,7 @@ struct YpTunApp {
     import_text: String,
     show_import: bool,
     bundle: LocationBundleV4,
+    connected_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
