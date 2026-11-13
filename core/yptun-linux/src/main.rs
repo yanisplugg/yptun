@@ -66,6 +66,27 @@ struct YpTunApp {
     proxy_port: String,
     status: String,
     bridge: Option<HttpProxyBridge>,
+    page: Page,
+    locations: Vec<LocationRow>,
+    bypass_lan: bool,
+    bypass_russia: bool,
+    auto_start: bool,
+    system_proxy: bool,
+    custom_rules: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Connection,
+    Locations,
+    Routing,
+    Settings,
+}
+
+struct LocationRow {
+    name: String,
+    endpoint: String,
+    enabled: bool,
 }
 
 impl Default for YpTunApp {
@@ -75,6 +96,17 @@ impl Default for YpTunApp {
             proxy_port: "8080".to_owned(),
             status: "Отключено".to_owned(),
             bridge: None,
+            page: Page::Connection,
+            locations: vec![LocationRow {
+                name: "Локальный SOCKS5".to_owned(),
+                endpoint: "127.0.0.1:1080".to_owned(),
+                enabled: true,
+            }],
+            bypass_lan: true,
+            bypass_russia: false,
+            auto_start: false,
+            system_proxy: false,
+            custom_rules: "domain:myserver.lan -> Direct".to_owned(),
         }
     }
 }
@@ -97,50 +129,62 @@ impl eframe::App for YpTunApp {
             .default_width(210.0)
             .show(ctx, |ui| {
                 ui.add_space(12.0);
-                let _ = ui.selectable_label(true, "Подключение");
-                let _ = ui.selectable_label(false, "Локации");
-                let _ = ui.selectable_label(false, "Маршрутизация");
-                let _ = ui.selectable_label(false, "Настройки");
+                if ui.selectable_label(self.page == Page::Connection, "Подключение").clicked() { self.page = Page::Connection; }
+                if ui.selectable_label(self.page == Page::Locations, "Локации").clicked() { self.page = Page::Locations; }
+                if ui.selectable_label(self.page == Page::Routing, "Маршрутизация").clicked() { self.page = Page::Routing; }
+                if ui.selectable_label(self.page == Page::Settings, "Настройки").clicked() { self.page = Page::Settings; }
                 ui.separator();
                 ui.small("Rust runtime");
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(22.0);
-            ui.heading("Подключение");
-            ui.add_space(12.0);
-            ui.group(|ui| {
-                ui.label("SOCKS5 endpoint");
-                ui.text_edit_singleline(&mut self.endpoint);
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("HTTP proxy port");
-                    ui.add(egui::TextEdit::singleline(&mut self.proxy_port).desired_width(90.0));
-                });
-                ui.add_space(14.0);
-                let connected = self.bridge.is_some();
-                if ui
-                    .add_sized(
-                        [180.0, 38.0],
-                        egui::Button::new(if connected { "Отключить" } else { "Подключить" }),
-                    )
-                    .clicked()
-                {
-                    if connected {
-                        if let Some(bridge) = self.bridge.take() {
-                            bridge.stop();
-                        }
-                        self.status = "Отключено".to_owned();
-                    } else {
-                        self.start_bridge();
-                    }
-                }
-            });
+            match self.page {
+                Page::Connection => self.connection_page(ui),
+                Page::Locations => self.locations_page(ui),
+                Page::Routing => self.routing_page(ui),
+                Page::Settings => self.settings_page(ui),
+            }
         });
     }
 }
 
 impl YpTunApp {
+    fn connection_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Подключение"); ui.add_space(12.0);
+        ui.group(|ui| {
+            ui.label("SOCKS5 endpoint"); ui.text_edit_singleline(&mut self.endpoint);
+            ui.add_space(8.0); ui.horizontal(|ui| { ui.label("HTTP proxy port"); ui.add(egui::TextEdit::singleline(&mut self.proxy_port).desired_width(90.0)); });
+            ui.add_space(14.0); let connected = self.bridge.is_some();
+            if ui.add_sized([180.0, 38.0], egui::Button::new(if connected { "Отключить" } else { "Подключить" })).clicked() {
+                if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.status = "Отключено".to_owned(); } else { self.start_bridge(); }
+            }
+        });
+    }
+
+    fn locations_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Локации"); ui.add_space(12.0);
+        for location in &mut self.locations {
+            ui.group(|ui| { ui.horizontal(|ui| { ui.checkbox(&mut location.enabled, ""); ui.text_edit_singleline(&mut location.name); ui.label(&location.endpoint); }); });
+        }
+        if ui.button("Добавить локацию").clicked() { self.locations.push(LocationRow { name: "Новая локация".into(), endpoint: "127.0.0.1:1080".into(), enabled: false }); }
+    }
+
+    fn routing_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Маршрутизация и rules"); ui.add_space(12.0);
+        ui.checkbox(&mut self.bypass_lan, "Bypass LAN");
+        ui.checkbox(&mut self.bypass_russia, "Bypass Russia");
+        ui.separator(); ui.label("Пользовательские правила применяются до geo-правил.");
+        ui.add(egui::TextEdit::multiline(&mut self.custom_rules).hint_text("domain:myserver.lan -> Direct").desired_rows(4));
+    }
+
+    fn settings_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Настройки"); ui.add_space(12.0);
+        ui.checkbox(&mut self.system_proxy, "Управлять системным proxy");
+        ui.checkbox(&mut self.auto_start, "Запускать вместе с системой");
+        ui.separator(); ui.label("Движок: Rust desktop runtime"); ui.label("Версия клиента: 4.0.0");
+    }
+
     fn start_bridge(&mut self) {
         let Some((host, socks_port)) = split_proxy_host_port(&self.endpoint) else {
             self.status = "Неверный SOCKS endpoint".to_owned();
