@@ -5,12 +5,15 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::process::Command;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use yptun_core::desktop_proxy::split_proxy_host_port;
+use yptun_core::desktop_proxy::{disable_gnome_proxy_commands, enable_gnome_proxy_commands};
 use yptun_core::http_proxy_bridge::{http_port_for, HttpProxyBridge};
 use yptun_core::importer::parse_import;
+use yptun_core::location::LocationBundleV4;
 
 fn usage() -> ! {
     eprintln!("usage: yptun-linux proxy <socks-host:port>");
@@ -77,6 +80,8 @@ struct SavedState {
     custom_rules: String,
     tunnel_mode: bool,
     selected_location: usize,
+    #[serde(default)]
+    bundle: LocationBundleV4,
 }
 
 struct YpTunApp {
@@ -95,6 +100,7 @@ struct YpTunApp {
     selected_location: usize,
     import_text: String,
     show_import: bool,
+    bundle: LocationBundleV4,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,6 +140,7 @@ impl Default for YpTunApp {
             selected_location: 0,
             import_text: String::new(),
             show_import: false,
+            bundle: LocationBundleV4::default(),
         };
         defaults.load_state()
     }
@@ -206,16 +213,27 @@ impl YpTunApp {
                 self.bypass_lan = saved.bypass_lan; self.bypass_russia = saved.bypass_russia;
                 self.auto_start = saved.auto_start; self.system_proxy = saved.system_proxy; self.custom_rules = saved.custom_rules;
                 self.tunnel_mode = saved.tunnel_mode; self.selected_location = saved.selected_location.min(self.locations.len().saturating_sub(1));
+                self.bundle = saved.bundle.normalized();
+                if !self.bundle.locations.is_empty() {
+                    self.locations = self.bundle.locations.iter().map(Self::row_from_entry).collect();
+                    self.selected_location = self.bundle.active_location_id.as_ref().and_then(|id| self.bundle.locations.iter().position(|e| &e.storage_id == id)).unwrap_or(0);
+                    self.endpoint = self.locations[self.selected_location].endpoint.clone();
+                }
             }
         }
         self
     }
 
     fn save_state(&self) {
-        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone(), tunnel_mode: self.tunnel_mode, selected_location: self.selected_location };
+        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone(), tunnel_mode: self.tunnel_mode, selected_location: self.selected_location, bundle: self.bundle.clone() };
         let path = Self::state_path();
         if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
         if let Ok(json) = serde_json::to_vec_pretty(&state) { let _ = fs::write(path, json); }
+    }
+
+    fn row_from_entry(entry: &yptun_core::location::LocationEntry) -> LocationRow {
+        let endpoint = entry.subscription_url.clone().unwrap_or_else(|| format!("engine:{:?}", entry.engine.unwrap_or_default()));
+        LocationRow { name: entry.name.clone(), endpoint, enabled: true }
     }
 
     fn connection_page(&mut self, ui: &mut egui::Ui) {
@@ -237,7 +255,7 @@ impl YpTunApp {
                 let button = egui::Button::new(if connected { "Отключить" } else { "Подключить" })
                     .min_size(egui::vec2(180.0, 80.0));
                 if ui.add(button).clicked() {
-                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
+                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
                 }
                 ui.add_space(20.0);
@@ -247,7 +265,7 @@ impl YpTunApp {
                 });
             });
             let right = &mut columns[1];
-            right.horizontal(|ui| { ui.label("Обновить подписки"); if ui.button("Обновить").clicked() { self.status = "Обновление…".into(); } });
+            right.horizontal(|ui| { ui.label("Обновить подписки"); if ui.button("Обновить").clicked() { self.refresh_subscriptions(); } });
             if right.button("+ Добавить конфигурацию").clicked() { self.show_import = true; }
             if self.show_import {
                 right.group(|ui| {
@@ -301,7 +319,7 @@ impl YpTunApp {
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Настройки"); ui.add_space(12.0);
-        if ui.checkbox(&mut self.system_proxy, "Управлять системным proxy").changed() { self.save_state(); }
+        if ui.checkbox(&mut self.system_proxy, "Управлять системным proxy").changed() { self.apply_system_proxy(); self.save_state(); }
         if ui.checkbox(&mut self.auto_start, "Запускать вместе с системой").changed() { self.save_state(); }
         ui.separator(); ui.label("Движок: Rust desktop runtime"); ui.label("Версия клиента: 4.0.0");
     }
@@ -329,9 +347,48 @@ impl YpTunApp {
         if bridge.start() {
             self.bridge = Some(bridge);
             self.status = format!("HTTP 127.0.0.1:{proxy_port}");
+            if self.system_proxy { self.apply_system_proxy(); }
         } else {
             self.status = "Не удалось запустить proxy".to_owned();
         }
+    }
+
+    fn apply_system_proxy(&mut self) {
+        let commands = if self.system_proxy {
+            let Ok(port) = self.proxy_port.parse::<i32>() else { self.status = "Неверный HTTP-порт".into(); return; };
+            enable_gnome_proxy_commands("127.0.0.1", port)
+        } else { disable_gnome_proxy_commands() };
+        for command in commands {
+            let Some((program, args)) = command.split_first() else { continue; };
+            if Command::new(program).args(args).status().is_err() {
+                self.status = "Не удалось применить системный proxy".into();
+                return;
+            }
+        }
+        self.status = if self.system_proxy { format!("HTTP 127.0.0.1:{}", self.proxy_port) } else { "Системный proxy отключен".into() };
+    }
+
+    fn refresh_subscriptions(&mut self) {
+        let urls: Vec<String> = self.bundle.locations.iter().filter_map(|e| e.subscription_url.clone()).filter(|u| u.starts_with("http://") || u.starts_with("https://")).collect();
+        if urls.is_empty() { self.status = "Нет подписок для обновления".into(); return; }
+        let mut success = 0;
+        for url in urls {
+            let output = Command::new("curl").args(["--silent", "--show-error", "--location", "--max-time", "30", &url]).output();
+            let Ok(output) = output else { continue };
+            if !output.status.success() { continue; }
+            let Ok(body) = String::from_utf8(output.stdout) else { continue; };
+            if let Some(parsed) = parse_import(&body, Some(&url), None, None) {
+                self.bundle = yptun_core::importer::merge_imported_bundle(Some(&self.bundle), &parsed.bundle, true).normalized();
+                success += 1;
+            }
+        }
+        if success > 0 {
+            self.locations = self.bundle.locations.iter().map(Self::row_from_entry).collect();
+            self.selected_location = self.selected_location.min(self.locations.len().saturating_sub(1));
+            self.endpoint = self.locations[self.selected_location].endpoint.clone();
+            self.save_state();
+            self.status = format!("Обновлено подписок: {success}");
+        } else { self.status = "Не удалось обновить подписки".into(); }
     }
 
     fn import_location(&mut self) {
@@ -341,13 +398,12 @@ impl YpTunApp {
             self.status = "Не удалось распознать ссылку конфигурации".into();
             return;
         };
-        let imported = parsed.bundle.locations;
+        let imported_bundle = parsed.bundle.normalized();
+        let imported = imported_bundle.locations.clone();
         if imported.is_empty() { self.status = "В ссылке нет конфигураций".into(); return; }
-        for entry in imported {
-            let endpoint = entry.subscription_url.clone().unwrap_or_else(|| format!("engine:{:?}", entry.engine));
-            self.locations.push(LocationRow { name: entry.name, endpoint, enabled: true });
-        }
-        self.selected_location = self.locations.len() - 1;
+        self.bundle = yptun_core::importer::merge_imported_bundle(Some(&self.bundle), &imported_bundle, false).normalized();
+        self.locations = self.bundle.locations.iter().map(Self::row_from_entry).collect();
+        self.selected_location = self.bundle.active_location_id.as_ref().and_then(|id| self.bundle.locations.iter().position(|e| &e.storage_id == id)).unwrap_or(0);
         self.endpoint = self.locations[self.selected_location].endpoint.clone();
         self.import_text.clear(); self.show_import = false; self.status = "Конфигурация добавлена".into(); self.save_state();
     }
