@@ -34,6 +34,9 @@ build_one() {
   if [[ -f "$native_dir/hev-socks5-tunnel-linux-$arch" ]]; then
     install -m 0755 "$native_dir/hev-socks5-tunnel-linux-$arch" "$stage/usr/lib/yptun/native/hev-socks5-tunnel-linux-$arch"
   fi
+  if [[ -d "$native_dir/olcrtc-data" ]]; then
+    cp -a "$native_dir/olcrtc-data" "$stage/usr/lib/yptun/olcrtc-data"
+  fi
   cat > "$stage/DEBIAN/control" <<EOF
 Package: yptun
 Version: $version
@@ -49,6 +52,9 @@ EOF
   mkdir -p "$appdir/usr/lib/yptun/native"
   install -m 0755 "$binary" "$appdir/usr/bin/yptun-linux"
   cp -a "$stage/usr/lib/yptun/native/." "$appdir/usr/lib/yptun/native/"
+  if [[ -d "$stage/usr/lib/yptun/olcrtc-data" ]]; then
+    cp -a "$stage/usr/lib/yptun/olcrtc-data" "$appdir/usr/lib/yptun/olcrtc-data"
+  fi
   cat > "$appdir/AppRun" <<'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/usr/bin/yptun-linux" "$@"
