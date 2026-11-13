@@ -60,7 +60,6 @@ struct AddLocationView: View {
                     } label: {
                         Label("Создать вручную", systemImage: "slider.horizontal.3")
                     }
-                    option("Найти бесплатные серверы", symbol: "sparkle.magnifyingglass")
                 }
             }
             .navigationTitle("Добавить")
@@ -109,16 +108,6 @@ struct AddLocationView: View {
         }
         #endif
     }
-
-    private func option(_ title: String, symbol: String) -> some View {
-        Button {
-            dismiss()
-            model.showPendingFeature(title)
-        } label: {
-            Label(title, systemImage: symbol)
-        }
-    }
-
     private func performImport(_ text: String) {
         isImporting = true
         Task {

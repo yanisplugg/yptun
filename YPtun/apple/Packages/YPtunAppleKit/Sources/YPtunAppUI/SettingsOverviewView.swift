@@ -65,29 +65,4 @@ public struct SettingsOverviewView: View {
         }
         .navigationTitle("Настройки")
     }
-
-    private func destination(_ title: String, symbol: String) -> some View {
-        NavigationLink {
-            FeaturePlaceholderView(title: title, symbol: symbol)
-        } label: {
-            Label(title, systemImage: symbol)
-        }
-    }
-}
-
-private struct FeaturePlaceholderView: View {
-    let title: String
-    let symbol: String
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Label(title, systemImage: symbol)
-                .font(.title3.weight(.semibold))
-            Text("Раздел переносится на Swift и будет подключён к общему Rust-ядру.")
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding()
-        .navigationTitle(title)
-    }
 }

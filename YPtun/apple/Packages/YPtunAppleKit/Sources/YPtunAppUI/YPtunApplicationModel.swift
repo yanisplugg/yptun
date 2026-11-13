@@ -212,19 +212,16 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
-    public func showPendingFeature(_ title: String) {
-        presentedNotice = YPtunNotice(
-            title: title,
-            message: "Раздел уже заложен в нативную структуру и будет подключён к Rust-ядру следующим этапом."
-        )
-    }
-
     public func importLocations(from text: String) async -> Bool {
+        let restartAfterImport = isTunnelActive
         do {
             let snapshot = try await bootstrapper.importLocations(from: text)
             locations = snapshot.locations
             selectedLocationID = snapshot.activeLocationID
                 ?? snapshot.locations.first(where: \.isComplete)?.id
+            if restartAfterImport {
+                await restartTunnelAfterConfigurationChange()
+            }
             return true
         } catch {
             presentedNotice = YPtunNotice(
@@ -251,10 +248,14 @@ public final class YPtunApplicationModel: ObservableObject {
     }
 
     public func saveLocation(text: String, id: String?) async -> Bool {
+        let restartAfterSave = isTunnelActive && (id == nil || id == selectedLocationID)
         do {
             let snapshot = try await bootstrapper.saveLocationText(text, id: id)
             locations = snapshot.locations
             selectedLocationID = snapshot.activeLocationID
+            if restartAfterSave {
+                await restartTunnelAfterConfigurationChange()
+            }
             return true
         } catch {
             presentedNotice = YPtunNotice(
@@ -267,16 +268,44 @@ public final class YPtunApplicationModel: ObservableObject {
 
     public func deletePendingLocation() async {
         guard let location = locationPendingDeletion else { return }
+        let restartAfterDelete = isTunnelActive && location.id == selectedLocationID
         do {
             let snapshot = try await bootstrapper.deleteLocation(id: location.id)
             locations = snapshot.locations
             selectedLocationID = snapshot.activeLocationID
             locationPendingDeletion = nil
+            if restartAfterDelete {
+                await restartTunnelAfterConfigurationChange()
+            }
         } catch {
             locationPendingDeletion = nil
             presentedNotice = YPtunNotice(
                 title: "Не удалось удалить локацию",
                 message: error.localizedDescription
+            )
+        }
+    }
+
+    private var isTunnelActive: Bool {
+        connectionState == .connected || connectionState == .connecting
+    }
+
+    private func restartTunnelAfterConfigurationChange() async {
+        guard let selectedLocation, selectedLocation.isComplete else {
+            connectionState = .disconnecting
+            await vpnController.stop()
+            return
+        }
+        connectionState = .connecting
+        do {
+            try await vpnController.restart()
+        } catch is CancellationError {
+            return
+        } catch {
+            connectionState = await vpnController.currentState()
+            presentedNotice = YPtunNotice(
+                title: "Не удалось применить изменения",
+                message: "Данные сохранены, но VPN не перезапустился: \(error.localizedDescription)"
             )
         }
     }
