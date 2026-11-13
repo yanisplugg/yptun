@@ -56,6 +56,7 @@ public final class YPtunApplicationModel: ObservableObject {
     @Published public var presentedNotice: YPtunNotice?
     @Published public var locationEditorRequest: LocationEditorRequest?
     @Published public var locationPendingDeletion: LocationListItem?
+    @Published public private(set) var isRefreshingSubscriptions = false
 
     private let bootstrapper: AppleApplicationBootstrapper
     private let vpnController: any AppleVPNControlling
@@ -282,6 +283,42 @@ public final class YPtunApplicationModel: ObservableObject {
             presentedNotice = YPtunNotice(
                 title: "Не удалось удалить локацию",
                 message: error.localizedDescription
+            )
+        }
+    }
+
+    public func refreshSubscriptions() async {
+        guard !isRefreshingSubscriptions else { return }
+        let urls = locations.compactMap(\.subscriptionID).reduce(into: [String]()) { result, url in
+            if !result.contains(url) { result.append(url) }
+        }
+        guard !urls.isEmpty else { return }
+
+        isRefreshingSubscriptions = true
+        defer { isRefreshingSubscriptions = false }
+        let restartAfterRefresh = isTunnelActive
+        var refreshed = 0
+        var latestSnapshot: AppleApplicationSnapshot?
+        for url in urls {
+            do {
+                latestSnapshot = try await bootstrapper.importLocations(from: url)
+                refreshed += 1
+            } catch {
+                continue
+            }
+        }
+        if let latestSnapshot {
+            locations = latestSnapshot.locations
+            selectedLocationID = latestSnapshot.activeLocationID
+                ?? latestSnapshot.locations.first(where: \.isComplete)?.id
+            if restartAfterRefresh {
+                await restartTunnelAfterConfigurationChange()
+            }
+        }
+        if refreshed != urls.count {
+            presentedNotice = YPtunNotice(
+                title: refreshed == 0 ? "Не удалось обновить подписки" : "Обновлено не всё",
+                message: "Обновлено \(refreshed) из \(urls.count) подписок. Проверьте сеть и ссылки."
             )
         }
     }

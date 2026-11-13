@@ -117,6 +117,29 @@ public struct ConnectionHomeView: View {
         }
         .padding(.top, 12)
 
+        if locationSections.contains(where: \.isSubscription) {
+            Button {
+                Task { await model.refreshSubscriptions() }
+            } label: {
+                HStack(spacing: 10) {
+                    if model.isRefreshingSubscriptions {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(.tint)
+                    }
+                    Text("Обновить подписки")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .frame(minHeight: 48)
+                .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isRefreshingSubscriptions)
+        }
+
         if model.locations.isEmpty && !model.isBootstrapping {
             VStack(spacing: 12) {
                 Image("CatTile")
