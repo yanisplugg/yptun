@@ -323,9 +323,14 @@ impl YpTunApp {
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Настройки"); ui.add_space(12.0);
+        ui.label("Локальный SOCKS endpoint");
+        if ui.text_edit_singleline(&mut self.endpoint).lost_focus() { self.save_state(); }
+        ui.label("Локальный HTTP proxy порт");
+        if ui.text_edit_singleline(&mut self.proxy_port).lost_focus() { self.save_state(); }
         if ui.checkbox(&mut self.system_proxy, "Управлять системным proxy").changed() { self.apply_system_proxy(); self.save_state(); }
         if ui.checkbox(&mut self.auto_start, "Запускать вместе с системой").changed() { self.save_state(); }
         ui.separator(); ui.label("Движок: Rust desktop runtime"); ui.label("Версия клиента: 4.0.0");
+        if self.tunnel_mode { ui.colored_label(egui::Color32::YELLOW, "TUN: требуется запуск Linux TUN/HEV runtime"); }
     }
 
     fn start_bridge(&mut self) {
