@@ -2,9 +2,12 @@
 //! launch this binary directly while the remaining desktop UI is migrated incrementally.
 
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 use yptun_core::desktop_proxy::split_proxy_host_port;
 use yptun_core::http_proxy_bridge::{http_port_for, HttpProxyBridge};
 
@@ -61,6 +64,18 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct SavedState {
+    endpoint: String,
+    proxy_port: String,
+    locations: Vec<LocationRow>,
+    bypass_lan: bool,
+    bypass_russia: bool,
+    auto_start: bool,
+    system_proxy: bool,
+    custom_rules: String,
+}
+
 struct YpTunApp {
     endpoint: String,
     proxy_port: String,
@@ -83,6 +98,7 @@ enum Page {
     Settings,
 }
 
+#[derive(Serialize, Deserialize)]
 struct LocationRow {
     name: String,
     endpoint: String,
@@ -91,7 +107,7 @@ struct LocationRow {
 
 impl Default for YpTunApp {
     fn default() -> Self {
-        Self {
+        let defaults = Self {
             endpoint: "127.0.0.1:1080".to_owned(),
             proxy_port: "8080".to_owned(),
             status: "Отключено".to_owned(),
@@ -107,7 +123,8 @@ impl Default for YpTunApp {
             auto_start: false,
             system_proxy: false,
             custom_rules: "domain:myserver.lan -> Direct".to_owned(),
-        }
+        };
+        defaults.load_state()
     }
 }
 
@@ -150,6 +167,32 @@ impl eframe::App for YpTunApp {
 }
 
 impl YpTunApp {
+    fn state_path() -> PathBuf {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join(".config"))
+            .join("yptun").join("linux.json")
+    }
+
+    fn load_state(mut self) -> Self {
+        if let Ok(bytes) = fs::read(Self::state_path()) {
+            if let Ok(saved) = serde_json::from_slice::<SavedState>(&bytes) {
+                self.endpoint = saved.endpoint; self.proxy_port = saved.proxy_port;
+                if !saved.locations.is_empty() { self.locations = saved.locations; }
+                self.bypass_lan = saved.bypass_lan; self.bypass_russia = saved.bypass_russia;
+                self.auto_start = saved.auto_start; self.system_proxy = saved.system_proxy; self.custom_rules = saved.custom_rules;
+            }
+        }
+        self
+    }
+
+    fn save_state(&self) {
+        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone() };
+        let path = Self::state_path();
+        if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
+        if let Ok(json) = serde_json::to_vec_pretty(&state) { let _ = fs::write(path, json); }
+    }
+
     fn connection_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Подключение"); ui.add_space(12.0);
         ui.group(|ui| {
@@ -158,6 +201,7 @@ impl YpTunApp {
             ui.add_space(14.0); let connected = self.bridge.is_some();
             if ui.add_sized([180.0, 38.0], egui::Button::new(if connected { "Отключить" } else { "Подключить" })).clicked() {
                 if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.status = "Отключено".to_owned(); } else { self.start_bridge(); }
+                self.save_state();
             }
         });
     }
@@ -167,21 +211,21 @@ impl YpTunApp {
         for location in &mut self.locations {
             ui.group(|ui| { ui.horizontal(|ui| { ui.checkbox(&mut location.enabled, ""); ui.text_edit_singleline(&mut location.name); ui.label(&location.endpoint); }); });
         }
-        if ui.button("Добавить локацию").clicked() { self.locations.push(LocationRow { name: "Новая локация".into(), endpoint: "127.0.0.1:1080".into(), enabled: false }); }
+        if ui.button("Добавить локацию").clicked() { self.locations.push(LocationRow { name: "Новая локация".into(), endpoint: "127.0.0.1:1080".into(), enabled: false }); self.save_state(); }
     }
 
     fn routing_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Маршрутизация и rules"); ui.add_space(12.0);
-        ui.checkbox(&mut self.bypass_lan, "Bypass LAN");
-        ui.checkbox(&mut self.bypass_russia, "Bypass Russia");
+        if ui.checkbox(&mut self.bypass_lan, "Bypass LAN").changed() { self.save_state(); }
+        if ui.checkbox(&mut self.bypass_russia, "Bypass Russia").changed() { self.save_state(); }
         ui.separator(); ui.label("Пользовательские правила применяются до geo-правил.");
-        ui.add(egui::TextEdit::multiline(&mut self.custom_rules).hint_text("domain:myserver.lan -> Direct").desired_rows(4));
+        if ui.add(egui::TextEdit::multiline(&mut self.custom_rules).hint_text("domain:myserver.lan -> Direct").desired_rows(4)).changed() { self.save_state(); }
     }
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Настройки"); ui.add_space(12.0);
-        ui.checkbox(&mut self.system_proxy, "Управлять системным proxy");
-        ui.checkbox(&mut self.auto_start, "Запускать вместе с системой");
+        if ui.checkbox(&mut self.system_proxy, "Управлять системным proxy").changed() { self.save_state(); }
+        if ui.checkbox(&mut self.auto_start, "Запускать вместе с системой").changed() { self.save_state(); }
         ui.separator(); ui.label("Движок: Rust desktop runtime"); ui.label("Версия клиента: 4.0.0");
     }
 
