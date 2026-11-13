@@ -10,6 +10,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use yptun_core::desktop_proxy::split_proxy_host_port;
 use yptun_core::http_proxy_bridge::{http_port_for, HttpProxyBridge};
+use yptun_core::importer::parse_import;
 
 fn usage() -> ! {
     eprintln!("usage: yptun-linux proxy <socks-host:port>");
@@ -336,14 +337,18 @@ impl YpTunApp {
     fn import_location(&mut self) {
         let link = self.import_text.trim();
         if link.is_empty() { self.status = "Вставь ссылку конфигурации".into(); return; }
-        let endpoint = link.strip_prefix("socks5://").unwrap_or(link).split(['/', '?', '#']).next().unwrap_or(link);
-        if split_proxy_host_port(endpoint).is_none() {
-            self.status = "Не удалось распознать endpoint".into();
+        let Some(parsed) = parse_import(link, None, None, None) else {
+            self.status = "Не удалось распознать ссылку конфигурации".into();
             return;
+        };
+        let imported = parsed.bundle.locations;
+        if imported.is_empty() { self.status = "В ссылке нет конфигураций".into(); return; }
+        for entry in imported {
+            let endpoint = entry.subscription_url.clone().unwrap_or_else(|| format!("engine:{:?}", entry.engine));
+            self.locations.push(LocationRow { name: entry.name, endpoint, enabled: true });
         }
-        self.locations.push(LocationRow { name: format!("Импортированная локация {}", self.locations.len() + 1), endpoint: endpoint.to_owned(), enabled: true });
         self.selected_location = self.locations.len() - 1;
-        self.endpoint = endpoint.to_owned();
+        self.endpoint = self.locations[self.selected_location].endpoint.clone();
         self.import_text.clear(); self.show_import = false; self.status = "Конфигурация добавлена".into(); self.save_state();
     }
 }
