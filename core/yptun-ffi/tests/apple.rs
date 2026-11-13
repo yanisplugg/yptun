@@ -673,7 +673,7 @@ fn native_runtime_plan_builds_client_side_warp_as_the_proxy_base() {
     assert!(awg.ini_config.contains("I1 = <r 8>"));
     assert!(!plan.start_amnezia_wg_after_proxy);
     let proxy = plan.proxy.unwrap().config;
-    assert!(proxy.contains("\"tag\": \"olcrtc\""));
+    assert!(proxy.contains("\"tag\": \"olcrtc-out\""));
     assert!(proxy.contains("\"server_port\": 10810"));
     assert!(!proxy.contains("warp-relay-in"));
 }
