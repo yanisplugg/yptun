@@ -140,6 +140,19 @@ impl Default for YpTunApp {
 
 impl eframe::App for YpTunApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut visuals = egui::Visuals::dark();
+        visuals.window_fill = egui::Color32::from_rgb(10, 10, 12);
+        visuals.panel_fill = egui::Color32::from_rgb(10, 10, 12);
+        visuals.faint_bg_color = egui::Color32::from_rgb(24, 25, 29);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(25, 26, 30);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(36, 38, 44);
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(49, 131, 246);
+        visuals.selection.bg_fill = egui::Color32::from_rgb(49, 131, 246);
+        visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_rgb(190, 192, 199);
+        visuals.widgets.inactive.rounding = 16.into();
+        visuals.widgets.hovered.rounding = 16.into();
+        visuals.widgets.active.rounding = 16.into();
+        ctx.set_visuals(visuals);
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("YPtun");
