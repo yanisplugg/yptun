@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::process::Command;
+use std::time::Instant;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,7 @@ struct SavedState {
     selected_location: usize,
     #[serde(default)]
     bundle: LocationBundleV4,
+    connected_at: Option<Instant>,
 }
 
 struct YpTunApp {
@@ -141,6 +143,7 @@ impl Default for YpTunApp {
             import_text: String::new(),
             show_import: false,
             bundle: LocationBundleV4::default(),
+            connected_at: None,
         };
         defaults.load_state()
     }
@@ -148,6 +151,7 @@ impl Default for YpTunApp {
 
 impl eframe::App for YpTunApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.bridge.is_some() { ctx.request_repaint_after(std::time::Duration::from_secs(1)); }
         let mut visuals = egui::Visuals::dark();
         visuals.window_fill = egui::Color32::from_rgb(10, 10, 12);
         visuals.panel_fill = egui::Color32::from_rgb(10, 10, 12);
@@ -250,12 +254,12 @@ impl YpTunApp {
             left.vertical_centered(|ui| {
                 ui.add_space(50.0);
                 ui.label("Время подключения");
-                ui.heading("00:00:00");
+                ui.heading(self.connection_elapsed());
                 ui.add_space(20.0);
                 let button = egui::Button::new(if connected { "Отключить" } else { "Подключить" })
                     .min_size(egui::vec2(180.0, 80.0));
                 if ui.add(button).clicked() {
-                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
+                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
                 }
                 ui.add_space(20.0);
@@ -346,11 +350,17 @@ impl YpTunApp {
         );
         if bridge.start() {
             self.bridge = Some(bridge);
+            self.connected_at = Some(Instant::now());
             self.status = format!("HTTP 127.0.0.1:{proxy_port}");
             if self.system_proxy { self.apply_system_proxy(); }
         } else {
             self.status = "Не удалось запустить proxy".to_owned();
         }
+    }
+
+    fn connection_elapsed(&self) -> String {
+        let seconds = self.connected_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        format!("{:02}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60)
     }
 
     fn apply_system_proxy(&mut self) {
