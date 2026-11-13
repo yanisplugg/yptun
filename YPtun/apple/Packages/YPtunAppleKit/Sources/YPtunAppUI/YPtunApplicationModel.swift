@@ -60,6 +60,7 @@ public final class YPtunApplicationModel {
 
     private let bootstrapper: AppleApplicationBootstrapper
     private let vpnController: any AppleVPNControlling
+    private let locationSelection: @MainActor @Sendable (String) async throws -> Void
     private var didBootstrap = false
     private var selectionTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
@@ -68,12 +69,16 @@ public final class YPtunApplicationModel {
         locations: [LocationListItem] = [],
         selectedLocationID: String? = nil,
         bootstrapper: AppleApplicationBootstrapper = AppleApplicationBootstrapper(),
-        vpnController: any AppleVPNControlling = AppleVPNController()
+        vpnController: any AppleVPNControlling = AppleVPNController(),
+        locationSelection: (@MainActor @Sendable (String) async throws -> Void)? = nil
     ) {
         self.locations = locations
         self.selectedLocationID = selectedLocationID
         self.bootstrapper = bootstrapper
         self.vpnController = vpnController
+        self.locationSelection = locationSelection ?? { id in
+            try await bootstrapper.selectLocation(id: id)
+        }
         vpnController.onStateChange = { [weak self] state in
             self?.connectionState = state
         }
@@ -120,18 +125,50 @@ public final class YPtunApplicationModel {
     }
 
     public func select(_ location: LocationListItem) {
+        guard selectedLocationID != location.id else { return }
+        let previousLocationID = selectedLocationID
+        let restartActiveTunnel = location.isComplete
+            && (connectionState == .connected || connectionState == .connecting)
         selectedLocationID = location.id
         selectionTask?.cancel()
-        selectionTask = Task { [bootstrapper] in
+        connectionTask?.cancel()
+        selectionTask = Task { [locationSelection, vpnController] in
             do {
-                try await bootstrapper.selectLocation(id: location.id)
+                try await locationSelection(location.id)
             } catch is CancellationError {
                 return
             } catch {
                 guard selectedLocationID == location.id else { return }
+                selectedLocationID = previousLocationID
                 startupMessage = "Не удалось сохранить выбранную локацию. Исходные данные не изменены."
+                return
+            }
+
+            do {
+                try Task.checkCancellation()
+                guard selectedLocationID == location.id else { return }
+                if restartActiveTunnel {
+                    connectionState = .connecting
+                    try await vpnController.restart()
+                } else if connectionState == .connected || connectionState == .connecting {
+                    connectionState = .disconnecting
+                    await vpnController.stop()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard selectedLocationID == location.id else { return }
+                connectionState = await vpnController.currentState()
+                presentedNotice = YPtunNotice(
+                    title: "Не удалось переключить локацию",
+                    message: "Выбор сохранён, но VPN не перезапустился: \(error.localizedDescription)"
+                )
             }
         }
+    }
+
+    func waitForPendingSelection() async {
+        await selectionTask?.value
     }
 
     public func requestPrimaryAction() {

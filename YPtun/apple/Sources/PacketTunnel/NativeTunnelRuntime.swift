@@ -119,10 +119,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         if let olcrtc = plan.olcrtc {
             try startOlcRtc(olcrtc)
         }
-        if let amneziaWg = plan.amneziaWg {
-            try callCore {
-                CoreapiAwgStart(amneziaWg.iniConfig, amneziaWg.listenAddress, $0)
-            }
+        if !plan.startAmneziaWgAfterProxy {
+            try startAmneziaWg(plan.amneziaWg)
         }
         if let snolc = plan.snolc {
             try startSnolc(snolc)
@@ -181,6 +179,16 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                     )
                 }
             }
+        }
+        if plan.startAmneziaWgAfterProxy {
+            try startAmneziaWg(plan.amneziaWg)
+        }
+    }
+
+    private func startAmneziaWg(_ plan: AppleAmneziaWgRuntimePlan?) throws {
+        guard let plan else { return }
+        try callCore {
+            CoreapiAwgStart(plan.iniConfig, plan.listenAddress, $0)
         }
     }
 

@@ -2,6 +2,39 @@ import Foundation
 import Testing
 @testable import YPtunAppUI
 import YPtunShared
+import YPtunVPNControl
+
+@MainActor
+private final class RecordingVPNController: AppleVPNControlling {
+    var onStateChange: ((VPNConnectionState) -> Void)?
+    var state: VPNConnectionState = .disconnected
+    var restartCount = 0
+    var stopCount = 0
+
+    func currentState() async -> VPNConnectionState { state }
+
+    func start() async throws {
+        state = .connected
+        onStateChange?(.connected)
+    }
+
+    func stop() async {
+        stopCount += 1
+        state = .disconnected
+        onStateChange?(.disconnected)
+    }
+
+    func restart() async throws {
+        restartCount += 1
+        state = .connected
+        onStateChange?(.connected)
+    }
+}
+
+@MainActor
+private final class SelectionRecorder {
+    var locationID: String?
+}
 
 @MainActor
 struct YPtunApplicationModelTests {
@@ -70,5 +103,42 @@ struct YPtunApplicationModelTests {
         #expect(model.connectionState == .disconnected)
         #expect(model.primaryActionTitle == "Подключить")
         #expect(model.presentedNotice == nil)
+    }
+
+    @Test func selectingAnotherLocationRestartsAnActiveTunnel() async {
+        let first = LocationListItem(
+            id: "first",
+            name: "Первая",
+            detail: "VLESS",
+            isComplete: true,
+            needsUserAction: false,
+            isFromSubscription: false
+        )
+        let second = LocationListItem(
+            id: "second",
+            name: "Вторая",
+            detail: "olcRTC",
+            isComplete: true,
+            needsUserAction: false,
+            isFromSubscription: false
+        )
+        let controller = RecordingVPNController()
+        let recorder = SelectionRecorder()
+        let model = YPtunApplicationModel(
+            locations: [first, second],
+            selectedLocationID: first.id,
+            vpnController: controller,
+            locationSelection: { id in recorder.locationID = id }
+        )
+        controller.state = .connected
+        controller.onStateChange?(.connected)
+
+        model.select(second)
+        await model.waitForPendingSelection()
+
+        #expect(recorder.locationID == second.id)
+        #expect(model.selectedLocationID == second.id)
+        #expect(controller.restartCount == 1)
+        #expect(model.connectionState == .connected)
     }
 }

@@ -602,11 +602,12 @@ fn native_runtime_plan_starts_turnable_and_slow_tunnel_engines() {
 }
 
 #[test]
-fn native_runtime_plan_keeps_existing_warp_config_in_the_proxy_chain() {
+fn native_runtime_plan_builds_server_side_warp_after_the_proxy_relay() {
     let location = serde_json::json!({
         "name": "WARP",
         "engine": "standard",
         "warp_enabled": true,
+        "warp_mode": "server",
         "warp_protocol": "awg",
         "proxy": {
             "type": "vless",
@@ -632,5 +633,47 @@ fn native_runtime_plan_keeps_existing_warp_config_in_the_proxy_chain() {
     .unwrap();
     let awg = plan.amnezia_wg.expect("WARP AWG runtime");
     assert!(awg.ini_config.contains("Endpoint = 127.0.0.1:10811"));
+    assert!(plan.start_amnezia_wg_after_proxy);
     assert!(plan.proxy.unwrap().config.contains("warp-relay-in"));
+}
+
+#[test]
+fn native_runtime_plan_builds_client_side_warp_as_the_proxy_base() {
+    let location = serde_json::json!({
+        "name": "WARP client",
+        "engine": "standard",
+        "warp_enabled": true,
+        "warp_mode": "client",
+        "warp_protocol": "awg",
+        "proxy": {
+            "type": "vless",
+            "server": "example.com",
+            "server_port": 443,
+            "uuid": "11111111-2222-3333-4444-555555555555"
+        }
+    });
+    let warp = "[Interface]\nPrivateKey = private\nAddress = 172.16.0.2/32\nJc = 4\nI1 = <r 8>\n[Peer]\nPublicKey = public\nEndpoint = engage.cloudflareclient.com:2408\n";
+    let plan = apple_native_runtime_plan(
+        location.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        r#"{"globalProxyCore":"singbox"}"#.into(),
+        warp.into(),
+        10_808,
+        "device".into(),
+        "runtime".into(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+
+    let awg = plan.amnezia_wg.expect("WARP AWG runtime");
+    assert!(awg.ini_config.contains("Endpoint = 162.159.192.1:2408"));
+    assert!(awg.ini_config.contains("I1 = <r 8>"));
+    assert!(!plan.start_amnezia_wg_after_proxy);
+    let proxy = plan.proxy.unwrap().config;
+    assert!(proxy.contains("\"tag\": \"olcrtc\""));
+    assert!(proxy.contains("\"server_port\": 10810"));
+    assert!(!proxy.contains("warp-relay-in"));
 }

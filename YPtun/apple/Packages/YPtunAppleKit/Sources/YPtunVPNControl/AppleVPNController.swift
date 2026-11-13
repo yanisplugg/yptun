@@ -22,6 +22,7 @@ public protocol AppleVPNControlling: AnyObject {
     func currentState() async -> VPNConnectionState
     func start() async throws
     func stop() async
+    func restart() async throws
 }
 
 @MainActor
@@ -90,6 +91,16 @@ public final class AppleVPNController: AppleVPNControlling {
         publish(.disconnecting)
     }
 
+    public func restart() async throws {
+        if let manager = try await loadManager(createIfMissing: false) {
+            manager.connection.stopVPNTunnel()
+            publish(.disconnecting)
+            _ = try await waitForDisconnection(manager.connection, timeout: .seconds(3))
+        }
+        try Task.checkCancellation()
+        try await start()
+    }
+
     private var providerBundleIdentifier: String {
         #if os(macOS)
         YPtunIdentity.MacOS.tunnelBundleIdentifier
@@ -147,6 +158,20 @@ public final class AppleVPNController: AppleVPNControlling {
                 }
             }
         }
+    }
+
+    private func waitForDisconnection(
+        _ connection: NEVPNConnection,
+        timeout: Duration
+    ) async throws -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while Self.state(for: connection.status) != .disconnected {
+            try Task.checkCancellation()
+            guard clock.now < deadline else { return false }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return true
     }
 
     private static func state(for status: NEVPNStatus) -> VPNConnectionState {

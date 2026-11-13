@@ -49,7 +49,7 @@ let package = Package(
         ),
         .testTarget(
             name: "YPtunAppUITests",
-            dependencies: ["YPtunAppUI", "YPtunShared"]
+            dependencies: ["YPtunAppUI", "YPtunShared", "YPtunVPNControl"]
         ),
     ],
     swiftLanguageModes: [.v6]

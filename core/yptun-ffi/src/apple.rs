@@ -16,6 +16,7 @@ use yptun_core::routing::{RoutingProfilesState, RoutingRules, TrafficSettings};
 use yptun_core::settings::AppBehaviorSettings;
 use yptun_core::share_link;
 use yptun_core::singbox::config::{self as singbox_config, SingBoxOptions};
+use yptun_core::transports::{WarpMode, WarpProtocol};
 use yptun_core::warp;
 use yptun_core::xray::config::{self as xray_config, RawOptions, XrayOptions};
 
@@ -230,6 +231,9 @@ pub struct AppleNativeRuntimePlan {
     pub bridge: AppleBridgePlan,
     pub olcrtc: Option<AppleOlcRtcRuntimePlan>,
     pub amnezia_wg: Option<AppleAmneziaWgRuntimePlan>,
+    /// Server-side WARP needs the proxy relay running before its WireGuard handshake starts.
+    /// Client-side WARP and regular AmneziaWG are bases and therefore start before the proxy.
+    pub start_amnezia_wg_after_proxy: bool,
     pub turnable: Option<AppleTurnableRuntimePlan>,
     pub auxiliary: Vec<AppleAuxiliaryRuntimePlan>,
     pub snolc: Option<AppleSnolcRuntimePlan>,
@@ -733,6 +737,7 @@ pub fn apple_native_runtime_plan(
     };
 
     let mut amnezia_wg = None;
+    let mut start_amnezia_wg_after_proxy = false;
     let mut turnable = None;
     let mut auxiliary = Vec::new();
     let mut snolc = None;
@@ -777,6 +782,7 @@ pub fn apple_native_runtime_plan(
                 };
                 let (mut second, _) = resolve_second(main, location.proxy2.as_ref());
                 let mut warp_relay = None;
+                let mut warp_chain_port = None;
                 let warp_eligible = location.warp_enabled
                     && location.engine == EngineType::Standard
                     && main.kind != TYPE_AMNEZIAWG
@@ -796,26 +802,36 @@ pub fn apple_native_runtime_plan(
                     }
                     let relay_port = socks_port + 3;
                     let awg_port = socks_port + 2;
-                    let (endpoint_host, endpoint_port) = warp::endpoint_of(&warp_config);
-                    let relay = yptun_core::singbox::config::WarpRelay {
-                        listen_port: relay_port,
-                        target_host: warp::pinned_host(&endpoint_host),
-                        target_port: endpoint_port,
-                    };
+                    let server_side = location.warp_mode == WarpMode::Server;
                     let engine_ini = warp::engine_ini(
                         &warp_config,
-                        location.warp_protocol == yptun_core::transports::WarpProtocol::Awg,
-                        false,
+                        location.warp_protocol == WarpProtocol::Awg,
+                        !server_side,
                     );
-                    amnezia_wg = Some(AppleAmneziaWgRuntimePlan {
-                        ini_config: warp::with_endpoint(
-                            &engine_ini,
-                            &format!("127.0.0.1:{relay_port}"),
-                        ),
-                        listen_address: format!("127.0.0.1:{awg_port}"),
-                    });
-                    second = Some(local_socks_profile("WARP", awg_port));
-                    warp_relay = Some(relay);
+                    if server_side {
+                        let (endpoint_host, endpoint_port) = warp::endpoint_of(&warp_config);
+                        let relay = yptun_core::singbox::config::WarpRelay {
+                            listen_port: relay_port,
+                            target_host: warp::pinned_host(&endpoint_host),
+                            target_port: endpoint_port,
+                        };
+                        amnezia_wg = Some(AppleAmneziaWgRuntimePlan {
+                            ini_config: warp::with_endpoint(
+                                &engine_ini,
+                                &format!("127.0.0.1:{relay_port}"),
+                            ),
+                            listen_address: format!("127.0.0.1:{awg_port}"),
+                        });
+                        second = Some(local_socks_profile("WARP", awg_port));
+                        warp_relay = Some(relay);
+                        start_amnezia_wg_after_proxy = true;
+                    } else {
+                        amnezia_wg = Some(AppleAmneziaWgRuntimePlan {
+                            ini_config: engine_ini,
+                            listen_address: format!("127.0.0.1:{awg_port}"),
+                        });
+                        warp_chain_port = Some(awg_port);
+                    }
                 }
                 let caps = PlatformCaps::ios();
                 let choice = choose_core(
@@ -830,7 +846,11 @@ pub fn apple_native_runtime_plan(
                     },
                     || true,
                 );
-                let chain_port = (location.engine == EngineType::Chain).then_some(socks_port + 1);
+                let chain_port = if location.engine == EngineType::Chain {
+                    Some(socks_port + 1)
+                } else {
+                    warp_chain_port
+                };
                 let log_file = (!log_file_path.trim().is_empty()).then_some(log_file_path);
                 let cache_file = (!cache_file_path.trim().is_empty()).then_some(cache_file_path);
                 match choice.core {
@@ -849,7 +869,8 @@ pub fn apple_native_runtime_plan(
                                     fake_dns_enabled: traffic.fake_dns_enabled,
                                     force_ipv4: traffic.domain_strategy == "ipv4_only",
                                     second_profile: second,
-                                    warp_exit_port: amnezia_wg.as_ref().map(|_| socks_port + 2),
+                                    warp_chain_port,
+                                    warp_exit_port: warp_relay.as_ref().map(|_| socks_port + 2),
                                     warp_relay: warp_relay.clone(),
                                     ..RawOptions::new(socks_port)
                                 },
@@ -868,6 +889,8 @@ pub fn apple_native_runtime_plan(
                                     bypass_lan: routing.bypass_lan,
                                     second_profile: second,
                                     warp_relay: warp_relay.clone(),
+                                    chain_via_dialer_proxy: warp_chain_port.is_some(),
+                                    keep_flow_on_chain: warp_chain_port.is_some(),
                                     fake_dns_spec: location.fake_dns.clone(),
                                     ..XrayOptions::default()
                                 },
@@ -1023,6 +1046,7 @@ pub fn apple_native_runtime_plan(
                     )?,
                     olcrtc,
                     amnezia_wg,
+                    start_amnezia_wg_after_proxy,
                     turnable,
                     auxiliary,
                     snolc,
@@ -1280,6 +1304,7 @@ pub fn apple_native_runtime_plan(
         )?,
         olcrtc,
         amnezia_wg,
+        start_amnezia_wg_after_proxy,
         turnable,
         auxiliary,
         snolc,
