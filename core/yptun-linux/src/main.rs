@@ -149,9 +149,9 @@ impl eframe::App for YpTunApp {
         visuals.widgets.active.bg_fill = egui::Color32::from_rgb(49, 131, 246);
         visuals.selection.bg_fill = egui::Color32::from_rgb(49, 131, 246);
         visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_rgb(190, 192, 199);
-        visuals.widgets.inactive.rounding = 16.into();
-        visuals.widgets.hovered.rounding = 16.into();
-        visuals.widgets.active.rounding = 16.into();
+        visuals.widgets.inactive.rounding = 16.0.into();
+        visuals.widgets.hovered.rounding = 16.0.into();
+        visuals.widgets.active.rounding = 16.0.into();
         ctx.set_visuals(visuals);
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
