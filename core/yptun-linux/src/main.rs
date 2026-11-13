@@ -247,14 +247,24 @@ impl YpTunApp {
             }
             right.add_space(10.0);
             right.label("КОНФИГУРАЦИИ");
+            let mut remove_index = None;
             for (index, location) in self.locations.iter().enumerate() {
                 let selected = self.selected_location == index;
                 let response = right.group(|ui| {
                     ui.horizontal(|ui| { ui.radio_value(&mut self.selected_location, index, ""); ui.strong(&location.name); ui.label(if location.enabled { "Включена" } else { "Отключена" }); });
                     ui.small(&location.endpoint);
+                    if ui.small_button("Удалить").clicked() { remove_index = Some(index); }
                 });
                 if response.response.clicked() { self.selected_location = index; self.endpoint = location.endpoint.clone(); self.save_state(); }
                 if selected { right.separator(); }
+            }
+            if let Some(index) = remove_index {
+                if self.locations.len() > 1 {
+                    self.locations.remove(index);
+                    self.selected_location = self.selected_location.min(self.locations.len() - 1);
+                    self.endpoint = self.locations[self.selected_location].endpoint.clone();
+                    self.save_state();
+                }
             }
         });
     }
