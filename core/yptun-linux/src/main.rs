@@ -74,6 +74,8 @@ struct SavedState {
     auto_start: bool,
     system_proxy: bool,
     custom_rules: String,
+    tunnel_mode: bool,
+    selected_location: usize,
 }
 
 struct YpTunApp {
@@ -88,6 +90,8 @@ struct YpTunApp {
     auto_start: bool,
     system_proxy: bool,
     custom_rules: String,
+    tunnel_mode: bool,
+    selected_location: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,6 +127,8 @@ impl Default for YpTunApp {
             auto_start: false,
             system_proxy: false,
             custom_rules: "domain:myserver.lan -> Direct".to_owned(),
+            tunnel_mode: true,
+            selected_location: 0,
         };
         defaults.load_state()
     }
@@ -181,27 +187,59 @@ impl YpTunApp {
                 if !saved.locations.is_empty() { self.locations = saved.locations; }
                 self.bypass_lan = saved.bypass_lan; self.bypass_russia = saved.bypass_russia;
                 self.auto_start = saved.auto_start; self.system_proxy = saved.system_proxy; self.custom_rules = saved.custom_rules;
+                self.tunnel_mode = saved.tunnel_mode; self.selected_location = saved.selected_location.min(self.locations.len().saturating_sub(1));
             }
         }
         self
     }
 
     fn save_state(&self) {
-        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone() };
+        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone(), tunnel_mode: self.tunnel_mode, selected_location: self.selected_location };
         let path = Self::state_path();
         if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
         if let Ok(json) = serde_json::to_vec_pretty(&state) { let _ = fs::write(path, json); }
     }
 
     fn connection_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Подключение"); ui.add_space(12.0);
-        ui.group(|ui| {
-            ui.label("SOCKS5 endpoint"); ui.text_edit_singleline(&mut self.endpoint);
-            ui.add_space(8.0); ui.horizontal(|ui| { ui.label("HTTP proxy port"); ui.add(egui::TextEdit::singleline(&mut self.proxy_port).desired_width(90.0)); });
-            ui.add_space(14.0); let connected = self.bridge.is_some();
-            if ui.add_sized([180.0, 38.0], egui::Button::new(if connected { "Отключить" } else { "Подключить" })).clicked() {
-                if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.status = "Отключено".to_owned(); } else { self.start_bridge(); }
-                self.save_state();
+        let connected = self.bridge.is_some();
+        ui.horizontal(|ui| {
+            ui.heading("YPtun");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(if connected { "Подключено" } else { "Отключено" });
+            });
+        });
+        ui.add_space(10.0);
+        ui.columns(2, |columns| {
+            let left = &mut columns[0];
+            left.vertical_centered(|ui| {
+                ui.add_space(50.0);
+                ui.label("Время подключения");
+                ui.heading("00:00:00");
+                ui.add_space(20.0);
+                let button = egui::Button::new(if connected { "Отключить" } else { "Подключить" })
+                    .min_size(egui::vec2(180.0, 80.0));
+                if ui.add(button).clicked() {
+                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
+                    self.save_state();
+                }
+                ui.add_space(20.0);
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!self.tunnel_mode, "ПРОКСИ").clicked() { self.tunnel_mode = false; self.save_state(); }
+                    if ui.selectable_label(self.tunnel_mode, "ТУННЕЛЬ").clicked() { self.tunnel_mode = true; self.save_state(); }
+                });
+            });
+            let right = &mut columns[1];
+            right.horizontal(|ui| { ui.label("Обновить подписки"); if ui.button("Обновить").clicked() { self.status = "Обновление…".into(); } });
+            right.add_space(10.0);
+            right.label("КОНФИГУРАЦИИ");
+            for (index, location) in self.locations.iter().enumerate() {
+                let selected = self.selected_location == index;
+                let response = right.group(|ui| {
+                    ui.horizontal(|ui| { ui.radio_value(&mut self.selected_location, index, ""); ui.strong(&location.name); ui.label(if location.enabled { "Включена" } else { "Отключена" }); });
+                    ui.small(&location.endpoint);
+                });
+                if response.response.clicked() { self.selected_location = index; self.endpoint = location.endpoint.clone(); self.save_state(); }
+                if selected { right.separator(); }
             }
         });
     }
