@@ -34,6 +34,7 @@ public enum AppleTunnelStore {
     public static let logFileName = "tunnel.log"
     public static let cacheFileName = "singbox_cache.db"
     public static let statusFileName = "tunnel_status.txt"
+    public static let connectedAtFileName = "tunnel_connected_at.txt"
 
     public static func directory(fileManager: FileManager = .default) throws -> URL {
         let appGroupIdentifier: String

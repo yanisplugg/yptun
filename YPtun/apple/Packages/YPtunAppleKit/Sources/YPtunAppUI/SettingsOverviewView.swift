@@ -2,7 +2,7 @@ import SwiftUI
 import YPtunMigrationSupport
 
 public struct SettingsOverviewView: View {
-    @Bindable private var model: YPtunApplicationModel
+    @ObservedObject private var model: YPtunApplicationModel
     private let bootstrapper = AppleApplicationBootstrapper()
 
     public init(model: YPtunApplicationModel) {
@@ -58,7 +58,7 @@ public struct SettingsOverviewView: View {
                 }
             }
             Section {
-                LabeledContent("Нативный клиент", value: "iOS 17+ · macOS 14+")
+                LabeledContent("Нативный клиент", value: "iOS 16+ · macOS 14+")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -80,11 +80,14 @@ private struct FeaturePlaceholderView: View {
     let symbol: String
 
     var body: some View {
-        ContentUnavailableView {
+        VStack(spacing: 12) {
             Label(title, systemImage: symbol)
-        } description: {
+                .font(.title3.weight(.semibold))
             Text("Раздел переносится на Swift и будет подключён к общему Rust-ядру.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
+        .padding()
         .navigationTitle(title)
     }
 }

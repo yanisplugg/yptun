@@ -2,7 +2,7 @@ import SwiftUI
 import YPtunShared
 
 struct SubscriptionLocationsView: View {
-    @Bindable var model: YPtunApplicationModel
+    @ObservedObject var model: YPtunApplicationModel
 
     private var locations: [LocationListItem] {
         model.locations.filter(\.isFromSubscription)
@@ -29,17 +29,22 @@ struct SubscriptionLocationsView: View {
                             .foregroundStyle(.tint)
                     }
                 }
-                .contentShape(.rect)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
         .overlay {
             if locations.isEmpty {
-                ContentUnavailableView(
-                    "Подписок пока нет",
-                    systemImage: "dot.radiowaves.left.and.right",
-                    description: Text("Добавьте URL подписки через экран импорта.")
-                )
+                VStack(spacing: 12) {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                    Text("Подписок пока нет")
+                        .font(.headline)
+                    Text("Добавьте URL подписки через экран импорта.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .navigationTitle("Подписки")
@@ -57,7 +62,7 @@ struct SubscriptionLocationsView: View {
 }
 
 struct SessionOverviewView: View {
-    @Bindable var model: YPtunApplicationModel
+    @ObservedObject var model: YPtunApplicationModel
 
     var body: some View {
         List {

@@ -61,6 +61,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                         VPNConnectionState.connected.rawValue,
                         to: AppleTunnelStore.statusFileName
                     )
+                    try? AppleTunnelStore.writeText(
+                        String(Date().timeIntervalSince1970),
+                        to: AppleTunnelStore.connectedAtFileName
+                    )
                     self?.startWatchdog(plan)
                     completion(nil)
                 } catch {
@@ -99,6 +103,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             VPNConnectionState.disconnected.rawValue,
             to: AppleTunnelStore.statusFileName
         )
+        try? AppleTunnelStore.remove(AppleTunnelStore.connectedAtFileName)
     }
 
     func handle(message: String) -> String {

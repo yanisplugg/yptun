@@ -29,6 +29,11 @@ public struct LocationListItem: Identifiable, Hashable, Sendable {
     public let isComplete: Bool
     public let needsUserAction: Bool
     public let isFromSubscription: Bool
+    public let subscriptionID: String?
+    public let subscriptionName: String?
+    public let icon: String?
+    public let isPinned: Bool
+    public let isLocked: Bool
 
     public init(
         id: String,
@@ -36,7 +41,12 @@ public struct LocationListItem: Identifiable, Hashable, Sendable {
         detail: String,
         isComplete: Bool,
         needsUserAction: Bool,
-        isFromSubscription: Bool
+        isFromSubscription: Bool,
+        subscriptionID: String? = nil,
+        subscriptionName: String? = nil,
+        icon: String? = nil,
+        isPinned: Bool = false,
+        isLocked: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -44,5 +54,10 @@ public struct LocationListItem: Identifiable, Hashable, Sendable {
         self.isComplete = isComplete
         self.needsUserAction = needsUserAction
         self.isFromSubscription = isFromSubscription
+        self.subscriptionID = subscriptionID
+        self.subscriptionName = subscriptionName
+        self.icon = icon
+        self.isPinned = isPinned
+        self.isLocked = isLocked
     }
 }

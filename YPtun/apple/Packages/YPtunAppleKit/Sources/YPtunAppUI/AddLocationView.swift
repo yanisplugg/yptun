@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct AddLocationView: View {
-    @Bindable var model: YPtunApplicationModel
+    @ObservedObject var model: YPtunApplicationModel
     @Environment(\.dismiss) private var dismiss
     @State private var importText = ""
     @State private var isImporting = false

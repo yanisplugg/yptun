@@ -115,6 +115,11 @@ pub struct AppleLocationSummary {
     pub complete: bool,
     pub needs_user_action: bool,
     pub from_subscription: bool,
+    pub subscription_id: String,
+    pub subscription_name: String,
+    pub icon: String,
+    pub pinned: bool,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -295,6 +300,20 @@ pub fn apple_location_catalog(bundle_json: String) -> Result<AppleLocationCatalo
                     _ => String::new(),
                 }
             };
+            let metadata = entry.metadata.as_ref();
+            let subscription = metadata.and_then(|value| value.subscription.as_ref());
+            let subscription_id = entry
+                .subscription_url
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let subscription_name = subscription
+                .and_then(|value| value.custom_name.as_deref().or(value.name.as_deref()))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_default()
+                .to_string();
             AppleLocationSummary {
                 id: entry.storage_id.clone(),
                 display_name: location.display_name(),
@@ -305,6 +324,16 @@ pub fn apple_location_catalog(bundle_json: String) -> Result<AppleLocationCatalo
                     .subscription_url
                     .as_deref()
                     .is_some_and(|url| !url.trim().is_empty()),
+                subscription_id,
+                subscription_name,
+                icon: metadata
+                    .and_then(|value| value.icon.as_deref())
+                    .or_else(|| subscription.and_then(|value| value.icon.as_deref()))
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string(),
+                pinned: metadata.is_some_and(|value| value.pinned),
+                locked: metadata.is_some_and(|value| value.locked),
             }
         })
         .collect();

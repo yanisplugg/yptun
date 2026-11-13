@@ -2,7 +2,7 @@ import SwiftUI
 
 #if os(iOS)
 public struct YPtunIOSRootView: View {
-    @Bindable private var model: YPtunApplicationModel
+    @ObservedObject private var model: YPtunApplicationModel
     @State private var selection = YPtunAppSection.connection
 
     public init(model: YPtunApplicationModel) {
@@ -35,7 +35,7 @@ public struct YPtunIOSRootView: View {
 
 #if os(macOS)
 public struct YPtunMacRootView: View {
-    @Bindable private var model: YPtunApplicationModel
+    @ObservedObject private var model: YPtunApplicationModel
     @State private var selection: YPtunAppSection? = .connection
 
     public init(model: YPtunApplicationModel) {
@@ -69,7 +69,7 @@ public struct YPtunMacRootView: View {
 }
 
 public struct YPtunMenuBarView: View {
-    @Bindable private var model: YPtunApplicationModel
+    @ObservedObject private var model: YPtunApplicationModel
     @Environment(\.openWindow) private var openWindow
 
     public init(model: YPtunApplicationModel) {

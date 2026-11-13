@@ -42,16 +42,21 @@ private struct StatusWidgetView: View {
                 .font(.headline)
             Text(statusTitle)
                 .font(.caption)
-            Button(intent: ToggleVPNIntent()) {
-                Label(
-                    entry.state == .connected ? "Отключить" : "Подключить",
-                    systemImage: entry.state == .connected ? "stop.fill" : "power"
-                )
-                .font(.caption.weight(.semibold))
+            if #available(iOS 17.0, *) {
+                Button(intent: ToggleVPNIntent()) {
+                    Label(
+                        entry.state == .connected ? "Отключить" : "Подключить",
+                        systemImage: entry.state == .connected ? "stop.fill" : "power"
+                    )
+                    .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Label("Открыть YPtun", systemImage: "arrow.up.forward.app")
+                    .font(.caption.weight(.semibold))
             }
-            .buttonStyle(.borderedProminent)
         }
-        .containerBackground(.fill.tertiary, for: .widget)
+        .ypWidgetBackground()
     }
 
     private var statusTitle: String {
@@ -60,6 +65,17 @@ private struct StatusWidgetView: View {
         case .connecting: "Подключение"
         case .connected: "Защищено"
         case .disconnecting: "Отключение"
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func ypWidgetBackground() -> some View {
+        if #available(iOS 17.0, *) {
+            self.containerBackground(.fill.tertiary, for: .widget)
+        } else {
+            self.padding().background(Color.secondary.opacity(0.12))
         }
     }
 }

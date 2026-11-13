@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RawLocationEditorView: View {
-    @Bindable var model: YPtunApplicationModel
+    @ObservedObject var model: YPtunApplicationModel
     let request: LocationEditorRequest
 
     @Environment(\.dismiss) private var dismiss

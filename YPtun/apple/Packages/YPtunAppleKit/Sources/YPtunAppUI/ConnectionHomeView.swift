@@ -1,102 +1,79 @@
+import Foundation
 import SwiftUI
 import YPtunShared
 
 public struct ConnectionHomeView: View {
-    @Bindable private var model: YPtunApplicationModel
+    @ObservedObject private var model: YPtunApplicationModel
 
     public init(model: YPtunApplicationModel) {
         self.model = model
     }
 
     public var body: some View {
-        List {
-            Section {
-                ConnectionStatusView(state: model.connectionState, isLoading: model.isBootstrapping)
-                    .frame(maxWidth: .infinity)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ConnectionTimer(state: model.connectionState)
+                    .padding(.top, 12)
+
+                AndroidStyleStartButton(
+                    state: model.connectionState,
+                    requiresSetup: model.selectedLocation == nil,
+                    isLoading: model.isBootstrapping,
+                    action: model.requestPrimaryAction
+                )
+                .disabled(model.isBootstrapping)
+
+                Text(model.primaryActionTitle)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                if model.connectionState == .connected {
+                    NavigationLink {
+                        SessionOverviewView(model: model)
+                    } label: {
+                        Label("Информация о сессии", systemImage: "globe")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 18)
+                            .frame(minHeight: 42)
+                            .background(.thinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 if let message = model.startupMessage {
                     Label(message, systemImage: "info.circle")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
                         .accessibilityLabel(message)
                 }
 
-                ActiveLocationRow(location: model.selectedLocation)
-
-                Button(action: model.requestPrimaryAction) {
-                    Label(model.primaryActionTitle, systemImage: model.primaryActionSymbol)
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isBootstrapping)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+                locationsContent
             }
-
-            Section("Локации") {
-                if model.locations.isEmpty && !model.isBootstrapping {
-                    ContentUnavailableView {
-                        VStack(spacing: 10) {
-                            Image("CatTile")
-                                .renderingMode(.template)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 54, height: 54)
-                                .foregroundStyle(.secondary)
-                            Text("Локаций пока нет")
-                                .font(.headline)
-                        }
-                    } description: {
-                        Text("Импортируйте подписку, ссылку или конфигурацию, чтобы начать.")
-                    } actions: {
-                        Button("Добавить") { model.isAddLocationPresented = true }
-                    }
-                    .listRowBackground(Color.clear)
-                } else {
-                    ForEach(model.locations) { location in
-                        Button {
-                            model.select(location)
-                        } label: {
-                            LocationRow(
-                                location: location,
-                                isSelected: location.id == model.selectedLocationID
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button {
-                                model.locationEditorRequest = LocationEditorRequest(
-                                    locationID: location.id
-                                )
-                            } label: {
-                                Label("Редактировать", systemImage: "pencil")
-                            }
-                            Button(role: .destructive) {
-                                model.locationPendingDeletion = location
-                            } label: {
-                                Label("Удалить", systemImage: "trash")
-                            }
-                        }
-                    }
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 24)
         }
-        .listStyle(.inset)
+        .background(Color.secondary.opacity(0.04))
         .navigationTitle("YPtun")
+        .ypInlineNavigationTitle()
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .navigation) {
                 NavigationLink {
                     TunnelLogView()
                 } label: {
-                    Label("Логи", systemImage: "text.alignleft")
+                    Label("Логи", systemImage: "clock.arrow.circlepath")
                 }
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     model.isAddLocationPresented = true
                 } label: {
                     Label("Добавить", systemImage: "plus")
+                }
+                if model.selectedLocation != nil {
+                    selectedLocationMenu
                 }
             }
         }
@@ -127,147 +104,319 @@ public struct ConnectionHomeView: View {
             Text("«\(location.name)» будет удалена с этого устройства.")
         }
     }
-}
 
-private struct ConnectionStatusView: View {
-    let state: VPNConnectionState
-    let isLoading: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ViewBuilder
+    private var locationsContent: some View {
+        HStack {
+            Text("Локации")
+                .font(.title3.weight(.semibold))
+            Spacer()
+            Text("\(model.locations.count)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 12)
 
-    var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(.thinMaterial)
-                Circle()
-                    .strokeBorder(statusColor.opacity(0.22), lineWidth: 1)
-                Image(systemName: statusSymbol)
-                    .font(.system(.largeTitle, design: .rounded, weight: .semibold))
-                    .foregroundStyle(statusColor)
-                    .symbolEffect(
-                        .pulse,
-                        options: .repeating,
-                        isActive: !reduceMotion && (isLoading || state == .connecting)
-                    )
-            }
-            .frame(width: 92, height: 92)
-            .accessibilityHidden(true)
-
-            VStack(spacing: 4) {
-                Text(statusTitle)
-                    .font(.title2.weight(.semibold))
-                Text(statusDetail)
+        if model.locations.isEmpty && !model.isBootstrapping {
+            VStack(spacing: 12) {
+                Image("CatTile")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 54, height: 54)
+                    .foregroundStyle(.secondary)
+                Text("Локаций пока нет")
+                    .font(.headline)
+                Text("Импортируйте подписку, ссылку или конфигурацию, чтобы начать.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                Button("Добавить") { model.isAddLocationPresented = true }
             }
-        }
-        .padding(.vertical, 14)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(statusTitle)
-        .accessibilityValue(statusDetail)
-    }
-
-    private var statusTitle: String {
-        if isLoading { return "Загрузка данных" }
-        return switch state {
-        case .disconnected: "Не подключено"
-        case .connecting: "Подключение"
-        case .connected: "Защищено"
-        case .disconnecting: "Отключение"
-        }
-    }
-
-    private var statusDetail: String {
-        if isLoading { return "Проверяем сохранённые локации" }
-        return switch state {
-        case .disconnected: "Трафик идёт через обычное подключение"
-        case .connecting: "Запускаем защищённый маршрут"
-        case .connected: "VPN работает"
-        case .disconnecting: "Завершаем текущую сессию"
-        }
-    }
-
-    private var statusSymbol: String {
-        if isLoading { return "arrow.trianglehead.2.clockwise.rotate.90" }
-        return switch state {
-        case .disconnected: "shield.slash"
-        case .connecting: "shield.lefthalf.filled"
-        case .connected: "shield.checkered"
-        case .disconnecting: "shield.slash"
-        }
-    }
-
-    private var statusColor: Color {
-        switch state {
-        case .disconnected, .disconnecting: .secondary
-        case .connecting: .orange
-        case .connected: .green
-        }
-    }
-}
-
-private struct ActiveLocationRow: View {
-    let location: LocationListItem?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "location.fill")
-                .foregroundStyle(.tint)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(location?.name ?? "Локация не выбрана")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.primary)
-                Text(location?.detail.nonEmpty ?? "Выберите локацию ниже или добавьте новую")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer()
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Текущая локация")
-        .accessibilityValue(location?.name ?? "Не выбрана")
-    }
-}
-
-private struct LocationRow: View {
-    let location: LocationListItem
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: location.isFromSubscription ? "dot.radiowaves.left.and.right" : "network")
-                .foregroundStyle(location.isComplete ? Color.accentColor : .secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(location.name)
-                    .foregroundStyle(.primary)
-                if !location.detail.isEmpty {
-                    Text(location.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+        } else {
+            ForEach(locationSections) { section in
+                LocationSectionHeader(section: section)
+                ForEach(section.locations) { location in
+                    LocationCard(
+                        location: location,
+                        isSelected: location.id == model.selectedLocationID,
+                        onSelect: { model.select(location) },
+                        onEdit: {
+                            model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
+                        },
+                        onDelete: { model.locationPendingDeletion = location }
+                    )
                 }
             }
-            Spacer()
-            if location.needsUserAction {
-                Image(systemName: "person.crop.circle.badge.questionmark")
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel("Требуется действие")
-            } else if isSelected {
-                Image(systemName: "checkmark")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.tint)
-                    .accessibilityLabel("Выбрано")
+        }
+    }
+
+    private var locationSections: [LocationSection] {
+        var sections: [LocationSection] = []
+        for location in model.locations {
+            let key = location.subscriptionID ?? "__custom__"
+            if let index = sections.firstIndex(where: { $0.id == key }) {
+                sections[index].locations.append(location)
+            } else {
+                sections.append(
+                    LocationSection(
+                        id: key,
+                        title: sectionTitle(for: location),
+                        isSubscription: location.subscriptionID != nil,
+                        locations: [location]
+                    )
+                )
             }
         }
-        .contentShape(.rect)
-        .opacity(location.isComplete ? 1 : 0.58)
+        return sections
+    }
+
+    private func sectionTitle(for location: LocationListItem) -> String {
+        guard let subscriptionID = location.subscriptionID else { return "Мои конфигурации" }
+        if let name = location.subscriptionName { return name }
+        return URL(string: subscriptionID)?.host ?? "Подписка"
+    }
+
+    private var selectedLocationMenu: some View {
+        Menu {
+            if let location = model.selectedLocation {
+                Button {
+                    model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
+                } label: {
+                    Label("Редактировать", systemImage: "pencil")
+                }
+                Button(role: .destructive) {
+                    model.locationPendingDeletion = location
+                } label: {
+                    Label("Удалить", systemImage: "trash")
+                }
+            }
+        } label: {
+            Label("Ещё", systemImage: "ellipsis")
+        }
     }
 }
 
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
+private struct LocationSection: Identifiable {
+    let id: String
+    let title: String
+    let isSubscription: Bool
+    var locations: [LocationListItem]
+}
+
+private struct LocationSectionHeader: View {
+    let section: LocationSection
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: section.isSubscription ? "dot.radiowaves.left.and.right" : "slider.horizontal.3")
+                .foregroundStyle(.tint)
+            Text(section.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+            Spacer()
+            Text("\(section.locations.count)")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 48)
+        .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
+    }
+}
+
+private struct ConnectionTimer: View {
+    let state: VPNConnectionState
+    @State private var connectedAt: Date?
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Text("Время подключения")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(formattedElapsed(at: context.date))
+                    .font(.system(size: 32, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .tracking(2)
+            }
+        }
+        .task(id: state) {
+            guard state == .connected else {
+                connectedAt = nil
+                return
+            }
+            let stored = try? AppleTunnelStore.readText(AppleTunnelStore.connectedAtFileName)
+            connectedAt = stored
+                .flatMap { TimeInterval($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                .map { Date(timeIntervalSince1970: $0) }
+                ?? Date()
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func formattedElapsed(at date: Date) -> String {
+        guard state == .connected, let connectedAt else { return "00:00:00" }
+        let elapsed = max(0, Int(date.timeIntervalSince(connectedAt)))
+        return String(
+            format: "%02d:%02d:%02d",
+            elapsed / 3_600,
+            (elapsed % 3_600) / 60,
+            elapsed % 60
+        )
+    }
+}
+
+private struct AndroidStyleStartButton: View {
+    let state: VPNConnectionState
+    let requiresSetup: Bool
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(ringColor)
+                    .frame(width: 132, height: 132)
+                Circle()
+                    .fill(buttonColor)
+                    .frame(width: 88, height: 88)
+                if isLoading || state == .connecting || state == .disconnecting {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(contentColor)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: 38, weight: .medium))
+                        .foregroundStyle(contentColor)
+                }
+            }
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityTitle)
+    }
+
+    private var isActive: Bool { state == .connected }
+    private var ringColor: Color { isActive ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.10) }
+    private var buttonColor: Color { isActive ? .accentColor : Color.secondary.opacity(0.14) }
+    private var contentColor: Color { isActive ? .white : .secondary }
+    private var symbol: String { isActive ? "pause.fill" : requiresSetup ? "plus" : "power" }
+
+    private var accessibilityTitle: String {
+        if requiresSetup { return "Добавить локацию" }
+        return isActive ? "Отключить" : "Подключить"
+    }
+}
+
+private struct LocationCard: View {
+    let location: LocationListItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onSelect) {
+                HStack(spacing: 12) {
+                    if let icon = location.icon {
+                        Text(icon)
+                            .font(.title3)
+                            .frame(width: 28)
+                    } else {
+                        Image(systemName: location.isFromSubscription ? "dot.radiowaves.left.and.right" : "network")
+                            .font(.title3)
+                            .foregroundStyle(location.isComplete ? Color.accentColor : .secondary)
+                            .frame(width: 28)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(location.name)
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                        if !location.detail.isEmpty {
+                            Text(location.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if location.needsUserAction {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("Требуется действие")
+                    } else if location.isLocked {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Защищённая конфигурация")
+                    } else if location.isPinned {
+                        Image(systemName: "pin.fill")
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("Закреплено")
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button(action: onEdit) {
+                    Label("Редактировать", systemImage: "pencil")
+                }
+                Button(role: .destructive, action: onDelete) {
+                    Label("Удалить", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 40)
+            }
+
+            Button(action: onSelect) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary.opacity(0.45))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(minHeight: 60)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 24))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 1.5)
+        }
+        .opacity(location.isComplete ? 1 : 0.58)
+        .contextMenu {
+            Button(action: onEdit) {
+                Label("Редактировать", systemImage: "pencil")
+            }
+            Button(role: .destructive, action: onDelete) {
+                Label("Удалить", systemImage: "trash")
+            }
+        }
+    }
+
+    private var cardBackground: Color {
+        isSelected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.09)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func ypInlineNavigationTitle() -> some View {
+        #if os(iOS)
+        self.navigationBarTitleDisplayMode(.inline)
+        #else
+        self
+        #endif
+    }
 }

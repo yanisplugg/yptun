@@ -72,7 +72,12 @@ public actor AppleApplicationBootstrapper {
                     detail: $0.detail,
                     isComplete: $0.complete,
                     needsUserAction: $0.needsUserAction,
-                    isFromSubscription: $0.fromSubscription
+                    isFromSubscription: $0.fromSubscription,
+                    subscriptionID: $0.subscriptionId.nilIfEmpty,
+                    subscriptionName: $0.subscriptionName.nilIfEmpty,
+                    icon: $0.icon.nilIfEmpty,
+                    isPinned: $0.pinned,
+                    isLocked: $0.locked
                 )
             },
             activeLocationID: catalog.activeLocationId,
@@ -301,6 +306,13 @@ public actor AppleApplicationBootstrapper {
         #else
         YPtunIdentity.IOS.appGroupIdentifier
         #endif
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let value = trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }
 

@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CORES="$ROOT/cores"
 OUT="$ROOT/YPtun/sharedUI/build/generated/cores/ios/Coreapi.xcframework"
 TARGETS="${GOMOBILE_APPLE_TARGETS:-ios,iossimulator,macos}"
-IOS_VERSION="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
+IOS_VERSION="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
 MACOS_VERSION="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
 cd "$CORES"

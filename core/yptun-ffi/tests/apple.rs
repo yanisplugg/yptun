@@ -212,7 +212,16 @@ fn location_catalog_preserves_selection_and_returns_ui_fields() {
                 "engine": "stealth",
                 "id": "room",
                 "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "subscription_url": "https://example.com/sub"
+                "subscription_url": "https://example.com/sub",
+                "metadata": {
+                    "icon": "🇳🇱",
+                    "pinned": true,
+                    "locked": true,
+                    "subscription": {
+                        "name": "Основная подписка",
+                        "custom_name": "Моя подписка"
+                    }
+                }
             }
         ]
     });
@@ -227,6 +236,11 @@ fn location_catalog_preserves_selection_and_returns_ui_fields() {
     assert!(location.complete);
     assert!(location.from_subscription);
     assert!(!location.needs_user_action);
+    assert_eq!(location.subscription_id, "https://example.com/sub");
+    assert_eq!(location.subscription_name, "Моя подписка");
+    assert_eq!(location.icon, "🇳🇱");
+    assert!(location.pinned);
+    assert!(location.locked);
 }
 
 #[test]

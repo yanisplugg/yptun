@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 import YPtunMigrationSupport
 import YPtunShared
 import YPtunVPNControl
@@ -46,17 +46,16 @@ public struct LocationEditorRequest: Identifiable, Sendable {
 }
 
 @MainActor
-@Observable
-public final class YPtunApplicationModel {
-    public private(set) var connectionState: VPNConnectionState = .disconnected
-    public private(set) var locations: [LocationListItem]
-    public var selectedLocationID: String?
-    public private(set) var isBootstrapping = false
-    public private(set) var startupMessage: String?
-    public var isAddLocationPresented = false
-    public var presentedNotice: YPtunNotice?
-    public var locationEditorRequest: LocationEditorRequest?
-    public var locationPendingDeletion: LocationListItem?
+public final class YPtunApplicationModel: ObservableObject {
+    @Published public private(set) var connectionState: VPNConnectionState = .disconnected
+    @Published public private(set) var locations: [LocationListItem]
+    @Published public var selectedLocationID: String?
+    @Published public private(set) var isBootstrapping = false
+    @Published public private(set) var startupMessage: String?
+    @Published public var isAddLocationPresented = false
+    @Published public var presentedNotice: YPtunNotice?
+    @Published public var locationEditorRequest: LocationEditorRequest?
+    @Published public var locationPendingDeletion: LocationListItem?
 
     private let bootstrapper: AppleApplicationBootstrapper
     private let vpnController: any AppleVPNControlling

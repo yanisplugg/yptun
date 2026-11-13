@@ -8,7 +8,7 @@ TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-
 
 mkdir -p "$OUT" "$WORK"
 rustup target add "${TARGETS[@]}"
-export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-17.0}"
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 
 # Multiple Rust staticlibs normally contain colliding copies of std/core. Rust 1.99 has a
