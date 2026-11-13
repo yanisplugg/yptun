@@ -92,6 +92,8 @@ struct YpTunApp {
     custom_rules: String,
     tunnel_mode: bool,
     selected_location: usize,
+    import_text: String,
+    show_import: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -129,6 +131,8 @@ impl Default for YpTunApp {
             custom_rules: "domain:myserver.lan -> Direct".to_owned(),
             tunnel_mode: true,
             selected_location: 0,
+            import_text: String::new(),
+            show_import: false,
         };
         defaults.load_state()
     }
@@ -230,6 +234,17 @@ impl YpTunApp {
             });
             let right = &mut columns[1];
             right.horizontal(|ui| { ui.label("Обновить подписки"); if ui.button("Обновить").clicked() { self.status = "Обновление…".into(); } });
+            if right.button("+ Добавить конфигурацию").clicked() { self.show_import = true; }
+            if self.show_import {
+                right.group(|ui| {
+                    ui.label("Импорт ссылки");
+                    ui.text_edit_singleline(&mut self.import_text);
+                    ui.horizontal(|ui| {
+                        if ui.button("Импортировать").clicked() { self.import_location(); }
+                        if ui.button("Отмена").clicked() { self.show_import = false; }
+                    });
+                });
+            }
             right.add_space(10.0);
             right.label("КОНФИГУРАЦИИ");
             for (index, location) in self.locations.iter().enumerate() {
@@ -293,5 +308,19 @@ impl YpTunApp {
         } else {
             self.status = "Не удалось запустить proxy".to_owned();
         }
+    }
+
+    fn import_location(&mut self) {
+        let link = self.import_text.trim();
+        if link.is_empty() { self.status = "Вставь ссылку конфигурации".into(); return; }
+        let endpoint = link.strip_prefix("socks5://").unwrap_or(link).split(['/', '?', '#']).next().unwrap_or(link);
+        if split_proxy_host_port(endpoint).is_none() {
+            self.status = "Не удалось распознать endpoint".into();
+            return;
+        }
+        self.locations.push(LocationRow { name: format!("Импортированная локация {}", self.locations.len() + 1), endpoint: endpoint.to_owned(), enabled: true });
+        self.selected_location = self.locations.len() - 1;
+        self.endpoint = endpoint.to_owned();
+        self.import_text.clear(); self.show_import = false; self.status = "Конфигурация добавлена".into(); self.save_state();
     }
 }
