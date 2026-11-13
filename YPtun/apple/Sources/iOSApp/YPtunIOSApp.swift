@@ -3,7 +3,7 @@ import YPtunAppUI
 
 @main
 struct YPtunIOSApp: App {
-    @State private var model = YPtunApplicationModel()
+    @StateObject private var model = YPtunApplicationModel()
 
     var body: some Scene {
         WindowGroup {
