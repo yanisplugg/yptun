@@ -72,8 +72,8 @@ public struct ConnectionHomeView: View {
                 } label: {
                     Label("Добавить", systemImage: "plus")
                 }
-                if model.selectedLocation != nil {
-                    selectedLocationMenu
+                if !model.locations.isEmpty {
+                    homeMenu
                 }
             }
         }
@@ -102,6 +102,16 @@ public struct ConnectionHomeView: View {
             }
         } message: { location in
             Text("«\(location.name)» будет удалена с этого устройства.")
+        }
+        .alert(item: $model.bulkDeletionPending) { deletion in
+            Alert(
+                title: Text(bulkDeletionTitle(deletion)),
+                message: Text("Это действие нельзя отменить."),
+                primaryButton: .destructive(Text("Удалить")) {
+                    Task { await model.performPendingBulkDeletion() }
+                },
+                secondaryButton: .cancel(Text("Отмена"))
+            )
         }
     }
 
@@ -202,7 +212,7 @@ public struct ConnectionHomeView: View {
         return URL(string: subscriptionID)?.host ?? "Подписка"
     }
 
-    private var selectedLocationMenu: some View {
+    private var homeMenu: some View {
         Menu {
             if let location = model.selectedLocation {
                 Button {
@@ -215,9 +225,31 @@ public struct ConnectionHomeView: View {
                 } label: {
                     Label("Удалить", systemImage: "trash")
                 }
+                Divider()
+            }
+            if model.locations.contains(where: \.isFromSubscription) {
+                Button(role: .destructive) {
+                    model.bulkDeletionPending = .subscriptions
+                } label: {
+                    Label("Удалить все подписки", systemImage: "trash")
+                }
+            }
+            if model.locations.contains(where: { !$0.isFromSubscription }) {
+                Button(role: .destructive) {
+                    model.bulkDeletionPending = .customLocations
+                } label: {
+                    Label("Удалить свои конфигурации", systemImage: "trash")
+                }
             }
         } label: {
             Label("Ещё", systemImage: "ellipsis")
+        }
+    }
+
+    private func bulkDeletionTitle(_ deletion: BulkLocationDeletion) -> String {
+        switch deletion {
+        case .subscriptions: "Удалить все подписки?"
+        case .customLocations: "Удалить свои конфигурации?"
         }
     }
 }

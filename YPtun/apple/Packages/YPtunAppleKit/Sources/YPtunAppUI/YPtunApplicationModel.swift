@@ -56,6 +56,7 @@ public final class YPtunApplicationModel: ObservableObject {
     @Published public var presentedNotice: YPtunNotice?
     @Published public var locationEditorRequest: LocationEditorRequest?
     @Published public var locationPendingDeletion: LocationListItem?
+    @Published public var bulkDeletionPending: BulkLocationDeletion?
     @Published public private(set) var isRefreshingSubscriptions = false
 
     private let bootstrapper: AppleApplicationBootstrapper
@@ -287,6 +288,42 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
+    public func performPendingBulkDeletion() async {
+        guard let deletion = bulkDeletionPending else { return }
+        bulkDeletionPending = nil
+        let ids = locations.filter {
+            switch deletion {
+            case .subscriptions: $0.isFromSubscription
+            case .customLocations: !$0.isFromSubscription
+            }
+        }.map(\.id)
+        guard !ids.isEmpty else { return }
+
+        let restartAfterDelete = isTunnelActive && ids.contains(selectedLocationID ?? "")
+        var latestSnapshot: AppleApplicationSnapshot?
+        do {
+            for id in ids {
+                latestSnapshot = try await bootstrapper.deleteLocation(id: id)
+            }
+            if let latestSnapshot {
+                locations = latestSnapshot.locations
+                selectedLocationID = latestSnapshot.activeLocationID
+            }
+            if restartAfterDelete {
+                await restartTunnelAfterConfigurationChange()
+            }
+        } catch {
+            if let snapshot = try? await bootstrapper.load() {
+                locations = snapshot.locations
+                selectedLocationID = snapshot.activeLocationID
+            }
+            presentedNotice = YPtunNotice(
+                title: "Удалено не всё",
+                message: "Часть конфигураций не удалось удалить: \(error.localizedDescription)"
+            )
+        }
+    }
+
     public func refreshSubscriptions() async {
         guard !isRefreshingSubscriptions else { return }
         let urls = locations.compactMap(\.subscriptionID).reduce(into: [String]()) { result, url in
@@ -346,4 +383,11 @@ public final class YPtunApplicationModel: ObservableObject {
             )
         }
     }
+}
+
+public enum BulkLocationDeletion: String, Identifiable, Sendable {
+    case subscriptions
+    case customLocations
+
+    public var id: Self { self }
 }
