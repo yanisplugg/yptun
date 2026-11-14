@@ -120,6 +120,8 @@ struct LocationRow {
     name: String,
     endpoint: String,
     enabled: bool,
+    #[serde(default)]
+    engine: String,
 }
 
 impl Default for YpTunApp {
@@ -134,6 +136,7 @@ impl Default for YpTunApp {
                 name: "Локальный SOCKS5".to_owned(),
                 endpoint: "127.0.0.1:1080".to_owned(),
                 enabled: true,
+                engine: "SOCKS5".to_owned(),
             }],
             bypass_lan: true,
             bypass_russia: false,
@@ -232,7 +235,7 @@ impl YpTunApp {
     }
 
     fn save_state(&self) {
-        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone(), tunnel_mode: self.tunnel_mode, selected_location: self.selected_location, bundle: self.bundle.clone() };
+        let state = SavedState { endpoint: self.endpoint.clone(), proxy_port: self.proxy_port.clone(), locations: self.locations.iter().map(|x| LocationRow { name: x.name.clone(), endpoint: x.endpoint.clone(), enabled: x.enabled, engine: x.engine.clone() }).collect(), bypass_lan: self.bypass_lan, bypass_russia: self.bypass_russia, auto_start: self.auto_start, system_proxy: self.system_proxy, custom_rules: self.custom_rules.clone(), tunnel_mode: self.tunnel_mode, selected_location: self.selected_location, bundle: self.bundle.clone() };
         let path = Self::state_path();
         if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
         if let Ok(json) = serde_json::to_vec_pretty(&state) { let _ = fs::write(path, json); }
@@ -240,7 +243,7 @@ impl YpTunApp {
 
     fn row_from_entry(entry: &yptun_core::location::LocationEntry) -> LocationRow {
         let endpoint = entry.subscription_url.clone().unwrap_or_else(|| format!("engine:{:?}", entry.engine.unwrap_or_default()));
-        LocationRow { name: entry.name.clone(), endpoint, enabled: true }
+        LocationRow { name: entry.name.clone(), endpoint, enabled: true, engine: format!("{:?}", entry.engine.unwrap_or_default()) }
     }
 
     fn connection_page(&mut self, ui: &mut egui::Ui) {
@@ -291,7 +294,7 @@ impl YpTunApp {
             for (index, location) in self.locations.iter().enumerate() {
                 let selected = self.selected_location == index;
                 let response = right.group(|ui| {
-                    ui.horizontal(|ui| { ui.radio_value(&mut self.selected_location, index, ""); ui.strong(&location.name); ui.label(if location.enabled { "Включена" } else { "Отключена" }); });
+                    ui.horizontal(|ui| { ui.radio_value(&mut self.selected_location, index, ""); ui.strong(&location.name); ui.small(&location.engine); ui.label(if location.enabled { "Включена" } else { "Отключена" }); });
                     ui.small(&location.endpoint);
                     if ui.small_button("Удалить").clicked() { remove_index = Some(index); }
                 });
@@ -322,7 +325,7 @@ impl YpTunApp {
             for (entry, row) in self.bundle.locations.iter_mut().zip(self.locations.iter()) { entry.name = row.name.clone(); }
             self.save_state();
         }
-        if ui.button("Добавить локацию").clicked() { self.locations.push(LocationRow { name: "Новая локация".into(), endpoint: "127.0.0.1:1080".into(), enabled: false }); self.save_state(); }
+        if ui.button("Добавить локацию").clicked() { self.locations.push(LocationRow { name: "Новая локация".into(), endpoint: "127.0.0.1:1080".into(), enabled: false, engine: "SOCKS5".into() }); self.save_state(); }
     }
 
     fn set_active_bundle(&mut self, index: usize) {
