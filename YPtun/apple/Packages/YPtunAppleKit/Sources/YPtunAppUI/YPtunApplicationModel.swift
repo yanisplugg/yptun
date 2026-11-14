@@ -45,6 +45,14 @@ public struct LocationEditorRequest: Identifiable, Sendable {
     }
 }
 
+public struct AppleUIBehavior: Equatable, Sendable {
+    public var autoConnectOnLaunch = false
+    public var confirmBeforeDelete = true
+    public var hideSessionButton = false
+    public var showSubscriptionIcons = true
+    public var globalProxyCore = "auto"
+}
+
 @MainActor
 public final class YPtunApplicationModel: ObservableObject {
     @Published public private(set) var connectionState: VPNConnectionState = .disconnected
@@ -58,6 +66,8 @@ public final class YPtunApplicationModel: ObservableObject {
     @Published public var locationPendingDeletion: LocationListItem?
     @Published public var bulkDeletionPending: BulkLocationDeletion?
     @Published public private(set) var isRefreshingSubscriptions = false
+
+    @Published public private(set) var uiBehavior = AppleUIBehavior()
 
     private let bootstrapper: AppleApplicationBootstrapper
     private let vpnController: any AppleVPNControlling
@@ -288,6 +298,18 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
+    public func requestLocationDeletion(_ location: LocationListItem) {
+        locationPendingDeletion = location
+        guard !uiBehavior.confirmBeforeDelete else { return }
+        Task { await deletePendingLocation() }
+    }
+
+    public func requestBulkDeletion(_ deletion: BulkLocationDeletion) {
+        bulkDeletionPending = deletion
+        guard !uiBehavior.confirmBeforeDelete else { return }
+        Task { await performPendingBulkDeletion() }
+    }
+
     public func settingsText(_ file: AppleSettingsFile) async -> String? {
         do {
             return try await bootstrapper.settingsText(file)
@@ -304,6 +326,9 @@ public final class YPtunApplicationModel: ObservableObject {
         let restartAfterSave = isTunnelActive
         do {
             try await bootstrapper.saveSettingsText(text, file: file)
+            if file == .appBehavior {
+                await reloadUIBehavior()
+            }
             if restartAfterSave {
                 await restartTunnelAfterConfigurationChange()
             }
@@ -389,6 +414,28 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
+    private func reloadUIBehavior() async {
+        guard let text = try? await bootstrapper.settingsText(.appBehavior),
+              let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let values = object as? [String: Any] else {
+            uiBehavior = AppleUIBehavior()
+            return
+        }
+        let bool = { (key: String, fallback: Bool) -> Bool in
+            if let value = values[key] as? Bool { return value }
+            return (values[key] as? NSNumber)?.boolValue ?? fallback
+        }
+        let core = (values["globalProxyCore"] as? String)?.lowercased() ?? "auto"
+        uiBehavior = AppleUIBehavior(
+            autoConnectOnLaunch: bool("autoConnectOnLaunch", false),
+            confirmBeforeDelete: bool("confirmBeforeDelete", true),
+            hideSessionButton: bool("hideSessionButton", false),
+            showSubscriptionIcons: bool("showSubscriptionIcons", true),
+            globalProxyCore: ["auto", "singbox", "xray"].contains(core) ? core : "auto"
+        )
+    }
+
     private var isTunnelActive: Bool {
         connectionState == .connected || connectionState == .connecting
     }
@@ -406,6 +453,12 @@ public final class YPtunApplicationModel: ObservableObject {
             return
         } catch {
             connectionState = await vpnController.currentState()
+            await reloadUIBehavior()
+            if uiBehavior.autoConnectOnLaunch,
+               connectionState == .disconnected,
+               selectedLocation?.isComplete == true {
+                requestPrimaryAction()
+            }
             presentedNotice = YPtunNotice(
                 title: "Не удалось применить изменения",
                 message: "Данные сохранены, но VPN не перезапустился: \(error.localizedDescription)"

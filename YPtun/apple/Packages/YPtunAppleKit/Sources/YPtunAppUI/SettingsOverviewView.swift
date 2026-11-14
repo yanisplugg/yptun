@@ -44,11 +44,7 @@ public struct SettingsOverviewView: View {
                     Label("Информация о сессии", systemImage: "info.circle")
                 }
                 NavigationLink {
-                    RawSettingsEditorView(
-                        title: "Основные настройки",
-                        file: .appBehavior,
-                        bootstrapper: bootstrapper
-                    )
+                    AppBehaviorSettingsView(model: model)
                 } label: {
                     Label("Основные настройки", systemImage: "gearshape")
                 }
@@ -67,6 +63,15 @@ public struct SettingsOverviewView: View {
                     )
                 } label: {
                     Label("JSON настроек трафика", systemImage: "curlybraces")
+                }
+                NavigationLink {
+                    RawSettingsEditorView(
+                        title: "Основные настройки — JSON",
+                        file: .appBehavior,
+                        bootstrapper: bootstrapper
+                    )
+                } label: {
+                    Label("JSON основных настроек", systemImage: "curlybraces")
                 }
             }
         }

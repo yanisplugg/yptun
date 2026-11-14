@@ -27,7 +27,7 @@ public struct ConnectionHomeView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
 
-                if model.connectionState == .connected {
+                if model.connectionState == .connected && !model.uiBehavior.hideSessionButton {
                     NavigationLink {
                         SessionOverviewView(model: model)
                     } label: {
@@ -179,7 +179,8 @@ public struct ConnectionHomeView: View {
                         onEdit: {
                             model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
                         },
-                        onDelete: { model.locationPendingDeletion = location }
+                        onDelete: { model.requestLocationDeletion(location) },
+                        showsIcon: model.uiBehavior.showSubscriptionIcons
                     )
                 }
             }
@@ -221,7 +222,7 @@ public struct ConnectionHomeView: View {
                     Label("Редактировать", systemImage: "pencil")
                 }
                 Button(role: .destructive) {
-                    model.locationPendingDeletion = location
+                    model.requestLocationDeletion(location)
                 } label: {
                     Label("Удалить", systemImage: "trash")
                 }
@@ -229,14 +230,14 @@ public struct ConnectionHomeView: View {
             }
             if model.locations.contains(where: \.isFromSubscription) {
                 Button(role: .destructive) {
-                    model.bulkDeletionPending = .subscriptions
+                    model.requestBulkDeletion(.subscriptions)
                 } label: {
                     Label("Удалить все подписки", systemImage: "trash")
                 }
             }
             if model.locations.contains(where: { !$0.isFromSubscription }) {
                 Button(role: .destructive) {
-                    model.bulkDeletionPending = .customLocations
+                    model.requestBulkDeletion(.customLocations)
                 } label: {
                     Label("Удалить свои конфигурации", systemImage: "trash")
                 }
@@ -373,12 +374,13 @@ private struct LocationCard: View {
     let onSelect: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let showsIcon: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onSelect) {
                 HStack(spacing: 12) {
-                    if let icon = location.icon {
+                    if showsIcon, let icon = location.icon {
                         Text(icon)
                             .font(.title3)
                             .frame(width: 28)
