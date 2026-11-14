@@ -263,7 +263,7 @@ impl YpTunApp {
     fn connection_page(&mut self, ui: &mut egui::Ui) {
         let connected = self.bridge.is_some();
         ui.horizontal(|ui| {
-            ui.heading("YPtun");
+            ui.label(if connected { "Подключено" } else { "Отключено" });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(if connected { "Подключено" } else { "Отключено" });
             });
@@ -277,7 +277,7 @@ impl YpTunApp {
                 ui.heading(self.connection_elapsed());
                 ui.add_space(20.0);
                 let button = egui::Button::new(if connected { "Отключить" } else { "Подключить" })
-                    .min_size(egui::vec2(180.0, 80.0));
+                    .min_size(egui::vec2(180.0, 180.0));
                 if ui.add(button).clicked() {
                     if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if let Some(mut tun) = self.tun_process.take() { let _ = tun.kill(); let _ = tun.wait(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
@@ -307,11 +307,15 @@ impl YpTunApp {
             let mut select_index = None;
             for (index, location) in self.locations.iter().enumerate() {
                 let selected = self.selected_location == index;
-                let response = right.group(|ui| {
+                let mut card = egui::Frame::group(right.style());
+                card.fill = egui::Color32::from_rgb(25, 26, 30);
+                card.rounding = 24.0.into();
+                card.inner_margin = egui::Margin::same(14.0);
+                let response = card.show(right, |ui| {
                     ui.horizontal(|ui| { ui.radio_value(&mut self.selected_location, index, ""); ui.strong(&location.name); ui.small(&location.engine); ui.label(if location.enabled { "Включена" } else { "Отключена" }); });
                     ui.small(&location.endpoint);
                     if ui.small_button("Удалить").clicked() { remove_index = Some(index); }
-                });
+                    });
                 if response.response.clicked() { select_index = Some(index); }
                 if selected { right.separator(); }
             }
