@@ -172,6 +172,14 @@ impl eframe::App for YpTunApp {
         visuals.widgets.active.rounding = 16.0.into();
         ctx.set_visuals(visuals);
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
+            ui.columns(3, |columns| {
+                columns[0].horizontal(|ui| { ui.label("⚙"); });
+                columns[1].vertical_centered(|ui| { ui.heading("YPtun"); });
+                columns[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("⋮"); ui.label("⏻"); ui.label("+");
+                });
+            });
+            if false {
             ui.horizontal(|ui| {
                 ui.label("⚙");
                 ui.heading("YPtun");
@@ -184,6 +192,7 @@ impl eframe::App for YpTunApp {
                     ui.label(&self.status);
                 });
             });
+            }
         });
 
         egui::SidePanel::left("navigation")
@@ -204,8 +213,6 @@ impl eframe::App for YpTunApp {
             ui.horizontal_centered(|ui| {
                 if ui.selectable_label(self.page == Page::Connection, "⚡  Подключение").clicked() { self.page = Page::Connection; }
                 if ui.selectable_label(self.page == Page::Settings, "⚙  Настройки").clicked() { self.page = Page::Settings; }
-                if ui.selectable_label(self.page == Page::Locations, "☰  Локации").clicked() { self.page = Page::Locations; }
-                if ui.selectable_label(self.page == Page::Routing, "⌁  Маршрутизация").clicked() { self.page = Page::Routing; }
             });
         });
 
@@ -277,16 +284,17 @@ impl YpTunApp {
                 ui.label(egui::RichText::new(self.connection_elapsed()).size(32.0).strong().extra_letter_spacing(2.0));
                 ui.add_space(20.0);
                 let (button_rect, button_response) = ui.allocate_exact_size(egui::vec2(132.0, 132.0), egui::Sense::click());
-                let painter = ui.painter();
                 let center = button_rect.center();
+                {
+                let painter = ui.painter();
                 painter.circle_filled(center, 66.0, if connected { egui::Color32::from_rgb(35, 72, 48) } else { egui::Color32::from_rgb(30, 31, 36) });
                 painter.circle_filled(center, 44.0, if connected { egui::Color32::from_rgb(49, 131, 246) } else { egui::Color32::from_rgb(46, 47, 53) });
                 painter.text(center, egui::Align2::CENTER_CENTER, "⏻", egui::FontId::proportional(42.0), if connected { egui::Color32::WHITE } else { egui::Color32::from_rgb(185, 187, 195) });
+                }
                 if button_response.clicked() {
                     if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if let Some(mut tun) = self.tun_process.take() { let _ = tun.kill(); let _ = tun.wait(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
                 }
-                drop(painter);
                 let auto_center = center + egui::vec2(100.0, 0.0);
                 let auto_rect = egui::Rect::from_center_size(auto_center, egui::vec2(56.0, 56.0));
                 let auto_response = ui.allocate_rect(auto_rect, egui::Sense::click());
@@ -321,7 +329,7 @@ impl YpTunApp {
             }
             right.add_space(10.0);
             right.label("КОНФИГУРАЦИИ");
-            let mut remove_index = None;
+            let remove_index: Option<usize> = None;
             let mut select_index = None;
             for (index, location) in self.locations.iter().enumerate() {
                 let selected = self.selected_location == index;
@@ -332,7 +340,7 @@ impl YpTunApp {
                 let response = card.show(right, |ui| {
                     ui.horizontal(|ui| { ui.radio_value(&mut self.selected_location, index, ""); ui.strong(&location.name); ui.small(&location.engine); ui.label(if location.enabled { "Включена" } else { "Отключена" }); });
                     ui.small(&location.endpoint);
-                    if ui.small_button("Удалить").clicked() { remove_index = Some(index); }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { ui.label("⋮"); });
                     });
                 if response.response.clicked() { select_index = Some(index); }
                 if selected { right.separator(); }
