@@ -287,6 +287,7 @@ impl YpTunApp {
             right.add_space(10.0);
             right.label("КОНФИГУРАЦИИ");
             let mut remove_index = None;
+            let mut select_index = None;
             for (index, location) in self.locations.iter().enumerate() {
                 let selected = self.selected_location == index;
                 let response = right.group(|ui| {
@@ -294,14 +295,17 @@ impl YpTunApp {
                     ui.small(&location.endpoint);
                     if ui.small_button("Удалить").clicked() { remove_index = Some(index); }
                 });
-                if response.response.clicked() { self.selected_location = index; self.endpoint = location.endpoint.clone(); self.save_state(); }
+                if response.response.clicked() { select_index = Some(index); }
                 if selected { right.separator(); }
             }
+            if let Some(index) = select_index { self.selected_location = index; self.endpoint = self.locations[index].endpoint.clone(); self.set_active_bundle(index); self.save_state(); }
             if let Some(index) = remove_index {
                 if self.locations.len() > 1 {
                     self.locations.remove(index);
+                    if index < self.bundle.locations.len() { self.bundle.locations.remove(index); }
                     self.selected_location = self.selected_location.min(self.locations.len() - 1);
                     self.endpoint = self.locations[self.selected_location].endpoint.clone();
+                    self.set_active_bundle(self.selected_location);
                     self.save_state();
                 }
             }
@@ -310,10 +314,19 @@ impl YpTunApp {
 
     fn locations_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Локации"); ui.add_space(12.0);
+        let mut changed = false;
         for location in &mut self.locations {
-            ui.group(|ui| { ui.horizontal(|ui| { ui.checkbox(&mut location.enabled, ""); ui.text_edit_singleline(&mut location.name); ui.label(&location.endpoint); }); });
+            ui.group(|ui| { ui.horizontal(|ui| { if ui.checkbox(&mut location.enabled, "").changed() { changed = true; } if ui.text_edit_singleline(&mut location.name).changed() { changed = true; } ui.label(&location.endpoint); }); });
+        }
+        if changed {
+            for (entry, row) in self.bundle.locations.iter_mut().zip(self.locations.iter()) { entry.name = row.name.clone(); }
+            self.save_state();
         }
         if ui.button("Добавить локацию").clicked() { self.locations.push(LocationRow { name: "Новая локация".into(), endpoint: "127.0.0.1:1080".into(), enabled: false }); self.save_state(); }
+    }
+
+    fn set_active_bundle(&mut self, index: usize) {
+        self.bundle.active_location_id = self.bundle.locations.get(index).map(|entry| entry.storage_id.clone());
     }
 
     fn routing_page(&mut self, ui: &mut egui::Ui) {
