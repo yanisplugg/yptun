@@ -8,12 +8,15 @@ import YPtunVPNControl
 private final class RecordingVPNController: AppleVPNControlling {
     var onStateChange: ((VPNConnectionState) -> Void)?
     var state: VPNConnectionState = .disconnected
+    var startCount = 0
     var restartCount = 0
     var stopCount = 0
+    var waitResults = [true]
 
     func currentState() async -> VPNConnectionState { state }
 
     func start() async throws {
+        startCount += 1
         state = .connected
         onStateChange?(.connected)
     }
@@ -29,11 +32,16 @@ private final class RecordingVPNController: AppleVPNControlling {
         state = .connected
         onStateChange?(.connected)
     }
+
+    func waitUntilConnected(timeout: Duration) async throws -> Bool {
+        waitResults.isEmpty ? false : waitResults.removeFirst()
+    }
 }
 
 @MainActor
 private final class SelectionRecorder {
-    var locationID: String?
+    var locationIDs: [String] = []
+    var locationID: String? { locationIDs.last }
 }
 
 @MainActor
@@ -128,7 +136,7 @@ struct YPtunApplicationModelTests {
             locations: [first, second],
             selectedLocationID: first.id,
             vpnController: controller,
-            locationSelection: { id in recorder.locationID = id }
+            locationSelection: { id in recorder.locationIDs.append(id) }
         )
         controller.state = .connected
         controller.onStateChange?(.connected)
@@ -140,5 +148,44 @@ struct YPtunApplicationModelTests {
         #expect(model.selectedLocationID == second.id)
         #expect(controller.restartCount == 1)
         #expect(model.connectionState == .connected)
+    }
+
+    @Test func autoConnectAdvancesAfterAFailedCandidate() async {
+        let first = LocationListItem(
+            id: "first",
+            name: "Первая",
+            detail: "VLESS",
+            isComplete: true,
+            needsUserAction: false,
+            isFromSubscription: false
+        )
+        let second = LocationListItem(
+            id: "second",
+            name: "Вторая",
+            detail: "olcRTC",
+            isComplete: true,
+            needsUserAction: false,
+            isFromSubscription: false
+        )
+        let controller = RecordingVPNController()
+        controller.waitResults = [false, true]
+        let recorder = SelectionRecorder()
+        let model = YPtunApplicationModel(
+            locations: [first, second],
+            selectedLocationID: first.id,
+            vpnController: controller,
+            locationSelection: { id in recorder.locationIDs.append(id) }
+        )
+
+        model.autoConnectFastest()
+        await model.waitForPendingConnection()
+
+        #expect(recorder.locationIDs == [first.id, second.id])
+        #expect(controller.startCount == 1)
+        #expect(controller.restartCount == 1)
+        #expect(controller.stopCount == 1)
+        #expect(model.selectedLocationID == second.id)
+        #expect(model.connectionState == .connected)
+        #expect(!model.isAutoConnecting)
     }
 }

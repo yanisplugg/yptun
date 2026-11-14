@@ -13,6 +13,7 @@ struct AppBehaviorSettingsView: View {
         Form {
             Section("Подключение") {
                 Toggle("Подключаться при запуске", isOn: boolBinding("autoConnectOnLaunch"))
+                Toggle("Показывать кнопку «Авто»", isOn: boolBinding("showAutoButton", default: true))
                 Toggle("Спрашивать перед удалением", isOn: boolBinding("confirmBeforeDelete", default: true))
                 Toggle("Скрыть кнопку сессии", isOn: boolBinding("hideSessionButton"))
             }

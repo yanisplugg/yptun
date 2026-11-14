@@ -45,12 +45,19 @@ public struct LocationEditorRequest: Identifiable, Sendable {
     }
 }
 
+public enum AppleSavedPing: Equatable, Sendable {
+    case latency(Int)
+    case offline
+}
+
 public struct AppleUIBehavior: Equatable, Sendable {
     public var autoConnectOnLaunch = false
+    public var showAutoButton = true
     public var confirmBeforeDelete = true
     public var hideSessionButton = false
     public var showSubscriptionIcons = true
     public var globalProxyCore = "auto"
+    public var savedPings: [String: AppleSavedPing] = [:]
 }
 
 @MainActor
@@ -66,6 +73,7 @@ public final class YPtunApplicationModel: ObservableObject {
     @Published public var locationPendingDeletion: LocationListItem?
     @Published public var bulkDeletionPending: BulkLocationDeletion?
     @Published public private(set) var isRefreshingSubscriptions = false
+    @Published public private(set) var isAutoConnecting = false
 
     @Published public private(set) var uiBehavior = AppleUIBehavior()
 
@@ -130,6 +138,15 @@ public final class YPtunApplicationModel: ObservableObject {
                 startupMessage = "Данные предыдущей версии перенесены без изменения исходных файлов."
             }
             connectionState = await vpnController.currentState()
+            await reloadUIBehavior()
+            let selectedIsComplete = locations
+                .first(where: { $0.id == selectedLocationID })?
+                .isComplete ?? false
+            if uiBehavior.autoConnectOnLaunch,
+               connectionState == .disconnected,
+               selectedIsComplete {
+                requestPrimaryAction()
+            }
         } catch {
             startupMessage = "Не удалось прочитать сохранённые локации. Исходные данные не изменены."
         }
@@ -180,6 +197,10 @@ public final class YPtunApplicationModel: ObservableObject {
 
     func waitForPendingSelection() async {
         await selectionTask?.value
+    }
+
+    func waitForPendingConnection() async {
+        await connectionTask?.value
     }
 
     public func requestPrimaryAction() {
@@ -295,6 +316,80 @@ public final class YPtunApplicationModel: ObservableObject {
                 title: "Не удалось удалить локацию",
                 message: error.localizedDescription
             )
+        }
+    }
+
+    public func autoConnectFastest() {
+        guard !isAutoConnecting else { return }
+        let candidates = autoConnectCandidates
+        guard !candidates.isEmpty else {
+            presentedNotice = YPtunNotice(
+                title: "Нет готовых локаций",
+                message: "Добавьте или завершите настройку хотя бы одной локации."
+            )
+            return
+        }
+
+        let restartFirst = isTunnelActive
+        selectionTask?.cancel()
+        connectionTask?.cancel()
+        isAutoConnecting = true
+        connectionTask = Task { [locationSelection, vpnController] in
+            defer { isAutoConnecting = false }
+            var shouldRestart = restartFirst
+            for location in candidates {
+                do {
+                    try Task.checkCancellation()
+                    selectedLocationID = location.id
+                    try await locationSelection(location.id)
+                    try Task.checkCancellation()
+                    connectionState = .connecting
+                    if shouldRestart {
+                        try await vpnController.restart()
+                    } else {
+                        try await vpnController.start()
+                    }
+                    if try await vpnController.waitUntilConnected(timeout: .seconds(25)) {
+                        connectionState = .connected
+                        return
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // A failed candidate is expected here; stop it and continue with the next one.
+                }
+                await vpnController.stop()
+                connectionState = .disconnected
+                // NetworkExtension may still be tearing the failed provider down. The next attempt
+                // uses the bounded restart path so it waits for that teardown instead of racing start.
+                shouldRestart = true
+            }
+            presentedNotice = YPtunNotice(
+                title: "Не удалось подключиться",
+                message: "Проверены лучшие подходящие локации. Ни одна не установила VPN-сессию."
+            )
+        }
+    }
+
+    private var autoConnectCandidates: [LocationListItem] {
+        Array(locations.enumerated()
+            .filter { $0.element.isComplete }
+            .sorted { left, right in
+                let lhs = autoRank(for: left.element, originalIndex: left.offset)
+                let rhs = autoRank(for: right.element, originalIndex: right.offset)
+                return lhs < rhs
+            }
+            .map(\.element)
+            // A subscription may contain thousands of nodes. Bound real NetworkExtension starts so
+            // one Auto tap cannot spend tens of minutes cycling dead servers or heat an old phone.
+            .prefix(8))
+    }
+
+    private func autoRank(for location: LocationListItem, originalIndex: Int) -> (Int, Int, Int) {
+        switch uiBehavior.savedPings[location.id] {
+        case let .some(.latency(milliseconds)): (0, milliseconds, originalIndex)
+        case .none: (1, 0, originalIndex)
+        case .some(.offline): (2, 0, originalIndex)
         }
     }
 
@@ -427,12 +522,24 @@ public final class YPtunApplicationModel: ObservableObject {
             return (values[key] as? NSNumber)?.boolValue ?? fallback
         }
         let core = (values["globalProxyCore"] as? String)?.lowercased() ?? "auto"
+        var savedPings: [String: AppleSavedPing] = [:]
+        if let rawPings = values["lastPingResults"] as? [String: Any] {
+            for (id, value) in rawPings {
+                if value is NSNull {
+                    savedPings[id] = .offline
+                } else if let number = value as? NSNumber {
+                    savedPings[id] = .latency(max(0, number.intValue))
+                }
+            }
+        }
         uiBehavior = AppleUIBehavior(
             autoConnectOnLaunch: bool("autoConnectOnLaunch", false),
+            showAutoButton: bool("showAutoButton", true),
             confirmBeforeDelete: bool("confirmBeforeDelete", true),
             hideSessionButton: bool("hideSessionButton", false),
             showSubscriptionIcons: bool("showSubscriptionIcons", true),
-            globalProxyCore: ["auto", "singbox", "xray"].contains(core) ? core : "auto"
+            globalProxyCore: ["auto", "singbox", "xray"].contains(core) ? core : "auto",
+            savedPings: savedPings
         )
     }
 
@@ -453,12 +560,6 @@ public final class YPtunApplicationModel: ObservableObject {
             return
         } catch {
             connectionState = await vpnController.currentState()
-            await reloadUIBehavior()
-            if uiBehavior.autoConnectOnLaunch,
-               connectionState == .disconnected,
-               selectedLocation?.isComplete == true {
-                requestPrimaryAction()
-            }
             presentedNotice = YPtunNotice(
                 title: "Не удалось применить изменения",
                 message: "Данные сохранены, но VPN не перезапустился: \(error.localizedDescription)"

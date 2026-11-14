@@ -23,6 +23,7 @@ public protocol AppleVPNControlling: AnyObject {
     func start() async throws
     func stop() async
     func restart() async throws
+    func waitUntilConnected(timeout: Duration) async throws -> Bool
 }
 
 @MainActor
@@ -99,6 +100,28 @@ public final class AppleVPNController: AppleVPNControlling {
         }
         try Task.checkCancellation()
         try await start()
+    }
+
+    public func waitUntilConnected(timeout: Duration) async throws -> Bool {
+        guard let manager = try await loadManager(createIfMissing: false) else { return false }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var observedTransition = false
+        while clock.now < deadline {
+            try Task.checkCancellation()
+            switch manager.connection.status {
+            case .connected:
+                return true
+            case .connecting, .reasserting, .disconnecting:
+                observedTransition = true
+            case .invalid, .disconnected:
+                if observedTransition { return false }
+            @unknown default:
+                if observedTransition { return false }
+            }
+            try await Task.sleep(for: .milliseconds(150))
+        }
+        return manager.connection.status == .connected
     }
 
     private var providerBundleIdentifier: String {

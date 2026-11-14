@@ -15,13 +15,35 @@ public struct ConnectionHomeView: View {
                 ConnectionTimer(state: model.connectionState)
                     .padding(.top, 12)
 
-                AndroidStyleStartButton(
-                    state: model.connectionState,
-                    requiresSetup: model.selectedLocation == nil,
-                    isLoading: model.isBootstrapping,
-                    action: model.requestPrimaryAction
-                )
-                .disabled(model.isBootstrapping)
+                ZStack {
+                    AndroidStyleStartButton(
+                        state: model.connectionState,
+                        requiresSetup: model.selectedLocation == nil,
+                        isLoading: model.isBootstrapping,
+                        action: model.requestPrimaryAction
+                    )
+                    .disabled(model.isBootstrapping || model.isAutoConnecting)
+
+                    if model.uiBehavior.showAutoButton && model.locations.contains(where: \.isComplete) {
+                        Button(action: model.autoConnectFastest) {
+                            Group {
+                                if model.isAutoConnecting {
+                                    ProgressView()
+                                } else {
+                                    Text("Авто")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                            .frame(width: 56, height: 56)
+                            .background(.thinMaterial, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.isAutoConnecting || model.isBootstrapping)
+                        .offset(x: 100)
+                        .accessibilityLabel("Подключиться к лучшей локации")
+                    }
+                }
 
                 Text(model.primaryActionTitle)
                     .font(.subheadline.weight(.medium))
@@ -180,7 +202,8 @@ public struct ConnectionHomeView: View {
                             model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
                         },
                         onDelete: { model.requestLocationDeletion(location) },
-                        showsIcon: model.uiBehavior.showSubscriptionIcons
+                        showsIcon: model.uiBehavior.showSubscriptionIcons,
+                        savedPing: model.uiBehavior.savedPings[location.id]
                     )
                 }
             }
@@ -375,6 +398,7 @@ private struct LocationCard: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let showsIcon: Bool
+    let savedPing: AppleSavedPing?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -423,6 +447,19 @@ private struct LocationCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            if let savedPing {
+                switch savedPing {
+                case let .latency(milliseconds):
+                    Text("\(milliseconds) ms")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                case .offline:
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Недоступно")
+                }
+            }
 
             Menu {
                 Button(action: onEdit) {
