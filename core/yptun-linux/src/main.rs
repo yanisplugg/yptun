@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::time::Instant;
 
 use eframe::egui;
@@ -15,6 +15,7 @@ use yptun_core::desktop_proxy::{disable_gnome_proxy_commands, enable_gnome_proxy
 use yptun_core::http_proxy_bridge::{http_port_for, HttpProxyBridge};
 use yptun_core::importer::parse_import;
 use yptun_core::location::LocationBundleV4;
+use yptun_core::linux_tun;
 
 fn usage() -> ! {
     eprintln!("usage: yptun-linux proxy <socks-host:port>");
@@ -103,6 +104,7 @@ struct YpTunApp {
     show_import: bool,
     bundle: LocationBundleV4,
     connected_at: Option<Instant>,
+    tun_process: Option<Child>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -144,6 +146,7 @@ impl Default for YpTunApp {
             show_import: false,
             bundle: LocationBundleV4::default(),
             connected_at: None,
+            tun_process: None,
         };
         defaults.load_state()
     }
@@ -259,7 +262,7 @@ impl YpTunApp {
                 let button = egui::Button::new(if connected { "Отключить" } else { "Подключить" })
                     .min_size(egui::vec2(180.0, 80.0));
                 if ui.add(button).clicked() {
-                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
+                    if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if let Some(mut tun) = self.tun_process.take() { let _ = tun.kill(); let _ = tun.wait(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
                 }
                 ui.add_space(20.0);
@@ -338,6 +341,17 @@ impl YpTunApp {
             self.status = "Неверный SOCKS endpoint".to_owned();
             return;
         };
+        if self.tunnel_mode {
+            if host != "127.0.0.1" && host != "localhost" {
+                self.status = "TUN ожидает локальный SOCKS runtime выбранной конфигурации".into();
+                return;
+            }
+            if self.start_linux_tun(socks_port as u16) {
+                self.connected_at = Some(Instant::now());
+                self.status = "TUN runtime запущен".into();
+            }
+            return;
+        }
         let Ok(proxy_port) = self.proxy_port.parse::<i32>() else {
             self.status = "Неверный HTTP-порт".to_owned();
             return;
@@ -360,6 +374,21 @@ impl YpTunApp {
             if self.system_proxy { self.apply_system_proxy(); }
         } else {
             self.status = "Не удалось запустить proxy".to_owned();
+        }
+    }
+
+    fn start_linux_tun(&mut self, socks_port: u16) -> bool {
+        let arch = match std::env::consts::ARCH { "aarch64" => "arm64", _ => "amd64" };
+        let binary = env::var_os("YPTUN_HEV_BINARY").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/usr/lib/yptun/hev-socks5-tunnel-linux-{arch}")));
+        if !binary.exists() { self.status = format!("HEV не найден: {}", binary.display()); return false; }
+        let config_path = Self::state_path().with_file_name("linux-tun.yaml");
+        let content = linux_tun::config_content(socks_port, None, None, "", "", false);
+        if fs::write(&config_path, content).is_err() { self.status = "Не удалось записать конфигурацию TUN".into(); return false; }
+        let command = if Command::new("pkexec").arg("--version").output().is_ok() { "pkexec" } else { binary.to_str().unwrap_or("hev-socks5-tunnel") };
+        let result = if command == "pkexec" { Command::new(command).args([binary.to_string_lossy().as_ref(), config_path.to_string_lossy().as_ref()]).spawn() } else { Command::new(command).arg(&config_path).spawn() };
+        match result {
+            Ok(child) => { self.tun_process = Some(child); self.status = "TUN runtime запущен".into(); true }
+            Err(error) => { self.status = format!("Не удалось запустить HEV: {error}"); false }
         }
     }
 
