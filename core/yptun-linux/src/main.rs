@@ -274,11 +274,15 @@ impl YpTunApp {
             left.vertical_centered(|ui| {
                 ui.add_space(50.0);
                 ui.label("Время подключения");
-                ui.heading(self.connection_elapsed());
+                ui.label(egui::RichText::new(self.connection_elapsed()).size(32.0).strong().extra_letter_spacing(2.0));
                 ui.add_space(20.0);
-                let button = egui::Button::new(if connected { "Отключить" } else { "Подключить" })
-                    .min_size(egui::vec2(180.0, 180.0));
-                if ui.add(button).clicked() {
+                let (button_rect, button_response) = ui.allocate_exact_size(egui::vec2(132.0, 132.0), egui::Sense::click());
+                let painter = ui.painter();
+                let center = button_rect.center();
+                painter.circle_filled(center, 66.0, if connected { egui::Color32::from_rgb(35, 72, 48) } else { egui::Color32::from_rgb(30, 31, 36) });
+                painter.circle_filled(center, 44.0, if connected { egui::Color32::from_rgb(49, 131, 246) } else { egui::Color32::from_rgb(46, 47, 53) });
+                painter.text(center, egui::Align2::CENTER_CENTER, "⏻", egui::FontId::proportional(42.0), if connected { egui::Color32::WHITE } else { egui::Color32::from_rgb(185, 187, 195) });
+                if button_response.clicked() {
                     if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if let Some(mut tun) = self.tun_process.take() { let _ = tun.kill(); let _ = tun.wait(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
                 }
@@ -289,7 +293,13 @@ impl YpTunApp {
                 });
             });
             let right = &mut columns[1];
-            right.horizontal(|ui| { ui.label("Обновить подписки"); if ui.button("Обновить").clicked() { self.refresh_subscriptions(); } });
+            let mut refresh_frame = egui::Frame::none();
+            refresh_frame.fill = egui::Color32::from_rgb(25, 26, 30);
+            refresh_frame.rounding = 24.0.into();
+            refresh_frame.inner_margin = egui::Margin::symmetric(16.0, 12.0);
+            refresh_frame.show(right, |ui| {
+                ui.horizontal(|ui| { ui.label("↻"); ui.label("Обновить подписки"); if ui.button("Обновить").clicked() { self.refresh_subscriptions(); } });
+            });
             if right.button("+ Добавить конфигурацию").clicked() { self.show_import = true; }
             if self.show_import {
                 right.group(|ui| {
