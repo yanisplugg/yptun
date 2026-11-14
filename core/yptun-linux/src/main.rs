@@ -286,6 +286,14 @@ impl YpTunApp {
                     if connected { if let Some(bridge) = self.bridge.take() { bridge.stop(); } if let Some(mut tun) = self.tun_process.take() { let _ = tun.kill(); let _ = tun.wait(); } self.connected_at = None; if self.system_proxy { self.system_proxy = false; self.apply_system_proxy(); } self.status = "Отключено".into(); } else { self.start_bridge(); }
                     self.save_state();
                 }
+                drop(painter);
+                let auto_center = center + egui::vec2(100.0, 0.0);
+                let auto_rect = egui::Rect::from_center_size(auto_center, egui::vec2(56.0, 56.0));
+                let auto_response = ui.allocate_rect(auto_rect, egui::Sense::click());
+                let painter = ui.painter();
+                painter.circle_filled(auto_center, 28.0, egui::Color32::from_rgb(32, 33, 38));
+                painter.text(auto_center, egui::Align2::CENTER_CENTER, "Авто", egui::FontId::proportional(13.0), egui::Color32::from_rgb(49, 131, 246));
+                if auto_response.clicked() { self.status = "Автоподбор доступен после проверки ping локаций".into(); }
                 ui.add_space(20.0);
                 ui.horizontal(|ui| {
                     if ui.selectable_label(!self.tunnel_mode, "ПРОКСИ").clicked() { self.tunnel_mode = false; self.save_state(); }
