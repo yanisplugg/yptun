@@ -48,7 +48,7 @@ struct TrafficSettingsView: View {
                 }
             }
 
-            Section("Сеть") {
+            Section {
                 Stepper(
                     "MTU: \(intValue("mtu", default: 1500))",
                     value: intBinding("mtu", default: 1500),
@@ -56,6 +56,8 @@ struct TrafficSettingsView: View {
                     step: 10
                 )
                 Toggle("Блокировать RU-домены", isOn: boolBinding("blockRuDomains"))
+            } header: {
+                Text("Сеть")
             } footer: {
                 Text("Изменения валидируются Rust-ядром. При активном VPN туннель автоматически перезапускается.")
             }
