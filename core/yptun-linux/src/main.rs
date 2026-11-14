@@ -26,8 +26,8 @@ fn main() -> ExitCode {
     if env::args().nth(1).as_deref() != Some("proxy") {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([960.0, 640.0])
-                .with_min_inner_size([760.0, 520.0]),
+                .with_inner_size([1355.0, 847.0])
+                .with_min_inner_size([980.0, 620.0]),
             ..Default::default()
         };
         return match eframe::run_native(
@@ -173,10 +173,14 @@ impl eframe::App for YpTunApp {
         ctx.set_visuals(visuals);
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.label("⚙");
                 ui.heading("YPtun");
                 ui.separator();
                 ui.label("Linux · Rust");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("⋮");
+                    ui.label("⏻");
+                    ui.label("+");
                     ui.label(&self.status);
                 });
             });
@@ -184,7 +188,8 @@ impl eframe::App for YpTunApp {
 
         egui::SidePanel::left("navigation")
             .resizable(false)
-            .default_width(210.0)
+            .default_width(0.0)
+            .width_range(0.0..=0.0)
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 if ui.selectable_label(self.page == Page::Connection, "Подключение").clicked() { self.page = Page::Connection; }
@@ -194,6 +199,15 @@ impl eframe::App for YpTunApp {
                 ui.separator();
                 ui.small("Rust runtime");
             });
+
+        egui::TopBottomPanel::bottom("bottom_nav").show(ctx, |ui| {
+            ui.horizontal_centered(|ui| {
+                if ui.selectable_label(self.page == Page::Connection, "⚡  Подключение").clicked() { self.page = Page::Connection; }
+                if ui.selectable_label(self.page == Page::Settings, "⚙  Настройки").clicked() { self.page = Page::Settings; }
+                if ui.selectable_label(self.page == Page::Locations, "☰  Локации").clicked() { self.page = Page::Locations; }
+                if ui.selectable_label(self.page == Page::Routing, "⌁  Маршрутизация").clicked() { self.page = Page::Routing; }
+            });
+        });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(22.0);
