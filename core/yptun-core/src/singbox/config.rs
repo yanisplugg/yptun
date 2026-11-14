@@ -390,13 +390,11 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     let expert_strategy = sb_expert_strategy.clone().unwrap_or_else(|| effective_strategy.clone());
     let force_family = o.force_family_resolve && (expert_strategy == "ipv4_only" || expert_strategy == "ipv6_only");
     let manual_use_ip = routing.rules.iter().any(|r| r.enabled && !r.ip.is_empty());
+    let user_rules_present = !routing.custom_rules_json.trim().is_empty() || routing.rules.iter().any(|r| r.enabled && r.has_matcher());
     if o.allow_local_resolve
-        && (rp.is_some_and(|p| p.uses_ip_rules())
-            || routing.bypass_russia
-            || force_family
-            || manual_use_ip
-            || embedded_uses_ip
-            || (sb_expert && rp.unwrap().singbox_resolve))
+        && !user_rules_present
+        && (rp.is_some_and(|p| p.uses_ip_rules()) || routing.bypass_russia || force_family || manual_use_ip
+            || embedded_uses_ip || (sb_expert && rp.is_some_and(|p| p.singbox_resolve)))
     {
         rules.push(json!({ "action": "resolve", "strategy": expert_strategy }));
     }
@@ -418,6 +416,20 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     } else {
         rules.extend(parse_json_array(&routing.custom_rules_json));
         rules.extend(sbr::manual_rules(&routing.rules, o.match_apps_by_process, direct_tag));
+        // User rules must see the original domain before the broad resolve action below. In
+        // particular, `domain:myserver.lan -> direct` must win even when Bypass Russia is enabled;
+        // resolving that LAN-only name through the public resolver makes the rule unreachable.
+        if o.allow_local_resolve
+            && user_rules_present
+            && (rp.is_some_and(|p| p.uses_ip_rules())
+                || routing.bypass_russia
+                || force_family
+                || manual_use_ip
+                || embedded_uses_ip
+                || (sb_expert && rp.is_some_and(|p| p.singbox_resolve)))
+        {
+            rules.push(json!({ "action": "resolve", "strategy": expert_strategy }));
+        }
         if !routing.block_domains.is_empty() {
             rules.push(json!({ "domain_suffix": routing.block_domains, "action": "reject" }));
         }
