@@ -331,18 +331,39 @@ jobs:
           mkdir -p "$KEY_DIR"
           printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
           chmod 600 "$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          UPLOAD_LOG="build/altool-upload.log"
+          mkdir -p build
+          set +e
           xcrun altool --upload-app \
             -f "$IPA" \
             -t ios \
             --apiKey "$APP_STORE_CONNECT_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" \
-            --show-progress
+            --show-progress 2>&1 | tee "$UPLOAD_LOG"
+          ALTOOL_STATUS=${PIPESTATUS[0]}
+          set -e
+
+          # Recent altool versions can print a server-side ERROR (for example, an expired Apple
+          # agreement) while still returning exit code 0. Treat any such response as a failed
+          # deployment instead of publishing a misleading green workflow.
+          if [ "$ALTOOL_STATUS" -ne 0 ] || grep -Eq '(^|[[:space:]])ERROR:' "$UPLOAD_LOG"; then
+            echo "App Store Connect rejected the upload; see altool-upload.log above." >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: native-apple-xcodebuild-log-${{ inputs.build_number }}
           path: YPtun/apple/build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-store-upload-log-${{ inputs.build_number }}
+          path: YPtun/apple/build/altool-upload.log
           if-no-files-found: ignore
           retention-days: 30
 
