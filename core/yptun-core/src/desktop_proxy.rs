@@ -30,6 +30,13 @@ fn run_all<R: ProxyCommandRunner>(runner: &mut R, commands: &[Vec<String>]) {
     }
 }
 
+fn run_all_or_error<R: ProxyCommandRunner>(runner: &mut R, commands: &[Vec<String>]) -> Result<(), String> {
+    for command in commands {
+        runner.run(command).map(|_| ())?;
+    }
+    Ok(())
+}
+
 fn starts_with_ci(text: &str, prefix: &str) -> bool {
     text.get(..prefix.len()).is_some_and(|h| h.eq_ignore_ascii_case(prefix))
 }
@@ -84,10 +91,19 @@ impl LinuxKdeProxyState {
     }
 }
 
-/// `host:port` -> (substringBefore(':'), substringAfter(':').toInt()); `None` if the port is not a number.
+/// Split a host/port pair, accepting bracketed IPv6 and rejecting invalid ports.
 pub fn split_proxy_host_port(host_port: &str) -> Option<(String, i32)> {
-    let host = host_port.split(':').next().unwrap_or(host_port);
-    let port = substring_after(host_port, ':').parse::<i32>().ok()?;
+    let (host, port) = if let Some(rest) = host_port.strip_prefix('[') {
+        let end = rest.find("]:")?;
+        (&rest[..end], &rest[end + 2..])
+    } else {
+        let split = host_port.rfind(':')?;
+        (&host_port[..split], &host_port[split + 1..])
+    };
+    let port = port.parse::<i32>().ok()?;
+    if !(1..=65_535).contains(&port) {
+        return None;
+    }
     Some((host.to_string(), port))
 }
 
@@ -230,14 +246,13 @@ impl LinuxProxyController {
         if !has_gsettings && kde.is_none() {
             return Ok(LinuxProxyEnable::ManualSetup { host_port: host_port.to_string() });
         }
-        self.active = true;
         if has_gsettings {
             if let Some(current) = Self::read_gnome(runner) {
                 if !current.looks_like_ours() {
                     self.gnome_backup = Some(current);
                 }
             }
-            run_all(runner, &enable_gnome_proxy_commands(&host, port));
+            run_all_or_error(runner, &enable_gnome_proxy_commands(&host, port))?;
         }
         if let Some(binary) = kde {
             if let Some(current) = Self::read_kde(runner) {
@@ -245,8 +260,9 @@ impl LinuxProxyController {
                     self.kde_backup = Some(current);
                 }
             }
-            run_all(runner, &enable_kde_proxy_commands(&format!("http://{host_port}"), binary));
+            run_all_or_error(runner, &enable_kde_proxy_commands(&format!("http://{host_port}"), binary))?;
         }
+        self.active = true;
         Ok(LinuxProxyEnable::Applied)
     }
 

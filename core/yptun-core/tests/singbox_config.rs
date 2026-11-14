@@ -163,6 +163,20 @@ fn embedded_route_wins_over_the_app_profile() {
 }
 
 #[test]
+fn custom_lan_rule_precedes_bypass_russia_resolve() {
+    let routing = RoutingRules {
+        bypass_russia: true,
+        custom_rules_json: r#"[{"domain":["myserver.lan"],"outbound":"direct"}]"#.into(),
+        ..Default::default()
+    };
+    let root = build(&vless(), SingBoxOptions { routing, ..Default::default() });
+    let rules = arr(&root, &["route", "rules"]);
+    let custom = rules.iter().position(|r| r["domain"][0] == "myserver.lan").unwrap();
+    let resolve = rules.iter().position(|r| r["action"] == "resolve").unwrap();
+    assert!(custom < resolve, "LAN domain must be matched before broad geo resolve");
+}
+
+#[test]
 fn ipv4_only_family_guards_and_quic() {
     let root = build(&vless(), SingBoxOptions::default());
     let rules = arr(&root, &["route", "rules"]);

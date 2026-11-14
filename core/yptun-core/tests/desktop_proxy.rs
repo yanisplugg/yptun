@@ -52,6 +52,9 @@ fn fake_gnome(mode: &str, host: &str) -> Fake {
 fn host_port_split() {
     assert_eq!(split_proxy_host_port("127.0.0.1:10808"), Some(("127.0.0.1".into(), 10808)));
     assert_eq!(split_proxy_host_port("127.0.0.1:x"), None);
+    assert_eq!(split_proxy_host_port("[::1]:3128"), Some(("::1".into(), 3128)));
+    assert_eq!(split_proxy_host_port("127.0.0.1:0"), None);
+    assert_eq!(split_proxy_host_port("127.0.0.1:65536"), None);
 }
 
 #[test]
