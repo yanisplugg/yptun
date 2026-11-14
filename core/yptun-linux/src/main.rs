@@ -173,10 +173,12 @@ impl eframe::App for YpTunApp {
         ctx.set_visuals(visuals);
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
             ui.columns(3, |columns| {
-                columns[0].horizontal(|ui| { ui.label("⚙"); });
+                columns[0].horizontal(|ui| { if ui.button("⚙").clicked() { self.page = Page::Settings; } });
                 columns[1].vertical_centered(|ui| { ui.heading("YPtun"); });
                 columns[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("⋮"); ui.label("⏻"); ui.label("+");
+                    if ui.button("⋮").clicked() { self.page = Page::Locations; }
+                    if ui.button("⏻").clicked() { self.page = Page::Connection; }
+                    if ui.button("+").clicked() { self.page = Page::Connection; self.show_import = true; }
                 });
             });
             if false {
@@ -360,10 +362,16 @@ impl YpTunApp {
     }
 
     fn locations_page(&mut self, ui: &mut egui::Ui) {
+        if ui.button("‹  Назад").clicked() { self.page = Page::Settings; }
         ui.heading("Локации"); ui.add_space(12.0);
         let mut changed = false;
         for location in &mut self.locations {
-            ui.group(|ui| { ui.horizontal(|ui| { if ui.checkbox(&mut location.enabled, "").changed() { changed = true; } if ui.text_edit_singleline(&mut location.name).changed() { changed = true; } ui.label(&location.endpoint); }); });
+            let mut row = egui::Frame::group(ui.style());
+            row.fill = egui::Color32::from_rgb(22, 23, 25);
+            row.rounding = 18.0.into();
+            row.inner_margin = egui::Margin::same(12.0);
+            row.show(ui, |ui| { ui.horizontal(|ui| { if ui.checkbox(&mut location.enabled, "").changed() { changed = true; } if ui.text_edit_singleline(&mut location.name).changed() { changed = true; } ui.label(&location.endpoint); }); });
+            ui.add_space(8.0);
         }
         if changed {
             for (entry, row) in self.bundle.locations.iter_mut().zip(self.locations.iter()) { entry.name = row.name.clone(); }
@@ -377,6 +385,7 @@ impl YpTunApp {
     }
 
     fn routing_page(&mut self, ui: &mut egui::Ui) {
+        if ui.button("‹  Назад").clicked() { self.page = Page::Settings; }
         ui.heading("Маршрутизация и rules"); ui.add_space(12.0);
         if ui.checkbox(&mut self.bypass_lan, "Bypass LAN").changed() { self.save_state(); }
         if ui.checkbox(&mut self.bypass_russia, "Bypass Russia").changed() { self.save_state(); }
@@ -385,6 +394,16 @@ impl YpTunApp {
     }
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Подключение и приложение").size(13.0).color(egui::Color32::from_rgb(160, 163, 168)));
+        let mut nav_card = egui::Frame::group(ui.style());
+        nav_card.fill = egui::Color32::from_rgb(22, 23, 25);
+        nav_card.rounding = 20.0.into();
+        nav_card.inner_margin = egui::Margin::same(14.0);
+        nav_card.show(ui, |ui| {
+            if ui.button("Локации  ›").clicked() { self.page = Page::Locations; }
+            if ui.button("Маршрутизация и правила  ›").clicked() { self.page = Page::Routing; }
+        });
+        ui.add_space(12.0);
         ui.heading("Настройки"); ui.add_space(12.0);
         ui.label("Локальный SOCKS endpoint");
         if ui.text_edit_singleline(&mut self.endpoint).lost_focus() { self.save_state(); }
