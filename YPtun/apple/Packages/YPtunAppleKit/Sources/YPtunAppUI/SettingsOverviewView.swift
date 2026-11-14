@@ -27,11 +27,7 @@ public struct SettingsOverviewView: View {
                     Label("Профили маршрутизации", systemImage: "arrow.triangle.branch")
                 }
                 NavigationLink {
-                    RawSettingsEditorView(
-                        title: "Настройки трафика",
-                        file: .traffic,
-                        bootstrapper: bootstrapper
-                    )
+                    TrafficSettingsView(model: model)
                 } label: {
                     Label("Настройки трафика", systemImage: "point.3.connected.trianglepath.dotted")
                 }
@@ -61,6 +57,17 @@ public struct SettingsOverviewView: View {
                 LabeledContent("Нативный клиент", value: "iOS 16+ · macOS 14+")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            Section("Расширенные настройки") {
+                NavigationLink {
+                    RawSettingsEditorView(
+                        title: "Настройки трафика — JSON",
+                        file: .traffic,
+                        bootstrapper: bootstrapper
+                    )
+                } label: {
+                    Label("JSON настроек трафика", systemImage: "curlybraces")
+                }
             }
         }
         .navigationTitle("Настройки")

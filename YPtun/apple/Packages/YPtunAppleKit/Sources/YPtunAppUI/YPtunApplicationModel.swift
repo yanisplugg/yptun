@@ -288,6 +288,35 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
+    public func settingsText(_ file: AppleSettingsFile) async -> String? {
+        do {
+            return try await bootstrapper.settingsText(file)
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Не удалось открыть настройки",
+                message: error.localizedDescription
+            )
+            return nil
+        }
+    }
+
+    public func saveSettingsText(_ text: String, file: AppleSettingsFile) async -> Bool {
+        let restartAfterSave = isTunnelActive
+        do {
+            try await bootstrapper.saveSettingsText(text, file: file)
+            if restartAfterSave {
+                await restartTunnelAfterConfigurationChange()
+            }
+            return true
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Не удалось сохранить настройки",
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
     public func performPendingBulkDeletion() async {
         guard let deletion = bulkDeletionPending else { return }
         bulkDeletionPending = nil
