@@ -4,6 +4,7 @@ import YPtunShared
 
 public struct ConnectionHomeView: View {
     @ObservedObject private var model: YPtunApplicationModel
+    @State private var isSettingsPresented = false
 
     public init(model: YPtunApplicationModel) {
         self.model = model
@@ -11,10 +12,12 @@ public struct ConnectionHomeView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: 14) {
+                // Connection Timer
                 ConnectionTimer(state: model.connectionState)
-                    .padding(.top, 12)
+                    .padding(.top, 14)
 
+                // Circular Power Button with "Авто" next to it
                 ZStack {
                     AndroidStyleStartButton(
                         state: model.connectionState,
@@ -29,35 +32,44 @@ public struct ConnectionHomeView: View {
                             Group {
                                 if model.isAutoConnecting {
                                     ProgressView()
+                                        .tint(YPtunColor.accent)
                                 } else {
                                     Text("Авто")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tint)
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundStyle(YPtunColor.accent)
                                 }
                             }
-                            .frame(width: 56, height: 56)
-                            .background(.thinMaterial, in: Circle())
+                            .frame(width: 54, height: 54)
+                            .background(YPtunColor.cardSurfaceHigh, in: Circle())
+                            .overlay(
+                                Circle()
+                                    .stroke(YPtunColor.accent.opacity(0.3), lineWidth: 1)
+                            )
                         }
                         .buttonStyle(.plain)
                         .disabled(model.isAutoConnecting || model.isBootstrapping)
-                        .offset(x: 100)
+                        .offset(x: 95)
                         .accessibilityLabel("Подключиться к лучшей локации")
                     }
                 }
+                .padding(.vertical, 8)
 
-                Text(model.primaryActionTitle)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-
+                // Subtitle / Session Overview Link
                 if model.connectionState == .connected && !model.uiBehavior.hideSessionButton {
                     NavigationLink {
                         SessionOverviewView(model: model)
                     } label: {
-                        Label("Информация о сессии", systemImage: "globe")
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 18)
-                            .frame(minHeight: 42)
-                            .background(.thinMaterial, in: Capsule())
+                        HStack(spacing: 6) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 12))
+                                .foregroundStyle(YPtunColor.accent)
+                            Text("Информация о сессии")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(YPtunColor.textPrimary)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 36)
+                        .background(YPtunColor.cardSurface, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -65,38 +77,138 @@ public struct ConnectionHomeView: View {
                 if let message = model.startupMessage {
                     Label(message, systemImage: "info.circle")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(YPtunColor.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(14)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-                        .accessibilityLabel(message)
+                        .background(YPtunColor.cardSurface, in: RoundedRectangle(cornerRadius: 16))
                 }
 
-                locationsContent
+                // "Обновить подписки" Full-Width Button
+                if locationSections.contains(where: \.isSubscription) {
+                    Button {
+                        Task { await model.refreshSubscriptions() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            if model.isRefreshingSubscriptions {
+                                ProgressView()
+                                    .tint(YPtunColor.accent)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(YPtunColor.accent)
+                            }
+                            Text("Обновить подписки")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(YPtunColor.textPrimary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 18)
+                        .frame(minHeight: 48)
+                        .background(YPtunColor.cardSurface, in: RoundedRectangle(cornerRadius: 18))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isRefreshingSubscriptions)
+                }
+
+                // Section Title: "КОНФИГУРАЦИИ"
+                HStack {
+                    Text("КОНФИГУРАЦИИ")
+                        .font(.system(size: 12, weight: .bold))
+                        .tracking(1.5)
+                        .foregroundStyle(YPtunColor.textSecondary)
+                    Spacer()
+                    Text("\(model.locations.count)")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(YPtunColor.textMuted)
+                }
+                .padding(.top, 8)
+                .padding(.horizontal, 4)
+
+                // Locations & Subscriptions Content
+                if model.locations.isEmpty && !model.isBootstrapping {
+                    emptyState
+                } else {
+                    ForEach(locationSections) { section in
+                        if section.isSubscription {
+                            SubscriptionCardView(
+                                title: section.title,
+                                subscriptionID: section.locations.first?.subscriptionID,
+                                locations: section.locations,
+                                selectedLocationID: model.selectedLocationID,
+                                savedPings: model.uiBehavior.savedPings,
+                                onSelect: { model.select($0) },
+                                onEdit: {
+                                    model.locationEditorRequest = LocationEditorRequest(locationID: $0.id)
+                                },
+                                onDelete: { model.requestLocationDeletion($0) },
+                                onRefreshSubscription: { url in
+                                    Task { _ = try? await model.importLocations(from: url) }
+                                },
+                                onPingAll: { ids in
+                                    // Pings all locations in subscription
+                                }
+                            )
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("Мои конфигурации")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(YPtunColor.textPrimary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 4)
+
+                                ForEach(section.locations) { location in
+                                    LocationRowView(
+                                        location: location,
+                                        isSelected: location.id == model.selectedLocationID,
+                                        savedPing: model.uiBehavior.savedPings[location.id],
+                                        onSelect: { model.select(location) },
+                                        onEdit: {
+                                            model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
+                                        },
+                                        onDelete: { model.requestLocationDeletion(location) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            .padding(.bottom, 32)
         }
-        .background(Color.secondary.opacity(0.04))
-        .navigationTitle("YPtun")
-        .ypInlineNavigationTitle()
+        .background(YPtunColor.canvas.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                NavigationLink {
-                    TunnelLogView()
+                Button {
+                    isSettingsPresented = true
                 } label: {
-                    Label("Логи", systemImage: "clock.arrow.circlepath")
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(YPtunColor.textPrimary)
                 }
+            }
+            ToolbarItem(placement: .principal) {
+                Text("YPtun")
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(YPtunColor.textPrimary)
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     model.isAddLocationPresented = true
                 } label: {
-                    Label("Добавить", systemImage: "plus")
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(YPtunColor.textPrimary)
                 }
-                if !model.locations.isEmpty {
-                    homeMenu
-                }
+                homeMenu
+            }
+        }
+        .sheet(isPresented: $isSettingsPresented) {
+            NavigationStack {
+                SettingsOverviewView(model: model)
             }
         }
         .sheet(isPresented: $model.isAddLocationPresented) {
@@ -137,77 +249,26 @@ public struct ConnectionHomeView: View {
         }
     }
 
-    @ViewBuilder
-    private var locationsContent: some View {
-        HStack {
-            Text("Локации")
-                .font(.title3.weight(.semibold))
-            Spacer()
-            Text("\(model.locations.count)")
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image("CatTile")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 54, height: 54)
+                .foregroundStyle(YPtunColor.textSecondary)
+            Text("Локаций пока нет")
+                .font(.headline)
+                .foregroundStyle(YPtunColor.textPrimary)
+            Text("Импортируйте подписку, ссылку или конфигурацию, чтобы начать.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YPtunColor.textSecondary)
+                .multilineTextAlignment(.center)
+            Button("Добавить") { model.isAddLocationPresented = true }
+                .tint(YPtunColor.accent)
         }
-        .padding(.top, 12)
-
-        if locationSections.contains(where: \.isSubscription) {
-            Button {
-                Task { await model.refreshSubscriptions() }
-            } label: {
-                HStack(spacing: 10) {
-                    if model.isRefreshingSubscriptions {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(.tint)
-                    }
-                    Text("Обновить подписки")
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .frame(minHeight: 48)
-                .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isRefreshingSubscriptions)
-        }
-
-        if model.locations.isEmpty && !model.isBootstrapping {
-            VStack(spacing: 12) {
-                Image("CatTile")
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 54, height: 54)
-                    .foregroundStyle(.secondary)
-                Text("Локаций пока нет")
-                    .font(.headline)
-                Text("Импортируйте подписку, ссылку или конфигурацию, чтобы начать.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                Button("Добавить") { model.isAddLocationPresented = true }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
-        } else {
-            ForEach(locationSections) { section in
-                LocationSectionHeader(section: section)
-                ForEach(section.locations) { location in
-                    LocationCard(
-                        location: location,
-                        isSelected: location.id == model.selectedLocationID,
-                        onSelect: { model.select(location) },
-                        onEdit: {
-                            model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
-                        },
-                        onDelete: { model.requestLocationDeletion(location) },
-                        showsIcon: model.uiBehavior.showSubscriptionIcons,
-                        savedPing: model.uiBehavior.savedPings[location.id]
-                    )
-                }
-            }
-        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
     }
 
     private var locationSections: [LocationSection] {
@@ -238,16 +299,22 @@ public struct ConnectionHomeView: View {
 
     private var homeMenu: some View {
         Menu {
+            NavigationLink {
+                TunnelLogView()
+            } label: {
+                Label("Логи подключения", systemImage: "text.alignleft")
+            }
+            Divider()
             if let location = model.selectedLocation {
                 Button {
                     model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
                 } label: {
-                    Label("Редактировать", systemImage: "pencil")
+                    Label("Редактировать выбранную", systemImage: "pencil")
                 }
                 Button(role: .destructive) {
                     model.requestLocationDeletion(location)
                 } label: {
-                    Label("Удалить", systemImage: "trash")
+                    Label("Удалить выбранную", systemImage: "trash")
                 }
                 Divider()
             }
@@ -266,7 +333,10 @@ public struct ConnectionHomeView: View {
                 }
             }
         } label: {
-            Label("Ещё", systemImage: "ellipsis")
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(YPtunColor.textPrimary)
+                .frame(width: 32, height: 32)
         }
     }
 
@@ -285,41 +355,21 @@ private struct LocationSection: Identifiable {
     var locations: [LocationListItem]
 }
 
-private struct LocationSectionHeader: View {
-    let section: LocationSection
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: section.isSubscription ? "dot.radiowaves.left.and.right" : "slider.horizontal.3")
-                .foregroundStyle(.tint)
-            Text(section.title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(2)
-            Spacer()
-            Text("\(section.locations.count)")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 48)
-        .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
-    }
-}
-
 private struct ConnectionTimer: View {
     let state: VPNConnectionState
     @State private var connectedAt: Date?
 
     var body: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 4) {
             Text("Время подключения")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(YPtunColor.textSecondary)
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(formattedElapsed(at: context.date))
-                    .font(.system(size: 32, weight: .semibold, design: .rounded))
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .tracking(2)
+                    .foregroundStyle(YPtunColor.textPrimary)
             }
         }
         .task(id: state) {
@@ -357,19 +407,24 @@ private struct AndroidStyleStartButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
+                // Outer Pulse Ring
                 Circle()
                     .fill(ringColor)
-                    .frame(width: 132, height: 132)
+                    .frame(width: 140, height: 140)
+
+                // Main Circular Button
                 Circle()
                     .fill(buttonColor)
-                    .frame(width: 88, height: 88)
+                    .frame(width: 96, height: 96)
+                    .shadow(color: isActive ? YPtunColor.accentGlow : Color.clear, radius: 16)
+
                 if isLoading || state == .connecting || state == .disconnecting {
                     ProgressView()
                         .controlSize(.large)
                         .tint(contentColor)
                 } else {
                     Image(systemName: symbol)
-                        .font(.system(size: 38, weight: .medium))
+                        .font(.system(size: 38, weight: .bold))
                         .foregroundStyle(contentColor)
                 }
             }
@@ -380,137 +435,13 @@ private struct AndroidStyleStartButton: View {
     }
 
     private var isActive: Bool { state == .connected }
-    private var ringColor: Color { isActive ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.10) }
-    private var buttonColor: Color { isActive ? .accentColor : Color.secondary.opacity(0.14) }
-    private var contentColor: Color { isActive ? .white : .secondary }
+    private var ringColor: Color { isActive ? YPtunColor.ringActive : YPtunColor.ringIdle }
+    private var buttonColor: Color { isActive ? YPtunColor.accent : YPtunColor.cardSurfaceHigh }
+    private var contentColor: Color { isActive ? Color.black : YPtunColor.textPrimary }
     private var symbol: String { isActive ? "pause.fill" : requiresSetup ? "plus" : "power" }
 
     private var accessibilityTitle: String {
         if requiresSetup { return "Добавить локацию" }
         return isActive ? "Отключить" : "Подключить"
-    }
-}
-
-private struct LocationCard: View {
-    let location: LocationListItem
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-    let showsIcon: Bool
-    let savedPing: AppleSavedPing?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onSelect) {
-                HStack(spacing: 12) {
-                    if showsIcon, let icon = location.icon {
-                        Text(icon)
-                            .font(.title3)
-                            .frame(width: 28)
-                    } else {
-                        Image(systemName: location.isFromSubscription ? "dot.radiowaves.left.and.right" : "network")
-                            .font(.title3)
-                            .foregroundStyle(location.isComplete ? Color.accentColor : .secondary)
-                            .frame(width: 28)
-                    }
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(location.name)
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.leading)
-                        if !location.detail.isEmpty {
-                            Text(location.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if location.needsUserAction {
-                        Image(systemName: "person.crop.circle.badge.questionmark")
-                            .foregroundStyle(.orange)
-                            .accessibilityLabel("Требуется действие")
-                    } else if location.isLocked {
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Защищённая конфигурация")
-                    } else if location.isPinned {
-                        Image(systemName: "pin.fill")
-                            .foregroundStyle(.orange)
-                            .accessibilityLabel("Закреплено")
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if let savedPing {
-                switch savedPing {
-                case let .latency(milliseconds):
-                    Text("\(milliseconds) ms")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                case .offline:
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                        .accessibilityLabel("Недоступно")
-                }
-            }
-
-            Menu {
-                Button(action: onEdit) {
-                    Label("Редактировать", systemImage: "pencil")
-                }
-                Button(role: .destructive, action: onDelete) {
-                    Label("Удалить", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 36, height: 40)
-            }
-
-            Button(action: onSelect) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary.opacity(0.45))
-            }
-            .buttonStyle(.plain)
-        }
-        .frame(minHeight: 60)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 24))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24)
-                .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 1.5)
-        }
-        .opacity(location.isComplete ? 1 : 0.58)
-        .contextMenu {
-            Button(action: onEdit) {
-                Label("Редактировать", systemImage: "pencil")
-            }
-            Button(role: .destructive, action: onDelete) {
-                Label("Удалить", systemImage: "trash")
-            }
-        }
-    }
-
-    private var cardBackground: Color {
-        isSelected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.09)
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func ypInlineNavigationTitle() -> some View {
-        #if os(iOS)
-        self.navigationBarTitleDisplayMode(.inline)
-        #else
-        self
-        #endif
     }
 }

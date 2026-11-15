@@ -69,6 +69,8 @@ struct AddLocationView: View {
                 }
             }
         }
+        .tint(YPtunColor.accent)
+        .preferredColorScheme(.dark)
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: [.json, .plainText, .data]

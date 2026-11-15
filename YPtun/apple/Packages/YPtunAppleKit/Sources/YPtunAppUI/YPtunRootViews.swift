@@ -23,7 +23,8 @@ public struct YPtunIOSRootView: View {
             .tabItem { Label("Настройки", systemImage: "gearshape") }
             .tag(YPtunAppSection.settings)
         }
-        .tint(Color(red: 59.0 / 255, green: 142.0 / 255, blue: 247.0 / 255))
+        .tint(YPtunColor.accent)
+        .preferredColorScheme(.dark)
         .toolbarBackground(.ultraThinMaterial, for: .tabBar)
         .task { await model.bootstrap() }
         .onOpenURL { url in

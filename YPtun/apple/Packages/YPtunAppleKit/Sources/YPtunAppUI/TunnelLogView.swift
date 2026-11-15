@@ -33,6 +33,7 @@ struct TunnelLogView: View {
             }
         }
         .task { load() }
+        .preferredColorScheme(.dark)
         .alert("Не удалось прочитать лог", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }

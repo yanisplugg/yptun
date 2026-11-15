@@ -72,11 +72,17 @@ func init() {
 		PushLog("masterdns", line)
 	})
 	if runtime.GOOS == "ios" {
-		// The packet-tunnel extension has a strict 15-20 MB limit on older devices (iPhone SE 2020 / iPhone 8).
-		// Keeping GC at 40% and a soft memory limit of 15 MB ensures Go GC triggers promptly before Jetsam kills the extension.
-		debug.SetGCPercent(40)
-		debug.SetMemoryLimit(15 << 20)
+		// The packet-tunnel extension has a strict 15 MB memory budget enforced by iOS Jetsam.
+		// Go must stay strictly under 8 MB so that hev-socks5-tunnel, Rust, and Swift runtime have headroom.
+		debug.SetGCPercent(20)
+		debug.SetMemoryLimit(8 << 20)
 	}
+}
+
+// CoreapiFreeOSMemory forces garbage collection and releases memory back to the operating system.
+func CoreapiFreeOSMemory() {
+	runtime.GC()
+	debug.FreeOSMemory()
 }
 
 // PollLog returns the next buffered log line, waiting up to timeoutMs; "" when none arrived.

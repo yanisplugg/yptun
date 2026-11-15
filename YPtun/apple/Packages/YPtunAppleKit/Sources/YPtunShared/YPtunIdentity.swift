@@ -34,6 +34,15 @@ public struct LocationListItem: Identifiable, Hashable, Sendable {
     public let icon: String?
     public let isPinned: Bool
     public let isLocked: Bool
+    public let flagEmoji: String
+    public let cleanName: String
+    public let protocolTag: String
+    public let customGroup: String?
+    public let trafficUsed: String?
+    public let trafficAvailable: String?
+    public let updateIntervalHours: Int?
+    public let lastRefreshEpochMs: Int64?
+    public let supportEmail: String?
 
     public init(
         id: String,
@@ -46,7 +55,16 @@ public struct LocationListItem: Identifiable, Hashable, Sendable {
         subscriptionName: String? = nil,
         icon: String? = nil,
         isPinned: Bool = false,
-        isLocked: Bool = false
+        isLocked: Bool = false,
+        flagEmoji: String? = nil,
+        cleanName: String? = nil,
+        protocolTag: String? = nil,
+        customGroup: String? = nil,
+        trafficUsed: String? = nil,
+        trafficAvailable: String? = nil,
+        updateIntervalHours: Int? = nil,
+        lastRefreshEpochMs: Int64? = nil,
+        supportEmail: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -59,5 +77,16 @@ public struct LocationListItem: Identifiable, Hashable, Sendable {
         self.icon = icon
         self.isPinned = isPinned
         self.isLocked = isLocked
+
+        let parsed = EmojiParser.parse(from: name, fallbackIcon: icon)
+        self.flagEmoji = flagEmoji ?? parsed.emoji
+        self.cleanName = cleanName ?? (parsed.name.isEmpty ? name : parsed.name)
+        self.protocolTag = protocolTag ?? (detail.isEmpty ? "VPN" : detail)
+        self.customGroup = customGroup
+        self.trafficUsed = trafficUsed
+        self.trafficAvailable = trafficAvailable
+        self.updateIntervalHours = updateIntervalHours
+        self.lastRefreshEpochMs = lastRefreshEpochMs
+        self.supportEmail = supportEmail
     }
 }

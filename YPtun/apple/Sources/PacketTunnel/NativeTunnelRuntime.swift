@@ -66,6 +66,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                         to: AppleTunnelStore.connectedAtFileName
                     )
                     self?.startWatchdog(plan)
+                    CoreapiFreeOSMemory()
                     completion(nil)
                 } catch {
                     self?.stop()
@@ -98,6 +99,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         var ignored: NSError?
         _ = CoreapiRtcStop(&ignored)
         setRunning(false)
+        CoreapiFreeOSMemory()
         provider = nil
         try? AppleTunnelStore.writeText(
             VPNConnectionState.disconnected.rawValue,

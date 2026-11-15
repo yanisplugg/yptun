@@ -64,9 +64,42 @@ public actor AppleApplicationBootstrapper {
             // still loads so it can explain and repair the underlying file error.
             try? AppleTunnelStore.clearRequest()
         }
+        var metadataByStorageID: [String: (used: String?, available: String?, email: String?, updateInterval: Int?, lastRefresh: Int64?)] = [:]
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let locs = root["locations"] as? [[String: Any]] {
+            for loc in locs {
+                guard let sid = loc["storage_id"] as? String else { continue }
+                if let meta = loc["metadata"] as? [String: Any],
+                   let sub = meta["subscription"] as? [String: Any] {
+                    let used = sub["used"] as? String
+                    let avail = sub["available"] as? String
+                    let email = (sub["support_url"] as? String)?.nilIfEmpty
+                    let interval = sub["update_interval_hours"] as? Int
+                    let lastRefresh = (sub["last_refresh_at_epoch_ms"] as? NSNumber)?.int64Value
+                    metadataByStorageID[sid] = (used, avail, email, interval, lastRefresh)
+                }
+            }
+        }
+
+        var customGroupByStorageID: [String: String] = [:]
+        if let behaviorText = try? artifactText(.appBehavior, paths: paths),
+           let behaviorData = behaviorText.data(using: .utf8),
+           let behaviorObj = try? JSONSerialization.jsonObject(with: behaviorData) as? [String: Any],
+           let customGroups = behaviorObj["custom_groups"] as? [[String: Any]] {
+            for group in customGroups {
+                guard let groupName = group["name"] as? String,
+                      let members = group["members"] as? [String] else { continue }
+                for member in members {
+                    customGroupByStorageID[member] = groupName
+                }
+            }
+        }
+
         return AppleApplicationSnapshot(
             locations: catalog.locations.map {
-                LocationListItem(
+                let meta = metadataByStorageID[$0.id]
+                let customGroup = customGroupByStorageID[$0.id]
+                return LocationListItem(
                     id: $0.id,
                     name: $0.displayName,
                     detail: $0.detail,
@@ -77,7 +110,13 @@ public actor AppleApplicationBootstrapper {
                     subscriptionName: $0.subscriptionName.nilIfEmpty,
                     icon: $0.icon.nilIfEmpty,
                     isPinned: $0.pinned,
-                    isLocked: $0.locked
+                    isLocked: $0.locked,
+                    customGroup: customGroup,
+                    trafficUsed: meta?.used,
+                    trafficAvailable: meta?.available,
+                    updateIntervalHours: meta?.updateInterval,
+                    lastRefreshEpochMs: meta?.lastRefresh,
+                    supportEmail: meta?.email
                 )
             },
             activeLocationID: catalog.activeLocationId,

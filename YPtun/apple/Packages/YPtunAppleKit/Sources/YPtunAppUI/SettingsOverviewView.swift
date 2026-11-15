@@ -75,6 +75,8 @@ public struct SettingsOverviewView: View {
                 }
             }
         }
+        .tint(YPtunColor.accent)
+        .preferredColorScheme(.dark)
         .navigationTitle("Настройки")
     }
 }

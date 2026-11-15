@@ -136,9 +136,9 @@ fn bridge_plan_matches_engine_and_ip_family_rules() {
     assert!(plan.yaml.contains("username: 'u''ser'"));
     assert!(plan.yaml.contains("connect-timeout: 30000"));
     assert!(plan.yaml.contains("# ipv6 disabled"));
-    assert!(plan.yaml.contains("cache-size: 2048"));
-    assert!(plan.yaml.contains("task-stack-size: 16384"));
-    assert!(plan.yaml.contains("max-session-count: 512"));
+    assert!(plan.yaml.contains("cache-size: 512"));
+    assert!(plan.yaml.contains("task-stack-size: 8192"));
+    assert!(plan.yaml.contains("max-session-count: 128"));
 
     location.engine = EngineType::VkTurn;
     let vk = apple_bridge_plan(

@@ -58,6 +58,8 @@ struct SubscriptionLocationsView: View {
         .sheet(isPresented: $model.isAddLocationPresented) {
             AddLocationView(model: model)
         }
+        .tint(YPtunColor.accent)
+        .preferredColorScheme(.dark)
     }
 }
 
