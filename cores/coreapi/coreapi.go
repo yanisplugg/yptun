@@ -79,8 +79,8 @@ func init() {
 	}
 }
 
-// CoreapiFreeOSMemory forces garbage collection and releases memory back to the operating system.
-func CoreapiFreeOSMemory() {
+// FreeOSMemory forces garbage collection and releases memory back to the operating system.
+func FreeOSMemory() {
 	runtime.GC()
 	debug.FreeOSMemory()
 }
