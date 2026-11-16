@@ -8,7 +8,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "510"
+        default: "511"
       comment:
         description: Build comment
         required: false
@@ -264,6 +264,7 @@ jobs:
             -derivedDataPath build/device \
             MARKETING_VERSION=4.0.0 CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO \
             build > build/xcodebuild.log 2>&1 && STATUS=0 || STATUS=$?
           grep -E "error:|Undefined symbols|referenced from|\*\* BUILD" build/xcodebuild.log | head -120 || true
           exit $STATUS

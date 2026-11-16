@@ -9,11 +9,11 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "510"
+    CURRENT_PROJECT_VERSION: "511"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
-    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
   configs:
     Debug:
@@ -46,6 +46,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../sharedUI/build/bin/iosArm64/releaseFramework"
@@ -76,6 +77,7 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -e
+          export ENABLE_USER_SCRIPT_SANDBOXING=NO
           export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           cd "$SRCROOT/.."
           ./gradlew :sharedUI:embedAndSignAppleFrameworkForXcode --no-configuration-cache
