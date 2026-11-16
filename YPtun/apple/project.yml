@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "514"
+    CURRENT_PROJECT_VERSION: "515"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -82,6 +82,21 @@ targets:
           export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           cd "$SRCROOT/.."
           ./gradlew :sharedUI:embedAndSignAppleFrameworkForXcode --no-configuration-cache
+    postCompileScripts:
+      - name: Copy Compose Resources
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          APP_DIR="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app"
+          mkdir -p "${APP_DIR}/composeResources/multiplatform_app.sharedui.generated.resources"
+          mkdir -p "${APP_DIR}/compose-resources/font"
+          if [ -d "${APP_DIR}/compose-resources/composeResources" ]; then
+            cp -R "${APP_DIR}/compose-resources/composeResources" "${APP_DIR}/" || true
+          fi
+          if [ -d "$SRCROOT/../sharedUI/src/commonMain/composeResources" ]; then
+            cp -R "$SRCROOT/../sharedUI/src/commonMain/composeResources/"* "${APP_DIR}/composeResources/multiplatform_app.sharedui.generated.resources/" || true
+            cp -R "$SRCROOT/../sharedUI/src/commonMain/composeResources/font/"* "${APP_DIR}/compose-resources/font/" || true
+          fi
 
   YPtunPacketTunnelIOS:
     type: app-extension

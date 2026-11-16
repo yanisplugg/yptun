@@ -8,7 +8,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "514"
+        default: "515"
       comment:
         description: Build comment
         required: false
@@ -277,6 +277,22 @@ jobs:
           cp -R build/device/Build/Products/Release-iphoneos/YPtun.app Payload/
           test -d Payload/YPtun.app/PlugIns/YPtunPacketTunnel.appex
           test -d Payload/YPtun.app/PlugIns/YPtunWidget.appex
+
+          # Ensure Compose resources are present at root of Payload/YPtun.app:
+          # 1. Payload/YPtun.app/composeResources/... (Compose Multiplatform 1.6+)
+          # 2. Payload/YPtun.app/compose-resources/... (fallback)
+          if [ -d "Payload/YPtun.app/compose-resources/composeResources" ]; then
+            echo "Un-nesting composeResources from compose-resources/composeResources"
+            cp -R Payload/YPtun.app/compose-resources/composeResources Payload/YPtun.app/
+          fi
+
+          mkdir -p Payload/YPtun.app/composeResources/multiplatform_app.sharedui.generated.resources
+          mkdir -p Payload/YPtun.app/compose-resources/font
+          if [ -d "../sharedUI/src/commonMain/composeResources" ]; then
+            cp -R ../sharedUI/src/commonMain/composeResources/* Payload/YPtun.app/composeResources/multiplatform_app.sharedui.generated.resources/ || true
+            cp -R ../sharedUI/src/commonMain/composeResources/font/* Payload/YPtun.app/compose-resources/font/ || true
+          fi
+
           zip -qry "YPtun-4.0.0-$BUILD_NUMBER-unsigned.ipa" Payload
 
       - uses: actions/upload-artifact@v4
