@@ -74,5 +74,34 @@ SCRIPTS=""; TELEMOST="https://example.com/j/1"
 ( check_transports ) >/dev/null 2>&1 && bad "a bad Telemost link" || ok
 TELEMOST=""; AVITO="not a list"
 ( check_transports ) >/dev/null 2>&1 && bad "a bad Avito list" || ok
+
+# A sign-in for one document never wipes the other document's (cookies.json
+# holds both): a core with cookie-inbox gets it in its inbox; an older core's
+# store is replaced only when it holds no other document.
+YA=https://disk.yandex.ru/i/ya; MR=https://cloud.mail.ru/public/aa/bb
+BIN_DIR="$2/bin"; mkdir -p "$BIN_DIR" "$STATE_ROOT/t1"
+old_core() { printf '#!/bin/sh\nexit 2\n' > "$BIN_DIR/openflux"; chmod +x "$BIN_DIR/openflux"; }
+new_core() { printf '#!/bin/sh\n[ "$1" = --features ] && printf "cookie-inbox\\nsignin-state\\n"\n' > "$BIN_DIR/openflux"; chmod +x "$BIN_DIR/openflux"; }
+store="$STATE_ROOT/t1/cookies.json"
+COOKIES=$(printf '{"%s":{"Session_id":"y"}}' "$YA" | base64 | tr -d '\n')
+old_core; rm -f "$store" "$store.incoming"
+write_cookies && [ "$COOKIES_QUEUED" = 0 ] && grep -q '"Session_id":"y"' "$store" && ok || bad "a first sign-in makes the store"
+printf '{\n  "%s": {\n    "Mpop": "m"\n  },\n  "%s": {\n    "Session_id": "old"\n  }\n}' "$MR" "$YA" > "$store"
+write_cookies && bad "an old core overwrote the Mail.ru sign-in" || ok
+grep -q '"Mpop": "m"' "$store" && [ ! -f "$store.incoming" ] && ok || bad "the store was touched: $(cat "$store")"
+case "$COOKIES_ERROR" in *"обновите ноду"*) ok ;; *) bad "error: $COOKIES_ERROR" ;; esac
+new_core
+write_cookies && [ "$COOKIES_QUEUED" = 1 ] && grep -q '"Session_id":"y"' "$store.incoming" && grep -q '"Mpop": "m"' "$store" && ok || bad "the inbox: $COOKIES_QUEUED"
+old_core; rm -f "$store.incoming"
+printf '{"%s":{"Session_id":"older"}}' "$YA" > "$store"
+write_cookies && grep -q '"Session_id":"y"' "$store" && ok || bad "an old core, the same document only, is replaced"
+
+# show's signin list: the core's state lines, anything else dropped.
+printf 'login 1760000000 %s\ndown 1760000300 %s\nbogus 1 x\nlogin notanumber %s\nlogin 5\n' "$YA" "$MR" "$YA" > "$STATE_ROOT/t1/signin-state"
+got=$(signin_json)
+[ "$got" = '[{"state":"login","since":1760000000,"doc":"'"$YA"'"},{"state":"down","since":1760000300,"doc":"'"$MR"'"}]' ] && ok || bad "signin_json: $got"
+rm -f "$STATE_ROOT/t1/signin-state"
+[ "$(signin_json)" = '[]' ] && ok || bad "signin_json without a file"
+
 printf 'passed %d, failed %d\n' "$pass" "$failn"
 [ "$failn" = 0 ]

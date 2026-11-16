@@ -88,12 +88,11 @@ func TestMakeIsCanonical(t *testing.T) {
 		{Type: "direct", Dial: "203.0.113.7:9443", Priority: 50},
 	}}
 	want := Make(base)
-	if want.Error != "" || want.Config.Context != docURL {
-		t.Fatalf("context not filled by the rule: %+v", want)
+	if want.Error != "" || want.Config.Context != "http://#" {
+		t.Fatalf("context is not the fixed placeholder: %+v", want)
 	}
 	spelled := base
 	spelled.Codec = "batched"
-	spelled.Context = " " + docURL + " "
 	spelled.Transports = []Transport{
 		{Type: "vyandex", Name: "vyandex", URL: docURL + "  ", Priority: 100},
 		{Type: " direct", Dial: " 203.0.113.7:9443", Priority: 50},
@@ -119,7 +118,7 @@ func TestMakeIsCanonical(t *testing.T) {
 		c       Config
 		context string
 	}{
-		{"classic document with a key", Config{Secret: key, Transports: []Transport{{Type: "mailru", URL: "https://cloud.mail.ru/public/x"}}}, "https://cloud.mail.ru/public/x"},
+		{"classic document with a key", Config{Secret: key, Transports: []Transport{{Type: "mailru", URL: "https://cloud.mail.ru/public/x"}}}, "http://#"},
 		{"cups rooms", Config{Secret: key, Transports: []Transport{{Type: "cupsonline", URL: "WyJhIl0"}}}, "http://#"},
 		{"direct only", Config{Negotiate: true, Secret: key, Transports: []Transport{{Type: "direct", Dial: "203.0.113.7:1"}}}, "http://#"},
 		{"explicit kept", Config{Negotiate: true, Secret: key, Context: "https://x/y", Transports: []Transport{{Type: "yandex", URL: "https://z"}}}, "https://x/y"},

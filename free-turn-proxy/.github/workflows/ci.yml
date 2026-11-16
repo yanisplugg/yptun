@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.7"
+  GO_VERSION: "1.26.11"
   GOLANGCI_VERSION: v2.12.2
   GOVULN_VERSION: v1.6.0
   GORELEASER_VERSION: v2.17.1

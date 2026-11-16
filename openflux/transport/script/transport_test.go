@@ -866,3 +866,90 @@ func TestScriptTransportUDP(t *testing.T) {
 		t.Fatal("timed out waiting for the UDP echo")
 	}
 }
+
+// A burst of packets the script emits reaches the session in the order it was emitted: a goroutine per
+// packet could let two of them swap, and inside a tunnel carrying TCP a swap looks like a loss.
+func TestScriptTransportDeliversEmittedPacketsInOrder(t *testing.T) {
+	const n = 3000
+	src := `
+var Transport = {
+  info: function () { return { name: "burst", version: "1.0.0" }; },
+  open: function (cfg) {
+    setState("connected");
+    for (var i = 0; i < ` + "3000" + `; i++) {
+      var b = new Uint8Array(4);
+      b[0] = (i >> 24) & 255; b[1] = (i >> 16) & 255; b[2] = (i >> 8) & 255; b[3] = i & 255;
+      emit(b.buffer);
+    }
+  },
+  write: function (bytes) {},
+  close: function () { setState("dead"); },
+};
+`
+	path, pub := mustSignedScript(t, src)
+	tr, err := New("burst", path, pub, "", nil, transport.DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := make(chan int, n)
+	tr.Receive(func(b []byte) {
+		got <- int(b[0])<<24 | int(b[1])<<16 | int(b[2])<<8 | int(b[3])
+	})
+	if err := tr.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer tr.Stop()
+	for want := 0; want < n; want++ {
+		select {
+		case v := <-got:
+			if v != want {
+				t.Fatalf("packet %d arrived where %d was expected", v, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d packets arrived", want, n)
+		}
+	}
+}
+
+// A script that names the packet size its carrier moves and the batch that fits one datagram has both
+// reach the session (transport.CarrierMTUer, transport.BatchSizeHinter); one that says nothing keeps the
+// defaults, and a value out of range is refused when the script is loaded.
+func TestScriptTransportDeclaresCarrierMTUAndBatch(t *testing.T) {
+	load := func(info string) (*ScriptTransport, error) {
+		src := `
+var Transport = {
+  info: function () { return ` + info + `; },
+  open: function (cfg) { setState("connected"); },
+  write: function (bytes) {},
+  close: function () { setState("dead"); },
+};
+`
+		path, pub := mustSignedScript(t, src)
+		return New("decl", path, pub, "", nil, transport.DefaultConfig())
+	}
+
+	tr, err := load(`{ name: "decl", version: "1.0.0", carrierMtu: 1200, batchBytes: 1297 }`)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var _ transport.CarrierMTUer = tr
+	var _ transport.BatchSizeHinter = tr
+	if tr.CarrierMTU() != 1200 || tr.PreferredBatchBytes() != 1297 {
+		t.Fatalf("declared %d / %d, want 1200 / 1297", tr.CarrierMTU(), tr.PreferredBatchBytes())
+	}
+
+	tr, err = load(`{ name: "decl", version: "1.0.0", mtu: 0 }`)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if tr.CarrierMTU() != 0 || tr.PreferredBatchBytes() != 0 {
+		t.Fatalf("a script that says nothing declared %d / %d", tr.CarrierMTU(), tr.PreferredBatchBytes())
+	}
+
+	for _, bad := range []string{`carrierMtu: 100`, `carrierMtu: 70000`, `batchBytes: -5`} {
+		src := `var Transport = { info: function () { return { name: "decl", version: "1.0.0", ` + bad + ` }; } };`
+		if _, err := Inspect([]byte(src)); err == nil {
+			t.Fatalf("%s was accepted", bad)
+		}
+	}
+}

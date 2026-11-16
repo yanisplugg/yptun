@@ -49,10 +49,12 @@ type proxyJSON struct {
 }
 
 type vkJSON struct {
-	Links          []string `json:"links"`
-	StreamsPerCred int      `json:"streamsPerCred"`
-	ManualCaptcha  bool     `json:"manualCaptcha"`
-	Platform       string   `json:"platform"`
+	Links           []string `json:"links"`
+	StreamsPerCred  int      `json:"streamsPerCred"`
+	ManualCaptcha   bool     `json:"manualCaptcha"`
+	AutoCaptcha     bool     `json:"autoCaptcha"`
+	AdvancedCaptcha bool     `json:"advancedCaptcha"`
+	Platform        string   `json:"platform"`
 }
 
 type obfJSON struct {
@@ -135,9 +137,11 @@ func defaultClientJSON() ClientJSON {
 		Proxy: proxyJSON{Mode: r.Mode, Listen: r.Listen},
 		KCP:   kcpJSONFrom(r.KCP),
 		VK: vkJSON{
-			StreamsPerCred: r.StreamsPerCred,
-			ManualCaptcha:  r.ManualCaptcha,
-			Platform:       r.Platform,
+			StreamsPerCred:  r.StreamsPerCred,
+			ManualCaptcha:   r.ManualCaptcha,
+			AutoCaptcha:     r.AutoCaptcha,
+			AdvancedCaptcha: r.AdvancedCaptcha,
+			Platform:        r.Platform,
 		},
 		Obf: obfJSON{
 			Profile:  r.ObfProfile,
@@ -174,8 +178,10 @@ func (j ClientJSON) toRaw() raw {
 		ObfKey:     j.Obf.Key,
 		ObfTiming:  time.Duration(j.Obf.TimingMs) * time.Millisecond,
 
-		ManualCaptcha: j.VK.ManualCaptcha,
-		Platform:      j.VK.Platform,
+		ManualCaptcha:   j.VK.ManualCaptcha,
+		AutoCaptcha:     j.VK.AutoCaptcha,
+		AdvancedCaptcha: j.VK.AdvancedCaptcha,
+		Platform:        j.VK.Platform,
 
 		DNSMode:    j.DNS.Mode,
 		DNSServers: strings.Join(j.DNS.Servers, ","),

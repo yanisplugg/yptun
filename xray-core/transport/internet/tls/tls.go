@@ -154,6 +154,24 @@ func (c *UConn) NegotiatedProtocol() string {
 	return state.NegotiatedProtocol
 }
 
+func (c *UConn) ConnectionState() tls.ConnectionState {
+	s := c.UConn.ConnectionState()
+	var state tls.ConnectionState
+	state.HandshakeComplete = s.HandshakeComplete
+	state.Version = s.Version
+	state.NegotiatedProtocol = s.NegotiatedProtocol
+	state.DidResume = s.DidResume
+	state.ServerName = s.ServerName
+	state.CipherSuite = s.CipherSuite
+	state.PeerCertificates = s.PeerCertificates
+	state.VerifiedChains = s.VerifiedChains
+	state.SignedCertificateTimestamps = s.SignedCertificateTimestamps
+	state.OCSPResponse = s.OCSPResponse
+	state.TLSUnique = s.TLSUnique
+	state.ECHAccepted = s.ECHAccepted
+	return state
+}
+
 func UClient(c net.Conn, config *tls.Config, fingerprint *utls.ClientHelloID) net.Conn {
 	utlsConn := utls.UClient(c, copyConfig(config), *fingerprint)
 	return &UConn{UConn: utlsConn}
@@ -257,6 +275,7 @@ var ModernFingerprints = map[string]*utls.ClientHelloID{
 	"hellochrome_120":  &utls.HelloChrome_120,
 	"hellochrome_131":  &utls.HelloChrome_131,
 	"hellochrome_133":  &utls.HelloChrome_133,
+	"hellochrome_155":  &utls.HelloChrome_155,
 	"helloios_13":      &utls.HelloIOS_13,
 	"helloios_14":      &utls.HelloIOS_14,
 	"helloedge_106":    &utls.HelloEdge_106,

@@ -2807,6 +2807,7 @@ private fun RoutingContent(
     var bypassLan by remember(routing) { mutableStateOf(routing.bypassLan) }
     var blockAds by remember(routing) { mutableStateOf(routing.blockAds) }
     var bypassRu by remember(routing) { mutableStateOf(routing.bypassRussia) }
+    var bypassCn by remember(routing) { mutableStateOf(routing.bypassChina) }
     var directText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.directDomains)) }
     var blockText by remember(routing) { mutableStateOf(RoutingRules.domainsToText(routing.blockDomains)) }
     var customRules by remember(routing) { mutableStateOf(routing.customRulesJson) }
@@ -2826,6 +2827,7 @@ private fun RoutingContent(
                 bypassLan = bypassLan,
                 blockAds = blockAds,
                 bypassRussia = bypassRu,
+                bypassChina = bypassCn,
                 directDomains = RoutingRules.parseDomains(directText),
                 blockDomains = RoutingRules.parseDomains(blockText),
                 customRulesJson = customRules.trim(),
@@ -2876,6 +2878,20 @@ private fun RoutingContent(
                     )
                     FilterChip(
                         selected = false,
+                        onClick = {
+                            bypassLan = true; bypassRu = false; bypassCn = true; blockAds = false
+                            val cnProfile = org.olcbox.app.data.model.RoutingProfile.chinaDirect(s.presetCnDirect)
+                            onSaveProfile(cnProfile)
+                            onSetGlobal(cnProfile.id)
+                            if (cnProfile.geoipUrl.isNotBlank() && cnProfile.geositeUrl.isNotBlank()) {
+                                onSetGeoSources(cnProfile.geoipUrl, cnProfile.geositeUrl)
+                            }
+                            onUpdateGeo()
+                        },
+                        label = { Text(s.presetCnDirect) }
+                    )
+                    FilterChip(
+                        selected = false,
                         onClick = { bypassLan = true; blockAds = true; bypassRu = false },
                         label = { Text(s.presetAdsBlock) }
                     )
@@ -2886,13 +2902,13 @@ private fun RoutingContent(
                     )
                     FilterChip(
                         selected = false,
-                        onClick = { bypassLan = true; bypassRu = false; blockAds = false },
+                        onClick = { bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false },
                         label = { Text(s.presetAllVpn) }
                     )
                     FilterChip(
                         selected = false,
                         onClick = {
-                            bypassLan = true; bypassRu = false; blockAds = false
+                            bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false
                             directText = ""; blockText = ""
                         },
                         label = { Text(s.presetReset) }
@@ -2900,7 +2916,8 @@ private fun RoutingContent(
                 }
 
                 RoutingToggleRow(s.bypassLan, s.bypassLanSubtitle, bypassLan) { bypassLan = it }
-                RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it }
+                RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it; if (it) onUpdateGeo() }
+                RoutingToggleRow(s.bypassChina, s.bypassChinaSubtitle, bypassCn) { bypassCn = it; if (it) onUpdateGeo() }
                 RoutingToggleRow(s.blockAds, s.blockAdsSubtitle, blockAds) { blockAds = it }
 
                 // Direct/blocked domain fields and the raw sing-box "advanced" routing editor are

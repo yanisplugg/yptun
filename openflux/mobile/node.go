@@ -199,6 +199,30 @@ func NodeApply(channel, transportsJSON, key string, port int, autoUpdate bool, s
 	return result(nil)
 }
 
+// NodeKit renders the installation of a channel as a script the person runs
+// by hand on the machine that will host the node (no SSH from the app): the
+// pinned installer, its SHA-256 check, plan, apply. Nothing connects: the app
+// made the key itself (NodeNewChannel). Returns {ok, kit: {script, paste,
+// context, transports[{type, url, priority, script}], installer}}: script is
+// the file to run as root, paste the same as a block for a terminal, context
+// and transports what the client's profile needs of the channel. source picks
+// the installer like NodeConnect's ("fork", "official").
+func NodeKit(channel, transportsJSON, key string, autoUpdate bool, mode, source string) string {
+	ts, err := nodeTransports(transportsJSON)
+	if err != nil {
+		return failure(err, nil)
+	}
+	installer, err := provision.PinnedFor(source)
+	if err != nil {
+		return failure(err, nil)
+	}
+	kit, err := provision.RenderKitFor(provision.Channel{ID: channel, Transports: ts, Key: key, AutoUpdate: autoUpdate, Mode: mode}, installer)
+	if err != nil {
+		return failure(err, nil)
+	}
+	return result(map[string]interface{}{"kit": kit})
+}
+
 // NodeSetCookies gives an installed channel's node a new Yandex sign-in
 // and restarts it.
 func NodeSetCookies(channel, documentURL, cookieHeader, sudoPassword string) string {
@@ -215,6 +239,32 @@ func NodeSetCookies(channel, documentURL, cookieHeader, sudoPassword string) str
 	}
 	appendLog("[NODE] Вход в Яндекс передан каналу " + channel)
 	return result(nil)
+}
+
+// NodePushSignIn gives an installed channel's document of the sign-in's
+// service (cookieHeader with Session_id: Yandex, with Mpop: Mail.ru) the
+// owner's sign-in, leaving the channel's other document alone; a node whose
+// core has cookie-inbox takes it without a restart ("merged": true). Answers
+// like NodeShowChannel with the channel as it is now.
+func NodePushSignIn(channel, transportsJSON, cookieHeader, sudoPassword string) string {
+	conn, err := nodeConn()
+	if err != nil {
+		return failure(err, nil)
+	}
+	ts, err := nodeTransports(transportsJSON)
+	if err != nil {
+		return failure(err, nil)
+	}
+	merged, err := conn.PushSignIn(channel, ts, cookieHeader, sudoPassword)
+	if err != nil {
+		return failure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
+	}
+	appendLog("[NODE] Вход передан каналу " + channel)
+	info, err := conn.Show(channel, sudoPassword)
+	if err != nil {
+		return failure(err, nil)
+	}
+	return result(map[string]interface{}{"channel": info, "merged": merged})
 }
 
 // NodeShowChannel reads an installed channel: its documents, port, state
@@ -283,6 +333,21 @@ func NodeRemove(channel, sudoPassword string) string {
 	return result(nil)
 }
 
+// NodeUpgrade moves every channel on the VDS to the core this build pins and
+// restarts the running ones: {"core", "restarted": [channel...]}.
+func NodeUpgrade(sudoPassword string) string {
+	conn, err := nodeConn()
+	if err != nil {
+		return failure(err, nil)
+	}
+	res, err := conn.Upgrade(sudoPassword)
+	if err != nil {
+		return failure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
+	}
+	appendLog("[NODE] Каналы на сервере переведены на ядро " + res.Core)
+	return result(map[string]interface{}{"core": res.Core, "restarted": res.Restarted})
+}
+
 // NodeCheckDocument tells whether the vyandex transport can use the
 // document, as an anonymous visitor like the node: {"editable"}. A check
 // Yandex wants a person to pass comes back with "captcha": true.
@@ -309,7 +374,7 @@ func NodeCheckDocument(documentURL string) string {
 // for specsJSON (as Profile.sessionTransportsJson builds it) and fetches
 // https://api.ipify.org through the tunnel, expecting the VDS's address
 // (expectHost, resolved here). The node's own Yandex check shows up in
-// PendingCaptchaURL like on a regular connect. Returns {"ip"}. Only one
+// PendingPromptURL like on a regular connect. Returns {"ip"}. Only one
 // connection can run at a time, so the app stops its tunnel first.
 func NodeVerify(specsJSON, secret, expectHost string, timeoutSec int) string {
 	if ProxyIsRunning() || ExitIsRunning() || packetRunning() {
@@ -341,10 +406,10 @@ func NodeVerify(specsJSON, secret, expectHost string, timeoutSec int) string {
 	if err != nil {
 		return failure(err, nil)
 	}
-	// Same order as StopProxy: the captcha side first, then the carriers.
+	// Same order as StopProxy: the prompt side first, then the carriers.
 	defer func() {
-		detachCaptcha()
-		CancelCaptcha()
+		detachPrompt()
+		CancelPrompt()
 		setAuthProxy(nil)
 		clearRoute()
 		_ = trans.Stop()
@@ -370,7 +435,7 @@ func NodeVerify(specsJSON, secret, expectHost string, timeoutSec int) string {
 	// Traffic may have gone through the backup carrier. Give the primary
 	// (highest priority) one the rest of the time to come up: the node may
 	// first need its own Yandex check passed, which reaches the app over the
-	// backup carrier as a pending captcha.
+	// backup carrier as a pending prompt.
 	names := sess.Transports()
 	primary := len(names) > 0 && waitLive(ctx, sess, names[0])
 	return result(map[string]interface{}{"ip": ip, "primary": primary, "live": sess.LiveTransports()})

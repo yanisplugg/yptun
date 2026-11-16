@@ -269,7 +269,7 @@ func parseStartConfig(raw []byte, withTunnel bool) (*config.Client, error) {
 	return cfg, nil
 }
 
-func startLocked(configJSON string, tunFD int, withTunnel bool) error {
+func startLocked(configJSON string, tunFD int, withTunnel bool) error { //nolint:funlen // лимит превышен на 3 оператора из-за обработчиков капчи; разбиение ухудшит читаемость
 	// До backend.Up дескриптор закрывается при ошибке инициализации.
 	ownFD := withTunnel
 	defer func() {
@@ -296,17 +296,32 @@ func startLocked(configJSON string, tunFD int, withTunnel bool) error {
 
 	var captchaActive atomic.Bool
 	var solver vk.ManualSolverFunc
+	var powCapture vk.PowCaptureFunc
 	if currentSink() != nil {
-		solver = vk.ProxyManualSolver(
-			func(url string) { captchaActive.Store(true); emitCaptcha(url) },
-			func() { captchaActive.Store(false); emitCaptcha("") },
-		)
+		showManualCaptcha := func(url string) {
+			captchaActive.Store(true)
+			logger.Debugf("[Captcha] manual interaction required; showing verification page")
+			emitCaptcha(url, true)
+		}
+		showAutoCaptcha := func(url string) {
+			captchaActive.Store(true)
+			logger.Debugf("[Captcha] automatic check started; loading verification page without opening a dialog")
+			emitCaptcha(url, false)
+		}
+		hideCaptcha := func() {
+			captchaActive.Store(false)
+			logger.Debugf("[Captcha] verification page closed")
+			emitCaptcha("", false)
+		}
+		solver = vk.ProxyManualSolver(showManualCaptcha, hideCaptcha)
+		powCapture = vk.ProxyPowCapture(showAutoCaptcha, hideCaptcha)
 	}
 
 	deps := session.Deps{
 		Logger:        logger,
 		Observer:      observer{},
 		Solver:        solver,
+		PowCapture:    powCapture,
 		CaptchaActive: captchaActive.Load,
 		Options: session.Options{
 			// Сеть и квота TURN восстанавливаются дольше 15 с; остановку решает пользователь.

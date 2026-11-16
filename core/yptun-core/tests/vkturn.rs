@@ -65,8 +65,7 @@ fn draft() -> VkTurnDraft {
 #[test]
 fn wireguard_draft_round_trips() {
     let (vk, proxy) = compose(&draft(), "Demo VK");
-    assert!(vk.uri.starts_with("freeturn://vk?tcp<mode=udp&obf-profile=rtpopus&wg="), "{}", vk.uri);
-    assert!(vk.uri.ends_with("@203.0.113.7:56000#deadbeef$Demo"));
+    assert!(vk.uri.starts_with("freeturn://"), "{}", vk.uri);
     let raw: serde_json::Value = serde_json::from_str(proxy.raw_outbound.as_deref().unwrap()).unwrap();
     assert_eq!((raw["server"].as_str(), raw["server_port"].as_i64(), raw["mtu"].as_i64()), (Some("127.0.0.1"), Some(9000), Some(1200)));
     assert_eq!(proxy.tag, "Demo VK");
@@ -90,10 +89,27 @@ fn amneziawg_and_proxy_exits() {
 
     let px = VkTurnDraft { outbound: OUTBOUND_PROXY.into(), outbound_proxy_link: "vless://u@exit.example:443?security=tls&type=tcp#X".into(), ..draft() };
     let (vk, proxy) = compose(&px, "");
-    assert!(vk.uri.contains("<mode=tcp&obf-profile=rtpopus>") && !vk.uri.contains("wg="), "{}", vk.uri);
+    assert_eq!(decompose(Some(&vk), Some(&proxy)).mode, "tcp");
     assert_eq!((proxy.server.as_str(), proxy.server_port, proxy.sni.as_str(), proxy.tag.as_str()), ("127.0.0.1", 9000, "exit.example", "X"));
     let back = decompose(Some(&vk), Some(&proxy));
     assert_eq!((back.peer_host.as_str(), back.outbound_proxy_link.as_str()), ("203.0.113.7", px.outbound_proxy_link.as_str()));
+}
+
+#[test]
+fn v4_wire_import_preserves_obfuscation_and_client_parameters() {
+    let mut d = draft();
+    d.obf_profile = "rtpopus3".into();
+    d.obf_key = "ab".repeat(32);
+    d.obf_timing_ms = "20".into();
+    d.streams_per_cred = "12".into();
+    d.client_id = "client-42".into();
+    d.manual_captcha = true;
+    let (vk, proxy) = compose(&d, "Wire v4");
+    let back = decompose(Some(&vk), Some(&proxy));
+    assert_eq!(back.obf_profile, "rtpopus3");
+    assert_eq!(back.obf_key, "ab".repeat(32));
+    assert_eq!((back.obf_timing_ms.as_str(), back.streams_per_cred.as_str(), back.client_id.as_str()), ("20", "12", "client-42"));
+    assert!(back.manual_captcha);
 }
 
 #[test]

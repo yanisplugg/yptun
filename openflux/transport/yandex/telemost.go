@@ -561,12 +561,18 @@ func (t *TelemostTransport) sendSetSlots() error {
 	key := t.slotKey.Add(1)
 	// The slot dimensions tell the SFU how large the subscriber will render each
 	// stream. The SFU sizes the bitrate it forwards to the slot: small
-	// (thumbnail) dimensions get a low-bitrate layer, so the default 608x342
-	// slots cap the forwarded sharing stream at a few hundred Kbps regardless of
-	// how much the publisher sends. TELEMOST_SLOT_W/H request a larger slot so
-	// the SFU forwards the full sharing bitrate (up to its ~2 Mbps cap).
+	// (thumbnail) dimensions get a low-bitrate layer. The old 608x342 default
+	// capped the forwarded sharing stream at a few hundred Kbps regardless of
+	// how much the publisher sent; a measured 2026-10-28 sweep in the same room
+	// showed single-stream 0.45 MB/s at 608x342 vs 1.15 MB/s at 1920x1080, a
+	// 2.44x win with no downside for a pure tunnel (we don't render). The first
+	// two slots (the ones the SFU actually forwards our stream to) now request
+	// 1920x1080 so the SFU forwards up to its ~2 Mbps per-slot cap. The smaller
+	// trailing slots remain unchanged - they belong to idle slots and only tell
+	// the SFU what else we are prepared to render if other publishers arrive.
+	// TELEMOST_SLOT_W/H still override this for custom benches.
 	slots := []map[string]interface{}{
-		{"width": 608, "height": 342}, {"width": 608, "height": 342},
+		{"width": 1920, "height": 1080}, {"width": 1920, "height": 1080},
 		{"width": 416, "height": 234}, {"width": 416, "height": 234},
 		{"width": 400, "height": 225}, {"width": 400, "height": 225},
 		{"width": 288, "height": 162}, {"width": 288, "height": 162},

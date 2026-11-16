@@ -108,6 +108,7 @@ struct Fns {
     tg_awg_running: unsafe extern "C" fn() -> i32,
 
     ft_version: unsafe extern "C" fn() -> P,
+    ft_set_auto_captcha: unsafe extern "C" fn(i32),
     ft_start: unsafe extern "C" fn(S, S, S, i32) -> P,
     ft_stop: unsafe extern "C" fn(),
     ft_running: unsafe extern "C" fn() -> i32,
@@ -194,6 +195,7 @@ impl NativeYpTunCoreLib {
                 tg_awg_stop: sym(&lib, "YpTgAwgStop")?,
                 tg_awg_running: sym(&lib, "YpTgAwgRunning")?,
                 ft_version: sym(&lib, "YpFtVersion")?,
+                ft_set_auto_captcha: sym(&lib, "YpFtSetAutoCaptcha")?,
                 ft_start: sym(&lib, "YpFtStart")?,
                 ft_stop: sym(&lib, "YpFtStop")?,
                 ft_running: sym(&lib, "YpFtRunning")?,
@@ -345,6 +347,9 @@ impl YpTunCoreLib for NativeYpTunCoreLib {
 
     fn ft_version(&self) -> Option<String> {
         self.take(unsafe { (self.f.ft_version)() })
+    }
+    fn ft_set_auto_captcha(&self, enabled: i32) {
+        unsafe { (self.f.ft_set_auto_captcha)(enabled) }
     }
     fn ft_start(&self, uri: &str, listen_addr: &str, vk_link: &str, n_streams: i32) -> Option<String> {
         let (a, b, c) = (c_string(uri), c_string(listen_addr), c_string(vk_link));

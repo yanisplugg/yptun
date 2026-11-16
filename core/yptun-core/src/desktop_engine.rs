@@ -309,6 +309,7 @@ pub trait EngineCore {
     fn xray_running(&self) -> bool;
     fn awg_start(&self, ini_config: &str, listen_addr: &str) -> CoreResult<()>;
     fn awg_stop(&self);
+    fn ft_set_auto_captcha(&self, enabled: bool) -> CoreResult<()>;
     fn ft_start(&self, uri: &str, listen_addr: &str, vk_link: &str, n_streams: i32) -> CoreResult<()>;
     fn ft_running(&self) -> bool;
     fn ft_connected_streams(&self) -> i32;
@@ -376,6 +377,9 @@ impl EngineCore for YpTunCore {
     }
     fn awg_stop(&self) {
         YpTunCore::awg_stop(self)
+    }
+    fn ft_set_auto_captcha(&self, enabled: bool) -> CoreResult<()> {
+        YpTunCore::ft_set_auto_captcha(self, enabled)
     }
     fn ft_start(&self, uri: &str, listen_addr: &str, vk_link: &str, n_streams: i32) -> CoreResult<()> {
         YpTunCore::ft_start(self, uri, listen_addr, vk_link, n_streams)
@@ -1086,6 +1090,7 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
                     keep_flow_on_chain: warp_chain_port.is_some(),
                     warp_relay: warp_relay.clone(),
                     routing_profile: self.xray_routing_profile(routing_profile.as_ref(), &asset_path),
+                    routing: routing.clone(),
                     second_profile: second_profile.clone(),
                     bypass_lan: routing.bypass_lan,
                     fake_dns_spec: config.fake_dns.clone(),
@@ -1531,6 +1536,7 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
             self.core.wdtt_start(&vk.wdtt_core_options_json(&core_listen, device_id))?;
         } else {
             self.log(&format!("Starting VK-TURN freeturn listener on {listen_addr}"));
+            self.core.ft_set_auto_captcha(vk.auto_captcha)?;
             self.core.ft_start(&vk.uri, &listen_addr, &vk.vk_link, vk.streams)?;
         }
 

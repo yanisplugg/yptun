@@ -32,3 +32,15 @@ YPtun/iosApp/*.xcodeproj/
 
 # portable launcher: vendored zstd decoder (so the build needs no network)
 !YPtun/desktopApp/packaging/windows/portable-launcher/vendor/
+
+# Release and build artifacts
+release-*/
+deliverables/
+*.png
+.build/
+.tmp/
+.wsl-tools/
+YPtun/*-build/
+YPtun/build-native/
+YPtun/linux-rust-release/
+

@@ -1,5 +1,79 @@
 # Changelog
 
+## [4.1.5](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.1.4...v4.1.5) (2026-11-13)
+
+
+### Bug Fixes
+
+* **captcha:** load relative chunks of the manual captcha page ([1d601c9](https://github.com/hackdiaz-dev/free-turn-proxy/commit/1d601c90ac3d21b5bfaabc52a9cf0a1dcf809373))
+
+## [4.1.4](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.1.3...v4.1.4) (2026-11-12)
+
+
+### Bug Fixes
+
+* **captcha:** browser PoW fallback and callback hardening ([1390c6b](https://github.com/hackdiaz-dev/free-turn-proxy/commit/1390c6b83bddee1580aac7a6d4dd91f579cd8e58))
+* **deps:** bump Go to 1.26.11 (GO-2026-6859) ([3483789](https://github.com/hackdiaz-dev/free-turn-proxy/commit/3483789e7ff0c96bc63cd22b48cd4cc2b4a213a3))
+
+## [4.1.3](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.1.2...v4.1.3) (2026-11-08)
+
+
+### Bug Fixes
+
+* **deps:** bump brotli and compress ([8404d81](https://github.com/hackdiaz-dev/free-turn-proxy/commit/8404d81033b740af1f488e7f5e1044b4b16b09dc))
+* **deps:** bump brotli and compress (GO-2026-6888, GO-2026-6865) ([8bab2c0](https://github.com/hackdiaz-dev/free-turn-proxy/commit/8bab2c0b7941e237c8fd1605d9f1d650cd86e342))
+* **install:** keep stderr attached after taking the lock ([aec0410](https://github.com/hackdiaz-dev/free-turn-proxy/commit/aec0410cf30d359cd52347b76400524d1bd27cff))
+* **install:** stop on a failed step and show the last 20 log lines ([e2cd7c3](https://github.com/hackdiaz-dev/free-turn-proxy/commit/e2cd7c32166066594a8a5bad4c65f78fcbf98de4))
+* **install:** stop on a failed step and show the last 20 log lines ([c489dce](https://github.com/hackdiaz-dev/free-turn-proxy/commit/c489dce78d9518942e2cde1e5055b3ef85136d5e))
+
+## [4.1.2](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.1.1...v4.1.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* **security:** disable MPTCP explicitly on every TCP listener ([00c6d19](https://github.com/hackdiaz-dev/free-turn-proxy/commit/00c6d195f3ccae22a14d113bab8ac49be1fd1a90))
+* **security:** disable MPTCP explicitly on every TCP listener (CVE-2026-98432) ([9873fda](https://github.com/hackdiaz-dev/free-turn-proxy/commit/9873fdab7cb2bd6b61c0071728b2afb56f024dd4))
+* **security:** disable MPTCP listeners by default ([53b5a39](https://github.com/hackdiaz-dev/free-turn-proxy/commit/53b5a39f50bb23afa8f453bc1ec4fc29ca780979))
+* **security:** disable MPTCP listeners by default (CVE-2026-98432) ([2810327](https://github.com/hackdiaz-dev/free-turn-proxy/commit/2810327c6c03ff40966d9c56eef69dc3e8372a18))
+
+## [4.1.1](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.1.0...v4.1.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **captcha:** do not start PoW cooldown on capture cancellation ([a3fb2ab](https://github.com/hackdiaz-dev/free-turn-proxy/commit/a3fb2ab190503a829be08e62a7da964cf138e5b5))
+* **captcha:** extract PoW cooldown logic and cover cancellation with a test ([d2374cf](https://github.com/hackdiaz-dev/free-turn-proxy/commit/d2374cfa3cb4fc9137b4958b558b7d7930404409))
+
+## [4.1.0](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.0.3...v4.1.0) (2026-10-21)
+
+
+### Features
+
+* **vk:** advanced captcha solving ([f6c1d91](https://github.com/hackdiaz-dev/free-turn-proxy/commit/f6c1d91396d4aa21a52d97b320cf3694bc0e661b))
+* **vk:** добавить продвинутый режим решения капчи ([60743a0](https://github.com/hackdiaz-dev/free-turn-proxy/commit/60743a0cba06af49d57dc319080042fca4433917))
+
+
+### Bug Fixes
+
+* **captcha:** back off after failed browser capture ([af206b1](https://github.com/hackdiaz-dev/free-turn-proxy/commit/af206b129bcf8ebe805f3404f7c3e63a061717a1))
+* **captcha:** constant-time capture path check, Go 1.26.10 in release workflow ([9b6f35c](https://github.com/hackdiaz-dev/free-turn-proxy/commit/9b6f35cd4267eb261d5b320d90f4f77a707d63d5))
+* **captcha:** validate browser PoW before use ([9e704c8](https://github.com/hackdiaz-dev/free-turn-proxy/commit/9e704c8f16ada9087463b4315f036864616a4543))
+* **config:** отключить продвинутую капчу по умолчанию ([a30b9f6](https://github.com/hackdiaz-dev/free-turn-proxy/commit/a30b9f6124e358ba5d9c176175e8f05a66ffdd02))
+
+## [4.0.3](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.0.2...v4.0.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** bump Go to 1.26.9 and x/net to v0.60.0 ([cc71a1a](https://github.com/hackdiaz-dev/free-turn-proxy/commit/cc71a1a938aa757b4c8e40901e3ae073f9bd19b5))
+
+## [4.0.2](https://github.com/hackdiaz-dev/free-turn-proxy/compare/v4.0.1...v4.0.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* **installer:** firewalld support and gum detection ([513e462](https://github.com/hackdiaz-dev/free-turn-proxy/commit/513e462fc9ef5d59a75099304389f9611244141c))
+
 ## [4.0.1](https://github.com/samosvalishe/free-turn-proxy/compare/v4.0.0...v4.0.1) (2026-09-24)
 
 

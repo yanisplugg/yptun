@@ -37,6 +37,11 @@ data class VkTurnDraft(
     val peerHost: String = "",
     val peerPort: String = "",
     val obfKey: String = "",
+    val obfTimingMs: String = "",
+    val streamsPerCred: String = "",
+    val clientId: String = "",
+    val manualCaptcha: Boolean = false,
+    val autoCaptcha: Boolean = true,
     val comment: String = "",
     // per-client VK call link
     val vkLink: String = "",
@@ -198,6 +203,7 @@ object VkTurnComposer {
             vkLink = draft.vkLink.trim(),
             listenPort = listenPort,
             streams = draft.streams.trim().toIntOrNull()?.takeIf { it > 0 } ?: 0,
+            autoCaptcha = draft.autoCaptcha,
             chainProxyLink = draft.chainProxyLink.trim(),
             outbound = outbound,
             outboundProxyLink = if (outbound == VkTurnConfig.OUTBOUND_PROXY) draft.outboundProxyLink.trim() else "",
@@ -326,6 +332,7 @@ object VkTurnComposer {
                 vkLink = vkturn.vkLink,
                 listenPort = vkturn.listenPort.toString(),
                 streams = vkturn.streams.takeIf { it > 0 }?.toString() ?: "",
+                autoCaptcha = vkturn.autoCaptcha,
                 chainProxyLink = vkturn.chainProxyLink,
                 outbound = vkturn.outbound.ifBlank { VkTurnConfig.OUTBOUND_WIREGUARD },
                 outboundProxyLink = vkturn.outboundProxyLink,
@@ -375,44 +382,71 @@ object VkTurnComposer {
         return draft
     }
 
-    /** Mirrors `uri.Config.String()`: assembles the canonical freeturn:// share link. */
+    /** Mirrors free-turn-proxy v4 `uri.Config.String()`: base64url(JSON), not the retired text form. */
     private fun buildUri(draft: VkTurnDraft, peerPort: Int, wgB64: String, mode: String): String {
-        val params = buildList {
-            mode.trim().takeIf { it.isNotBlank() }?.let { add("mode=$it") }
-            draft.obfProfile.trim().takeIf { it.isNotBlank() }?.let { add("obf-profile=$it") }
-            // bond=1 больше не пишем: ядро free-turn-proxy 3.2.0 выпилило побайтовый striping,
-            // tcprelay сам раскидывает соединения по сессиям. Старые ссылки с bond=1 импортируются
-            // как раньше — поле просто игнорируется.
-            if (wgB64.isNotBlank()) add("wg=$wgB64")
+        val host = draft.peerHost.trim()
+        val peer = when {
+            host.isBlank() -> ""
+            peerPort <= 0 -> host
+            ':' in host && !host.startsWith('[') -> "[$host]:$peerPort"
+            else -> "$host:$peerPort"
         }
-        val transport = draft.transport.trim()
-        val transportStr = if (params.isEmpty()) transport else "$transport<${params.joinToString("&")}>"
-
-        return buildString {
-            append(FreeturnUriParser.SCHEME)
-            append(draft.provider.trim().ifBlank { "vk" })
-            if (transportStr.isNotBlank()) {
-                append('?')
-                append(transportStr)
+        val wire = buildJsonObject {
+            put("v", 1)
+            put("provider", draft.provider.trim().ifBlank { "vk" })
+            put("peer", peer)
+            draft.transport.trim().takeIf { it.isNotBlank() }?.let { put("transport", it) }
+            mode.trim().takeIf { it.isNotBlank() }?.let { put("mode", it) }
+            draft.obfProfile.trim().takeIf { it.isNotBlank() && it != "none" }?.let {
+                put("obf", it)
+                put("key", draft.obfKey.trim())
+                draft.obfTimingMs.trim().toIntOrNull()?.takeIf { n -> n > 0 }?.let { n -> put("timing", n) }
             }
-            val host = draft.peerHost.trim()
-            if (host.isNotBlank()) {
-                append('@')
-                append(host)
-                if (peerPort > 0) {
-                    append(':')
-                    append(peerPort)
-                }
+            draft.streams.trim().toIntOrNull()?.takeIf { it > 0 }?.let { put("n", it) }
+            draft.streamsPerCred.trim().toIntOrNull()?.takeIf { it > 0 }?.let { put("spc", it) }
+            draft.clientId.trim().takeIf { it.isNotBlank() }?.let { put("cid", it) }
+            if (draft.manualCaptcha) put("mcap", true)
+            draft.comment.trim().takeIf { it.isNotBlank() }?.let { put("name", it) }
+            draft.vkLink.trim().takeIf { it.isNotBlank() }?.let { put("vk", it) }
+            wgB64.takeIf { it.isNotBlank() }?.let { encoded ->
+                SubscriptionDecoder.decodeBase64Chunk(encoded)?.let { put("wg", it) }
             }
-            draft.obfKey.trim().takeIf { it.isNotBlank() }?.let { append('#'); append(it) }
-            draft.comment.trim().takeIf { it.isNotBlank() }?.let { append('$'); append(it) }
         }
+        return FreeturnUriParser.SCHEME + encodeBase64Url(wire.toString())
     }
 
     /** Parses transport/obf/peer/comment + the embedded wg= INI back into [draft]. */
     private fun applyUri(draft: VkTurnDraft, uri: String): VkTurnDraft {
         var s = uri.trim().substring(FreeturnUriParser.SCHEME.length)
         var result = draft
+
+        runCatching {
+            Json.parseToJsonElement(SubscriptionDecoder.decodeBase64Chunk(s) ?: error("not wire")).jsonObject
+        }.getOrNull()?.let { obj ->
+            fun str(key: String) = obj[key]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val peer = str("peer")
+            result = result.copy(
+                provider = str("provider").ifBlank { "vk" },
+                transport = str("transport").ifBlank { result.transport },
+                mode = str("mode").ifBlank { result.mode },
+                obfProfile = str("obf").ifBlank { "none" },
+                obfKey = str("key"),
+                obfTimingMs = str("timing"),
+                streams = str("n").ifBlank { result.streams },
+                streamsPerCred = str("spc"),
+                clientId = str("cid"),
+                manualCaptcha = str("mcap").toBooleanStrictOrNull() ?: false,
+                comment = str("name"),
+                vkLink = str("vk").ifBlank { result.vkLink },
+            )
+            UriCodec.splitHostPort(peer)?.let { (host, port) ->
+                result = result.copy(peerHost = host, peerPort = port.toString())
+            }
+            str("wg").takeIf { it.isNotBlank() }?.let { wg ->
+                result = applyWgConf(result, if ('[' in wg) wg else SubscriptionDecoder.decodeBase64Chunk(wg).orEmpty())
+            }
+            return result
+        }
 
         s.indexOf('$').takeIf { it >= 0 }?.let { idx ->
             result = result.copy(comment = s.substring(idx + 1))

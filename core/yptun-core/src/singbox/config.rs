@@ -393,7 +393,7 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
     let user_rules_present = !routing.custom_rules_json.trim().is_empty() || routing.rules.iter().any(|r| r.enabled && r.has_matcher());
     if o.allow_local_resolve
         && !user_rules_present
-        && (rp.is_some_and(|p| p.uses_ip_rules()) || routing.bypass_russia || force_family || manual_use_ip
+        && (rp.is_some_and(|p| p.uses_ip_rules()) || routing.bypass_russia || routing.bypass_china || force_family || manual_use_ip
             || embedded_uses_ip || (sb_expert && rp.is_some_and(|p| p.singbox_resolve)))
     {
         rules.push(json!({ "action": "resolve", "strategy": expert_strategy }));
@@ -423,6 +423,7 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
             && user_rules_present
             && (rp.is_some_and(|p| p.uses_ip_rules())
                 || routing.bypass_russia
+                || routing.bypass_china
                 || force_family
                 || manual_use_ip
                 || embedded_uses_ip
@@ -448,6 +449,23 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
         if routing.bypass_russia {
             rules.push(json!({ "rule_set": ["geoip-ru", "geosite-ru"], "outbound": direct_tag }));
         }
+        if routing.bypass_china {
+            rules.push(json!({ "rule_set": ["geoip-cn", "geosite-cn"], "outbound": direct_tag }));
+            rules.push(json!({
+                "domain_suffix": [
+                    "cn", "qq.com", "wechat.com", "baidu.com", "bdstatic.com", "taobao.com",
+                    "tmall.com", "alipay.com", "alicdn.com", "aliyun.com", "aliyuncs.com", "jd.com",
+                    "bilibili.com", "hdslb.com", "douyin.com", "bytedance.com", "zhihu.com",
+                    "weibo.com", "163.com", "126.net", "xiaohongshu.com", "meituan.com",
+                    "pinduoduo.com", "huawei.com", "xiaomi.com", "mi.com"
+                ],
+                "outbound": direct_tag
+            }));
+            rules.push(json!({
+                "ip_cidr": ["223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "114.114.114.114/32"],
+                "outbound": direct_tag
+            }));
+        }
     }
 
     // Rule-sets are fetched before endpoints start: WireGuard tunnels fetch over `direct`.
@@ -469,6 +487,10 @@ pub fn build_value(profile: &ProxyProfile, o: &SingBoxOptions) -> Result<Value, 
         if routing.bypass_russia {
             sets.push(remote("geoip-ru", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs"));
             sets.push(remote("geosite-ru", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs"));
+        }
+        if routing.bypass_china {
+            sets.push(remote("geoip-cn", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"));
+            sets.push(remote("geosite-cn", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs"));
         }
     }
     // De-duplicate by tag (a duplicate tag is a hard error): the LAST definition wins, at the

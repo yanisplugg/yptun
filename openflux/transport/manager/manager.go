@@ -60,11 +60,14 @@ type Manager struct {
 	// Callbacks wired from main.go / mobile bridge.
 	dataCallback    func([]byte)
 	controlCallback func(sub control.Subtype, payload []byte)
-	captchaNotifier CaptchaNotifier
-	remoteAuth      CaptchaNotifier
+	promptNotifier PromptNotifier
+	remoteAuth      PromptNotifier
 
 	// authSent rate-limits AuthRequired forwarding per transport.
 	authSent map[string]time.Time
+
+	// signIn tracks the account sign-ins of the exit's documents (signin.go).
+	signIn signInTrack
 }
 
 // authForwardInterval bounds how often the exit re-sends AuthRequired for
@@ -86,6 +89,12 @@ func New(session *transport.Session, factory Factory, secret, context string) *M
 
 // Session returns the underlying Session.
 func (m *Manager) Session() *transport.Session { return m.session }
+
+// CarrierMTU forwards the session's carrier packet size (transport.CarrierMTUer).
+func (m *Manager) CarrierMTU() int { return m.session.CarrierMTU() }
+
+// OnReliableStream forwards to the session (transport.StreamCarrierer).
+func (m *Manager) OnReliableStream() bool { return m.session.OnReliableStream() }
 
 // Add attaches an already-built transport. Priority is used to order
 // transports for handshake and for control traffic.
@@ -122,7 +131,7 @@ func (m *Manager) Add(name, typ string, raw transport.Transport, priority int, p
 func (m *Manager) subscribeErrors(name string, raw transport.Transport) {
 	if en, ok := raw.(transport.ErrorNotifier); ok {
 		en.SetErrorNotifier(func(_ error, _, url, html, reason string) {
-			m.NotifyCaptcha(name, url, html, reason)
+			m.NotifyPrompt(name, url, html, reason)
 		})
 	}
 }
@@ -263,6 +272,11 @@ func (m *Manager) Stop() error {
 // Send routes one IPv4 packet.
 func (m *Manager) Send(pkt []byte) error { return m.session.Send(pkt) }
 
+// SendFill forwards to the session (transport.FillSender).
+func (m *Manager) SendFill(size int, fill func(dst []byte)) error {
+	return m.session.SendFill(size, fill)
+}
+
 // Receive installs the IPv4 data callback.
 func (m *Manager) Receive(cb func([]byte)) {
 	m.mu.Lock()
@@ -354,10 +368,13 @@ func (m *Manager) AcceptCookies(name string, jar map[string]string) error {
 	return nil
 }
 
-// accountCookies are the Yandex cookies that carry a signed-in account.
+// accountCookies are the cookies that carry a signed-in account: Yandex's, and
+// Mail.ru's (Cloud now wants a login to open a document, so an exit holds one).
 var accountCookies = map[string]bool{
 	"Session_id": true, "sessionid2": true, "sessar": true, "sessguard": true,
 	"L": true, "yandex_login": true, "lah": true, "mda2_beacon": true,
+	"Mpop": true, "t": true, "sdcs": true, "ssdc": true, "ssdc_info": true, "act": true,
+	"p": true, "oid": true, "mrcu": true, "mrhc": true, "VID": true,
 }
 
 // shareableCookies is jar without account login cookies: what an exit may
@@ -463,7 +480,16 @@ func (m *Manager) handleCookies(sub control.Subtype, payload []byte) {
 		if len(cp.Jar) == 0 {
 			return
 		}
-		if err := m.AcceptCookies(name, cp.Jar); err != nil {
+		jar := cp.Jar
+		if m.session.IsExit() && m.refusesPeerLogin() {
+			// Whoever holds the channel link may send this; only the owner,
+			// over SSH, changes the account the node signs in as.
+			if jar = shareableCookies(jar); len(jar) == 0 {
+				utils.Infof("[MANAGER] a client offered %s an account sign-in: refused", name)
+				return
+			}
+		}
+		if err := m.AcceptCookies(name, jar); err != nil {
 			utils.Debugf("[MANAGER] apply cookies (%s): %v", name, err)
 		}
 	}
@@ -627,33 +653,34 @@ func (m *Manager) Stats() transport.TransportStats {
 	return m.session.Stats()
 }
 
-// ---- captcha notifications ----
+// ---- prompt notifications ----
 
-// CaptchaNotifier is called when a transport reports that it needs fresh
+// PromptNotifier is called when a transport reports that it needs fresh
 // cookies (ErrCaptchaRequired or ErrLoginRequired) or, for a script
 // transport, any page it wants the operator to go through (login, one-time
 // setup) - html is set instead of url when the page is the script's own
 // rather than a real site. Wired to the IPC server by main.go.
-type CaptchaNotifier func(transportName, url, html, reason string)
+type PromptNotifier func(transportName, url, html, reason string)
 
-// SetCaptchaNotifier installs the callback.
-func (m *Manager) SetCaptchaNotifier(n CaptchaNotifier) {
+// SetPromptNotifier installs the callback.
+func (m *Manager) SetPromptNotifier(n PromptNotifier) {
 	m.mu.Lock()
-	m.captchaNotifier = n
+	m.promptNotifier = n
 	m.mu.Unlock()
 }
 
-// NotifyCaptcha is called by transports (via ErrorNotifier) when they cannot
+// NotifyPrompt is called by transports (via ErrorNotifier) when they cannot
 // proceed without external help. The local notifier (IPC to the app) gets
 // every report. On the exit node there is usually no app, and the check
 // has to be passed from the exit's address anyway, so the report also goes
 // to the client over whichever carrier still reaches it.
-func (m *Manager) NotifyCaptcha(name, url, html, reason string) {
+func (m *Manager) NotifyPrompt(name, url, html, reason string) {
 	// A transport waiting on a check carries nothing; route around it,
 	// and in particular do not send its own AuthRequired through it.
 	m.session.MarkStalled(name)
+	m.noteLogin(name, reason)
 	m.mu.RLock()
-	n := m.captchaNotifier
+	n := m.promptNotifier
 	m.mu.RUnlock()
 	if n != nil {
 		n(name, url, html, reason)
@@ -689,7 +716,7 @@ func (m *Manager) forwardAuth(name, url, html, reason string) {
 // SetRemoteAuthNotifier installs the callback for AuthRequired reports from
 // the exit node: the app must pass the check from the exit's address and
 // answer with OfferCookies.
-func (m *Manager) SetRemoteAuthNotifier(n CaptchaNotifier) {
+func (m *Manager) SetRemoteAuthNotifier(n PromptNotifier) {
 	m.mu.Lock()
 	m.remoteAuth = n
 	m.mu.Unlock()

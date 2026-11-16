@@ -188,7 +188,16 @@ internal fun RoutingProfilesContent(
             state.profiles.forEach { p ->
                 DropdownMenuItem(
                     text = { Text(p.displayName()) },
-                    onClick = { onSetGlobal(p.id); dismiss() },
+                    onClick = {
+                        onSetGlobal(p.id)
+                        if (p.needsGeoFiles()) {
+                            if (p.geoipUrl.isNotBlank() && p.geositeUrl.isNotBlank()) {
+                                onSetGeoSources(p.geoipUrl, p.geositeUrl)
+                            }
+                            onUpdateGeo()
+                        }
+                        dismiss()
+                    },
                 )
             }
         }
@@ -313,7 +322,13 @@ internal fun RoutingProfilesContent(
                         )
                         OutlinedButton(
                             onClick = {
-                                onSaveProfile(RoutingProfile.chinaDirect(s.routingPresetChina))
+                                val cn = RoutingProfile.chinaDirect(s.routingPresetChina)
+                                onSaveProfile(cn)
+                                onSetGlobal(cn.id)
+                                if (cn.geoipUrl.isNotBlank() && cn.geositeUrl.isNotBlank()) {
+                                    onSetGeoSources(cn.geoipUrl, cn.geositeUrl)
+                                }
+                                onUpdateGeo()
                                 showAddDialog = false
                                 importError = null
                             },

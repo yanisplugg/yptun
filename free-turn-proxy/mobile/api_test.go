@@ -31,7 +31,7 @@ func (r *recorder) OnLog(level, msg string, _ int64) {
 	r.logs = append(r.logs, level+" "+msg)
 }
 
-func (r *recorder) OnCaptcha(url string) {
+func (r *recorder) OnCaptcha(url string, _ bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.captcha = append(r.captcha, url)

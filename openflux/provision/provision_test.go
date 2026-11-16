@@ -96,3 +96,20 @@ func TestChannelInfoStringHidesTheKey(t *testing.T) {
 		}
 	}
 }
+
+// show's signin list (node-install.sh signin_json) reaches the app; an older
+// installer leaves it out.
+func TestChannelInfoSignIn(t *testing.T) {
+	var info ChannelInfo
+	out := []byte(`{"ok":true,"channel":"c1","state":"active","port":1,"context":"","mode":"l4","key":"","signin":[{"state":"login","since":1760000000,"doc":"https://disk.yandex.ru/i/x"}],"transports":[]}`)
+	if err := lastJSON(out, &info); err != nil {
+		t.Fatal(err)
+	}
+	if len(info.SignIn) != 1 || info.SignIn[0].State != "login" || info.SignIn[0].Since != 1760000000 || info.SignIn[0].Doc != "https://disk.yandex.ru/i/x" {
+		t.Fatalf("%+v", info.SignIn)
+	}
+	var old ChannelInfo
+	if err := lastJSON([]byte(`{"ok":true,"channel":"c1","transports":[]}`), &old); err != nil || old.SignIn != nil {
+		t.Fatalf("%v %v", err, old.SignIn)
+	}
+}

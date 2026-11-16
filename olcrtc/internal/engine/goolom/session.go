@@ -159,6 +159,10 @@ type Session struct {
 
 	subscriberReady atomic.Bool
 	publisherReady  atomic.Bool
+	// The counters invalidate a pending disconnect grace period whenever the
+	// same peer connection reports a newer state.
+	subscriberState atomic.Uint64
+	publisherState  atomic.Uint64
 
 	// mediaMu guards subscriberConn, which Connect replaces while the
 	// callbacks of the previous subscriber PC may still be signalling it.

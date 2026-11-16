@@ -37,18 +37,20 @@ const (
 
 func defaultRaw() raw {
 	return raw{
-		Listen:         DefaultListen,
-		Provider:       DefaultProvider,
-		StreamsPerCred: DefaultStreamsPerCred,
-		Transport:      DefaultTransport,
-		Mode:           DefaultMode,
-		ObfProfile:     string(DefaultObfProfile),
-		Platform:       string(DefaultPlatform),
-		DNSMode:        DefaultDNSMode,
-		Routes:         false,
-		TunnelMode:     string(tunnel.ModeNone),
-		TunnelMTU:      tunnel.DefaultMTU,
-		KCP:            kcpmux.DefaultProfile(),
+		Listen:          DefaultListen,
+		Provider:        DefaultProvider,
+		StreamsPerCred:  DefaultStreamsPerCred,
+		AutoCaptcha:     true,
+		AdvancedCaptcha: false,
+		Transport:       DefaultTransport,
+		Mode:            DefaultMode,
+		ObfProfile:      string(DefaultObfProfile),
+		Platform:        string(DefaultPlatform),
+		DNSMode:         DefaultDNSMode,
+		Routes:          false,
+		TunnelMode:      string(tunnel.ModeNone),
+		TunnelMTU:       tunnel.DefaultMTU,
+		KCP:             kcpmux.DefaultProfile(),
 	}
 }
 

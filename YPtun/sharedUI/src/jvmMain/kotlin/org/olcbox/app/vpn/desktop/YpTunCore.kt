@@ -47,6 +47,7 @@ internal interface YpTunCoreLib : Library {
     fun YpTgAwgRunning(): Int
 
     fun YpFtVersion(): Pointer?
+    fun YpFtSetAutoCaptcha(enabled: Int)
     fun YpFtStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int): Pointer?
     fun YpFtStop()
     fun YpFtRunning(): Int
@@ -305,6 +306,7 @@ internal object YpTunCore {
 
     // VK-TURN -------------------------------------------------------------------------------
     fun ftVersion(): String = takeString(lib().YpFtVersion()).orEmpty()
+    fun ftSetAutoCaptcha(enabled: Boolean) = lib().YpFtSetAutoCaptcha(if (enabled) 1 else 0)
     fun ftStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int) =
         check(lib().YpFtStart(uri, listenAddr, vkLink, nStreams), "VK-TURN start failed")
 

@@ -25,7 +25,7 @@ func (s *Session) link(dialer net.Dialer, peer *net.UDPAddr) (udprelay.AuthHandl
 		}, nil
 	}
 
-	prov, err := buildProvider(s.cfg, dialer, &s.connected, s.deps.Solver, log, s.total)
+	prov, err := buildProvider(s.cfg, dialer, &s.connected, s.deps.Solver, s.deps.PowCapture, log, s.total)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -53,6 +53,7 @@ func buildProvider(
 	dialer net.Dialer,
 	connected *atomic.Int32,
 	solver vk.ManualSolverFunc,
+	powCapture vk.PowCaptureFunc,
 	logger logx.Logger,
 	total int,
 ) (provider.Provider, error) {
@@ -65,7 +66,9 @@ func buildProvider(
 			return vk.New(vk.Config{
 				Link:            link,
 				Dialer:          dialer,
-				ManualOnly:      cfg.VK.ManualCaptcha,
+				ManualOnly:      cfg.VK.ManualCaptcha || !cfg.VK.AutoCaptcha,
+				AdvancedCaptcha: cfg.VK.AdvancedCaptcha,
+				PowCapture:      powCapture,
 				Platform:        string(cfg.VK.Platform),
 				StreamsPerCache: cfg.VK.StreamsPerCred,
 				StreamsAlive:    connected.Load,

@@ -669,7 +669,13 @@ func hostEmit(vm *goja.Runtime, t *ScriptTransport) func(goja.FunctionCall) goja
 		}
 		decoded := append([]byte(nil), raw...)
 		t.RecordReceive(len(decoded))
-		utils.SafeGo("script."+t.name+".recv", func() { t.CallReceive(decoded) })
+		select {
+		case t.recvCh <- decoded:
+		default:
+			if n := t.recvDropped.Add(1); n == 1 || n%1000 == 0 {
+				utils.Debugf("[SCRIPT:%s] receive queue full, %d packet(s) dropped", t.name, n)
+			}
+		}
 		return goja.Undefined()
 	}
 }
@@ -695,19 +701,19 @@ func hostSetState(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 	}
 }
 
-// captchaRaiseKinds are the raise() kinds that also reach SetErrorNotifier,
+// promptRaiseKinds are the raise() kinds that also reach SetErrorNotifier,
 // in addition to the generic EventHandler every kind reaches: a reactive
 // mid-session check (captchaRequired, matching the native yandex/mailru
 // transports' own wording) and a proactive "nothing is configured yet"
 // signal (needsSetup) a script can raise right from open() before it even
 // tries to connect - manager.go treats both identically, so the choice is
 // purely which reads better in the script's own code.
-var captchaRaiseKinds = map[string]bool{"captchaRequired": true, "needsSetup": true}
+var promptRaiseKinds = map[string]bool{"captchaRequired": true, "needsSetup": true}
 
 // hostRaise carries out-of-band events upward. Every kind reaches whatever
 // registered via SetEventHandler (mirrors the existing CookieExchanger
 // pattern used by the native yandex/mailru transports, generalized to any
-// kind); captchaRaiseKinds additionally reach SetErrorNotifier - the same
+// kind); promptRaiseKinds additionally reach SetErrorNotifier - the same
 // path those native transports' own captcha/login signal takes - carrying
 // payload.url (a real site, or the script's own httpserver.listen() address)
 // or payload.html (the script's own page, see js/template_html.html) and
@@ -724,7 +730,7 @@ func hostRaise(vm *goja.Runtime, t *ScriptTransport) func(goja.FunctionCall) goj
 		}
 		str := func(key string) string { s, _ := payload[key].(string); return s }
 		reason := str("reason")
-		if captchaRaiseKinds[kind] {
+		if promptRaiseKinds[kind] {
 			checked, err := t.checkSetupPayload(str("html"), str("url"), reason)
 			if err != nil {
 				panic(vm.NewTypeError("raise(" + kind + "): " + err.Error()))
@@ -740,7 +746,7 @@ func hostRaise(vm *goja.Runtime, t *ScriptTransport) func(goja.FunctionCall) goj
 		if h := t.eventHandler(); h != nil {
 			h(kind, payload)
 		}
-		if captchaRaiseKinds[kind] {
+		if promptRaiseKinds[kind] {
 			if en := t.errorNotifier(); en != nil {
 				en(fmt.Errorf("script: %s", kind), t.name, str("url"), str("html"), reason)
 			}

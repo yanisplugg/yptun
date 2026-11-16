@@ -309,6 +309,8 @@ func TgAwgRunning() bool {
 
 func FtVersion() string { return freeturn.Version() }
 
+func FtSetAutoCaptcha(enabled bool) { freeturn.SetAutoCaptcha(enabled) }
+
 func FtStart(uri, listenAddr, vkLink string, nStreams int) error {
 	freeturn.SetLogWriter(tagWriter{"vkturn"})
 	// Without a presenter freeturn opens the captcha in a browser itself and never raises
@@ -547,11 +549,11 @@ func RtcStartRoom(carrier, transport, roomID, clientID, keyHex string, socksPort
 	return h
 }
 
-func RtcStopRoom(handle int)          { mobile.StopRoom(handle) }
-func RtcStopAllRooms()                { mobile.StopAllRooms() }
-func RtcRoomsRunning() int            { return mobile.RoomsRunning() }
+func RtcStopRoom(handle int)         { mobile.StopRoom(handle) }
+func RtcStopAllRooms()               { mobile.StopAllRooms() }
+func RtcRoomsRunning() int           { return mobile.RoomsRunning() }
 func RtcRoomHealthy(handle int) bool { return mobile.RoomHealthy(handle) }
-func RtcRoomPort(handle int) int      { return mobile.RoomPort(handle) }
+func RtcRoomPort(handle int) int     { return mobile.RoomPort(handle) }
 
 // RtcPing returns ms or -1.
 func RtcPing(carrier, transport, roomID, clientID, keyHex string, socksPort, timeoutMs int, pingURL string, vp8FPS, vp8Batch int) int64 {

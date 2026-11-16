@@ -30,6 +30,10 @@
        fires). The function belongs to the page's own address: another origin
        cannot use it. The dialog's title is the script's `reason`; a setup page
        has no "Готово" of the app's own - submitting is this page's job.
+       An app that can also open a sign-in window for a site defines
+       window.openfluxLogin({url, title, capture: {localStorage: key}}), a
+       Promise of that key's text once the person has signed in (see
+       docs/scripted-transports.md); check typeof before using it.
     4. The data is delivered to the script the same way a solved captcha's
        cookies always have been: ApplyCookies writes it into the jar and fires
        onEvent("cookiesApplied") - the script reads it back via cookieJar.get()

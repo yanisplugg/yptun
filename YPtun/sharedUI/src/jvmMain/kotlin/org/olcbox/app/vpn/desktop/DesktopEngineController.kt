@@ -1175,6 +1175,7 @@ internal class DesktopEngineController(
             // bond=1 в старых ссылках ядро 3.2.0 игнорирует — вырезать его больше не нужно.
             val freeturnUri = vk.uri
             log("Starting VK-TURN freeturn listener on $listenAddr")
+            YpTunCore.ftSetAutoCaptcha(vk.autoCaptcha)
             YpTunCore.ftStart(freeturnUri, listenAddr, vk.vkLink, vk.streams)
         }
 

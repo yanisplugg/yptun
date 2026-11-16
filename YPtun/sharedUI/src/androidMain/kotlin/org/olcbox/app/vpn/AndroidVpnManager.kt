@@ -190,9 +190,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 _routing.value = preferences[KEY_ANDROID_ROUTING]
                     ?.let { runCatching { Json.decodeFromString(RoutingRules.serializer(), it) }.getOrNull() }
                     ?: RoutingRules()
-                _routingProfiles.value = preferences[KEY_ANDROID_ROUTING_PROFILES]
+                _routingProfiles.value = (preferences[KEY_ANDROID_ROUTING_PROFILES]
                     ?.let { runCatching { Json.decodeFromString(RoutingProfilesState.serializer(), it) }.getOrNull() }
-                    ?: seededRoutingProfilesState()
+                    ?: seededRoutingProfilesState()).withPresets()
                 _trafficSettings.value = preferences[KEY_ANDROID_TRAFFIC]
                     ?.let { runCatching { Json.decodeFromString(TrafficSettings.serializer(), it) }.getOrNull() }
                     ?.normalized()
@@ -465,9 +465,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         _geoUpdateStatus.value = null
     }
 
-    /** First-run routing state: the built-in "Russia → direct" profile, applied globally for convenience. */
+    /** First-run routing state: the built-in "Russia → direct" and "China → direct" profiles. */
     private fun seededRoutingProfilesState() = RoutingProfilesState(
-        profiles = listOf(RoutingProfile.russiaDirect()),
+        profiles = listOf(RoutingProfile.russiaDirect(), RoutingProfile.chinaDirect()),
         globalProfileId = RoutingProfile.DEFAULT_RU_DIRECT_ID,
     )
 

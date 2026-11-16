@@ -274,6 +274,9 @@ func YpTgAwgRunning() C.int { return cbool(coreapi.TgAwgRunning()) }
 //export YpFtVersion
 func YpFtVersion() *C.char { return cs(coreapi.FtVersion()) }
 
+//export YpFtSetAutoCaptcha
+func YpFtSetAutoCaptcha(enabled C.int) { coreapi.FtSetAutoCaptcha(enabled != 0) }
+
 //export YpFtStart
 func YpFtStart(uri, listenAddr, vkLink *C.char, nStreams C.int) *C.char {
 	return errOut(coreapi.FtStart(gs(uri), gs(listenAddr), gs(vkLink), int(nStreams)))

@@ -61,7 +61,6 @@ func (c *Client) doRequest(ctx context.Context, httpClient tlsclient.HttpClient,
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
-	// Последним: персона снимает свои невозможные заголовки и задаёт порядок.
 	browserprofile.ApplyFhttp(req, profile)
 
 	httpResp, err := httpClient.Do(req)

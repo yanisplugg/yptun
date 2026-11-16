@@ -57,7 +57,7 @@ class DesktopSettingsController {
     private val _routing = MutableStateFlow(JvmVpnSettings.loadRouting())
     val routing: StateFlow<RoutingRules> = _routing.asStateFlow()
 
-    private val _routingProfiles = MutableStateFlow(JvmVpnSettings.loadRoutingProfiles())
+    private val _routingProfiles = MutableStateFlow(JvmVpnSettings.loadRoutingProfiles().withPresets())
     val routingProfiles: StateFlow<RoutingProfilesState> = _routingProfiles.asStateFlow()
 
     private val _traffic = MutableStateFlow(JvmVpnSettings.loadTraffic())

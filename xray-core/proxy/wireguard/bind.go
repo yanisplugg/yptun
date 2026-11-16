@@ -16,14 +16,21 @@ import (
 )
 
 type bind struct {
-	resolveFunc func(host string) (net.IP, error)
-	listenFunc  func() (net.PacketConn, error)
+	ctx         context.Context
+	resolveFunc func(ctx context.Context, host string) (net.IP, error)
+	listenFunc  func(ctx context.Context) (net.PacketConn, error)
 	downFunc    func() error
 	reserved    []byte
 
 	net.PacketConn
 	closeCh chan struct{}
 	mu      sync.Mutex
+}
+
+func (b *bind) SetCtx(ctx context.Context) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ctx = ctx
 }
 
 func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err error) {
@@ -34,7 +41,7 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 		return nil, 0, conn.ErrBindAlreadyOpen
 	}
 
-	c, err := b.listenFunc()
+	c, err := b.listenFunc(b.ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -52,12 +59,9 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 						case <-ch:
 						default:
 							errors.LogErrorInner(context.Background(), err, "unexpected closed")
-							b.mu.Lock()
-							downFunc := b.downFunc
-							b.mu.Unlock()
-							if downFunc != nil {
+							if b.downFunc != nil {
 								go func() {
-									common.Must(downFunc())
+									common.Must(b.downFunc())
 								}()
 							}
 						}
@@ -77,13 +81,6 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
 			}
 		},
 	}, uint16(c.LocalAddr().(*net.UDPAddr).Port), nil
-}
-
-// setDownFunc sets downFunc after the device is created, since the device may already be using the bind.
-func (b *bind) setDownFunc(f func() error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.downFunc = f
 }
 
 func (b *bind) Close() error {
@@ -146,7 +143,11 @@ func (b *bind) ParseEndpoint(s string) (conn.Endpoint, error) {
 	if port < 0 || port > 65535 {
 		return nil, errors.New("invalid port " + sport)
 	}
-	ip, err := b.resolveFunc(host)
+	// up sets the connection's context right before it hands over the endpoint
+	b.mu.Lock()
+	ctx := b.ctx
+	b.mu.Unlock()
+	ip, err := b.resolveFunc(ctx, host)
 	if err != nil {
 		return nil, err
 	}

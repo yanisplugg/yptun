@@ -140,7 +140,7 @@ func (c *Client) solveCaptcha(
 			solveFn = c.defaultAutoSolve
 		}
 		if captchaErr.SessionToken != "" && captchaErr.RedirectURI != "" {
-			successToken, solveErr = solveFn(ctx, captchaErr, streamID, httpClient, profile)
+			successToken, solveErr = solveFn(ctx, captchaErr, streamID, c.dialer, httpClient, profile)
 			if solveErr != nil {
 				c.log.Warnf("[STREAM %d] [Captcha] Auto captcha failed: %v", streamID, solveErr)
 			}
@@ -230,13 +230,9 @@ func (c *Client) solveCaptcha(
 
 func buildCaptchaRetryData(link, escapedName, token1 string, captchaErr *captcha.Error, successToken string) string {
 	if captchaErr.CaptchaSid == "" {
-		// 1.4.3: VK sometimes omits captcha_sid on the smart-captcha (script) path. Retrying with an
-		// empty/invalid sid just re-triggers the challenge, so send the retry without captcha params
-		// (success_token alone) and let the server accept the solved challenge.
 		return fmt.Sprintf(
-			"vk_join_link=https://vk.ru/call/join/%s&name=%s&is_sound_captcha=0&success_token=%s&captcha_ts=%s&captcha_attempt=%s&access_token=%s",
-			link, escapedName, neturl.QueryEscape(successToken),
-			captchaErr.CaptchaTs, captchaErr.CaptchaAttempt, token1,
+			"vk_join_link=https://vk.ru/call/join/%s&name=%s&success_token=%s&access_token=%s",
+			link, escapedName, neturl.QueryEscape(successToken), token1,
 		)
 	}
 	return fmt.Sprintf(

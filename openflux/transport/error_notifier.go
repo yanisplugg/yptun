@@ -1,7 +1,7 @@
 package transport
 
 // ErrorNotifier is implemented by transports that want to signal
-// out-of-band conditions (captcha, login required) to the layer above.
+// out-of-band conditions (prompt, login required) to the layer above.
 //
 // SetErrorNotifier is called once by the manager before Start. The callback
 // must not block; it runs on the transport's reconnect goroutine.

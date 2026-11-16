@@ -1,6 +1,6 @@
 services:
   free-turn-proxy:
-    image: ghcr.io/samosvalishe/free-turn-proxy:latest
+    image: ghcr.io/hackdiaz-dev/free-turn-proxy:latest
     # build: .
     network_mode: host
     restart: unless-stopped

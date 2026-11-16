@@ -45,9 +45,17 @@ type AutoSolveFunc func(
 	ctx context.Context,
 	captchaErr *captcha.Error,
 	streamID int,
+	dialer net.Dialer,
 	http tlsclient.HttpClient,
 	profile browserprofile.Profile,
 ) (token string, err error)
+
+type PowCaptureFunc func(
+	ctx context.Context,
+	redirectURI string,
+	dialer net.Dialer,
+	profile browserprofile.Profile,
+) (powEnvelope string, err error)
 
 type ManualSolveFunc func(
 	ctx context.Context,

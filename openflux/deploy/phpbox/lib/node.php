@@ -28,6 +28,7 @@
 
 require_once __DIR__ . '/util.php';
 require_once __DIR__ . '/mux.php';
+require_once __DIR__ . '/reviver.php';
 
 /** An append-only ring log, one JSON object per line: {"t":ms,"l":level,"m":message}. */
 /**
@@ -437,6 +438,12 @@ final class PhpboxNode
                 // iframe) and hands the cookies here; the node stores them in its jar and clears the captcha
                 // marker, so the next generation authorizes as the user. The cookies are a secret, like the token.
                 $this->json(PhpboxAuth::takeCookies($dir, $key, (string)file_get_contents('php://input'), $log));
+            case 'kick':
+                // A screenshot service's browser (having passed the host's anti-bot) lands here.
+                $this->json($this->kick($target, $key, $dir, $log));
+            case 'revive':
+                // The node (or anyone) asks a screenshot service to open the kick URL in a real browser.
+                $this->json($this->revive($target, $key, $dir, $log));
             case 'run':
                 $this->run($target, $key, $dir, $log);
                 exit;
@@ -643,9 +650,13 @@ final class PhpboxNode
                     $asPred = true;                       // from now on new streams are claimed, not assumed
                     if ($this->spawn($target, $gen, $cap, $sensitive, $log, $spawnTries++)) {
                         $spawned = true;
+                        $s['spawn_fails'] = 0;
                         $log->write('info', "started gen " . ($gen + 1) . ' to take over');
                     } else {
+                        $s['spawn_fails'] = (int)($s['spawn_fails'] ?? 0) + 1;
                         $log->write('warn', 'could not start the successor; retrying');
+                        // The host keeps refusing our own self-request: ask a screenshot service to kick us instead.
+                        if ($s['spawn_fails'] >= 3) { $this->fireRevive($target, $key, $dir, $log); }
                     }
                 }
                 if ($spawned) {
@@ -717,6 +728,86 @@ final class PhpboxNode
         }
         fclose($fp);                                   // the successor outlives this socket and writes nothing to it
         return true;
+    }
+
+    // ---- revive: screenshot-service self-kick --------------------------
+    //
+    // When a free host refuses the node's own self-request (its anti-bot lets
+    // the host through only sometimes), the chain cannot renew itself. A
+    // screenshot service renders a URL in a REAL browser, which passes the
+    // anti-bot, so pointing one at this node's kick URL starts a generation
+    // from the outside. reviver.php (the enterno port) makes that call; the
+    // node fires it itself when its self-request keeps failing.
+
+    /** This node's own kick URL for a browser to open (it passes the anti-bot; a=kick then spawns a generation). */
+    private function selfKickUrl(string $target): string
+    {
+        $host = (string)($_SERVER['HTTP_HOST'] ?? '');
+        $tls  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https' || ($_SERVER['SERVER_PORT'] ?? '') === '443';
+        $path = (string)strtok((string)($_SERVER['REQUEST_URI'] ?? '/'), '?');
+        return ($tls ? 'https' : 'http') . '://' . $host . $path . '?'
+            . http_build_query(['k' => (string)($_GET['k'] ?? ''), 'url' => $target, 'a' => 'kick']);
+    }
+
+    /**
+     * a=kick: hit by a screenshot service's browser (which has passed the anti-bot). If nothing is serving,
+     * start a generation with a self-request (the host lets it through, coming from itself) and return at
+     * once, so the browser's screenshot is quick and the generation outlives it. Idempotent.
+     */
+    private function kick(string $target, string $key, string $dir, PhpboxLog $log): array
+    {
+        if (is_file("$dir/$key.stop")) { return ['ok' => true, 'kicked' => false, 'why' => 'stopped']; }
+        $accepting = array_filter(PhpboxState::generations($dir, $key), fn($g) => PhpboxState::accepting($g));
+        if ($accepting) { return ['ok' => true, 'kicked' => false, 'why' => 'already serving', 'gen' => max(array_keys($accepting))]; }
+        $gens = PhpboxState::generations($dir, $key);
+        $gen  = $gens ? max(array_keys($gens)) : 0;
+        $started = false;
+        for ($a = 0; $a < 2 && !$started; $a++) {   // try both schemes (http/https)
+            $started = $this->spawn($target, $gen, self::CHAIN_CAP, !empty($_GET['sensitive']), $log, $a);
+        }
+        $log->write('info', 'kick: ' . ($started ? 'started a generation' : 'self-request refused'));
+        return ['ok' => $started, 'kicked' => $started];
+    }
+
+    /**
+     * a=revive: ask a screenshot service to open this node's kick URL in a real browser (which passes the
+     * anti-bot a plain self-request cannot). Rate-limited; a no-op while a generation is serving. This is
+     * the node renewing itself with the enterno PHP reviver. Blocks ~a screenshot's length - call it in its
+     * own request (fireRevive), never from the serving loop.
+     */
+    private function revive(string $target, string $key, string $dir, PhpboxLog $log): array
+    {
+        $accepting = array_filter(PhpboxState::generations($dir, $key), fn($g) => PhpboxState::accepting($g));
+        if ($accepting && !isset($_GET['force'])) { return ['ok' => true, 'skipped' => 'already serving']; }
+        $mark = "$dir/$key.revive";
+        if (!isset($_GET['force']) && time() - (int)@file_get_contents($mark) < 45) { return ['ok' => true, 'skipped' => 'rate-limited']; }
+        @file_put_contents($mark, (string)time());
+        $url = $this->selfKickUrl($target);
+        $log->write('info', 'revive: asking a screenshot service to open the kick URL');
+        $svc = PhpboxReviver::kick($url, $log);
+        $log->write($svc !== '' ? 'info' : 'warn', 'revive: ' . ($svc !== '' ? "$svc opened the kick URL" : 'no service could open it'));
+        return ['ok' => $svc !== '', 'service' => $svc];
+    }
+
+    /** Fire a=revive as a separate request (the serving loop must not block ~30s on a screenshot call). Rate-limited. */
+    private function fireRevive(string $target, string $key, string $dir, PhpboxLog $log): void
+    {
+        $mark = "$dir/$key.revive";
+        if (time() - (int)@file_get_contents($mark) < 45) { return; }
+        @file_put_contents($mark, (string)time());
+        $host = (string)($_SERVER['HTTP_HOST'] ?? '');
+        if ($host === '') { return; }
+        [$h, $p] = array_pad(explode(':', $host, 2), 2, null);
+        $tls  = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($_SERVER['SERVER_PORT'] ?? '') === '443';
+        $port = (int)($p ?: ($tls ? 443 : 80));
+        $path = (string)strtok((string)($_SERVER['REQUEST_URI'] ?? '/'), '?');
+        $qs = http_build_query(['k' => (string)($_GET['k'] ?? ''), 'url' => $target, 'a' => 'revive']);
+        $fp = @fsockopen(($tls ? 'ssl://' : '') . $h, $port, $en, $es, 5);
+        if (!$fp) { $log->write('warn', "revive: cannot reach self to fire a=revive: $en $es"); return; }
+        fwrite($fp, "GET $path?$qs HTTP/1.1\r\nHost: $host\r\nUser-Agent: phpbox-revive\r\nConnection: close\r\n\r\n");
+        fclose($fp);   // fire and forget; the a=revive request runs on its own
+        $log->write('info', 'revive: fired a=revive in the background (self-request was failing)');
     }
 
     /** CPU seconds this process has used (user + system): what a host's max_execution_time counts. */

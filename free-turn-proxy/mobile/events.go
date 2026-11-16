@@ -21,8 +21,8 @@ const (
 type EventSink interface {
 	OnState(state string, streams, total int, errMsg string)
 	OnLog(level, msg string, unixMillis int64)
-	// OnCaptcha передаёт URL для решения капчи вручную (пустой url - закрыть окно).
-	OnCaptcha(url string)
+	// OnCaptcha передаёт URL и признак необходимости ручного действия; пустой URL закрывает страницу.
+	OnCaptcha(url string, manual bool)
 }
 
 var sink atomic.Pointer[EventSink]
@@ -43,9 +43,9 @@ func currentSink() EventSink {
 	return nil
 }
 
-func emitCaptcha(url string) {
+func emitCaptcha(url string, manual bool) {
 	if s := currentSink(); s != nil {
-		s.OnCaptcha(url)
+		s.OnCaptcha(url, manual)
 	}
 }
 

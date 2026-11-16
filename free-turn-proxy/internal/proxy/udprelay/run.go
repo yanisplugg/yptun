@@ -122,10 +122,10 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		}
 	}()
 
-	disp := newDispatcher()
+	inboundChan := make(chan *Packet, inboundQueueCap)
 	wg := sync.WaitGroup{}
 	wg.Go(deps.guard(func() {
-		if err := runListener(runCtx, listenConn, &activeLocalPeer, disp); err != nil && runCtx.Err() == nil {
+		if err := runListener(runCtx, listenConn, &activeLocalPeer, inboundChan); err != nil && runCtx.Err() == nil {
 			deps.fatal(err)
 		}
 	}))
@@ -135,7 +135,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 	{
 		cchan := make(chan streamPair)
 		wg.Go(deps.guard(func() {
-			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, okchan, 1)
+			DTLSLoop(runCtx, deps, params, peer, listenConn, inboundChan, cchan, okchan, 1)
 		}))
 		wg.Go(deps.guard(func() {
 			TURNLoop(runCtx, deps, params, peer, cchan, 1)
@@ -152,7 +152,7 @@ func Run(ctx context.Context, dtlsDialer *dtlsdial.Dialer, auth AuthHandler, log
 		cchan := make(chan streamPair)
 		streamID := i + 1
 		wg.Go(deps.guard(func() {
-			DTLSLoop(runCtx, deps, params, peer, listenConn, disp, cchan, nil, streamID)
+			DTLSLoop(runCtx, deps, params, peer, listenConn, inboundChan, cchan, nil, streamID)
 		}))
 		wg.Go(deps.guard(func() {
 			TURNLoop(runCtx, deps, params, peer, cchan, streamID)

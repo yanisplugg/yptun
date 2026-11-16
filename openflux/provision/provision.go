@@ -368,6 +368,25 @@ func (c *Conn) SetCookies(channel, cookies, sudoPassword string) error {
 	return c.asRoot("set-cookies", "channel="+channel+"\ncookies="+cookies+"\n", sudoPassword)
 }
 
+// PushSignIn gives an installed channel's document of the header's service
+// (Session_id: Yandex, Mpop: Mail.ru; see ChannelCookies) the owner's
+// sign-in. The channel's other document keeps its own. merged reports that
+// the running node took it without a restart (a core with cookie-inbox);
+// otherwise it was restarted on it.
+func (c *Conn) PushSignIn(channel string, ts []ChannelTransport, header, sudoPassword string) (merged bool, err error) {
+	cookies, err := ChannelCookies(ts, header)
+	if err != nil {
+		return false, err
+	}
+	var res struct {
+		Merged bool `json:"merged"`
+	}
+	if err := c.asRootJSON("set-cookies", "channel="+channel+"\ncookies="+cookies+"\n", sudoPassword, &res); err != nil {
+		return false, err
+	}
+	return res.Merged, nil
+}
+
 // CookieStore turns a Cookie header ("a=1; b=2", as the WebView keeps it
 // for the document) into what Channel.Cookies takes: the core's cookie
 // store JSON, keyed by the document URL like the node looks it up, then
@@ -410,6 +429,17 @@ type ChannelInfo struct {
 	// Key is the channel's encryption key, read by root over SSH so the
 	// owner can make its link and profile; empty when the installer is older.
 	Key string `json:"key"`
+	// SignIn is the node's own word on its documents' sign-ins: the ones
+	// it is signed out of ("login") or that have been down ("down") since
+	// Since (Unix seconds). Empty when all is well or the core is older.
+	SignIn []SignInState `json:"signin"`
+}
+
+// SignInState is one entry of ChannelInfo.SignIn.
+type SignInState struct {
+	State string `json:"state"`
+	Since int64  `json:"since"`
+	Doc   string `json:"doc"`
 }
 
 // String omits the key: a ChannelInfo in a log or an error must not carry it.
@@ -460,6 +490,23 @@ func (c *Conn) SetChannel(channel string, ts []ChannelTransport, mode, cookies, 
 	return c.asRoot("set-transports", cfg, sudoPassword)
 }
 
+// UpgradeResult is what Upgrade did: the core now installed and the channels
+// that were running and have been restarted on it.
+type UpgradeResult struct {
+	Core      string   `json:"core"`
+	Restarted []string `json:"restarted"`
+}
+
+// Upgrade moves every channel on the server to the core this script pins and
+// restarts the running ones (their tunnels drop for a moment).
+func (c *Conn) Upgrade(sudoPassword string) (*UpgradeResult, error) {
+	var res UpgradeResult
+	if err := c.asRootJSON("upgrade", "", sudoPassword, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // Remove stops and deletes the channel; the last one also removes the
 // binaries, unit and system user the script installed.
 func (c *Conn) Remove(channel, sudoPassword string) error {
@@ -477,16 +524,28 @@ func (c *Conn) asRootJSON(command, cfg, sudoPassword string, into interface{}) e
 		return errors.New("скрипт установки не загружен")
 	}
 	// The config goes into a private temp file (the script deletes it right
-	// after reading) so stdin is free for sudo's password.
-	out, _, err := c.run(`umask 077; f=$(mktemp /tmp/openflux-node-conf.XXXXXX) && cat > "$f" && echo "$f"`, []byte(cfg))
-	if err != nil {
-		return errors.New("не удалось передать конфигурацию на сервер")
+	// after reading) so stdin is free for sudo's password. A command with no
+	// config (upgrade) gets none.
+	conf := ""
+	if cfg != "" {
+		out, _, err := c.run(`umask 077; f=$(mktemp /tmp/openflux-node-conf.XXXXXX) && cat > "$f" && echo "$f"`, []byte(cfg))
+		if err != nil {
+			return errors.New("не удалось передать конфигурацию на сервер")
+		}
+		conf = strings.TrimSpace(string(out))
+		if !strings.HasPrefix(conf, "/tmp/openflux-node-conf.") {
+			return errors.New("не удалось передать конфигурацию на сервер")
+		}
 	}
-	conf := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(conf, "/tmp/openflux-node-conf.") {
-		return errors.New("не удалось передать конфигурацию на сервер")
+	dropConf := func() {
+		if conf != "" {
+			_, _, _ = c.run("rm -f "+shellQuote(conf), nil)
+		}
 	}
-	script := "sh " + shellQuote(c.script) + " " + command + " " + shellQuote(conf)
+	script := "sh " + shellQuote(c.script) + " " + command
+	if conf != "" {
+		script += " " + shellQuote(conf)
+	}
 	var stdin []byte
 	switch c.sudo {
 	case "root":
@@ -494,13 +553,13 @@ func (c *Conn) asRootJSON(command, cfg, sudoPassword string, into interface{}) e
 		script = "sudo -n " + script
 	case "password":
 		if sudoPassword == "" {
-			_, _, _ = c.run("rm -f "+shellQuote(conf), nil)
+			dropConf()
 			return errors.New("для sudo нужен пароль")
 		}
 		script = "sudo -S -p '' " + script
 		stdin = []byte(sudoPassword + "\n")
 	default:
-		_, _, _ = c.run("rm -f "+shellQuote(conf), nil)
+		dropConf()
 		return errors.New("у пользователя нет прав root и sudo")
 	}
 	stdout, stderr, runErr := c.run(script, stdin)
@@ -512,7 +571,7 @@ func (c *Conn) asRootJSON(command, cfg, sudoPassword string, into interface{}) e
 	if jerr := lastJSON(stdout, &res); jerr != nil {
 		// The script did not run (sudo refused, or it crashed). Its config
 		// file may still be there.
-		_, _, _ = c.run("rm -f "+shellQuote(conf), nil)
+		dropConf()
 		if isSudoRefusal(stderr) {
 			return ErrSudoPassword
 		}

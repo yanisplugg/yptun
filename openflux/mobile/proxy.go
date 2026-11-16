@@ -72,13 +72,13 @@ func startProxyWith(build func() (transport.Transport, error), listenAddr, usern
 	trans, err := build()
 	if err != nil {
 		appendLog(fmt.Sprintf("[ERROR] Ошибка запуска прокси: %v", err))
-		detachCaptcha()
+		detachPrompt()
 		setAuthProxy(nil)
 		return err.Error()
 	}
 	if err := trans.Start(); err != nil {
 		appendLog(fmt.Sprintf("[ERROR] Ошибка запуска прокси: %v", err))
-		detachCaptcha()
+		detachPrompt()
 		setAuthProxy(nil)
 		return err.Error()
 	}
@@ -95,7 +95,7 @@ func startProxyWith(build func() (transport.Transport, error), listenAddr, usern
 	if err := server.Bind(); err != nil {
 		_ = trans.Stop()
 		appendLog(fmt.Sprintf("[ERROR] Не удалось занять %s: %v", listenAddr, err))
-		detachCaptcha()
+		detachPrompt()
 		setAuthProxy(nil)
 		return fmt.Sprintf("Порт %s уже занят", listenAddr)
 	}
@@ -132,8 +132,8 @@ func StopProxy() {
 	proxy.server = nil
 	proxy.stream = nil
 	proxy.mu.Unlock()
-	detachCaptcha()
-	CancelCaptcha()
+	detachPrompt()
+	CancelPrompt()
 	setAuthProxy(nil)
 	clearRoute()
 	appendLog("[ANDROID] Остановка прокси-транспорта")

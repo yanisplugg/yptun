@@ -16,6 +16,8 @@ data class RoutingRules(
     val blockAds: Boolean = false,
     /** Send Russian sites/IPs directly (geoip-ru + geosite-ru). */
     val bypassRussia: Boolean = false,
+    /** Send Chinese sites/IPs directly (AliDNS + geoip-cn + geosite-cn). */
+    val bypassChina: Boolean = false,
     /** User domains routed directly (domain suffixes). */
     val directDomains: List<String> = emptyList(),
     /** User domains blocked (domain suffixes). */

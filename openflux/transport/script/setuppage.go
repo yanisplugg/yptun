@@ -152,23 +152,45 @@ func clip(s string, n int) string {
 // into the {name: value} map that reaches the script (ApplyCookies, then
 // cookieJar.get() in onEvent("cookiesApplied")).
 //
-// The page may pass a flat object, or {client: {...}, node: {...}} (only the
-// client half is delivered today). Values arrive as strings: a string is kept,
-// a number or true/false becomes its text, null, objects and arrays are
-// dropped (a page that needs structure sends JSON.stringify of it). An empty
-// result is an error: a page that submits nothing has not set anything up.
+// The page may pass a flat object, or {client: {...}, node: {...}}. The
+// client half is always returned; the node half is returned separately
+// (nil when absent) for delivery to a node during provisioning.
+// Values arrive as strings: a string is kept, a number or true/false
+// becomes its text, null, objects and arrays are dropped (a page that
+// needs structure sends JSON.stringify of it). An empty client result is
+// an error: a page that submits nothing has not set anything up.
 func FlattenSubmission(raw []byte) (map[string]string, error) {
+	client, _, err := FlattenSubmissionScoped(raw)
+	return client, err
+}
+
+// FlattenSubmissionScoped is like FlattenSubmission but also returns the
+// node half of a {client: {...}, node: {...}} payload. The node map is nil
+// when the page passed a flat object or omitted the node key.
+func FlattenSubmissionScoped(raw []byte) (client map[string]string, node map[string]string, err error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var root map[string]interface{}
-	if err := dec.Decode(&root); err != nil {
-		return nil, fmt.Errorf("the page's data is not a JSON object: %w", err)
+	if err = dec.Decode(&root); err != nil {
+		return nil, nil, fmt.Errorf("the page's data is not a JSON object: %w", err)
 	}
-	if client, ok := root["client"].(map[string]interface{}); ok {
-		root = client
+	clientObj, scoped := root["client"].(map[string]interface{})
+	if scoped {
+		if nodeObj, ok := root["node"].(map[string]interface{}); ok {
+			node = flattenMap(nodeObj)
+		}
+		root = clientObj
 	}
-	out := make(map[string]string, len(root))
-	for k, v := range root {
+	client = flattenMap(root)
+	if len(client) == 0 {
+		return nil, nil, fmt.Errorf("the page passed no data")
+	}
+	return client, node, nil
+}
+
+func flattenMap(m map[string]interface{}) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
 		if k == "" {
 			continue
 		}
@@ -182,7 +204,7 @@ func FlattenSubmission(raw []byte) (map[string]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("the page passed no data")
+		return nil
 	}
-	return out, nil
+	return out
 }

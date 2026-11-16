@@ -88,8 +88,12 @@ internal class LinuxProxyController : DesktopProxyController {
     private val kdeRead get() = listOf("kreadconfig6", "kreadconfig5").firstOrNull(LinuxPrivilege::executableExists)
 
     override suspend fun enable(httpProxyHostPort: String, pacUrl: String) {
-        val host = httpProxyHostPort.substringBefore(':')
-        val port = httpProxyHostPort.substringAfter(':').toInt()
+        val separator = httpProxyHostPort.lastIndexOf(':')
+        require(separator > 0) { "Invalid proxy address: $httpProxyHostPort" }
+        val host = httpProxyHostPort.substring(0, separator).removePrefix("[").removeSuffix("]")
+        val port = httpProxyHostPort.substring(separator + 1).toIntOrNull()
+            ?.takeIf { it in 1..65535 }
+            ?: error("Invalid proxy port: $httpProxyHostPort")
         val kde = kdeWrite
         // XFCE, LXQt, sway, Hyprland…: no system proxy to set. Failing the connect used to throw away
         // a working local proxy, and the error never reached the screen — keep it up and say where it is.
@@ -100,16 +104,15 @@ internal class LinuxProxyController : DesktopProxyController {
             )
             return
         }
-        active = true
-
         if (hasGsettings) {
             readGnomeState()?.takeUnless { it.looksLikeOurs() }?.let { gnomeBackup = it }
-            runAll(enableGnomeProxyCommands(host, port))
+            runAllOrThrow(enableGnomeProxyCommands(host, port))
         }
         if (kde != null) {
             readKdeState()?.takeUnless { it.looksLikeOurs() }?.let { kdeBackup = it }
-            runAll(enableKdeProxyCommands("http://$httpProxyHostPort", kde))
+            runAllOrThrow(enableKdeProxyCommands("http://$httpProxyHostPort", kde))
         }
+        active = true
     }
 
     override suspend fun restore() {
@@ -136,6 +139,12 @@ internal class LinuxProxyController : DesktopProxyController {
     }
 
     private suspend fun runAll(commands: List<List<String>>) = commands.forEach { runCatching { runCommand(it) } }
+
+    /** Enabling the proxy must fail loudly: swallowing gsettings/kwriteconfig errors leaves the UI
+     * connected while no application can reach the local bridge (the Mint failure mode). */
+    private suspend fun runAllOrThrow(commands: List<List<String>>) {
+        commands.forEach { runCommand(it) }
+    }
 
     private suspend fun readGnomeState(): LinuxGnomeProxyState? = runCatching {
         val mode = runCommand(listOf("gsettings", "get", "org.gnome.system.proxy", "mode")).trim()

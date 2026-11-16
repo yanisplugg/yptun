@@ -41,7 +41,19 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
 
     let existing_inbounds: Vec<Obj> = root.get("inbounds").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_object().cloned()).collect()).unwrap_or_default();
     let template_socks = existing_inbounds.iter().find(|i| str_of(i, "protocol") == Some("socks"));
-    let non_socks: Vec<&Obj> = existing_inbounds.iter().filter(|i| str_of(i, "protocol") != Some("socks")).collect();
+    let non_socks: Vec<&Obj> = existing_inbounds.iter().filter(|i| {
+        let proto = str_of(i, "protocol");
+        if proto == Some("socks") {
+            return false;
+        }
+        if !o.socks_username.is_empty() && proto == Some("http") {
+            let accounts = i.get("settings").and_then(Value::as_object).and_then(|s| s.get("accounts")).and_then(Value::as_array);
+            if accounts.map_or(true, |a| a.is_empty()) {
+                return false;
+            }
+        }
+        true
+    }).collect();
 
     let mut socks = socks_inbound(&o.listen_host, o.listen_port, &o.socks_username, &o.socks_password);
     let sniffing = template_socks.and_then(|t| t.get("sniffing")).and_then(Value::as_object);
@@ -228,7 +240,7 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
     }
     let mut inbounds = vec![Value::Object(socks)];
     if loop_active {
-        inbounds.push(loop_inbound(loop_port));
+        inbounds.push(loop_inbound(loop_port, Some(&o.socks_username), Some(&o.socks_password)));
     }
     if warp_server {
         inbounds.push(warp_relay_inbound(o.warp_relay.as_ref().unwrap()));
@@ -239,7 +251,7 @@ pub fn prepare_raw(raw_config_json: &str, o: &RawOptions) -> String {
     let mut outbounds: Vec<Value> = Vec::new();
     outbounds.extend(cascade_outbound);
     if loop_active {
-        outbounds.push(loop_outbound(loop_port));
+        outbounds.push(loop_outbound(loop_port, Some(&o.socks_username), Some(&o.socks_password)));
     }
     for raw in &user_outbounds {
         let ob = if warp_client { with_dialer_proxy(raw, WARP_OUT_TAG) } else { raw.clone() };

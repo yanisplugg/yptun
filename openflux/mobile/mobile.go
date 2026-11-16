@@ -13,6 +13,7 @@ import (
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/registry"
+	"github.com/p1neappleXpress/OpenFlux/tunnel"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
@@ -114,7 +115,7 @@ func startPacket(build func() (transport.Transport, error)) string {
 		client.mu.Lock()
 		client.running = false
 		client.mu.Unlock()
-		detachCaptcha()
+		detachPrompt()
 		setAuthProxy(nil)
 		return err.Error()
 	}
@@ -125,6 +126,7 @@ func startPacket(build func() (transport.Transport, error)) string {
 	maxQueue := transport.DefaultConfig().MaxQueueSize
 	trans.Receive(func(data []byte) {
 		packet := append([]byte(nil), data...)
+		tunnel.ClampDeviceSyn(trans, packet)
 		client.mu.Lock()
 		if !client.running {
 			client.mu.Unlock()
@@ -196,7 +198,7 @@ func classicTransport(transportType, documentURL, encryptionSecret, codec, maxTo
 	if err != nil {
 		return nil, err
 	}
-	attachCaptcha(transportType, documentURL, inner)
+	attachPrompt(transportType, documentURL, inner)
 	setClassicRoute(transportType)
 	if exit {
 		addExitRoom(transportType, inner)
@@ -240,8 +242,8 @@ func Stop() {
 	client.transport = nil
 	client.packets = nil
 	client.mu.Unlock()
-	detachCaptcha()
-	CancelCaptcha()
+	detachPrompt()
+	CancelPrompt()
 	setAuthProxy(nil)
 	clearRoute()
 	appendLog("[ANDROID] Остановка транспорта")
@@ -257,6 +259,28 @@ func IsConnected() bool {
 	return trans != nil && trans.IsConnected()
 }
 
+// CarrierMTU is the largest IPv4 packet the current carriers move whole, so
+// the embedding app can size its TUN interface to it instead of a fixed,
+// conservative value. A direct TCP carrier moves a 16 KB packet as cheaply as
+// a 1.5 KB one, and a larger MTU divides the per-packet work of the whole
+// pipeline (JNI crossings, AES, framing, TUN syscalls) across far fewer
+// packets; a datagram carrier that declares a smaller MTU reports that
+// instead, so no record is cut on the wire. Returns transport.DefaultCarrierMTU
+// before a carrier is up or when the transport reports nothing. The app reads
+// it once the session is connected and (re)establishes its TUN at this size;
+// see the Android AndroidConnectionService.
+func CarrierMTU() int {
+	client.mu.Lock()
+	trans := client.transport
+	client.mu.Unlock()
+	if m, ok := trans.(interface{ CarrierMTU() int }); ok {
+		if n := m.CarrierMTU(); n >= transport.MinCarrierMTU {
+			return n
+		}
+	}
+	return transport.DefaultCarrierMTU
+}
+
 func Send(packet []byte) string {
 	client.mu.Lock()
 	trans := client.transport
@@ -265,7 +289,7 @@ func Send(packet []byte) string {
 	if !running || trans == nil {
 		return "Транспорт не запущен"
 	}
-	if err := trans.Send(packet); err != nil {
+	if err := tunnel.SendFromDevice(trans, packet); err != nil {
 		return err.Error()
 	}
 	return ""

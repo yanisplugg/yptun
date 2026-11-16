@@ -675,10 +675,11 @@ object SingBoxConfig {
                     // v2rayNG-style manual rules that use IP/geoip selectors also need the sniffed
                     // domain resolved first, or `geoip:ru → direct` silently skips domain connections.
                     val manualRulesUseIp = routing.rules.any { it.enabled && it.ip.isNotEmpty() }
-                    if (allowLocalResolve &&
-                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                    val userRulesPresent = routing.customRulesJson.isNotBlank() || routing.rules.any { it.enabled && it.hasMatcher() }
+                    if (allowLocalResolve && !userRulesPresent &&
+                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || routing.bypassChina || forceFamily ||
                             manualRulesUseIp || embeddedUsesIpRules ||
-                            (sbExpert && routingProfile!!.singboxResolve))
+                            (sbExpert && routingProfile?.singboxResolve == true))
                     ) {
                         addJsonObject {
                             put("action", "resolve")
@@ -730,6 +731,19 @@ object SingBoxConfig {
                     parseJsonArray(routing.customRulesJson).forEach { add(it) }
                     // Structured v2rayNG-style rules (in user-defined order, after verbatim JSON).
                     SingBoxRouting.manualRules(routing.rules, matchAppsByProcess, directTag).forEach { add(it) }
+                    // Resolve only after user rules have had a chance to match the original domain.
+                    // Otherwise Bypass Russia's broad resolve action sends LAN-only names (for
+                    // example myserver.lan) to public DNS before their Direct rule can fire.
+                    if (allowLocalResolve && userRulesPresent &&
+                        (routingProfile?.usesIpRules() == true || routing.bypassRussia || forceFamily ||
+                            manualRulesUseIp || embeddedUsesIpRules ||
+                            (sbExpert && routingProfile?.singboxResolve == true))
+                    ) {
+                        addJsonObject {
+                            put("action", "resolve")
+                            put("strategy", expertStrategy)
+                        }
+                    }
                     // Blocking toggles first so ads/blocked domains die even if a profile bucket would proxy them.
                     if (routing.blockDomains.isNotEmpty()) {
                         addJsonObject {
@@ -774,6 +788,30 @@ object SingBoxConfig {
                             putJsonArray("rule_set") { add("geoip-ru"); add("geosite-ru") }
                             put("outbound", directTag)
                         }
+                    if (routing.bypassChina) {
+                        addJsonObject {
+                            putJsonArray("rule_set") { add("geoip-cn"); add("geosite-cn") }
+                            put("outbound", directTag)
+                        }
+                        addJsonObject {
+                            putJsonArray("domain_suffix") {
+                                listOf(
+                                    "cn", "qq.com", "wechat.com", "baidu.com", "bdstatic.com", "taobao.com",
+                                    "tmall.com", "alipay.com", "alicdn.com", "aliyun.com", "aliyuncs.com", "jd.com",
+                                    "bilibili.com", "hdslb.com", "douyin.com", "bytedance.com", "zhihu.com",
+                                    "weibo.com", "163.com", "126.net", "xiaohongshu.com", "meituan.com",
+                                    "pinduoduo.com", "huawei.com", "xiaomi.com", "mi.com"
+                                ).forEach { add(it) }
+                            }
+                            put("outbound", directTag)
+                        }
+                        addJsonObject {
+                            putJsonArray("ip_cidr") {
+                                listOf("223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "114.114.114.114/32").forEach { add(it) }
+                            }
+                            put("outbound", directTag)
+                        }
+                    }
                     }
                     }
                 }
@@ -825,6 +863,22 @@ object SingBoxConfig {
                             put("tag", "geosite-ru")
                             put("format", "binary")
                             put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs")
+                            put("download_detour", ruleSetDetour)
+                        })
+                    }
+                    if (routing.bypassChina) {
+                        add(buildJsonObject {
+                            put("type", "remote")
+                            put("tag", "geoip-cn")
+                            put("format", "binary")
+                            put("url", "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs")
+                            put("download_detour", ruleSetDetour)
+                        })
+                        add(buildJsonObject {
+                            put("type", "remote")
+                            put("tag", "geosite-cn")
+                            put("format", "binary")
+                            put("url", "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs")
                             put("download_detour", ruleSetDetour)
                         })
                     }

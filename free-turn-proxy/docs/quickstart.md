@@ -11,7 +11,7 @@
 Интерактивный скрипт поднимет FreeTurn (Docker или systemd) и WireGuard `ft-wg0` либо подключит FreeTurn к вашему VPN, сгенерирует ключи, создаст клиента `owner` и выдаст **ссылку `freeturn://` и ссылку на QR-код**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samosvalishe/free-turn-proxy/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/hackdiaz-dev/free-turn-proxy/master/scripts/install.sh | sudo bash
 ```
 
 > [!TIP]
@@ -28,14 +28,14 @@ curl -fsSL https://raw.githubusercontent.com/samosvalishe/free-turn-proxy/master
 
 **Linux:**
 ```bash
-curl -L -o client https://github.com/samosvalishe/free-turn-proxy/releases/latest/download/client-linux-amd64
+curl -L -o client https://github.com/hackdiaz-dev/free-turn-proxy/releases/latest/download/client-linux-amd64
 chmod +x client
 sudo ./client -listen 127.0.0.1:9000 -peer <vps_ip>:56000 -link "<call-link>" -obf-profile rtpopus3 -obf-key <ВАШ_КЛЮЧ> -client-id <ВАШ_CLIENT_ID> -routes
 ```
 
 **Windows (PowerShell от администратора):**
 ```powershell
-Invoke-WebRequest -Uri https://github.com/samosvalishe/free-turn-proxy/releases/latest/download/client-windows-amd64.exe -OutFile client.exe
+Invoke-WebRequest -Uri https://github.com/hackdiaz-dev/free-turn-proxy/releases/latest/download/client-windows-amd64.exe -OutFile client.exe
 .\client.exe -peer <vps_ip>:56000 -provider vk -link "<call-link>" -listen 127.0.0.1:9000 -n 12 -streams-per-cred 12 -obf-profile rtpopus3 -obf-key <ВАШ_КЛЮЧ> -dns-servers 192.168.31.1 -dns-mode doh -client-id <ВАШ_CLIENT_ID> -routes
 ```
 
@@ -62,7 +62,7 @@ sudo ./client -listen 127.0.0.1:9000 -peer <vps_ip>:56000 -link "<call-link>" -o
 
 ```bash
 termux-wake-lock
-# Скачивание: curl -L -o client https://github.com/samosvalishe/free-turn-proxy/releases/latest/download/client-android-arm64 && chmod +x client
+# Скачивание: curl -L -o client https://github.com/hackdiaz-dev/free-turn-proxy/releases/latest/download/client-android-arm64 && chmod +x client
 
 # Обязательно укажите ваш ключ и DNS оператора (можно узнать в настройках APN)
 ./client -listen 127.0.0.1:9000 -peer <vps_ip>:56000 -link "<call-link>" -obf-profile rtpopus3 -obf-key <ВАШ_КЛЮЧ> -dns-servers <ip_dns_оператора> -client-id <ВАШ_CLIENT_ID>

@@ -151,7 +151,7 @@ Mobile.startDirectTunnel(wgConf, 1376L, pfd.dup().detachFd().toLong())
 type EventSink interface {
     OnState(state string, streams, total int, errMsg string)
     OnLog(level, msg string, unixMillis int64)
-    OnCaptcha(url string)
+    OnCaptcha(url string, manual bool)
 }
 ```
 

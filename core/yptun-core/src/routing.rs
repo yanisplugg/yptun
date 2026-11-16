@@ -684,6 +684,8 @@ pub struct RoutingRules {
     pub bypass_lan: bool,
     pub block_ads: bool,
     pub bypass_russia: bool,
+    #[serde(default)]
+    pub bypass_china: bool,
     pub direct_domains: Vec<String>,
     pub block_domains: Vec<String>,
     /// A verbatim sing-box `route.rules` array. Blank = unused.
@@ -699,6 +701,7 @@ impl Default for RoutingRules {
             bypass_lan: true,
             block_ads: false,
             bypass_russia: false,
+            bypass_china: false,
             direct_domains: vec![],
             block_domains: vec![],
             custom_rules_json: String::new(),
