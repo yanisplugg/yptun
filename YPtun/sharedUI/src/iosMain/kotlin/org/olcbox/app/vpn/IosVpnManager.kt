@@ -577,10 +577,27 @@ class IosVpnManager(
      */
     private suspend fun publishRequest(location: LocationConfig) {
         val deviceId = locationsRepository.getDeviceIdentity()
-        val request = IosTunnelRequest(location, deviceId)
+        val locJson = Json.encodeToString(LocationConfig.serializer(), location)
+        val trafficJson = IosSharedStore.readText("traffic.json") ?: "{}"
+        val routingJson = IosSharedStore.readText("routing.json") ?: "{}"
+        val routingProfilesJson = IosSharedStore.readText("routing_profiles.json") ?: "{}"
+        val appBehaviorJson = IosSharedStore.readText("app_behavior.json") ?: "{}"
+        val warpConfig = org.olcbox.app.vpn.warp.WarpConfigStore.loadConfig().orEmpty()
+
+        val requestPayload = buildJsonObject {
+            put("locationJSON", JsonPrimitive(locJson))
+            put("trafficJSON", JsonPrimitive(trafficJson))
+            put("routingJSON", JsonPrimitive(routingJson))
+            put("routingProfilesJSON", JsonPrimitive(routingProfilesJson))
+            put("appBehaviorJSON", JsonPrimitive(appBehaviorJson))
+            put("warpConfig", JsonPrimitive(warpConfig))
+            put("deviceID", JsonPrimitive(deviceId))
+            put("deviceId", JsonPrimitive(deviceId))
+            put("location", Json.parseToJsonElement(locJson))
+        }
         IosSharedStore.writeText(
             IosTunnelSession.REQUEST_FILE,
-            IosTunnelSession.json.encodeToString(IosTunnelRequest.serializer(), request)
+            requestPayload.toString()
         )
         val routing = IosSharedStore.loadRouting()
         val bundle = runCatching { locationsRepository.getBundle() }.getOrNull()

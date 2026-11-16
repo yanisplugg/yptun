@@ -26,6 +26,41 @@ public struct AppleTunnelRequest: Codable, Equatable, Sendable {
         self.warpConfig = warpConfig
         self.deviceID = deviceID
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case locationJSON
+        case trafficJSON
+        case routingJSON
+        case routingProfilesJSON
+        case appBehaviorJSON
+        case warpConfig
+        case deviceID
+        case deviceId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.locationJSON = try container.decode(String.self, forKey: .locationJSON)
+        self.trafficJSON = (try? container.decode(String.self, forKey: .trafficJSON)) ?? "{}"
+        self.routingJSON = (try? container.decode(String.self, forKey: .routingJSON)) ?? "{}"
+        self.routingProfilesJSON = (try? container.decode(String.self, forKey: .routingProfilesJSON)) ?? "{}"
+        self.appBehaviorJSON = (try? container.decode(String.self, forKey: .appBehaviorJSON)) ?? "{}"
+        self.warpConfig = (try? container.decode(String.self, forKey: .warpConfig)) ?? ""
+        self.deviceID = (try? container.decode(String.self, forKey: .deviceID))
+            ?? (try? container.decode(String.self, forKey: .deviceId)) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(locationJSON, forKey: .locationJSON)
+        try container.encode(trafficJSON, forKey: .trafficJSON)
+        try container.encode(routingJSON, forKey: .routingJSON)
+        try container.encode(routingProfilesJSON, forKey: .routingProfilesJSON)
+        try container.encode(appBehaviorJSON, forKey: .appBehaviorJSON)
+        try container.encode(warpConfig, forKey: .warpConfig)
+        try container.encode(deviceID, forKey: .deviceID)
+        try container.encode(deviceID, forKey: .deviceId)
+    }
 }
 
 public enum AppleTunnelStore {

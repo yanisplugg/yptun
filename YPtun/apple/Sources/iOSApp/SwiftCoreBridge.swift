@@ -1,0 +1,381 @@
+import Coreapi
+import Darwin
+import Foundation
+import SharedUI
+#if canImport(SnolcCore)
+import SnolcCore
+#endif
+#if canImport(CsqttCore)
+import CsqttCore
+#endif
+
+/// Kotlin's `IosCoreBridge`, forwarded 1:1 to the gomobile framework of `kazcores/coreapi`.
+/// Compiled into both the app (server pings) and the packet-tunnel extension (the tunnel itself).
+/// Error convention of the Kotlin side: "" = success, otherwise the error text.
+final class SwiftCoreBridge: NSObject, IosCoreBridge {
+    private func err(_ call: (NSErrorPointer) -> Bool) -> String {
+        var error: NSError?
+        _ = call(&error)
+        return error?.localizedDescription ?? ""
+    }
+
+    func pollLog(timeoutMs: Int32) -> String { CoreapiPollLog(Int(timeoutMs)) }
+
+    func sbVersion() -> String { CoreapiSbVersion() }
+    func sbStart(configJson: String) -> String { err { CoreapiSbStart(configJson, $0) } }
+    func sbStop() { CoreapiSbStop() }
+    func sbRunning() -> Bool { CoreapiSbRunning() }
+
+    func xraySetAssetPath(dir: String) { CoreapiXraySetAssetPath(dir) }
+    func xrayVersion() -> String { CoreapiXrayVersion() }
+    func xrayStart(configJson: String) -> String { err { CoreapiXrayStart(configJson, $0) } }
+    func xrayStop() { CoreapiXrayStop() }
+    func xrayRunning() -> Bool { CoreapiXrayRunning() }
+    func xrayMeasureDelay(configJson: String, url: String, method: String, timeoutMs: Int32) -> Int64 {
+        CoreapiXrayMeasureDelay(configJson, url, method, Int(timeoutMs))
+    }
+
+    func tcpPing(host: String, port: Int32, timeoutMs: Int32) -> Int64 {
+        guard !host.isEmpty, port > 0, port <= 65535 else { return -1 }
+        let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "0.0.0.0" {
+            return -1
+        }
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &res) == 0, let info = res else {
+            return -1
+        }
+        defer { freeaddrinfo(info) }
+
+        let fd = socket(info.pointee.ai_family, info.pointee.ai_socktype, info.pointee.ai_protocol)
+        guard fd >= 0 else { return -1 }
+        defer { close(fd) }
+
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        let IP_BOUND_IF: Int32 = 25
+        let IPV6_BOUND_IF: Int32 = 125
+        if let ifIndex = SwiftCoreBridge.getPhysicalInterfaceIndex() {
+            var idx = ifIndex
+            if info.pointee.ai_family == AF_INET {
+                _ = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            } else if info.pointee.ai_family == AF_INET6 {
+                _ = setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            }
+        }
+
+        let start = DispatchTime.now()
+        let ret = connect(fd, info.pointee.ai_addr, info.pointee.ai_addrlen)
+        if ret == 0 {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+            return max(1, Int64(elapsed / 1_000_000))
+        }
+        if errno != EINPROGRESS {
+            return -1
+        }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let pollRet = poll(&pfd, 1, Int32(timeoutMs))
+        if pollRet > 0 && (pfd.revents & Int16(POLLOUT)) != 0 && (pfd.revents & (Int16(POLLERR) | Int16(POLLHUP))) == 0 {
+            var errVal: Int32 = 0
+            var len = socklen_t(MemoryLayout<Int32>.size)
+            if getsockopt(fd, SOL_SOCKET, SO_ERROR, &errVal, &len) == 0 && errVal == 0 {
+                let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+                return max(1, Int64(elapsed / 1_000_000))
+            }
+        }
+        return -1
+    }
+
+    func awgVersion() -> String { CoreapiAwgVersion() }
+    func awgStart(iniConfig: String, listenAddr: String) -> String { err { CoreapiAwgStart(iniConfig, listenAddr, $0) } }
+    func awgStop() { CoreapiAwgStop() }
+    func awgRunning() -> Bool { CoreapiAwgRunning() }
+    func awgMeasureDelay(iniConfig: String, url: String, method: String, timeoutMs: Int32) -> Int64 {
+        CoreapiAwgMeasureDelay(iniConfig, url, method, Int(timeoutMs))
+    }
+    func awgProbe(iniConfig: String) -> Int64 {
+        CoreapiAwgProbe(iniConfig)
+    }
+
+    func ftVersion() -> String { CoreapiFtVersion() }
+    func ftStart(uri: String, listenAddr: String, vkLink: String, nStreams: Int32) -> String {
+        err { CoreapiFtStart(uri, listenAddr, vkLink, Int(nStreams), $0) }
+    }
+    func ftStop() { CoreapiFtStop() }
+    func ftRunning() -> Bool { CoreapiFtRunning() }
+    func ftConnectedStreams() -> Int32 { Int32(CoreapiFtConnectedStreams()) }
+    func ftCaptchaUrl() -> String { CoreapiFtCaptchaURL() }
+    func ftCaptchaActive() -> Bool { CoreapiFtCaptchaActive() }
+
+    func wdttVersion() -> String { CoreapiWdttVersion() }
+    func wdttStart(optionsJson: String) -> String { err { CoreapiWdttStart(optionsJson, $0) } }
+    func wdttLastError() -> String { CoreapiWdttLastError() }
+    func wdttWaitConfig(timeoutMs: Int32) -> String { CoreapiWdttWaitConfig(Int(timeoutMs)) }
+    func wdttStop() { CoreapiWdttStop() }
+    func wdttRunning() -> Bool { CoreapiWdttRunning() }
+    func wdttPushCaptcha(token: String) { CoreapiWdttPushCaptcha(token) }
+
+    func masterDnsVersion() -> String { CoreapiMasterDnsVersion() }
+    func masterDnsStart(
+        workDir: String, domains: String, key: String, encryptionMethod: Int32,
+        resolvers: String, listenAddr: String, socksUser: String, socksPass: String,
+        balancingStrategy: Int32, packetDuplication: Int32, uploadCompression: Int32, downloadCompression: Int32
+    ) -> String {
+        err {
+            CoreapiMasterDnsStart(
+                workDir, domains, key, Int(encryptionMethod), resolvers, listenAddr, socksUser, socksPass,
+                Int(balancingStrategy), Int(packetDuplication), Int(uploadCompression), Int(downloadCompression), $0
+            )
+        }
+    }
+    func masterDnsStop() { CoreapiMasterDnsStop() }
+    func masterDnsRunning() -> Bool { CoreapiMasterDnsRunning() }
+    func masterDnsLastError() -> String { CoreapiMasterDnsLastError() }
+
+    func openfluxVersion() -> String { CoreapiOpenFluxVersion() }
+    func openfluxStart(
+        transport: String,
+        url: String,
+        secret: String,
+        maxToken: String,
+        maxUid: String,
+        avitoCookies: String,
+        sessionSpecsJson: String,
+        listenAddr: String,
+        socksUser: String,
+        socksPass: String,
+        debug: Bool
+    ) -> String {
+        err {
+            CoreapiOpenFluxStart(
+                transport,
+                url,
+                secret,
+                maxToken,
+                maxUid,
+                avitoCookies,
+                sessionSpecsJson,
+                listenAddr,
+                socksUser,
+                socksPass,
+                debug,
+                $0
+            )
+        }
+    }
+    func openfluxStop() { CoreapiOpenFluxStop() }
+    func openfluxRunning() -> Bool { CoreapiOpenFluxRunning() }
+    func openfluxLastError() -> String { CoreapiOpenFluxLastError() }
+
+    func rtcVersion() -> String { CoreapiRtcVersion() }
+    func rtcSetTransport(transport: String) -> String { err { CoreapiRtcSetTransport(transport, $0) } }
+    func rtcSetTelemostCookies(cookies: String) { CoreapiRtcSetTelemostCookies(cookies) }
+    func rtcSetDns(dnsServer: String) -> String { err { CoreapiRtcSetDNS(dnsServer, $0) } }
+    func rtcSetSocksListenHost(host: String) -> String { err { CoreapiRtcSetSocksListenHost(host, $0) } }
+    func rtcSetVp8Options(fps: Int32, batchSize: Int32) -> String {
+        err { CoreapiRtcSetVP8Options(Int(fps), Int(batchSize), $0) }
+    }
+    func rtcSetSeiOptions(fps: Int32, batchSize: Int32, fragmentSize: Int32, ackTimeoutMs: Int32) -> String {
+        err { CoreapiRtcSetSEIOptions(Int(fps), Int(batchSize), Int(fragmentSize), Int(ackTimeoutMs), $0) }
+    }
+    func rtcSetVideoOptions(
+        width: Int32, height: Int32, fps: Int32, qrSize: Int32,
+        qrRecovery: String, codec: String, tileModule: Int32, tileRs: Int32
+    ) -> String {
+        err {
+            CoreapiRtcSetVideoOptions(
+                Int(width), Int(height), Int(fps), Int(qrSize), qrRecovery, codec, Int(tileModule), Int(tileRs), $0
+            )
+        }
+    }
+    func rtcStart(
+        carrier: String, transport: String, roomId: String, clientId: String, keyHex: String,
+        socksPort: Int32, socksUser: String, socksPass: String
+    ) -> String {
+        err { CoreapiRtcStart(carrier, transport, roomId, clientId, keyHex, Int(socksPort), socksUser, socksPass, $0) }
+    }
+    func rtcWaitReady(timeoutMs: Int32) -> String { err { CoreapiRtcWaitReady(Int(timeoutMs), $0) } }
+    func rtcStop() -> String { err { CoreapiRtcStop($0) } }
+    func rtcRunning() -> Bool { CoreapiRtcRunning() }
+    func rtcStartPool(roomsJson: String, clientId: String, listenAddr: String, socksUser: String, socksPass: String, readyTimeoutMs: Int32) -> String {
+        err { CoreapiRtcStartPool(roomsJson, clientId, listenAddr, socksUser, socksPass, Int(readyTimeoutMs), $0) }
+    }
+    func rtcStopPool() { CoreapiRtcStopPool() }
+    func rtcPoolRunning() -> Bool { CoreapiRtcPoolRunning() }
+    func rtcPoolRooms() -> Int32 { Int32(CoreapiRtcPoolRooms()) }
+    func rtcPing(
+        carrier: String, transport: String, roomId: String, clientId: String, keyHex: String,
+        socksPort: Int32, timeoutMs: Int32, pingUrl: String, vp8Fps: Int32, vp8Batch: Int32
+    ) -> Int64 {
+        CoreapiRtcPing(carrier, transport, roomId, clientId, keyHex, Int(socksPort), Int(timeoutMs), pingUrl, Int(vp8Fps), Int(vp8Batch))
+    }
+
+    func resolveHostIpv4(host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        var sin = sockaddr_in()
+        if inet_pton(AF_INET, trimmed, &sin.sin_addr) == 1 {
+            return trimmed
+        }
+        var hints = addrinfo(
+            ai_flags: 0,
+            ai_family: AF_INET,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(trimmed, nil, &hints, &res) == 0, let first = res else { return "" }
+        defer { freeaddrinfo(first) }
+        var ips: [String] = []
+        var ptr: UnsafeMutablePointer<addrinfo>? = first
+        while let cur = ptr {
+            if let addr = cur.pointee.ai_addr {
+                var ipBuf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                let sockIn = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                var sinAddr = sockIn.sin_addr
+                if inet_ntop(AF_INET, &sinAddr, &ipBuf, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    let ipStr = String(cString: ipBuf)
+                    if !ips.contains(ipStr) {
+                        ips.append(ipStr)
+                    }
+                }
+            }
+            ptr = cur.pointee.ai_next
+        }
+        return ips.joined(separator: ",")
+    }
+
+    private static func getPhysicalInterfaceIndex() -> UInt32? {
+        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrs) == 0, let first = ifaddrs else { return nil }
+        defer { freeifaddrs(first) }
+
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let cur = ptr {
+            let name = String(cString: cur.pointee.ifa_name)
+            let flags = Int(cur.pointee.ifa_flags)
+            if (flags & Int(IFF_UP)) != 0 && (flags & Int(IFF_RUNNING)) != 0 && (flags & Int(IFF_LOOPBACK)) == 0 {
+                if !name.hasPrefix("utun") && !name.hasPrefix("lo") && !name.hasPrefix("awdl") && !name.hasPrefix("llw") && !name.hasPrefix("p2p") {
+                    if let addr = cur.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) || addr.pointee.sa_family == UInt8(AF_INET6) {
+                        let idx = if_nametoindex(cur.pointee.ifa_name)
+                        if idx > 0 {
+                            return idx
+                        }
+                    }
+                }
+            }
+            ptr = cur.pointee.ifa_next
+        }
+        return nil
+    }
+
+    func snolcVersion() -> String {
+        #if canImport(SnolcCore)
+        guard let v = snolc_ffi_version() else { return "" }
+        return String(cString: v)
+        #else
+        return ""
+        #endif
+    }
+
+    func snolcStart(configTomlPath: String) -> String {
+        #if canImport(SnolcCore)
+        guard let err = snolc_ffi_start(configTomlPath) else { return "" }
+        let msg = String(cString: err)
+        snolc_ffi_free_string(err)
+        return msg
+        #else
+        return "SnolcCore framework not linked"
+        #endif
+    }
+
+    func snolcStop() {
+        #if canImport(SnolcCore)
+        snolc_ffi_stop()
+        #endif
+    }
+
+    func snolcRunning() -> Bool {
+        #if canImport(SnolcCore)
+        return snolc_ffi_is_running()
+        #else
+        return false
+        #endif
+    }
+
+    func csqttVersion() -> String {
+        #if canImport(CsqttCore)
+        guard let v = csqtt_ffi_version() else { return "" }
+        return String(cString: v)
+        #else
+        return ""
+        #endif
+    }
+
+    func csqttStart(optionsJson: String) -> String {
+        #if canImport(CsqttCore)
+        guard let err = csqtt_ffi_start(optionsJson, { conf in
+            guard let conf = conf else { return }
+            let confStr = String(cString: conf)
+            var err: NSError?
+            _ = CoreapiCsqttBridgeSetTunnel(confStr, &err)
+        }, { logLine in
+            guard let logLine = logLine else { return }
+            CoreapiPushLog("csqtt", String(cString: logLine))
+        }) else { return "" }
+        let msg = String(cString: err)
+        csqtt_ffi_free_string(err)
+        return msg
+        #else
+        return "CsqttCore framework not linked"
+        #endif
+    }
+
+    func csqttStop() {
+        #if canImport(CsqttCore)
+        csqtt_ffi_stop()
+        #endif
+    }
+
+    func csqttRunning() -> Bool {
+        #if canImport(CsqttCore)
+        return csqtt_ffi_is_running()
+        #else
+        return false
+        #endif
+    }
+
+    func csqttBridgeStart(socksAddr: String, clientUdpAddr: String, mtu: Int32) -> String {
+        err { CoreapiCsqttBridgeStart(socksAddr, clientUdpAddr, Int(mtu), $0) }
+    }
+
+    func csqttBridgeSetTunnel(tunConf: String) -> String {
+        err { CoreapiCsqttBridgeSetTunnel(tunConf, $0) }
+    }
+
+    func csqttBridgeStop() {
+        CoreapiCsqttBridgeStop()
+    }
+
+    func csqttBridgeRunning() -> Bool {
+        CoreapiCsqttBridgeIsRunning()
+    }
+
+    func csqttBridgeTunnelReady() -> Bool {
+        CoreapiCsqttBridgeIsTunnelReady()
+    }
+
+    func csqttBridgeWaitTunnel(timeoutMs: Int32) -> Bool {
+        CoreapiCsqttBridgeWaitTunnel(Int(timeoutMs))
+    }
+}
+

@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "509"
+    CURRENT_PROJECT_VERSION: "510"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -46,19 +46,39 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../sharedUI/build/bin/iosArm64/releaseFramework"
+          - "$(SRCROOT)/../sharedUI/build/bin/iosSimulatorArm64/releaseFramework"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-ObjC"
+          - "-framework"
+          - "SharedUI"
+          - "-lresolv"
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared
-      - package: YPtunAppleKit
-        product: YPtunMigrationSupport
-      - package: YPtunAppleKit
-        product: YPtunAppUI
       - package: YPtunRustBridge
         product: YPtunRustBridge
+      - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+        embed: false
       - target: YPtunPacketTunnelIOS
         embed: true
       - target: YPtunWidget
         embed: true
+    preBuildScripts:
+      - name: Kotlin SharedUI framework
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          ./gradlew :sharedUI:embedAndSignAppleFrameworkForXcode --no-configuration-cache
 
   YPtunPacketTunnelIOS:
     type: app-extension
