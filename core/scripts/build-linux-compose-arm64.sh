@@ -72,7 +72,6 @@ exec "$APPDIR/lib/runtime/bin/java" \
   -XX:G1PeriodicGCInterval=30000 \
   -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=25 \
   -XX:TieredStopAtLevel=1 \
-  -Xverify:none -XX:+UseFastUnorderedTimeStamps \
   -Dskiko.library.path="$APPDIR/lib/app" \
   -cp "$APPDIR/lib/app/*" MainKt "$@"
 LAUNCHER
