@@ -845,6 +845,24 @@ sourceSets {
         resources.srcDir(rootProject.layout.projectDirectory.dir("androidApp/src/main/assets"))
         // Zygisk module: Android-only, nothing on a PC can use it.
         resources.exclude("olcvpnhide.zip")
+        when {
+            currentBuildOs.isWindows -> {
+                resources.exclude("native/*-linux-*", "native/*-darwin-*", "native/libcronet.so", "native/*.so", "native/*.h")
+                if (hostDesktopArch == "amd64") {
+                    resources.exclude("native/*-arm64*", "native/*-arm.*", "native/wintun-arm64.dll")
+                } else if (hostDesktopArch == "arm64") {
+                    resources.exclude("native/*-amd64*", "native/*-x64*")
+                }
+            }
+            currentBuildOs.isLinux -> {
+                resources.exclude("native/*-windows-*", "native/*-darwin-*", "native/*.dll", "native/*.exe", "native/*.h")
+                if (hostDesktopArch == "amd64") {
+                    resources.exclude("native/*-arm64*", "native/*-arm.*")
+                } else if (hostDesktopArch == "arm64") {
+                    resources.exclude("native/*-amd64*", "native/*-x64*")
+                }
+            }
+        }
     }
 }
 
