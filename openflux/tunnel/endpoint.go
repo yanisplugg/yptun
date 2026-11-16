@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/p1neappleXpress/OpenFlux/transport"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -15,6 +16,10 @@ type TunnelLinkEndpoint struct {
 	mu               sync.RWMutex
 	dispatcher       stack.NetworkDispatcher
 	onOutgoingPacket func([]byte)
+	// onOutgoingFill, when set, takes a packet by size and a function that
+	// copies it into the buffer the sender built (transport.FillSender):
+	// the packet is copied once from the stack, not twice.
+	onOutgoingFill func(size int, fill func(dst []byte))
 	packetIn         atomic.Uint64
 	packetOut        atomic.Uint64
 	mtu              atomic.Uint32
@@ -33,7 +38,9 @@ func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 	}
 	e.packetIn.Add(1)
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(append([]byte{}, data...)),
+		// MakeWithData copies data into the stack's own pooled chunk, so the
+		// caller keeps its buffer and no copy of ours is needed.
+		Payload: buffer.MakeWithData(data),
 	})
 	defer pkt.DecRef()
 	dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pkt)
@@ -42,9 +49,17 @@ func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 func (e *TunnelLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
 	n := 0
 	for _, pkt := range pkts.AsSlice() {
+		e.packetOut.Add(1)
+		if e.onOutgoingFill != nil {
+			vl, skip := pkt.AsViewList()
+			e.onOutgoingFill(pkt.Size(), func(dst []byte) {
+				copyViews(dst, vl, skip)
+			})
+			n++
+			continue
+		}
 		view := pkt.ToView()
 		data := view.ToSlice()
-		e.packetOut.Add(1)
 		if e.onOutgoingPacket != nil {
 			e.onOutgoingPacket(data)
 		}
@@ -80,10 +95,25 @@ func (e *TunnelLinkEndpoint) ARPHardwareType() header.ARPHardwareType { return h
 func (e *TunnelLinkEndpoint) AddHeader(*stack.PacketBuffer)           {}
 func (e *TunnelLinkEndpoint) Close()                                  {}
 func (e *TunnelLinkEndpoint) SetMTU(m uint32) {
-	if m >= 1280 && m <= 65000 {
+	if m >= transport.MinCarrierMTU && m <= 65000 {
 		e.mtu.Store(m)
 	}
 }
 func (e *TunnelLinkEndpoint) SetLinkAddress(tcpip.LinkAddress)     {}
 func (e *TunnelLinkEndpoint) ParseHeader(*stack.PacketBuffer) bool { return true }
 func (e *TunnelLinkEndpoint) SetOnCloseAction(func())              {}
+
+// copyViews copies the bytes of a packet's view list, after its first skip
+// bytes (the header room the stack reserved), into dst.
+func copyViews(dst []byte, vl buffer.ViewList, skip int) {
+	for v := vl.Front(); v != nil && len(dst) > 0; v = v.Next() {
+		b := v.AsSlice()
+		if skip >= len(b) {
+			skip -= len(b)
+			continue
+		}
+		n := copy(dst, b[skip:])
+		dst = dst[n:]
+		skip = 0
+	}
+}

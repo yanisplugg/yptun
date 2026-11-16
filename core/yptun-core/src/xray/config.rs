@@ -9,7 +9,10 @@ use serde_json::{json, Map, Value};
 use super::blocklist::HOST_REGEXPS;
 use super::routing as xr;
 use crate::model::*;
-use crate::routing::{RoutingProfile, TrafficSettings};
+use crate::routing::{
+    RoutingProfile, RoutingRules, SingBoxRule, TrafficSettings, ACTION_REJECT, ACTION_ROUTE,
+    OUT_BLOCK, OUT_DIRECT,
+};
 use crate::singbox::config::WarpRelay;
 use crate::transports::FakeDnsSpec;
 
@@ -228,12 +231,28 @@ fn socks_inbound(host: &str, port: i32, user: &str, pass: &str) -> Obj {
     m
 }
 
-fn loop_inbound(port: i32) -> Value {
-    json!({ "tag": CASCADE_LOOP_IN_TAG, "listen": "127.0.0.1", "port": port, "protocol": "socks", "settings": { "udp": true, "auth": "noauth" } })
+fn loop_inbound(port: i32, user: Option<&str>, pass: Option<&str>) -> Value {
+    let settings = match (user, pass) {
+        (Some(u), Some(p)) if !u.is_empty() => json!({
+            "udp": true,
+            "auth": "password",
+            "accounts": [{ "user": u, "pass": p }]
+        }),
+        _ => json!({ "udp": true, "auth": "noauth" }),
+    };
+    json!({ "tag": CASCADE_LOOP_IN_TAG, "listen": "127.0.0.1", "port": port, "protocol": "socks", "settings": settings })
 }
 
-fn loop_outbound(port: i32) -> Value {
-    json!({ "tag": CASCADE_LOOP_OUT_TAG, "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": port }] } })
+fn loop_outbound(port: i32, user: Option<&str>, pass: Option<&str>) -> Value {
+    let server = match (user, pass) {
+        (Some(u), Some(p)) if !u.is_empty() => json!({
+            "address": "127.0.0.1",
+            "port": port,
+            "users": [{ "user": u, "pass": p }]
+        }),
+        _ => json!({ "address": "127.0.0.1", "port": port }),
+    };
+    json!({ "tag": CASCADE_LOOP_OUT_TAG, "protocol": "socks", "settings": { "servers": [server] } })
 }
 
 fn warp_relay_inbound(r: &WarpRelay) -> Value {
@@ -257,6 +276,9 @@ pub struct XrayOptions {
     pub traffic: TrafficSettings,
     pub wireguard_base: Option<ProxyProfile>,
     pub routing_profile: Option<RoutingProfile>,
+    /// Global user routing. Structured rules are translated to native Xray field rules; they must
+    /// stay ahead of broad geo/IP rules so a LAN-only domain can be routed without public DNS.
+    pub routing: RoutingRules,
     pub block_quic: bool,
     pub force_family_resolve: bool,
     /// Socket-level chaining (keeps vless+reality/vision intact over MasterDNS).
@@ -285,6 +307,7 @@ impl Default for XrayOptions {
             traffic: TrafficSettings::default(),
             wireguard_base: None,
             routing_profile: None,
+            routing: RoutingRules::default(),
             block_quic: true,
             force_family_resolve: true,
             chain_via_dialer_proxy: false,
@@ -297,6 +320,57 @@ impl Default for XrayOptions {
             handshake_timeout_sec: None,
         }
     }
+}
+
+fn xray_domains(values: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut domains = Vec::new();
+    let mut ips = Vec::new();
+    for raw in values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        if raw.len() >= 6 && raw[..6].eq_ignore_ascii_case("geoip:") {
+            ips.push(raw.to_string());
+        } else if ["domain:", "full:", "keyword:", "regexp:", "geosite:", "ext:"].iter().any(|p| {
+            raw.len() >= p.len() && raw[..p.len()].eq_ignore_ascii_case(p)
+        }) {
+            domains.push(raw.to_string());
+        } else {
+            domains.push(format!("domain:{raw}"));
+        }
+    }
+    (domains, ips)
+}
+
+fn manual_xray_rule(rule: &SingBoxRule) -> Option<Value> {
+    if !rule.enabled || !rule.has_matcher() || (!rule.action.is_empty() && rule.action != ACTION_ROUTE && rule.action != ACTION_REJECT) {
+        return None;
+    }
+    let (domains, domain_ips) = xray_domains(&rule.domains);
+    let mut ips: Vec<String> = rule.ip.iter().map(|v| v.trim()).filter(|v| !v.is_empty()).map(str::to_string).collect();
+    ips.extend(domain_ips);
+    let source: Vec<String> = rule.source.iter().map(|v| v.trim()).filter(|v| !v.is_empty()).map(str::to_string).collect();
+    let protocols: Vec<String> = rule.protocol.iter().map(|v| v.trim()).filter(|v| !v.is_empty()).map(str::to_string).collect();
+    let users: Vec<String> = rule.client.iter().map(|v| v.trim()).filter(|v| !v.is_empty()).map(str::to_string).collect();
+    let mut out = Obj::new();
+    out.insert("type".into(), json!("field"));
+    if !domains.is_empty() { out.insert("domain".into(), json!(domains)); }
+    if !ips.is_empty() { out.insert("ip".into(), json!(ips)); }
+    if !source.is_empty() { out.insert("source".into(), json!(source)); }
+    if !rule.port.trim().is_empty() { out.insert("port".into(), json!(rule.port.trim().replace(':', "-"))); }
+    if !rule.source_port.trim().is_empty() { out.insert("sourcePort".into(), json!(rule.source_port.trim().replace(':', "-"))); }
+    if !rule.network.trim().is_empty() { out.insert("network".into(), json!(rule.network.trim())); }
+    if !protocols.is_empty() { out.insert("protocol".into(), json!(protocols)); }
+    if !users.is_empty() { out.insert("user".into(), json!(users)); }
+    // Xray cannot match Android packages/process regexes or sing-box network metadata. Never turn
+    // such an unsupported-only rule into an accidental catch-all.
+    if out.len() == 1 { return None; }
+    let tag = if rule.action == ACTION_REJECT || rule.outbound == OUT_BLOCK {
+        "block"
+    } else if rule.outbound == OUT_DIRECT {
+        "direct"
+    } else {
+        PROXY_TAG
+    };
+    out.insert("outboundTag".into(), json!(tag));
+    Some(Value::Object(out))
 }
 
 /// Knobs of one proxy outbound (the Kotlin `buildProxyOutbound` named parameters).
@@ -384,7 +458,7 @@ pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
         inbounds.push(warp_relay_inbound(r));
     }
     if loop_active {
-        inbounds.push(loop_inbound(loop_port));
+        inbounds.push(loop_inbound(loop_port, Some(&o.socks_username), Some(&o.socks_password)));
     }
     config.insert("inbounds".into(), Value::Array(inbounds));
 
@@ -429,7 +503,7 @@ pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
             OutOpts { chained, detour: base_detour, xhttp_high_concurrency: loop_active, suppress_mux: loop_active, ..Default::default() },
         ));
         if loop_active {
-            outbounds.push(loop_outbound(loop_port));
+            outbounds.push(loop_outbound(loop_port, Some(&o.socks_username), Some(&o.socks_password)));
         }
     } else {
         outbounds.push(proxy_outbound(
@@ -499,6 +573,36 @@ pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
         let v6 = spec.map(|s| s.inet6_range.as_str()).filter(|s| not_blank(s)).unwrap_or(FAKEDNS_POOL6);
         rules.push(json!({ "type": "field", "ip": [v4, v6], "outboundTag": exit_tag }));
     }
+
+    // User rules have the highest routing priority after the engine's own DNS/FakeDNS plumbing.
+    // With IPIfNonMatch, a domain rule that matches here is not resolved first. This is essential
+    // for private names such as myserver.lan when Bypass Russia adds geoip:ru below (#87).
+    rules.extend(o.routing.rules.iter().filter_map(manual_xray_rule));
+    if !o.routing.block_domains.is_empty() {
+        let (domains, _) = xray_domains(&o.routing.block_domains);
+        if !domains.is_empty() {
+            rules.push(json!({ "type": "field", "domain": domains, "outboundTag": "block" }));
+        }
+    }
+    if o.routing.block_ads {
+        rules.push(json!({ "type": "field", "domain": ["domain:google.com", "domain:gstatic.com", "domain:googleapis.com"], "outboundTag": PROXY_TAG }));
+        rules.push(json!({ "type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block" }));
+    }
+    if !o.routing.direct_domains.is_empty() {
+        let (domains, _) = xray_domains(&o.routing.direct_domains);
+        if !domains.is_empty() {
+            rules.push(json!({ "type": "field", "domain": domains, "outboundTag": "direct" }));
+        }
+    }
+    if o.routing.bypass_russia {
+        // Separate rules: fields inside one Xray rule are ANDed.
+        rules.push(json!({ "type": "field", "domain": ["geosite:category-ru"], "outboundTag": "direct" }));
+        rules.push(json!({ "type": "field", "ip": ["geoip:ru"], "outboundTag": "direct" }));
+    }
+    if o.routing.bypass_china {
+        rules.push(json!({ "type": "field", "domain": ["geosite:cn", "geosite:geolocation-cn", "domain:cn"], "outboundTag": "direct" }));
+        rules.push(json!({ "type": "field", "ip": ["geoip:cn", "223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "114.114.114.114/32"], "outboundTag": "direct" }));
+    }
     if o.bypass_lan && !o.direct_via_base {
         rules.push(json!({ "type": "field", "ip": LAN_CIDRS, "outboundTag": "direct" }));
     }
@@ -520,7 +624,12 @@ pub fn build_value(profile: &ProxyProfile, o: &XrayOptions) -> Value {
                 xr::domain_strategy(p)
             }
         }
-        None => (if force_family { "IPIfNonMatch" } else { "AsIs" }).to_string(),
+        None => (if force_family || o.routing.bypass_russia || o.routing.bypass_china || o.routing.rules.iter().any(|r| r.enabled && !r.ip.is_empty()) {
+            "IPIfNonMatch"
+        } else {
+            "AsIs"
+        })
+        .to_string(),
     };
     config.insert("routing".into(), json!({ "domainStrategy": strategy, "rules": rules }));
     Value::Object(config)

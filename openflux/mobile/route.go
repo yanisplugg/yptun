@@ -1,6 +1,7 @@
 package mobile
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 
@@ -78,4 +79,43 @@ func ConnectionMode() string {
 		return ""
 	}
 	return s.Mode()
+}
+
+// carrierLink is one carrier of the running Session as the UI lists it.
+type carrierLink struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Live   bool   `json:"live"`
+	Pinned bool   `json:"pinned"`
+}
+
+// CarrierLinks lists the running Session's carriers, highest priority first, as JSON
+// [{"name","type","live","pinned"}]: name is what SetPinnedCarrier takes, type the carrier's kind ("direct",
+// "script", ...). "[]" when no Session runs.
+func CarrierLinks() string {
+	route.mu.Lock()
+	s, types := route.session, route.types
+	route.mu.Unlock()
+	out := []carrierLink{}
+	if s != nil {
+		live := map[string]bool{}
+		for _, n := range s.LiveTransports() {
+			live[n] = true
+		}
+		pinned := s.PinnedCarrier()
+		for _, n := range s.CarrierNames() {
+			out = append(out, carrierLink{Name: n, Type: types[n], Live: live[n], Pinned: n == pinned})
+		}
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+// SetPinnedCarrier makes the running Session send only through the carrier called name (from CarrierLinks),
+// "" for automatic choice again. False when no Session runs or it has no such carrier.
+func SetPinnedCarrier(name string) bool {
+	route.mu.Lock()
+	s := route.session
+	route.mu.Unlock()
+	return s != nil && s.SetPinnedCarrier(name)
 }

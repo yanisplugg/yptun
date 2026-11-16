@@ -93,6 +93,7 @@ type Deps struct {
 	Logger        logx.Logger
 	Observer      Observer
 	Solver        vk.ManualSolverFunc
+	PowCapture    vk.PowCaptureFunc
 	CaptchaActive func() bool
 	// LocalPipe подменяет локальный UDP-сокет прямым каналом в памяти.
 	LocalPipe net.PacketConn

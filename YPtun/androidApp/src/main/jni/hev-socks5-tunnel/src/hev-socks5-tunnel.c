@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <arpa/inet.h>
 
 #include <lwip/tcp.h>
 #include <lwip/udp.h>
@@ -40,6 +41,42 @@
 #include "hev-socks5-tunnel.h"
 
 static int run;
+static HevSocks5TunnelConnectionFilter connection_filter = NULL;
+
+void
+hev_socks5_tunnel_set_connection_filter (HevSocks5TunnelConnectionFilter filter)
+{
+    connection_filter = filter;
+}
+
+static int
+filter_connection (int protocol, const ip_addr_t *src_ip, uint16_t src_port,
+                   const ip_addr_t *dst_ip, uint16_t dst_port)
+{
+    if (!connection_filter)
+        return 1;
+
+    char src_str[INET6_ADDRSTRLEN] = {0};
+    char dst_str[INET6_ADDRSTRLEN] = {0};
+
+    if (src_ip->type == IPADDR_TYPE_V4) {
+        inet_ntop (AF_INET, &ip_2_ip4 (src_ip)->addr, src_str, sizeof (src_str));
+    } else if (src_ip->type == IPADDR_TYPE_V6) {
+        inet_ntop (AF_INET6, ip_2_ip6 (src_ip)->addr, src_str, sizeof (src_str));
+    } else {
+        return 1;
+    }
+
+    if (dst_ip->type == IPADDR_TYPE_V4) {
+        inet_ntop (AF_INET, &ip_2_ip4 (dst_ip)->addr, dst_str, sizeof (dst_str));
+    } else if (dst_ip->type == IPADDR_TYPE_V6) {
+        inet_ntop (AF_INET6, ip_2_ip6 (dst_ip)->addr, dst_str, sizeof (dst_str));
+    } else {
+        return 1;
+    }
+
+    return connection_filter (protocol, src_str, src_port, dst_str, dst_port);
+}
 /* IPv6 forwarding switch, derived from config (tunnel.ipv6 present?) in gateway_init().
  * When 0 ("IPv4 only"), IPv6 sessions are refused at the bridge so no IPv6 ever reaches an
  * upstream core. sing-box/Xray drop IPv6 themselves, but olcRTC/VK-TURN would otherwise carry
@@ -185,6 +222,10 @@ tcp_accept_handler (void *arg, struct tcp_pcb *pcb, err_t err)
     if (!ipv6_enabled && pcb->local_ip.type == IPADDR_TYPE_V6)
         return ERR_RST;
 
+    if (!filter_connection (IPPROTO_TCP, &pcb->remote_ip, pcb->remote_port,
+                            &pcb->local_ip, pcb->local_port))
+        return ERR_RST;
+
     tcp = hev_socks5_session_tcp_new (pcb, &mutex);
     if (!tcp)
         return ERR_MEM;
@@ -264,6 +305,14 @@ udp_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
             udp_recv (pcb, dns_recv_handler, dns);
             return;
         }
+    }
+
+    if (!filter_connection (IPPROTO_UDP, addr, port,
+                            &pcb->local_ip, pcb->local_port)) {
+        if (p)
+            pbuf_free (p);
+        udp_remove (pcb);
+        return;
     }
 
     udp = hev_socks5_session_udp_new (pcb, &mutex);

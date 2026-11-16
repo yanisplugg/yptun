@@ -52,7 +52,10 @@ func (t ChannelTransport) String() string {
 // Priority = 85. TODO: confirm Telemost's priority with the core's owner.
 var transportPriority = map[string]int{"vyandex": 100, "yandex": 95, "mailru": 90, "telemost": 85, "boards": 80, "avito": 75, "cupsonline": 70, "script": 60}
 
-const directPriority = 50
+// directPriority ranks direct above every document carrier: a path straight to the node is
+// faster than any relay. (The core already prefers a live direct whatever the profile says, see
+// transport.PreferredCarrier; this makes peers on an older core do the same.)
+const directPriority = 110
 
 var (
 	volgaDocURL  = regexp.MustCompile(`^https://(docs|disk)\.yandex\.(ru|com|by|kz|uz)/edit/d/[A-Za-z0-9_-]{16,200}$`)
@@ -194,10 +197,11 @@ func TransportURL(ts []ChannelTransport, typ string) string {
 	return ""
 }
 
-// SessionContext is the encryption context both sides of the channel
-// derive, by the core's one rule (transport.KDFContexts): the
-// highest-priority document, cups.online aside (its rooms are no
-// document). node-install.sh's session_context picks the same.
+// SessionContext is the encryption context both sides of the channel derive,
+// by the core's one rule (transport.KDFContexts). With no explicit context
+// that rule is now the one fixed placeholder — the documents no longer decide
+// it, so two peers cannot disagree; node-install.sh's session_context picks
+// the same.
 func SessionContext(ts []ChannelTransport) string {
 	sources := make([]transport.ContextSource, 0, len(ts))
 	for _, t := range ts {
@@ -260,6 +264,16 @@ func transportLines(ts []ChannelTransport) string {
 	return b.String()
 }
 
+// hasCookie reports whether a Cookie header holds a cookie of that name.
+func hasCookie(header, name string) bool {
+	for _, part := range strings.Split(header, ";") {
+		if n, _, ok := strings.Cut(strings.TrimSpace(part), "="); ok && n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ChannelCookies turns the app's Cookie header for the channel's Yandex
 // document into what Channel.Cookies takes (see CookieStore), keyed by the
 // document as the node's config names it.
@@ -268,9 +282,21 @@ func ChannelCookies(ts []ChannelTransport, header string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	doc := TransportURL(ts, "vyandex")
+	// The header says whose sign-in it is: Yandex's holds Session_id, Mail.ru's
+	// holds Mpop. It goes to that service's document and to no other.
+	var doc string
+	switch {
+	case hasCookie(header, "Session_id"):
+		if doc = TransportURL(ts, "vyandex"); doc == "" {
+			doc = TransportURL(ts, "yandex")
+		}
+	case hasCookie(header, "Mpop"):
+		doc = TransportURL(ts, "mailru")
+	default:
+		return "", errors.New("в cookies нет входа в Яндекс или Mail.ru")
+	}
 	if doc == "" {
-		return "", errors.New("вход в Яндекс нужен только каналу с документом Яндекса")
+		return "", errors.New("вход нужен только каналу с документом того же сервиса: Яндекса или Mail.ru")
 	}
 	cookies, _, err := CookieStore(doc, header)
 	return cookies, err

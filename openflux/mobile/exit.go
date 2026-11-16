@@ -83,7 +83,7 @@ func startExitWith(build func() (transport.Transport, error), shareCfg *share.Co
 
 	fail := func(err error) string {
 		appendLog(fmt.Sprintf("[ERROR] Выходная нода: %v", err))
-		detachCaptcha()
+		detachPrompt()
 		clearRoute()
 		return err.Error()
 	}
@@ -116,8 +116,8 @@ func StopExit() {
 	exitNode.running, exitNode.transport, exitNode.node, exitNode.share = false, nil, nil, nil
 	exitNode.rooms = nil
 	exitNode.mu.Unlock()
-	detachCaptcha()
-	CancelCaptcha()
+	detachPrompt()
+	CancelPrompt()
 	clearRoute()
 	appendLog("[ANDROID] Остановка выходной ноды")
 	if node != nil {

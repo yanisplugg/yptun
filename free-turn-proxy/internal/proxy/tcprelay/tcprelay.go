@@ -13,6 +13,7 @@ import (
 	"github.com/samosvalishe/free-turn-proxy/internal/clientsdb"
 	"github.com/samosvalishe/free-turn-proxy/internal/logx"
 	"github.com/samosvalishe/free-turn-proxy/internal/netconn"
+	"github.com/samosvalishe/free-turn-proxy/internal/netctl"
 	"github.com/samosvalishe/free-turn-proxy/internal/provider"
 	"github.com/samosvalishe/free-turn-proxy/internal/proxy/udprelay"
 	"github.com/samosvalishe/free-turn-proxy/internal/randx"
@@ -158,7 +159,7 @@ func announceReady(ctx context.Context, log logx.Logger, pool *sessionPool, numS
 }
 
 func listen(ctx context.Context, addr string, log logx.Logger) (net.Listener, error) {
-	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	ln, err := netctl.NoMPTCP(nil).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("tcprelay listen %s: %w", addr, err)
 	}

@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.desktop
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.model.AppBehaviorSettings
+import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.model.RoutingProfilesState
 import org.olcbox.app.data.model.RoutingRules
 import org.olcbox.app.data.model.TrafficSettings
@@ -52,7 +53,12 @@ internal object JvmVpnSettings {
     fun saveRouting(value: RoutingRules) = save("routing.json", RoutingRules.serializer(), value)
 
     fun loadRoutingProfiles(): RoutingProfilesState =
-        load("routing_profiles.json", RoutingProfilesState.serializer()) { RoutingProfilesState() }
+        load("routing_profiles.json", RoutingProfilesState.serializer()) {
+            RoutingProfilesState(
+                profiles = listOf(RoutingProfile.russiaDirect(), RoutingProfile.chinaDirect()),
+                globalProfileId = RoutingProfile.DEFAULT_RU_DIRECT_ID,
+            )
+        }
 
     fun saveRoutingProfiles(value: RoutingProfilesState) =
         save("routing_profiles.json", RoutingProfilesState.serializer(), value)

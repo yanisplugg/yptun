@@ -52,7 +52,10 @@ type TrustReport struct {
 	ParamProblems []string `json:"paramProblems,omitempty"`
 	// SettingsPage: the script brings a settings page of its own, so it has
 	// settings to open even with no setting params declared.
-	SettingsPage  bool   `json:"settingsPage,omitempty"`
+	SettingsPage bool `json:"settingsPage,omitempty"`
+	// SetupPage: the script has a setup wizard of its own (Transport.setup),
+	// run by StartSetup, which hands back what a node and a client each need.
+	SetupPage     bool   `json:"setupPage,omitempty"`
 	Signature     string `json:"signature"` // "valid" | "invalid" | "unverified"
 	Fingerprint   string `json:"fingerprint,omitempty"`
 	Official      bool   `json:"official,omitempty"`
@@ -142,6 +145,7 @@ func InspectTrust(data, sig []byte, pubkeyHex, officialKeyHex string) TrustRepor
 	report.Params = info.ResolvedParams()
 	report.ParamProblems = info.CheckParams()
 	report.SettingsPage = info.CustomSettings
+	report.SetupPage = info.SetupWizard
 	report.OK = true
 	return report
 }

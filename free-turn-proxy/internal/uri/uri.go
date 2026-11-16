@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"strings"
 )
 
@@ -70,30 +69,25 @@ func Parse(s string) (*Config, error) {
 		return nil, errors.New("empty payload")
 	}
 
-	// Primary: new base64url(json) wire format. On ANY failure (decode/json/version) fall back
-	// to the legacy text format below — the olcvpn panel still emits the original
-	// freeturn://<provider>?<transport>...@peer#key$name links (carrying a custom wg= param the
-	// Kotlin client reads), and those MUST keep parsing so existing VK-TURN configs don't break.
-	if cfg, ok := parseWire(payload); ok {
-		return cfg, nil
-	}
-	return parseLegacy(payload)
-}
-
-// parseWire decodes the new base64url(json) payload. Returns ok=false (not an error) when the
-// payload isn't a valid current-version wire object, so the caller can try the legacy format.
-func parseWire(payload string) (*Config, bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
-		return nil, false
+		return nil, errors.New("invalid base64 payload")
 	}
+
 	var w wire
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, false
+		return nil, errors.New("invalid json payload")
 	}
-	if w.V != currentVersion || w.Provider == "" || w.Peer == "" {
-		return nil, false
+	if w.V != currentVersion {
+		return nil, errors.New("unsupported link version")
 	}
+	if w.Provider == "" {
+		return nil, errors.New("missing provider")
+	}
+	if w.Peer == "" {
+		return nil, errors.New("missing peer")
+	}
+
 	return &Config{
 		Version:        w.V,
 		Provider:       w.Provider,
@@ -115,73 +109,7 @@ func parseWire(payload string) (*Config, bool) {
 		Comment:        w.Name,
 		VKLink:         w.VK,
 		WGConf:         w.WGConf,
-	}, true
-}
-
-// parseLegacy - ЛОКАЛЬНЫЙ ПАТЧ (upstream парсит только base64url-формат). Панель olcvpn
-// до сих пор выдаёт СТАРЫЙ текстовый формат, и Kotlin-клиент вычитывает из него wg=,
-// поэтому фоллбэк обязан пережить любой ре-вендор: без него отваливаются ВСЕ
-// существующие VK-TURN ссылки и конфиги.
-//
-// Формат:
-//   freeturn://<Provider>?<Transport><mode=..&obf-profile=..&bond=1>@<Peer>#<ObfKey>$<Comment>
-// payload — строка БЕЗ префикса схемы. Кастомный параметр wg= внутри <...> здесь не нужен
-// (его читает Kotlin-клиент из исходной ссылки); url.ParseQuery его молча игнорирует.
-//
-// НЕ заполнять здесь Config.WGConf, даже когда wg= разобран: с 3.4.0 непустой WGConf переключает
-// raw.applyURI на TunnelMode="awg", т.е. Go-клиент поднимал бы AmneziaWG САМ. У нас туннель строит
-// Kotlin (WireGuard-outbound в Xray/sing-box), и внутренний awg дублировал бы его.
-func parseLegacy(payload string) (*Config, error) {
-	s := payload
-	cfg := &Config{Version: currentVersion}
-
-	// 1. Comment (после $)
-	if idx := strings.Index(s, "$"); idx != -1 {
-		cfg.Comment = s[idx+1:]
-		s = s[:idx]
-	}
-	// 2. ObfKey (после #)
-	if idx := strings.Index(s, "#"); idx != -1 {
-		cfg.ObfKey = s[idx+1:]
-		s = s[:idx]
-	}
-	// 3. Peer (после последнего @)
-	if idx := strings.LastIndex(s, "@"); idx != -1 {
-		cfg.Peer = s[idx+1:]
-		s = s[:idx]
-	}
-
-	// Остаток: <Provider>?<Transport><key=val&...>
-	parts := strings.SplitN(s, "?", 2)
-	if parts[0] == "" {
-		return nil, errors.New("missing provider")
-	}
-	cfg.Provider = parts[0]
-
-	if len(parts) == 2 {
-		transportPart := parts[1]
-		if startIdx := strings.Index(transportPart, "<"); startIdx != -1 {
-			if endIdx := strings.Index(transportPart, ">"); endIdx != -1 && endIdx > startIdx {
-				inner := transportPart[startIdx+1 : endIdx]
-				cfg.Transport = transportPart[:startIdx]
-				vals, err := url.ParseQuery(inner)
-				if err != nil {
-					return nil, err
-				}
-				cfg.Mode = vals.Get("mode")
-				cfg.ObfProfile = vals.Get("obf-profile")
-			} else {
-				cfg.Transport = transportPart
-			}
-		} else {
-			cfg.Transport = transportPart
-		}
-	}
-
-	if cfg.Peer == "" {
-		return nil, errors.New("missing peer")
-	}
-	return cfg, nil
+	}, nil
 }
 
 // String кодирует Config в freeturn://<base64url(json)>.

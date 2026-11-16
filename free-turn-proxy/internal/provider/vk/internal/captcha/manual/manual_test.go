@@ -2,12 +2,76 @@ package manual
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestPowCaptureHandlerRequiresSecretPath(t *testing.T) {
+	const path = "/local-captcha-pow/test-secret"
+	pow := "v2." + base64.StdEncoding.EncodeToString([]byte(`{"hash":"fixture"}`))
+	keyCh := make(chan string, 1)
+	handler := powCaptureHandler(path, keyCh)
+
+	wrongPath := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/local-captcha-pow/wrong-secret", strings.NewReader("pow="+url.QueryEscape(pow)))
+	wrongPath.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	wrongPathResponse := httptest.NewRecorder()
+	handler.ServeHTTP(wrongPathResponse, wrongPath)
+	if wrongPathResponse.Code != http.StatusNotFound {
+		t.Fatalf("wrong path status = %d, want %d", wrongPathResponse.Code, http.StatusNotFound)
+	}
+
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader("pow="+url.QueryEscape(pow)))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("valid request status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want no CORS allow header", got)
+	}
+	select {
+	case got := <-keyCh:
+		if got != pow {
+			t.Fatalf("captured PoW = %q, want %q", got, pow)
+		}
+	default:
+		t.Fatal("valid request did not deliver PoW")
+	}
+}
+
+func TestPowCaptureHandlerRejectsInvalidRequests(t *testing.T) {
+	const path = "/local-captcha-pow/test-secret"
+	handler := powCaptureHandler(path, make(chan string, 1))
+
+	tests := []struct {
+		name   string
+		method string
+		body   string
+		want   int
+	}{
+		{name: "wrong method", method: http.MethodGet, want: http.StatusMethodNotAllowed},
+		{name: "malformed envelope", method: http.MethodPost, body: "pow=not-base64", want: http.StatusBadRequest},
+		{name: "missing envelope", method: http.MethodPost, want: http.StatusBadRequest},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(context.Background(), tc.method, path, strings.NewReader(tc.body))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tc.want {
+				t.Fatalf("status = %d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}
 
 func TestRunCaptchaServerPresentsAfterListen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

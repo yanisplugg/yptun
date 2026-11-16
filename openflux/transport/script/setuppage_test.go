@@ -179,6 +179,46 @@ func TestFlattenSubmission(t *testing.T) {
 	}
 }
 
+func TestFlattenSubmissionScoped(t *testing.T) {
+	for _, c := range []struct {
+		name, in   string
+		wantClient map[string]string
+		wantNode   map[string]string
+		fail       bool
+	}{
+		{"flat", `{"token":"abc"}`, map[string]string{"token": "abc"}, nil, false},
+		{"scoped both", `{"client":{"token":"a","uid":"1"},"node":{"token":"b","exit":"true"}}`,
+			map[string]string{"token": "a", "uid": "1"}, map[string]string{"token": "b", "exit": "true"}, false},
+		{"scoped client only", `{"client":{"a":"1"}}`, map[string]string{"a": "1"}, nil, false},
+		{"empty client", `{"client":{},"node":{"b":"2"}}`, nil, nil, true},
+	} {
+		client, node, err := FlattenSubmissionScoped([]byte(c.in))
+		if (err != nil) != c.fail {
+			t.Errorf("%s: err = %v, want failure %v", c.name, err, c.fail)
+			continue
+		}
+		if c.fail {
+			continue
+		}
+		if len(client) != len(c.wantClient) {
+			t.Errorf("%s: client = %v, want %v", c.name, client, c.wantClient)
+		}
+		for k, v := range c.wantClient {
+			if client[k] != v {
+				t.Errorf("%s: client[%s] = %q, want %q", c.name, k, client[k], v)
+			}
+		}
+		if len(node) != len(c.wantNode) {
+			t.Errorf("%s: node = %v, want %v", c.name, node, c.wantNode)
+		}
+		for k, v := range c.wantNode {
+			if node[k] != v {
+				t.Errorf("%s: node[%s] = %q, want %q", c.name, k, node[k], v)
+			}
+		}
+	}
+}
+
 // Values applied before the script has run (the replay of what an earlier run
 // saved) must be where the script looks once it has: under its own
 // info().cookieDomain, which is only known after info() is read.

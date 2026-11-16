@@ -18,6 +18,8 @@ type Config struct {
 	Link            string
 	Dialer          net.Dialer
 	ManualOnly      bool
+	AdvancedCaptcha bool
+	PowCapture      PowCaptureFunc
 	Platform        string
 	StreamsPerCache int
 	StreamsAlive    func() int32
@@ -30,6 +32,7 @@ type Config struct {
 
 // ManualSolverFunc определяет сигнатуру функции для интерактивного решения капчи.
 type ManualSolverFunc = vkauth.ManualSolveFunc
+type PowCaptureFunc = vkauth.PowCaptureFunc
 
 type Provider struct {
 	link string
@@ -48,10 +51,12 @@ func New(cfg Config, solver ManualSolverFunc) (*Provider, error) {
 		Credentials:     cfg.Credentials,
 		Dialer:          cfg.Dialer,
 		ManualOnly:      cfg.ManualOnly,
+		AdvancedCaptcha: cfg.AdvancedCaptcha,
 		Platform:        browserprofile.PlatformFromString(cfg.Platform),
 		StreamsPerCache: cfg.StreamsPerCache,
 		StreamsAlive:    cfg.StreamsAlive,
 		ManualSolver:    solver,
+		PowCapture:      cfg.PowCapture,
 		FingerprintSeed: cfg.FingerprintSeed,
 		StatePaths:      cfg.StatePaths,
 		Log:             cfg.Log,

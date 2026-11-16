@@ -9,7 +9,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
-// Local TCP ports of the side stack that carries the exit's captcha page.
+// Local TCP ports of the side stack that carries the exit's prompt page.
 // The exit answers only the client address, so the side stack shares it
 // and is told apart by these ports: below gVisor's ephemeral range (16000+)
 // and Android's (32768+), so the regular traffic never uses them.

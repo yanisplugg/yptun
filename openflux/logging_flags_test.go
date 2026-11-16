@@ -43,23 +43,20 @@ func TestPickSessionContext(t *testing.T) {
 		want                string
 	}{
 		{"explicit wins", "ctx", "https://u", specs, "ctx"},
-		{"--url wins over transports", "", "https://u", specs, "https://u"},
-		{"highest-priority transport URL", "", "http://#", specs, "https://docs/doc"},
-		{"no URL anywhere keeps the old default", "", "http://#", specs[:1], "http://#"},
-		{"legacy single transport", "", "http://#", []transportSpec{{Type: "yandex", Priority: 100, URL: "http://#"}}, "http://#"},
-		{"cupsonline rooms are not a context", "", "http://#", []transportSpec{
+		// The context no longer encodes the channel: without an explicit
+		// context (shared via the openflux:// link) every setup collapses to
+		// the one fixed placeholder, so URLs, transport priorities and
+		// cupsonline room lists can no longer make two peers derive different
+		// contexts and fail the handshake. See transport.KDFContexts.
+		{"no explicit: --url ignored", "", "https://u", specs, "http://#"},
+		{"no explicit: transport URLs ignored", "", "http://#", specs, "http://#"},
+		{"no URL anywhere", "", "http://#", specs[:1], "http://#"},
+		{"cupsonline rooms never a context", "", "http://#", []transportSpec{
 			{Type: "cupsonline", Priority: 100, URL: "WyIxYzE0NGQwZS1lMDQw"},
 			{Type: "yandex", Priority: 50, URL: "https://docs/doc"},
-		}, "https://docs/doc"},
-		{"cupsonline alone", "", "http://#", []transportSpec{{Type: "cupsonline", Priority: 100, URL: "WyIxYzE0NGQwZS1lMDQw"}}, "http://#"},
-		// A classic cupsonline client is given the rooms as --url; the exit
-		// that created them ran without one. Both must land on the same
-		// context (they used to differ, and nothing got through).
+		}, "http://#"},
 		{"classic cupsonline client with rooms as --url", "", "WyIxYzE0NGQwZS1lMDQw",
 			[]transportSpec{{Type: "cupsonline", Priority: 100, URL: "WyIxYzE0NGQwZS1lMDQw"}}, "http://#"},
-		{"direct host:port is not a context", "", "http://#", []transportSpec{
-			{Type: "direct", Priority: 100, URL: "203.0.113.7:9443"},
-		}, "http://#"},
 	}
 	for _, c := range cases {
 		if got, _ := transport.KDFContexts(c.explicit, c.url, contextSources(c.specs)); got != c.want {

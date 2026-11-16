@@ -59,6 +59,10 @@ var (
 const (
 	connectWait   = 30 * time.Second
 	maxReconnects = 10
+	// disconnectedReconnectGrace lets a brief ICE handover recover in place.
+	// An SFU-retired allocation can otherwise remain Disconnected forever,
+	// leaving the olcRTC runtime alive but unable to carry traffic.
+	disconnectedReconnectGrace = 5 * time.Second
 	// receiveSlots is how many video m-lines the offer receives on: the web
 	// client's nine, each of which the SFU fills with one publisher.
 	receiveSlots = 9
@@ -101,6 +105,9 @@ type Session struct {
 // attempt and nothing crosses attempts.
 type generation struct {
 	pc *webrtc.PeerConnection
+	// stateVersion invalidates an older disconnect grace period when pion
+	// reports that this generation recovered or changed state again.
+	stateVersion atomic.Uint64
 	// connected closes when the peer connection first connects, failed when
 	// it fails before it ever did, done when the attempt is torn down.
 	connected     chan struct{}
@@ -407,6 +414,9 @@ func (s *Session) watch(gen *generation) {
 		go drain(track)
 	})
 	gen.pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		// ai-generated: version the callback so a recovered transient outage
+		// cannot reconnect a later, unrelated outage (issue #90).
+		version := gen.stateVersion.Add(1)
 		logger.Debugf("mtslink: peer connection %s", state)
 		switch state {
 		case webrtc.PeerConnectionStateConnected:
@@ -419,10 +429,42 @@ func (s *Session) watch(gen *generation) {
 				return
 			}
 			s.reconnectAttempt(gen)
+		case webrtc.PeerConnectionStateDisconnected:
+			s.reconnectAfterDisconnect(gen, version)
 		case webrtc.PeerConnectionStateNew, webrtc.PeerConnectionStateConnecting,
-			webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateUnknown:
+			webrtc.PeerConnectionStateUnknown:
 		}
 	})
+}
+
+// reconnectAfterDisconnect asks for a fresh provider join only if this is
+// still the current generation and it stayed disconnected for the whole grace
+// period. Teardown closes gen.done, so callbacks from replaced generations
+// cannot disturb the live one.
+//
+// ai-generated: issue yanisplugg/yptun#90.
+func (s *Session) reconnectAfterDisconnect(gen *generation, version uint64) {
+	go func() {
+		timer := time.NewTimer(disconnectedReconnectGrace)
+		defer timer.Stop()
+		select {
+		case <-s.closeCh:
+			return
+		case <-gen.done:
+			return
+		case <-timer.C:
+		}
+
+		s.mu.Lock()
+		current := s.gen == gen
+		s.mu.Unlock()
+		if !current || gen.stateVersion.Load() != version ||
+			gen.pc.ConnectionState() != webrtc.PeerConnectionStateDisconnected {
+			return
+		}
+		logger.Warnf("mtslink: peer connection stayed disconnected for %s - triggering reconnect", disconnectedReconnectGrace)
+		s.reconnectAttempt(gen)
+	}()
 }
 
 // drain reads a track nothing consumes, so its packets do not pile up.

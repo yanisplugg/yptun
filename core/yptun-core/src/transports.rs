@@ -101,6 +101,8 @@ pub struct VkTurnConfig {
     pub listen_port: i32,
     /// Parallel TURN streams (freeturn -n); 0 = client default.
     pub streams: i32,
+    #[serde(rename = "auto_captcha", default = "default_true")]
+    pub auto_captcha: bool,
     /// Proxy link chained on top of the WG-over-VK tunnel.
     #[serde(rename = "chain_proxy_link")]
     pub chain_proxy_link: String,
@@ -150,6 +152,7 @@ impl Default for VkTurnConfig {
             vk_link: String::new(),
             listen_port: DEFAULT_FREETURN_PORT,
             streams: 0,
+            auto_captcha: true,
             chain_proxy_link: String::new(),
             outbound: default_outbound(),
             outbound_proxy_link: String::new(),

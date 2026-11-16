@@ -6,6 +6,13 @@ umask 077
 
 PROTO_VERSION=3
 
+# Полный вывод шагов установки: хвост показывается при сбое шага или неожиданном выходе.
+_FT_LOG=""
+_ft_log_init() {
+    [ -z "$_FT_LOG" ] || return 0
+    _FT_LOG=$(mktemp "${TMPDIR:-/tmp}/freeturn-install.XXXXXX" 2>/dev/null) || _FT_LOG=/dev/null
+}
+
 PREFIX="${FT_PREFIX:-/opt/free-turn-proxy}"
 CONF_FILE="$PREFIX/install.conf"
 LOCKFILE="$PREFIX/control.lock"
@@ -41,7 +48,7 @@ WG_MTU=1280                    # = tunnel.DefaultMTU клиента
 CLIENT_LISTEN="127.0.0.1:9000" # = -listen клиента по умолчанию, Endpoint клиентского WG
 SYSCTL_FILE="/etc/sysctl.d/99-free-turn-proxy.conf"
 
-REPO="samosvalishe/free-turn-proxy"
+REPO="hackdiaz-dev/free-turn-proxy"
 IMAGE="ghcr.io/$REPO"
 RELEASES_URL="https://github.com/$REPO/releases"
 
@@ -166,6 +173,7 @@ fail() {
     local code=$1 msg=${2:-$1}
     if [ "$_IS_RPC" != 1 ]; then
         log_error "$msg"
+        _EMITTED=1
         exit 1
     fi
     [ "$_EMITTED" -eq 1 ] && exit 1
@@ -181,7 +189,16 @@ die() { fail internal "$1"; }
 _on_exit() {
     local rc=$?
     [ "$_EMITTED" -eq 1 ] && return
-    [ "$_IS_RPC" -ne 1 ] && return
+    if [ "$_IS_RPC" -ne 1 ]; then
+        if [ "$rc" -ne 0 ]; then
+            log_error "Установка прервана на этапе «$_STAGE» (код $rc)."
+            if [ -n "$_FT_LOG" ] && [ -s "$_FT_LOG" ]; then
+                log_error "Последние 20 строк лога шагов:"
+                tail -n 20 "$_FT_LOG" >&2
+            fi
+        fi
+        return
+    fi
     _EMITTED=1
     printf '{"proto":%d,"result":"err","code":"internal","msg":"unexpected exit %d","stage":"%s","logs":[%s]}\n' \
         "$PROTO_VERSION" "$rc" "$_STAGE" "$(_logs_json)"
@@ -343,14 +360,19 @@ ui_spin() {
         if [ "$rc" -eq 0 ]; then
             log_success "$title"
         else
-            log_error "$title - ошибка (код $rc)"
-            tail -n 40 "$out" | gum style --border rounded --border-foreground "$MD_ERROR" --padding "0 1"
+            log_error "Шаг «$title» не удался (код $rc). Последние 20 строк:"
+            tail -n 20 "$out" | gum style --border rounded --border-foreground "$MD_ERROR" --padding "0 1"
         fi
     else
         log_info "$title..."
         "$@" >"$out" 2>&1 || rc=$?
-        [ "$rc" -eq 0 ] || tail -n 40 "$out" >&2
+        if [ "$rc" -ne 0 ]; then
+            log_error "Шаг «$title» не удался (код $rc). Последние 20 строк:"
+            tail -n 20 "$out" >&2
+        fi
     fi
+    _ft_log_init
+    { printf '== %s (код %s)\n' "$title" "$rc"; cat "$out"; } >>"$_FT_LOG" 2>/dev/null || true
     rm -f "$out"
     return "$rc"
 }
@@ -364,6 +386,7 @@ step() {
         [ "$rc" -eq 0 ] || log_error "$title: $(printf '%s' "$out" | tail -n 5)"
         return "$rc"
     fi
+    _STAGE=$title
     ui_spin "$title" "$@"
 }
 
@@ -373,7 +396,8 @@ step() {
 with_lock() {
     command -v flock >/dev/null 2>&1 || return 0
     mkdir -p "$PREFIX" 2>/dev/null || return 0
-    exec 8>"$LOCKFILE" 2>/dev/null || return 0
+    # Группа обязательна: у голого `exec ... 2>/dev/null` перенаправление stderr остаётся навсегда.
+    { exec 8>"$LOCKFILE"; } 2>/dev/null || return 0
     flock -w 300 8 2>/dev/null || true
 }
 
@@ -429,11 +453,11 @@ gum_download() {
         [ -n "$bin" ] && install -m 0755 "$bin" /usr/local/bin/gum 2>/dev/null
     fi
     rm -rf "$tmp"
-    command -v gum >/dev/null 2>&1
+    type -P gum >/dev/null 2>&1
 }
 
 ensure_gum() {
-    command -v gum >/dev/null 2>&1 && { HAS_GUM=1; return 0; }
+    type -P gum >/dev/null 2>&1 && { HAS_GUM=1; return 0; }
     log_info "Установка gum ${GUM_VERSION}..."
     gum_download "$GUM_VERSION" && { HAS_GUM=1; return 0; }
     log_warn "gum недоступен - классический текстовый режим."
@@ -470,10 +494,18 @@ port_busy_udp() {
     [ -n "$(ss -Hlun "sport = :$1" 2>/dev/null || true)" ]
 }
 
+# firewalld запущен (на RHEL-семействе ufw нет, а правила iptables firewalld не учитывает).
+_firewalld_running() {
+    command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1
+}
+
 firewall_open_port() {
     local port=$1 proto=${2:-udp}
     if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
         ufw allow "${port}/${proto}" >/dev/null 2>&1 || true
+    elif _firewalld_running; then
+        firewall-cmd --add-port="${port}/${proto}" >/dev/null 2>&1 || true
+        firewall-cmd --permanent --add-port="${port}/${proto}" >/dev/null 2>&1 || true
     elif command -v iptables >/dev/null 2>&1; then
         if ! iptables -C INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null; then
             iptables -I INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
@@ -488,6 +520,9 @@ firewall_close_port() {
     [ -n "$port" ] || return 0
     if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
         ufw delete allow "${port}/${proto}" >/dev/null 2>&1 || true
+    elif _firewalld_running; then
+        firewall-cmd --remove-port="${port}/${proto}" >/dev/null 2>&1 || true
+        firewall-cmd --permanent --remove-port="${port}/${proto}" >/dev/null 2>&1 || true
     elif command -v iptables >/dev/null 2>&1; then
         iptables -D INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
         command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1 || true
@@ -652,9 +687,18 @@ ft_remove() {
     rm -f "$ENVFILE"
 }
 
+# get.docker.com качаем в файл: в `curl | sh` сбой curl давал пустой stdin и успешный выход sh.
+_install_docker() {
+    local tmp rc=0
+    tmp=$(mktemp) || return 1
+    _dl https://get.docker.com "$tmp" && sh "$tmp" || rc=$?
+    rm -f "$tmp"
+    return "$rc"
+}
+
 ensure_docker() {
     if ! command -v docker >/dev/null 2>&1; then
-        step "Установка Docker" sh -c 'curl -fsSL https://get.docker.com | sh' \
+        step "Установка Docker" _install_docker \
             || fail docker_failed "установка Docker не удалась"
     fi
     docker info >/dev/null 2>&1 || systemctl start docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
@@ -1376,13 +1420,16 @@ _web_listening() {
 }
 
 # Строкой, а не функцией: исполняется вне скрипта (ExecStopPost, детач-обёртка). Зеркалит
-# firewall_open_port - ufw ИЛИ iptables, иначе снесём постоянное правило админа.
+# firewall_open_port - ufw, firewalld ИЛИ iptables, иначе снесём постоянное правило админа.
 _web_close_cmd() {
-    local port=$1 ufw_bin ipt_bin
+    local port=$1 ufw_bin ipt_bin fw_bin
     ufw_bin=$(command -v ufw 2>/dev/null || true)
     ipt_bin=$(command -v iptables 2>/dev/null || true)
+    fw_bin=$(command -v firewall-cmd 2>/dev/null || true)
     if [ -n "$ufw_bin" ] && ufw status 2>/dev/null | grep -q "Status: active"; then
         printf "%s delete allow %s/tcp >/dev/null 2>&1; exit 0" "$ufw_bin" "$port"
+    elif [ -n "$fw_bin" ] && "$fw_bin" --state >/dev/null 2>&1; then
+        printf "%s --remove-port=%s/tcp >/dev/null 2>&1; %s --permanent --remove-port=%s/tcp >/dev/null 2>&1; exit 0" "$fw_bin" "$port" "$fw_bin" "$port"
     elif [ -n "$ipt_bin" ]; then
         printf "%s -D INPUT -p tcp --dport %s -j ACCEPT >/dev/null 2>&1; exit 0" "$ipt_bin" "$port"
     else

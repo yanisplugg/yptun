@@ -2,8 +2,8 @@ package transport
 
 import "sort"
 
-// ContextPlaceholder is the --url default and the encryption context of a
-// channel none of whose carriers has a document URL.
+// ContextPlaceholder is the --url default and the one fixed encryption KDF
+// context every current peer uses unless a context was set explicitly.
 const ContextPlaceholder = "http://#"
 
 // maxContextCandidates bounds how many contexts a peer tries: each one costs
@@ -31,24 +31,41 @@ func contextURL(s ContextSource) bool {
 	return s.URL != "" && s.URL != ContextPlaceholder
 }
 
-// KDFContexts is the one rule every OpenFlux peer uses to pick the context
-// its encryption keys are derived from (the scrypt salt); both peers must
-// arrive at the same string. It replaces the copies that had drifted apart
-// (CLI, Android bridge, Desktop, iOS):
+// KDFContexts returns the context a peer derives its encryption keys from (the
+// scrypt salt) and the alternates it will also try.
 //
-//	explicit      --session-context / the context an openflux:// link carries
-//	--url         unless it is a cupsonline room list
-//	transports    URL of the highest-priority carrier that names the
-//	              channel (see contextURL); equal priorities keep the first
-//	fallback      ContextPlaceholder
+// The PRIMARY is pinned (see EncryptedTransport and the pin commit): an
+// explicit context — set with --session-context, or carried by an openflux://
+// link — is shared out of band so both peers hold the same string and cannot
+// diverge; otherwise every current peer, build and carrier uses the one fixed
+// ContextPlaceholder. Two up-to-date peers that share the secret therefore
+// derive the same keys on the first try, with no divergence to work around.
 //
-// alternates are the contexts other or older builds derive for the same
-// setup, most likely first: the placeholder, --url taken literally (older
-// classic cupsonline peers used the room list), every carrier URL, and the
-// transport names (third-party panels and an older fork used them when no
-// URL was set). A receiver that cannot authenticate a packet under the
-// primary context tries these before dropping it; see EncryptedTransport.
+// The ALTERNATES are the LEGACY fallback. Before the pin, a peer computed its
+// context FROM the carrier URLs and transport names, and the two sides had to
+// independently arrive at the same string (it is only a public salt — secrecy
+// comes from the secret). Builds still deployed in the field do exactly that,
+// so to interoperate with them we offer those same strings as alternates: a
+// receiver that cannot authenticate a packet under the pinned primary tries
+// them before dropping it, and the sender rotates through them while the peer
+// stays silent (see EncryptedTransport). An up-to-date peer never needs them —
+// both sides agree on the primary; an older peer whose primary is a URL/room
+// list is reached through them. The candidate order, most likely first, is the
+// context an old build would have derived as ITS primary, then the placeholder,
+// --url taken literally, every carrier URL, and the transport names.
+//
+// globalURL and specs feed only the legacy alternates now; the primary ignores
+// them unless explicit is set.
 func KDFContexts(explicit, globalURL string, specs []ContextSource) (primary string, alternates []string) {
+	if explicit != "" {
+		primary = explicit
+	} else {
+		primary = ContextPlaceholder
+	}
+
+	// legacyPrimary is the context a pre-pin build would have chosen as its
+	// own primary for this same setup; it is the alternate most worth trying
+	// first when talking to the deployed fleet.
 	cups := false
 	for _, s := range specs {
 		if s.Type == "cupsonline" && s.URL != "" && s.URL == globalURL {
@@ -58,11 +75,12 @@ func KDFContexts(explicit, globalURL string, specs []ContextSource) (primary str
 	if len(specs) == 1 && specs[0].Type == "cupsonline" {
 		cups = true
 	}
+	var legacyPrimary string
 	switch {
 	case explicit != "":
-		primary = explicit
+		legacyPrimary = explicit
 	case globalURL != "" && globalURL != ContextPlaceholder && !cups:
-		primary = globalURL
+		legacyPrimary = globalURL
 	default:
 		best := -1
 		for i, s := range specs {
@@ -74,9 +92,9 @@ func KDFContexts(explicit, globalURL string, specs []ContextSource) (primary str
 			}
 		}
 		if best >= 0 {
-			primary = specs[best].URL
+			legacyPrimary = specs[best].URL
 		} else {
-			primary = ContextPlaceholder
+			legacyPrimary = ContextPlaceholder
 		}
 	}
 
@@ -88,6 +106,7 @@ func KDFContexts(explicit, globalURL string, specs []ContextSource) (primary str
 		seen[c] = true
 		alternates = append(alternates, c)
 	}
+	add(legacyPrimary)
 	add(ContextPlaceholder)
 	if globalURL != ContextPlaceholder {
 		add(globalURL)

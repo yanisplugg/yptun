@@ -54,7 +54,7 @@ func TestBurnPersonaAdvancesIdentity(t *testing.T) {
 
 func TestAutoFailureBurnsPersonaAndRestartsChain(t *testing.T) {
 	c := newTestClient(t, nil)
-	c.autoSolver = func(context.Context, *captcha.Error, int, tlsclient.HttpClient, browserprofile.Profile) (string, error) {
+	c.autoSolver = func(context.Context, *captcha.Error, int, net.Dialer, tlsclient.HttpClient, browserprofile.Profile) (string, error) {
 		return "", errors.New("auto rejected")
 	}
 	var manualPersona browserprofile.Profile
@@ -149,7 +149,7 @@ func TestFetchBoundsPersonaRestarts(t *testing.T) {
 
 func TestCaptchaUnavailableKeepsPersona(t *testing.T) {
 	c := newTestClient(t, nil)
-	c.autoSolver = func(context.Context, *captcha.Error, int, tlsclient.HttpClient, browserprofile.Profile) (string, error) {
+	c.autoSolver = func(context.Context, *captcha.Error, int, net.Dialer, tlsclient.HttpClient, browserprofile.Profile) (string, error) {
 		return "", fmt.Errorf("%w: captcha page http 429 (bytes=120)", captcha.ErrUnavailable)
 	}
 

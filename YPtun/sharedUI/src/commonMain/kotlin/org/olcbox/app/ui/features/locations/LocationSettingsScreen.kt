@@ -1511,6 +1511,12 @@ private fun LazyListScope.vkTurnSection(
                     placeholder = "64 hex characters",
                     enabled = enabled
                 )
+                VkTurnSwitchRow(
+                    label = "Автопрохождение капчи VK",
+                    checked = draft.autoCaptcha,
+                    enabled = enabled,
+                    onCheckedChange = { v -> onChange { it.copy(autoCaptcha = v) } }
+                )
                 VkTurnField(
                     value = draft.streams,
                     onValueChange = { v -> onChange { it.copy(streams = v.filter(Char::isDigit)) } },

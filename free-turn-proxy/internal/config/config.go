@@ -57,10 +57,12 @@ const (
 )
 
 type VKOpts struct {
-	Links          []string
-	StreamsPerCred int
-	ManualCaptcha  bool
-	Platform       Platform
+	Links           []string
+	StreamsPerCred  int
+	ManualCaptcha   bool
+	AutoCaptcha     bool
+	AdvancedCaptcha bool
+	Platform        Platform
 }
 
 type ProviderOpts struct {

@@ -1,8 +1,16 @@
 package script
 
 import (
+	"os"
+	"strconv"
+	"time"
+
 	"github.com/dop251/goja"
+	"github.com/pion/sctp"
+	"github.com/pion/transport/v5/stdnet"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // registerWebRTC exposes a minimal PeerConnection/DataChannel surface backed
@@ -24,7 +32,10 @@ func registerWebRTC(vm *goja.Runtime, t *ScriptTransport) {
 
 func newPeerConnectionJS(vm *goja.Runtime, t *ScriptTransport, call goja.FunctionCall) goja.Value {
 	config := webrtc.Configuration{}
+	var settings webrtc.SettingEngine
+	var pace *paceConfig
 	if opts, ok := call.Argument(0).(*goja.Object); ok {
+		pace = tuneConnection(&settings, t, opts)
 		if v := opts.Get("iceServers"); v != nil && !goja.IsUndefined(v) {
 			if arr, ok := v.Export().([]interface{}); ok {
 				for _, raw := range arr {
@@ -41,7 +52,10 @@ func newPeerConnectionJS(vm *goja.Runtime, t *ScriptTransport, call goja.Functio
 		}
 	}
 
-	pc, err := webrtc.NewPeerConnection(config)
+	if opts, ok := call.Argument(0).(*goja.Object); !ok || opts == nil {
+		pace = tuneConnection(&settings, t, nil)
+	}
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(config)
 	if err != nil {
 		panic(vm.NewGoError(err))
 	}
@@ -91,7 +105,7 @@ func newPeerConnectionJS(vm *goja.Runtime, t *ScriptTransport, call goja.Functio
 			if !ok {
 				return
 			}
-			djs := newDataChannelJS(vm, t, dc)
+			djs := newDataChannelJS(vm, t, dc, pace)
 			_, _ = fn(obj, djs)
 		})
 	})
@@ -113,7 +127,7 @@ func newPeerConnectionJS(vm *goja.Runtime, t *ScriptTransport, call goja.Functio
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
-		return newDataChannelJS(vm, t, dc)
+		return newDataChannelJS(vm, t, dc, pace)
 	})
 
 	// addTransceiver(kind, {direction}) puts an RTP m-line into the next offer. A data-channel-only
@@ -242,7 +256,7 @@ func parseICEServer(m map[string]interface{}) webrtc.ICEServer {
 // createDataChannel, or one delivered through ondatachannel for a
 // remote-initiated channel. send() auto-detects bytes-like vs. string, same
 // convention as the ws.open Socket wrapper in host.go.
-func newDataChannelJS(vm *goja.Runtime, t *ScriptTransport, dc *webrtc.DataChannel) *goja.Object {
+func newDataChannelJS(vm *goja.Runtime, t *ScriptTransport, dc *webrtc.DataChannel, pace *paceConfig) *goja.Object {
 	obj := vm.NewObject()
 	obj.Set("label", dc.Label())
 
@@ -278,6 +292,12 @@ func newDataChannelJS(vm *goja.Runtime, t *ScriptTransport, dc *webrtc.DataChann
 		arg := call.Argument(0)
 		if _, isObj := arg.(*goja.Object); isObj {
 			if b, err := bytesArg(vm, arg); err == nil {
+				if pace != nil {
+					if limit := pace.dcbuf.Load(); limit > 0 && int64(dc.BufferedAmount()) > limit {
+						pace.dcDropped.Add(1)
+						return goja.Undefined()
+					}
+				}
 				if err := dc.Send(b); err != nil {
 					panic(vm.NewGoError(err))
 				}
@@ -295,4 +315,83 @@ func newDataChannelJS(vm *goja.Runtime, t *ScriptTransport, dc *webrtc.DataChann
 	})
 
 	return obj
+}
+
+// tuneConnection applies the knobs that decide how the connection behaves on a lossy relayed path:
+//
+//	paceKBps      spaces the datagrams written to a TURN server out to this many KB/s (see paceConfig)
+//	paceQueue     datagrams that may wait for their turn (60), paceBurst datagrams that may leave together (1)
+//	dcBufKB       the most a data channel may hold unsent or unacknowledged before send() drops (no limit)
+//	sctpRtoMaxMs  caps SCTP's retransmission backoff (60 s by default: a channel that lost a window stays
+//	              dead for about that long)
+//	sctpMinCwnd   the least SCTP's congestion window may shrink to, bytes. Over a path that drops in bursts
+//	              SCTP reads every loss as congestion and slows to one packet per round trip, while the TCP
+//	              inside the tunnel has its own congestion control and needs no second one below it
+//	sctpMtu       the size of the packets SCTP sends (1191 by default, the largest that always fits); the
+//	              datagram is this plus 69 bytes of DTLS, TURN, UDP and IP
+//
+// OPENFLUX_PACE_FILE (rate=, queue=, burst=, dcbuf=), OPENFLUX_SCTP_RTOMAX_MS and OPENFLUX_SCTP_MINCWND
+// override them for a test, without a new script. The result is the pacing configuration the connection's
+// data channels read their limit from, or nil.
+func tuneConnection(se *webrtc.SettingEngine, t *ScriptTransport, opts *goja.Object) *paceConfig {
+	var pace *paceConfig
+	rtoMax, minCwnd, mtu := 0, 0, 0
+	if opts != nil {
+		if v := opts.Get("paceKBps"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) && v.ToInteger() > 0 {
+			pace = &paceConfig{}
+			pace.rate.Store(v.ToInteger() * 1000)
+			pace.queue.Store(60)
+			pace.burst.Store(1)
+			if q := opts.Get("paceQueue"); q != nil && !goja.IsUndefined(q) && q.ToInteger() > 0 {
+				pace.queue.Store(q.ToInteger())
+			}
+			if b := opts.Get("paceBurst"); b != nil && !goja.IsUndefined(b) && b.ToInteger() > 0 {
+				pace.burst.Store(b.ToInteger())
+			}
+		}
+		if v := opts.Get("dcBufKB"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) && v.ToInteger() > 0 {
+			if pace == nil {
+				pace = &paceConfig{}
+			}
+			pace.dcbuf.Store(v.ToInteger() * 1000)
+		}
+		if v := opts.Get("sctpRtoMaxMs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+			rtoMax = int(v.ToInteger())
+		}
+		if v := opts.Get("sctpMinCwnd"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+			minCwnd = int(v.ToInteger())
+		}
+		if v := opts.Get("sctpMtu"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+			mtu = int(v.ToInteger())
+		}
+	}
+	if env := paceFromEnv(); env != nil {
+		pace = env
+	}
+	if v, err := strconv.Atoi(os.Getenv("OPENFLUX_SCTP_RTOMAX_MS")); err == nil && v > 0 {
+		rtoMax = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("OPENFLUX_SCTP_MINCWND")); err == nil && v > 0 {
+		minCwnd = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("OPENFLUX_SCTP_MTU")); err == nil && v > 0 {
+		mtu = v
+	}
+	if pace != nil {
+		if n, err := stdnet.NewNet(); err == nil {
+			se.SetNet(&pacedNet{Net: n, cfg: pace, name: t.name})
+		}
+	}
+	if rtoMax > 0 {
+		se.SetSCTPRTOMax(time.Duration(rtoMax) * time.Millisecond)
+	}
+	if minCwnd > 0 {
+		se.SetSCTPMinCwnd(uint32(minCwnd))
+	}
+	if mtu > 0 {
+		if err := sctp.SetOutboundMTU(uint32(mtu)); err != nil {
+			utils.Debugf("[SCRIPT:%s] sctpMtu %d refused: %v", t.name, mtu, err)
+		}
+	}
+	return pace
 }

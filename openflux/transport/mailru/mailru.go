@@ -68,6 +68,10 @@ type DocSession struct {
 	UserID     string
 	writeMu    sync.Mutex
 
+	// sid is this connection's Socket.IO session id (from the 40{"sid"} acknowledgement); the server lists it as
+	// connectionId next to the connection's own editor id in the auth reply (see learnConnID).
+	sid string
+
 	// ready is closed once co-editing writes are allowed on this session:
 	// either we have replied authChangesAck to the server's authChanges, or
 	// the readiness fallback fired (a legacy server that never sends
@@ -215,7 +219,16 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 	// Socket.IO acknowledgement:
 	//   40{"sid":"..."}
 	if err := waitFor(func(text string) bool {
-		return strings.HasPrefix(text, "40")
+		if !strings.HasPrefix(text, "40") {
+			return false
+		}
+		var ack struct {
+			Sid string `json:"sid"`
+		}
+		if json.Unmarshal([]byte(text[2:]), &ack) == nil {
+			session.sid = ack.Sid
+		}
+		return true
 	}); err != nil {
 		return fmt.Errorf("mailru: wait for Socket.IO connect: %w", err)
 	}
@@ -270,6 +283,11 @@ type MailruDocsTransport struct {
 	// the old connection also sees the new connection's echoes. Without tracking
 	// all of them, the old reader would re-deliver our own egress as ingress.
 	ourIDs sync.Map
+
+	// ourConns holds the per-connection editor ids ("uid…108") of this transport's own connections, learned from
+	// the auth reply. A signed-in account has one editor id for all its connections (useridoriginal), so a frame
+	// from the account's other connection, the node of the same account, is told from our echo only by this one.
+	ourConns sync.Map
 }
 
 // mailruRecvQueue bounds the decoupling receive buffer (whole batches, so kept
@@ -962,6 +980,7 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 	if strings.Contains(text, `"type":"auth"`) && strings.Contains(text, `"result":1`) {
 		utils.Debugf("[M-DOCS] Auth OK for user %s", session.UserID)
+		t.learnConnID(session, data)
 		// The server has accepted this connection: it will now relay our chat.
 		// A rotation waits on this before moving sends onto the new connection.
 		if session != nil {
@@ -1004,7 +1023,7 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	// Only the active session delivers, so a frame is never delivered twice
 	// during a rotation (both connections see every broadcast).
 	if strings.Contains(text, `"messages"`) && session.active.Load() {
-		for _, pkt := range decodeChatDataFilter(data, t.isOwnID) {
+		for _, pkt := range decodeChatFrames(data, t.isOwnFrame) {
 			t.RecordReceive(len(pkt))
 			// Never block the reader: a full queue means downstream is behind,
 			// so drop (the Session's ARQ retransmits) and keep reading so the
@@ -1026,6 +1045,54 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 // cannot decode as ours.
 const chatDataTag = "OFX1"
 
+// learnConnID reads this connection's own editor id out of the auth reply: the reply lists the document's
+// participants, each with its connectionId, and ours is the one whose connectionId is this socket's sid.
+func (t *MailruDocsTransport) learnConnID(session *DocSession, data []byte) {
+	if session == nil || session.sid == "" {
+		return
+	}
+	i := bytes.IndexByte(data, '[')
+	if i < 0 {
+		return
+	}
+	var arr []json.RawMessage
+	if json.Unmarshal(data[i:], &arr) != nil || len(arr) < 2 {
+		return
+	}
+	var reply struct {
+		Participants []struct {
+			ID           string `json:"id"`
+			ConnectionID string `json:"connectionId"`
+		} `json:"participants"`
+	}
+	if json.Unmarshal(arr[1], &reply) != nil {
+		return
+	}
+	for _, p := range reply.Participants {
+		if p.ConnectionID == session.sid && p.ID != "" {
+			t.ourConns.Store(p.ID, struct{}{})
+			return
+		}
+	}
+}
+
+// isOwnFrame reports whether a chat entry is the echo of one of this transport's own connections. user is the
+// entry's per-connection editor id, original the id of the account behind it. Once this transport knows its own
+// connection ids it judges by user alone: an account has the same original id on every connection, so judging by
+// that would take the exit's frames for our echo when both sides sign in as the same account. Without that
+// knowledge (an older server's auth reply) it falls back to the account-level id.
+func (t *MailruDocsTransport) isOwnFrame(user, original string) bool {
+	if user != "" {
+		known := false
+		t.ourConns.Range(func(_, _ any) bool { known = true; return false })
+		if known {
+			_, ok := t.ourConns.Load(user)
+			return ok
+		}
+	}
+	return t.isOwnID(original)
+}
+
 // isOwnID reports whether an editor id is one of this transport's own
 // connections (so a chat frame from it is our own echo, not peer data).
 func (t *MailruDocsTransport) isOwnID(id string) bool {
@@ -1046,6 +1113,12 @@ func (t *MailruDocsTransport) isOwnID(id string) bool {
 // base64-decodes the remainder. Human chat and presence entries (no tag) are
 // ignored.
 func decodeChatDataFilter(frame []byte, isOwn func(string) bool) [][]byte {
+	return decodeChatFrames(frame, func(_, original string) bool { return isOwn != nil && isOwn(original) })
+}
+
+// decodeChatFrames is decodeChatDataFilter with the entry's per-connection id (user) as well as the account's
+// (useridoriginal) given to isOwn.
+func decodeChatFrames(frame []byte, isOwn func(user, original string) bool) [][]byte {
 	i := bytes.IndexByte(frame, '[')
 	if i < 0 {
 		return nil
@@ -1058,6 +1131,7 @@ func decodeChatDataFilter(frame []byte, isOwn func(string) bool) [][]byte {
 		Type     string `json:"type"`
 		Messages []struct {
 			Message        string `json:"message"`
+			User           string `json:"user"`
 			UserIDOriginal string `json:"useridoriginal"`
 		} `json:"messages"`
 	}
@@ -1066,7 +1140,7 @@ func decodeChatDataFilter(frame []byte, isOwn func(string) bool) [][]byte {
 	}
 	var out [][]byte
 	for _, m := range payload.Messages {
-		if isOwn != nil && isOwn(m.UserIDOriginal) {
+		if isOwn != nil && isOwn(m.User, m.UserIDOriginal) {
 			continue // the server's echo of one of our own connections
 		}
 		if !strings.HasPrefix(m.Message, chatDataTag) {
@@ -1146,6 +1220,34 @@ func reconnectBackoff(n int) time.Duration {
 	return d
 }
 
+// csrfToken asks Cloud for the token of the jar's session; "" when the jar
+// holds no sign-in (Cloud answers 403) or the call fails: the request then goes
+// out anonymously, as it did before Mail.ru wanted a login.
+func (t *MailruDocsTransport) csrfToken(client *http.Client) string {
+	req, _ := http.NewRequest("POST", "https://cloud.mail.ru/api/v2/tokens/csrf", nil)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("User-Agent", mailruUserAgent)
+	req.Header.Set("Referer", "https://cloud.mail.ru/home/")
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var res struct {
+		Body struct {
+			Token string `json:"token"`
+		} `json:"body"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&res) != nil {
+		return ""
+	}
+	return res.Body.Token
+}
+
 // fetchDocInfo POSTs to Mail.ru's public-document editor API and parses the
 // response into the fields needed to open the collaborative WebSocket.
 func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, error) {
@@ -1172,6 +1274,11 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	utils.Debugf("[M-DOCS] fetchDocInfo POST %s", apiURL)
 
 	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	// Mail.ru refuses an anonymous r7/edit ("public is available with auth
+	// only", 401); with the sign-in's cookies it needs the CSRF token too.
+	if token := t.csrfToken(client); token != "" {
+		req.Header.Set("X-CSRF-Token", token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")

@@ -228,7 +228,7 @@ func (h *Host) serveSubmit(w http.ResponseWriter, r *http.Request) {
 
 // deliver is what an app does with a submission.
 func (h *Host) deliver(body []byte) error {
-	values, err := script.FlattenSubmission(body)
+	client, node, err := script.FlattenSubmissionScoped(body)
 	if err != nil {
 		return err
 	}
@@ -237,22 +237,30 @@ func (h *Host) deliver(body []byte) error {
 	h.mu.Unlock()
 	switch {
 	case sink != nil:
-		if err := sink(values); err != nil {
+		if err := sink(client); err != nil {
 			return err
 		}
 	case h.tr != nil:
-		if err := h.tr.ApplyCookies(values); err != nil {
+		if err := h.tr.ApplyCookies(client); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("no script is running to take the data")
 	}
-	keys := make([]string, 0, len(values))
-	for k := range values {
+	keys := make([]string, 0, len(client))
+	for k := range client {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	h.opts.Logf("setup delivered to the script: %d values (%s)", len(values), strings.Join(keys, ", "))
+	h.opts.Logf("setup delivered to the script: %d values (%s)", len(client), strings.Join(keys, ", "))
+	if node != nil {
+		nk := make([]string, 0, len(node))
+		for k := range node {
+			nk = append(nk, k)
+		}
+		sort.Strings(nk)
+		h.opts.Logf("node params received: %d values (%s) — apply with set-transports", len(node), strings.Join(nk, ", "))
+	}
 	return nil
 }
 

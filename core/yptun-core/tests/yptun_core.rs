@@ -52,6 +52,7 @@ impl YpTunCoreLib for Shared {
     fn tg_awg_stop(&self) { self.0.rec("tg_awg_stop".into()) }
     fn tg_awg_running(&self) -> i32 { self.0.running }
     fn ft_version(&self) -> Option<String> { Some("ft1".into()) }
+    fn ft_set_auto_captcha(&self, enabled: i32) { self.0.rec(format!("ft_auto {enabled}")) }
     fn ft_start(&self, _u: &str, _l: &str, _v: &str, _n: i32) -> Option<String> { self.0.err() }
     fn ft_stop(&self) { self.0.rec("ft_stop".into()) }
     fn ft_running(&self) -> i32 { self.0.running }

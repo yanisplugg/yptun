@@ -10,7 +10,16 @@
 #ifndef __HEV_SOCKS5_TUNNEL_H__
 #define __HEV_SOCKS5_TUNNEL_H__
 
+#include <stdint.h>
 #include "hev-list.h"
+
+typedef int (*HevSocks5TunnelConnectionFilter) (int protocol,
+                                                const char *src_ip,
+                                                uint16_t src_port,
+                                                const char *dst_ip,
+                                                uint16_t dst_port);
+
+void hev_socks5_tunnel_set_connection_filter (HevSocks5TunnelConnectionFilter filter);
 
 int hev_socks5_tunnel_init (int tun_fd);
 void hev_socks5_tunnel_fini (void);

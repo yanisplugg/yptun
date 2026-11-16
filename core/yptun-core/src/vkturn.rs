@@ -25,6 +25,11 @@ pub struct VkTurnDraft {
     pub peer_host: String,
     pub peer_port: String,
     pub obf_key: String,
+    pub obf_timing_ms: String,
+    pub streams_per_cred: String,
+    pub client_id: String,
+    pub manual_captcha: bool,
+    pub auto_captcha: bool,
     pub comment: String,
     pub vk_link: String,
     pub wg_private_key: String,
@@ -81,6 +86,11 @@ impl Default for VkTurnDraft {
             peer_host: s(""),
             peer_port: s(""),
             obf_key: s(""),
+            obf_timing_ms: s(""),
+            streams_per_cred: s(""),
+            client_id: s(""),
+            manual_captcha: false,
+            auto_captcha: true,
             comment: s(""),
             vk_link: s(""),
             wg_private_key: s(""),
@@ -211,6 +221,7 @@ pub fn compose(draft: &VkTurnDraft, name: &str) -> (VkTurnConfig, ProxyProfile) 
         vk_link: draft.vk_link.trim().into(),
         listen_port,
         streams: positive(&draft.streams),
+        auto_captcha: draft.auto_captcha,
         chain_proxy_link: draft.chain_proxy_link.trim().into(),
         outbound_proxy_link: if outbound == OUTBOUND_PROXY { draft.outbound_proxy_link.trim().into() } else { String::new() },
         outbound,
@@ -329,6 +340,7 @@ pub fn decompose(vkturn: Option<&VkTurnConfig>, proxy: Option<&ProxyProfile>) ->
         d.vk_link = vk.vk_link.clone();
         d.listen_port = vk.listen_port.to_string();
         d.streams = positive_text(vk.streams);
+        d.auto_captcha = vk.auto_captcha;
         d.chain_proxy_link = vk.chain_proxy_link.clone();
         d.outbound = or(&vk.outbound, OUTBOUND_WIREGUARD).into();
         d.outbound_proxy_link = vk.outbound_proxy_link.clone();
@@ -385,41 +397,63 @@ pub fn decompose(vkturn: Option<&VkTurnConfig>, proxy: Option<&ProxyProfile>) ->
 }
 
 fn build_uri(d: &VkTurnDraft, peer_port: i32, wg_b64: &str, mode: &str) -> String {
-    let mut params: Vec<String> = Vec::new();
-    if !mode.trim().is_empty() {
-        params.push(format!("mode={}", mode.trim()));
-    }
-    if !d.obf_profile.trim().is_empty() {
-        params.push(format!("obf-profile={}", d.obf_profile.trim()));
-    }
-    // bond=1 is no longer written: free-turn-proxy 3.2.0 dropped byte striping.
-    if !wg_b64.is_empty() {
-        params.push(format!("wg={wg_b64}"));
-    }
-    let transport = d.transport.trim();
-    let transport = if params.is_empty() { transport.to_string() } else { format!("{transport}<{}>", params.join("&")) };
-    let mut s = format!("{FREETURN_SCHEME}{}", or(&d.provider, "vk"));
-    if !transport.trim().is_empty() {
-        s += &format!("?{transport}");
-    }
     let host = d.peer_host.trim();
-    if !host.is_empty() {
-        s += &format!("@{host}");
-        if peer_port > 0 {
-            s += &format!(":{peer_port}");
-        }
+    let peer = if host.is_empty() {
+        String::new()
+    } else if peer_port <= 0 {
+        host.to_string()
+    } else if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{peer_port}")
+    } else {
+        format!("{host}:{peer_port}")
+    };
+    let mut w = Map::new();
+    w.insert("v".into(), json!(1));
+    w.insert("provider".into(), json!(or(&d.provider, "vk")));
+    w.insert("peer".into(), json!(peer));
+    if !d.transport.trim().is_empty() { w.insert("transport".into(), json!(d.transport.trim())); }
+    if !mode.trim().is_empty() { w.insert("mode".into(), json!(mode.trim())); }
+    if !d.obf_profile.trim().is_empty() && d.obf_profile.trim() != "none" {
+        w.insert("obf".into(), json!(d.obf_profile.trim()));
+        w.insert("key".into(), json!(d.obf_key.trim()));
+        if let Some(v) = int(&d.obf_timing_ms).filter(|v| *v > 0) { w.insert("timing".into(), json!(v)); }
     }
-    if !d.obf_key.trim().is_empty() {
-        s += &format!("#{}", d.obf_key.trim());
+    if let Some(v) = int(&d.streams).filter(|v| *v > 0) { w.insert("n".into(), json!(v)); }
+    if let Some(v) = int(&d.streams_per_cred).filter(|v| *v > 0) { w.insert("spc".into(), json!(v)); }
+    if !d.client_id.trim().is_empty() { w.insert("cid".into(), json!(d.client_id.trim())); }
+    if d.manual_captcha { w.insert("mcap".into(), json!(true)); }
+    if !d.comment.trim().is_empty() { w.insert("name".into(), json!(d.comment.trim())); }
+    if !d.vk_link.trim().is_empty() { w.insert("vk".into(), json!(d.vk_link.trim())); }
+    if let Some(conf) = (!wg_b64.is_empty()).then(|| decode_base64_chunk(wg_b64)).flatten() {
+        w.insert("wg".into(), json!(conf));
     }
-    if !d.comment.trim().is_empty() {
-        s += &format!("${}", d.comment.trim());
-    }
-    s
+    format!("{FREETURN_SCHEME}{}", URL_SAFE_NO_PAD.encode(Value::Object(w).to_string()))
 }
 
 fn apply_uri(d: &mut VkTurnDraft, uri: &str) {
     let mut s = uri.trim()[FREETURN_SCHEME.len()..].to_string();
+    if let Some(Value::Object(w)) = decode_base64_chunk(&s).and_then(|raw| serde_json::from_str(&raw).ok()) {
+        let text = |key: &str| w.get(key).and_then(|v| match v { Value::String(s) => Some(s.clone()), Value::Number(n) => Some(n.to_string()), Value::Bool(b) => Some(b.to_string()), _ => None }).unwrap_or_default();
+        d.provider = { let v = text("provider"); or(&v, "vk").to_string() };
+        let v = text("transport"); if !v.is_empty() { d.transport = v; }
+        let v = text("mode"); if !v.is_empty() { d.mode = v; }
+        d.obf_profile = { let v = text("obf"); or(&v, "none").to_string() };
+        d.obf_key = text("key");
+        d.obf_timing_ms = text("timing");
+        let v = text("n"); if !v.is_empty() { d.streams = v; }
+        d.streams_per_cred = text("spc");
+        d.client_id = text("cid");
+        d.manual_captcha = w.get("mcap").and_then(Value::as_bool).unwrap_or(false);
+        d.comment = text("name");
+        let v = text("vk"); if !v.is_empty() { d.vk_link = v; }
+        if let Some((h, p)) = split_host_port(&text("peer")) { d.peer_host = h; d.peer_port = p.to_string(); }
+        let wg = text("wg");
+        if !wg.is_empty() {
+            let conf = if wg.contains('[') { wg } else { decode_base64_chunk(&wg).unwrap_or_default() };
+            apply_wg_conf(d, &conf, false);
+        }
+        return;
+    }
     if let Some(i) = s.find('$') {
         d.comment = s[i + 1..].into();
         s.truncate(i);

@@ -421,6 +421,30 @@ fn wireguard_balancer() {
 }
 
 #[test]
+fn custom_lan_domain_precedes_bypass_russia_ip_resolution() {
+    let custom = SingBoxRule {
+        name: "LAN server".into(),
+        outbound: OUT_DIRECT.into(),
+        domains: vec!["myserver.lan".into()],
+        ..Default::default()
+    };
+    let root = built(
+        &vless(),
+        XrayOptions {
+            routing: RoutingRules { bypass_russia: true, rules: vec![custom], ..Default::default() },
+            ..Default::default()
+        },
+    );
+    let rules = list(&root["routing"], "rules");
+    let custom_at = rules.iter().position(|r| r["domain"] == json!(["domain:myserver.lan"])).unwrap();
+    let ru_domain_at = rules.iter().position(|r| r["domain"] == json!(["geosite:category-ru"])).unwrap();
+    let ru_ip_at = rules.iter().position(|r| r["ip"] == json!(["geoip:ru"])).unwrap();
+    assert_eq!(rules[custom_at]["outboundTag"], "direct");
+    assert!(custom_at < ru_domain_at && custom_at < ru_ip_at);
+    assert_eq!(root["routing"]["domainStrategy"], "IPIfNonMatch");
+}
+
+#[test]
 fn three_xui_params_reach_the_outbound() {
     let p = ProxyProfile {
         security: SECURITY_REALITY.into(), reality_public_key: "PBK".into(), reality_short_id: "1".into(), reality_mldsa65_verify: "PQV".into(), reality_spider_x: "/abc".into(),

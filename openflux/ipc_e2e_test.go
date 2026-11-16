@@ -49,7 +49,7 @@ func (t *e2eTransport) SetErrorNotifier(fn func(error, string, string, string, s
 	t.notifyMu.Unlock()
 }
 
-func (t *e2eTransport) FireCaptcha(reason string) {
+func (t *e2eTransport) FirePrompt(reason string) {
 	t.notifyMu.Lock()
 	fn := t.notify
 	t.notifyMu.Unlock()
@@ -88,7 +88,7 @@ func (t *e2eTransport) getJar() map[string]string {
 	return out
 }
 
-func TestCaptchaOverIPC(t *testing.T) {
+func TestPromptOverIPC(t *testing.T) {
 	// 1. Manager with a fake transport.
 	sess, err := transport.NewSession(transport.PeerParameters{
 		Capabilities:  control.CapabilityIPv4 | control.CapabilityTCP,
@@ -116,7 +116,7 @@ func TestCaptchaOverIPC(t *testing.T) {
 	defer srv.Close()
 
 	// Wire the captcha notifier exactly the way main.go does.
-	m.SetCaptchaNotifier(func(_name, url, html, reason string) {
+	m.SetPromptNotifier(func(_name, url, html, reason string) {
 		_ = srv.SendCookiesRequest(localCheckRequest("yandex", url, html, reason))
 	})
 
@@ -145,7 +145,7 @@ func TestCaptchaOverIPC(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 4. Fire the captcha signal from the fake transport.
-	raw.FireCaptcha("smartcaptcha")
+	raw.FirePrompt("smartcaptcha")
 
 	// 5. Expect the jar to appear on the transport within a second.
 	deadline := time.Now().Add(2 * time.Second)
@@ -161,7 +161,7 @@ func TestCaptchaOverIPC(t *testing.T) {
 // The classic path has no Session and no manager: the carrier's own check
 // (SmartCaptcha) must still reach the app, and the cookies the app answers
 // with must reach the carrier.
-func TestCaptchaClassic(t *testing.T) {
+func TestPromptClassic(t *testing.T) {
 	raw := &e2eTransport{}
 	sock := filepath.Join(t.TempDir(), "oflx.sock")
 	srv := ipc.NewServer(sock, &coreIPCHandler{exchanger: raw})
@@ -195,7 +195,7 @@ func TestCaptchaClassic(t *testing.T) {
 	})
 	time.Sleep(100 * time.Millisecond)
 
-	raw.FireCaptcha("smartcaptcha")
+	raw.FirePrompt("smartcaptcha")
 
 	select {
 	case req := <-asked:
@@ -303,7 +303,7 @@ var Transport = {
 		t.Fatal(err)
 	}
 	defer srv.Close()
-	m.SetCaptchaNotifier(func(name, url, html, reason string) {
+	m.SetPromptNotifier(func(name, url, html, reason string) {
 		_ = srv.SendCookiesRequest(localCheckRequest(name, url, html, reason))
 	})
 
@@ -448,7 +448,7 @@ var Transport = {
 		if err := m.Add("script", "script", tr, 100, tr); err != nil {
 			t.Fatal(err)
 		}
-		m.SetCaptchaNotifier(func(string, string, string, string) { asked <- struct{}{} })
+		m.SetPromptNotifier(func(string, string, string, string) { asked <- struct{}{} })
 		// what main.go does for a Session, before the transport starts
 		if err := m.UseCookieStore(store, "script", sessionCookieKey(spec, "")); err != nil {
 			t.Logf("replay before start: %v (expected: the script is not running yet)", err)

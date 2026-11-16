@@ -42,12 +42,15 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.2.1 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/sctp v1.11.3 // indirect
+	github.com/pion/sctp v1.11.3
 	github.com/pion/srtp/v3 v3.1.0 // indirect
 	github.com/pion/stun/v4 v4.0.1 // indirect
-	github.com/pion/transport/v5 v5.1.1 // indirect
+	github.com/pion/transport/v5 v5.1.1
 	github.com/pion/turn/v5 v5.1.2 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 )
+
+// A one-change copy of pion/sctp (third_party/sctp/OPENFLUX_PATCH.md): the MTU of a data channel's packets can be set.
+replace github.com/pion/sctp => ./third_party/sctp

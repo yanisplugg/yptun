@@ -31,8 +31,9 @@
 #                                                 script installed)
 #        node-install.sh upgrade                  (run as root: move every
 #                                                 channel to this core)
-#        node-install.sh set-cookies CONFIG_FILE  (run as root: replace a
-#                                                 channel's Yandex login)
+#        node-install.sh set-cookies CONFIG_FILE  (run as root: a new
+#                                                 Yandex or Mail.ru login for
+#                                                 one document of a channel)
 #        node-install.sh set-transports CONFIG_FILE (run as root: add or
 #                                                 remove the documents of a
 #                                                 running channel; key, port
@@ -69,14 +70,14 @@
 set -u
 umask 077
 
-CORE_VERSION="node-v1.6.0"
-SHA_amd64="8b0c0b3f118da7c3ad95541f547fbb40324dab14803a4cb99d3f8eb04d7f0da7"
-SHA_arm64="519550d60d2a3a2635229d825d9d71090cbcbded9e14c5fd5e245d1c9214db85"
-SHA_arm="4406e0e8460a31ed33b80b8062a80a9468c8c0f3c9b56555a5837456a5fa644a"
+CORE_VERSION="node-v1.7.3"
+SHA_amd64="95640444d64eebe185ba4d936b3d8e404a06deb33c78f8c12a8d331295679c84"
+SHA_arm64="9ba7784f61e0bd17832cd7ad9f892c1d46fdfd7eae5fb420bfcd888706662e03"
+SHA_arm="705639eb04ccab48ef6362998663b6f48f3810030ad01a112354421766c5e503"
 # The repository this script and its core come from: the core is one of its
 # node-v* releases, and the updater follows them (UPDATE_CONF may override
 # that with a "repo=owner/name" line).
-RELEASE_REPO="p1neappleXpress/OpenFlux"
+RELEASE_REPO="meepo161/OpenFlux"
 GITHUB_API="https://api.github.com"
 GITHUB_RAW="https://raw.githubusercontent.com"
 GITHUB_WEB="https://github.com"
@@ -344,7 +345,7 @@ check_transports() {
     [ -z "$TELEMOST" ] || valid_telemost "$TELEMOST" || fail input "ссылка на Телемост должна быть вида https://telemost.yandex.ru/j/..."
     [ -z "$AVITO" ] || valid_rooms "$AVITO" || fail input "неверный список комнат Avito"
     check_scripts
-    [ -z "$COOKIES" ] || [ -n "$URL" ] || [ -n "$YANDEX" ] || fail input "вход в Яндекс нужен только каналу с документом Яндекса"
+    [ -z "$COOKIES" ] || [ -n "$URL" ] || [ -n "$YANDEX" ] || [ -n "$MAILRU" ] || fail input "вход нужен только каналу с документом Яндекса или Mail.ru"
     case "$AUTOUPDATE" in ""|yes|no) ;; *) fail input "autoupdate: yes или no" ;; esac
     case "$MODE" in ""|l4|l3) ;; *) fail input "режим ноды: l4 или l3" ;; esac
 }
@@ -425,9 +426,32 @@ session_context() {
     fi
 }
 
-# write_cookies: decodes COOKIES into the channel's cookie store, which the
-# node loads at start. Needs the node user to exist.
+# core_has FEATURE: whether the installed core says it can (openflux
+# --features; an older core fails on the flag and has none).
+core_has() {
+    "$BIN_DIR/openflux" --features 2>/dev/null | grep -qx "$1"
+}
+
+# store_docs FILE: the document keys of a cookie store, one a line: the core
+# writes it indented, an older write_cookies left the app's one-line JSON.
+store_docs() {
+    keys=$(sed -n 's/^  "\([^"]*\)": {.*/\1/p' "$1")
+    [ -n "$keys" ] || keys=$(sed -n 's/^{"\([^"]*\)":.*/\1/p' "$1")
+    printf '%s' "$keys"
+}
+
+# write_cookies: decodes COOKIES (a cookie store JSON for one document) for
+# the channel's node. With no store yet it becomes the store, which the node
+# loads at start. With one, the sign-in goes to the node's inbox
+# (cookies.json.incoming), which a core that has cookie-inbox merges per
+# document at its next start or SIGHUP: the channel's other document keeps
+# its sign-in. An older core would only read the whole file, so then the
+# store is replaced only when it holds no other document (else
+# COOKIES_ERROR says to update the core). COOKIES_QUEUED=1 when the inbox
+# was used. Needs the node user to exist.
 write_cookies() {
+    COOKIES_QUEUED=0
+    COOKIES_ERROR="не удалось сохранить вход на сервере"
     printf '%s' "$COOKIES" | grep -Eq '^[A-Za-z0-9+/]+={0,2}$' || return 1
     [ ${#COOKIES} -le 65536 ] || return 1
     dir="$STATE_ROOT/$CHANNEL"
@@ -442,7 +466,43 @@ write_cookies() {
         printf '%s' "$COOKIES" | openssl base64 -d -A > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
     fi
     head -c 1 "$tmp" | grep -q '{' || { rm -f "$tmp"; return 1; }
-    chown "$NODE_USER:$NODE_USER" "$dir" "$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$dir/cookies.json"
+    chown "$NODE_USER:$NODE_USER" "$dir" "$tmp" && chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+    if [ -s "$dir/cookies.json" ]; then
+        if core_has cookie-inbox; then
+            mv -f "$tmp" "$dir/cookies.json.incoming" || { rm -f "$tmp"; return 1; }
+            COOKIES_QUEUED=1
+            return 0
+        fi
+        pushed=$(store_docs "$tmp")
+        for doc in $(store_docs "$dir/cookies.json"); do
+            if [ "$doc" != "$pushed" ]; then
+                rm -f "$tmp"
+                COOKIES_ERROR="ядро ноды старое и стёрло бы вход другого документа: обновите ноду (Обновить ядро) и передайте вход снова"
+                return 1
+            fi
+        done
+    fi
+    mv -f "$tmp" "$dir/cookies.json"
+}
+
+# signin_json: the node's own word on its documents' sign-ins (the core
+# writes signin-state: "STATE SINCE DOC" lines), as a JSON list; [] when the
+# core is older or all is well.
+signin_json() {
+    first=1
+    printf '['
+    f="$STATE_ROOT/$CHANNEL/signin-state"
+    if [ -f "$f" ]; then
+        while read -r st since doc; do
+            case "$st" in login|down) ;; *) continue ;; esac
+            case "$since" in ''|*[!0-9]*) continue ;; esac
+            [ -n "$doc" ] || continue
+            [ "$first" = 1 ] || printf ','
+            first=0
+            printf '{"state":"%s","since":%s,"doc":"%s"}' "$st" "$since" "$(json_escape "$doc")"
+        done < "$f"
+    fi
+    printf ']'
 }
 
 check_channel() {
@@ -792,7 +852,7 @@ EOF
     [ -n "$AVITO" ] && printf '\n[Transport avito]\nType = avito\nPriority = 75\nURL = %s\n' "$AVITO"
     [ -n "$CUPS" ] && printf '\n[Transport cupsonline]\nType = cupsonline\nPriority = 70\nURL = %s\n' "$CUPS"
     write_script_sections
-    printf '\n[Transport direct]\nType = direct\nPriority = 50\nListen = 0.0.0.0:%s\n' "$PORT"
+    printf '\n[Transport direct]\nType = direct\nPriority = 110\nListen = 0.0.0.0:%s\n' "$PORT"
 }
 
 # write_script_sections: a [Transport script], [Transport script-2], ... per
@@ -916,7 +976,7 @@ cmd_apply() {
     mkdir -p "$STATE_ROOT/$CHANNEL" && chmod 0755 "$STATE_ROOT" && chown "$NODE_USER:$NODE_USER" "$STATE_ROOT/$CHANNEL" \
         && chmod 0750 "$STATE_ROOT/$CHANNEL" || apply_fail config "не удалось создать $STATE_ROOT/$CHANNEL"
     if [ -n "$COOKIES" ]; then
-        write_cookies || apply_fail cookies "не удалось сохранить вход в Яндекс на сервере"
+        write_cookies || apply_fail cookies "$COOKIES_ERROR"
     fi
     install_scripts || apply_fail scripts "$SCRIPT_ERROR"
 
@@ -1177,16 +1237,25 @@ cmd_update() {
         "$latest" "$(json_escape "${prev#openflux-}")" "$(json_list "$@")"
 }
 
-# set-cookies: replaces a channel's Yandex sign-in and restarts it.
+# set-cookies: gives a channel's document a new sign-in (Yandex's or
+# Mail.ru's; the other document's stays). A running node with a core that
+# has cookie-inbox takes it on SIGHUP, without a restart ("merged":true);
+# otherwise the node is restarted on it.
 cmd_set_cookies() {
     [ "$(id -u)" = 0 ] || fail set-cookies "нужны права root (sudo)"
     read_config "$@"
     check_channel
     [ -d "$CONF_ROOT/$CHANNEL" ] || fail set-cookies "канала $CHANNEL нет на сервере"
     [ -n "$COOKIES" ] || fail set-cookies "нет cookies"
-    write_cookies || fail set-cookies "не удалось сохранить вход в Яндекс на сервере"
-    systemctl restart "openflux-node@$CHANNEL" || fail set-cookies "не удалось перезапустить openflux-node@$CHANNEL"
-    printf '{"ok":true,"channel":"%s"}\n' "$CHANNEL"
+    write_cookies || fail set-cookies "$COOKIES_ERROR"
+    merged=false
+    if [ "$COOKIES_QUEUED" = 1 ] && systemctl is-active --quiet "openflux-node@$CHANNEL" \
+        && systemctl kill -s HUP --kill-who=main "openflux-node@$CHANNEL" >/dev/null 2>&1; then
+        merged=true
+    else
+        systemctl restart "openflux-node@$CHANNEL" || fail set-cookies "не удалось перезапустить openflux-node@$CHANNEL"
+    fi
+    printf '{"ok":true,"channel":"%s","merged":%s}\n' "$CHANNEL" "$merged"
 }
 
 # set-transports CONFIG_FILE: changes the transports of a channel that already
@@ -1218,7 +1287,7 @@ cmd_set_transports() {
     tmp=$(mktemp "$dir/.node.conf.XXXXXX") || fail set-transports "не удалось создать временный файл"
     write_node_conf > "$tmp" && chown "root:$NODE_USER" "$tmp" && chmod 0640 "$tmp" && mv -f "$tmp" "$dir/node.conf" \
         || { rm -f "$tmp"; fail set-transports "не удалось записать node.conf"; }
-    [ -n "$COOKIES" ] && { write_cookies || fail set-transports "не удалось сохранить вход в Яндекс на сервере"; }
+    [ -n "$COOKIES" ] && { write_cookies || { set_transports_rollback; fail set-transports "$COOKIES_ERROR"; }; }
     if ! install_scripts; then
         set_transports_rollback
         fail set-transports "$SCRIPT_ERROR"
@@ -1258,8 +1327,8 @@ cmd_show() {
     state=$(systemctl is-active "openflux-node@$CHANNEL" 2>/dev/null)
     key=$(cat "$dir/encryption-key" 2>/dev/null)
     valid_key "$key" || key=""
-    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","mode":"%s","key":"%s","transports":[' \
-        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")" "$(channel_mode "$CHANNEL")" "$key"
+    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","mode":"%s","key":"%s","signin":%s,"transports":[' \
+        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")" "$(channel_mode "$CHANNEL")" "$key" "$(signin_json)"
     first=1
     awk '
         function flush() { if (type != "") print type "|" url "|" name "|" pubkey "|" params; type = ""; url = ""; name = ""; pubkey = ""; params = "" }

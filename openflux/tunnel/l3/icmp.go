@@ -110,32 +110,58 @@ func makeTooBig(original []byte, source [4]byte, mtu int) []byte {
 	return p
 }
 
-// Respect the negotiated receive limit on the return path as well. Feedback
-// to an Internet sender must quote the packet BEFORE reverse NAT, otherwise
-// its socket cannot associate the error with the actual flow.
+// Respect the limits on the return path as well: the packet size the peer
+// negotiated, and the one a carrier of the session moves (a session with a
+// stream carrier next to a datagram one refuses what the datagram one cannot
+// take, with *transport.PacketTooLargeError). Feedback to an Internet sender
+// must quote the packet BEFORE reverse NAT, otherwise its socket cannot
+// associate the error with the actual flow.
 func (t *L3Exit) sendClient(p, wire []byte) error {
+	limit := 0
 	if n, ok := t.trans.(transport.PeerParameterProvider); ok {
-		if limits, ready := n.PeerParameters(); ready && len(p) > limits.MaxPacketSize {
-			if p[6]&0x40 != 0 {
-				feedback := makeTooBig(wire, t.backend.EgressIP(), limits.MaxPacketSize)
-				if feedback != nil {
-					return t.backend.Send(feedback)
-				}
-				return &PacketTooBigError{MTU: limits.MaxPacketSize}
-			}
-			parts, err := fragmentIPv4(p, limits.MaxPacketSize)
-			if err != nil {
-				return err
-			}
-			for _, part := range parts {
-				if err := t.trans.Send(part); err != nil {
-					return err
-				}
-			}
-			return nil
+		if limits, ready := n.PeerParameters(); ready {
+			limit = limits.MaxPacketSize
 		}
 	}
-	return t.trans.Send(p)
+	if limit == 0 || len(p) <= limit {
+		err := t.trans.Send(p)
+		var big *transport.PacketTooLargeError
+		if !errors.As(err, &big) || big.Limit >= len(p) || big.Limit < 68 {
+			return err
+		}
+		limit = big.Limit
+	}
+	return t.sendWithin(p, wire, limit)
+}
+
+// sendWithin sends p, which is larger than limit, as packets that fit.
+func (t *L3Exit) sendWithin(p, wire []byte, limit int) error {
+	// TCP larger than the limit is mostly receive offload's merge of several segments, not
+	// a packet that was on the wire: cut it (see splitTCP) instead of answering "too big".
+	if parts := splitTCP(p, limit); parts != nil {
+		return t.sendAll(parts)
+	}
+	if p[6]&0x40 != 0 {
+		feedback := makeTooBig(wire, t.backend.EgressIP(), limit)
+		if feedback != nil {
+			return t.backend.Send(feedback)
+		}
+		return &PacketTooBigError{MTU: limit}
+	}
+	parts, err := fragmentIPv4(p, limit)
+	if err != nil {
+		return err
+	}
+	return t.sendAll(parts)
+}
+
+func (t *L3Exit) sendAll(parts [][]byte) error {
+	for _, part := range parts {
+		if err := t.trans.Send(part); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // translateICMP accepts only checksum-valid errors quoting a live outbound

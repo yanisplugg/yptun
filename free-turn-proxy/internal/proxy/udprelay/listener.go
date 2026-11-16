@@ -25,12 +25,7 @@ var packetPool = sync.Pool{
 	New: func() any { return &Packet{Data: make([]byte, maxDatagramLen)} },
 }
 
-// runListener читает входящие датаграммы и раздаёт их стримам через диспетчер с
-// chunk-affinity (см. dispatcher.dispatch). ЛОКАЛЬНЫЙ ПАТЧ: у upstream тут одна
-// общая очередь inboundChan, которую разбирают все стримы по готовности - это
-// размазывает подряд идущие WG-пакеты по TURN-путям с разным latency и роняет
-// скорость одиночного потока. Не терять при ре-вендоре.
-func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer *atomic.Value, d *dispatcher) error {
+func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer *atomic.Value, inboundChan chan<- *Packet) error {
 	var lastPort netip.AddrPort
 	var lastAddrStr string
 	for {
@@ -57,7 +52,9 @@ func runListener(ctx context.Context, listenConn net.PacketConn, activeLocalPeer
 
 		pkt.N = nRead
 
-		if !d.dispatch(pkt) {
+		select {
+		case inboundChan <- pkt:
+		default:
 			packetPool.Put(pkt)
 		}
 	}

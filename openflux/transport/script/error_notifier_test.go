@@ -96,9 +96,9 @@ func TestCaptchaRequiredAliasReachesErrorNotifier(t *testing.T) {
 	}
 }
 
-// A kind outside captchaRaiseKinds reaches only the generic EventHandler,
+// A kind outside promptRaiseKinds reaches only the generic EventHandler,
 // never the error notifier - raise() must not silently promote everything
-// to a captcha/setup signal.
+// to a prompt/setup signal.
 func TestOtherRaiseKindsDoNotReachErrorNotifier(t *testing.T) {
 	src := `
 	var Transport = {
@@ -136,7 +136,7 @@ func TestOtherRaiseKindsDoNotReachErrorNotifier(t *testing.T) {
 	}
 	select {
 	case <-notified:
-		t.Fatal("error notifier fired for a non-captcha raise kind")
+		t.Fatal("error notifier fired for a non-prompt raise kind")
 	case <-time.After(200 * time.Millisecond):
 	}
 }

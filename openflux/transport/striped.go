@@ -908,6 +908,13 @@ type sender struct {
 
 	laneTx  [maxStripeLanes]uint64 // transmissions per lane, in send order
 	laneAck [maxStripeLanes]uint64 // highest of them known delivered
+	// laneFly counts the pieces still in the ring whose last transmission
+	// went out on each lane. laneTx-laneAck alone never comes down for a
+	// lane whose pieces nobody acks: after a receiver that went away (a
+	// client gone for hours while the exit's keepalives kept going out) it
+	// stayed at the window for good and the lane never sent again, to the
+	// next receiver either.
+	laneFly [maxStripeLanes]int
 	lane    [maxStripeLanes]laneState
 
 	srtt, rttvar time.Duration
@@ -948,6 +955,7 @@ type txEntry struct {
 	dupAt   time.Time
 	lane    uint8
 	laneIdx uint64 // laneTx[lane] when it last left
+	flying  bool   // counted in laneFly[lane]
 	at      time.Time
 	born    time.Time // when it first left
 	tries   uint8
@@ -999,7 +1007,7 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 		max = len(out) + allowed
 	}
 	if ls.winOn {
-		inflight := int(q.laneTx[i] - q.laneAck[i])
+		inflight := q.laneInflight(i)
 		if room := ls.winRoom(inflight); max-len(out) > room {
 			max = len(out) + room
 		}
@@ -1155,8 +1163,25 @@ func (q *sender) othersAlive(i int, now time.Time) bool {
 }
 
 func (q *sender) stamp(e *txEntry, lane int, now time.Time) {
+	q.land(e)
 	q.laneTx[lane]++
-	e.lane, e.laneIdx, e.at = uint8(lane), q.laneTx[lane], now
+	q.laneFly[lane]++
+	e.lane, e.laneIdx, e.at, e.flying = uint8(lane), q.laneTx[lane], now, true
+}
+
+// land takes a piece off its lane's count: acked, given up or about to be
+// resent.
+func (q *sender) land(e *txEntry) {
+	if e.flying {
+		q.laneFly[e.lane]--
+		e.flying = false
+	}
+}
+
+// laneInflight is how much of lane i's window is taken: its transmissions
+// not known delivered, but no more than the pieces really in flight on it.
+func (q *sender) laneInflight(i int) int {
+	return min(int(q.laneTx[i]-q.laneAck[i]), q.laneFly[i])
 }
 
 // nextPiece cuts the next piece ([flag][bytes]) off the queue.
@@ -1272,6 +1297,7 @@ func (q *sender) onAck(b []byte, now time.Time) bool {
 			return
 		}
 		e.ok, e.buf = false, nil
+		q.land(e)
 		q.delivered++
 		d := now.Sub(e.at)
 		// Which copy came in is unknown when there were several: a resent
@@ -1387,6 +1413,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 			// hole long ago, or is gone. Resending it forever would only
 			// keep the lanes busy and the ring full.
 			e.ok, e.buf, e.queued = false, nil, false
+			q.land(e)
 			q.gaveUp++
 			continue
 		}
@@ -1496,7 +1523,7 @@ func (q *sender) snapshot() senderStats {
 		inflight: int(q.seq + 1 - q.low), queueBytes: q.queueBytes, srtt: q.srtt, rto: q.rto()}
 	for i := range q.lane {
 		st.laneLoss[i], st.laneRate[i], st.laneDead[i] = q.lane[i].loss, q.lane[i].rate, q.lane[i].dead(time.Now())
-		st.laneWin[i], st.laneFlight[i], st.laneRTT[i] = q.lane[i].win, int(q.laneTx[i]-q.laneAck[i]), q.lane[i].lrtt
+		st.laneWin[i], st.laneFlight[i], st.laneRTT[i] = q.lane[i].win, q.laneInflight(i), q.lane[i].lrtt
 	}
 	if len(q.queue) > 0 {
 		st.queueDelay = time.Since(q.queue[0].at)

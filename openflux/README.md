@@ -1,6 +1,30 @@
-# OpenFlux
+<p align="center">
+  <img src="docs/images/icon.png" width="120" alt="OpenFlux">
+</p>
 
-**English** | [Русский](README.ru.md)
+<h1 align="center">OpenFlux</h1>
+
+<p align="center">
+  A tunnel that rides on ordinary web services, with pluggable transports and two exit-node backends.
+</p>
+
+<p align="center">
+  <a href="../../releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/OpenFluxTeam/OpenFlux?display_name=tag&color=4F7CFF"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
+  <img alt="Go" src="https://img.shields.io/badge/core-Go-00ADD8">
+</p>
+
+<p align="center">
+  <b>English</b> · <a href="README.ru.md">Русский</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/OpenFluxTeam/OpenFlux">Core</a> · <a href="https://github.com/OpenFluxTeam/OpenFluxDesktop">Desktop</a> · <a href="https://github.com/OpenFluxTeam/OpenFluxAndroid">Android</a> · <a href="https://testflight.apple.com/join/BwnAcdus">iOS (TestFlight; the App Store release is coming)</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/home-states.png" alt="The OpenFlux apps on a phone: off, connecting, connected" width="760">
+</p>
 
 Network stack research tool. IPv4 TCP/UDP tunnel with pluggable transports
 (including a signed JS scripting engine for writing new ones), a batched +
@@ -37,23 +61,13 @@ The original code is provided **as is**, **without any warranties**.
 | **macOS**   | build from source | CLI + utun L3 client (`--inbound=tun`, default on macOS) |
 | **Linux**   | build from source | CLI client (SOCKS5) / exit node (L3 or L4) |
 | **Windows** | build from source | CLI client (SOCKS5, or `--inbound=tun` via Wintun - needs administrator) / exit node (`l4`, or `l3` via QEMU - see docs) |
-| **Desktop** | [OpenFluxDesktop releases](https://github.com/p1neappleXpress/OpenFluxDesktop) | Windows/macOS/Linux: full tunnel or SOCKS5/HTTP proxy, multi-transport sessions, encryption, an in-app node-deployment wizard over SSH |
-| **Android** | [OpenFluxAndroid releases](https://github.com/p1neappleXpress/OpenFluxAndroid) | System-wide VPN or local SOCKS5, multi-transport sessions with failover, encryption, captcha handling in a built-in browser |
-| **Android** | [OpenFlux-Android releases](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Fork: system-wide VPN or SOCKS5 proxy, multi-transport sessions, captcha handling, phone as exit node |
+| **Desktop** | [OpenFluxDesktop releases](https://github.com/OpenFluxTeam/OpenFluxDesktop) | Windows/macOS/Linux: full tunnel or SOCKS5/HTTP proxy, multi-transport sessions, encryption, an in-app node-deployment wizard over SSH |
+| **Android** | [OpenFluxAndroid releases](https://github.com/OpenFluxTeam/OpenFluxAndroid) | System-wide VPN or local SOCKS5, multi-transport sessions with failover, encryption, captcha handling in a built-in browser |
 | **iOS**     | [TestFlight beta](https://testflight.apple.com/join/BwnAcdus) | System-wide VPN via Network Extension |
 
 > **iOS app** built by [@saharev1](https://github.com/saharev1) - full iOS client,
 > TestFlight pipeline, system VPN support, DNS-over-TLS, and many stability fixes.
 > HUGE thanks!
->
-> **OpenFlux-Android** built by [@damnurmum](https://github.com/damnurmum) - an
-> Android client with a system-wide VPN and a local SOCKS5 proxy mode, connection
-> profiles, multi-transport sessions with failover (direct included), SmartCaptcha
-> and login handling in a WebView (the exit node's too, passed through the tunnel
-> from its address), the phone as an l4 exit node, Kill Switch and per-app and
-> per-domain routing. Also contributed end-to-end encryption (#38), the Mail.ru
-> transport (#60) and session resilience with exit captcha handling (#93) to this
-> repository. HUGE thanks!
 >
 > **OpenFluxAndroid and OpenFluxDesktop** run a Compose Multiplatform app and a
 > shared module (multi-transport sessions, encryption, the built-in browser for
@@ -62,9 +76,13 @@ The original code is provided **as is**, **without any warranties**.
 > [OpenFluxClient](https://github.com/meepo161/OpenFluxClient) and moved into
 > these repositories with his agreement. HUGE thanks!
 >
-> **Android app** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid),
-> **desktop app** - [p1neappleXpress/OpenFluxDesktop](https://github.com/p1neappleXpress/OpenFluxDesktop),
-> the module they share - [p1neappleXpress/OpenFluxClientShared](https://github.com/p1neappleXpress/OpenFluxClientShared).
+> **Android app** - [OpenFluxTeam/OpenFluxAndroid](https://github.com/OpenFluxTeam/OpenFluxAndroid),
+> **desktop app** - [OpenFluxTeam/OpenFluxDesktop](https://github.com/OpenFluxTeam/OpenFluxDesktop),
+> the module they share - [OpenFluxTeam/OpenFluxClientShared](https://github.com/OpenFluxTeam/OpenFluxClientShared).
+
+<p align="center">
+  <img src="docs/images/desktop-home.png" alt="The desktop app, connected" width="820">
+</p>
 
 ## How it works
 
@@ -113,6 +131,13 @@ Linux-only, faster) backend and the macOS/Windows full-tunnel clients, and
   See [docs/scripted-transports.md](docs/scripted-transports.md).
 - **Multi-transport sessions** with authenticated negotiation, encryption
   and failover. See [docs/sessions.md](docs/sessions.md).
+- **Direct first, and fast** - a live `direct` transport is used ahead of the
+  document carriers (`Prefer = no` or `OPENFLUX_DIRECT_FIRST=0` turns that
+  off), with pooled buffers, gated zstd, a 16000-byte tunnel MTU on direct and
+  Reno on direct streams. The method and the measurements:
+  [TRANSPORT_PERFORMANCE.md](TRANSPORT_PERFORMANCE.md).
+- **Stripe groups** - several carriers of one or mixed types work as one
+  stripe, one lane each (`--lanes N`, `Lanes = N`).
 - **Two exit backends** - `l3` (raw SNAT/DNAT) and `l4` (gVisor proxy).
   See [docs/architecture.md](docs/architecture.md).
 - **Mode without a server** - the exit can be a small PHP program on any
@@ -147,6 +172,8 @@ Linux-only, faster) backend and the macOS/Windows full-tunnel clients, and
 9. **[docs/cli-reference.md](docs/cli-reference.md)** - every flag, flat.
 10. **[docs/building-and-releases.md](docs/building-and-releases.md)** -
     CI, tagged releases, exit-node releases, and the nightly channel.
+11. **[TRANSPORT_PERFORMANCE.md](TRANSPORT_PERFORMANCE.md)** (in Russian) - what limits
+    the transports' speed, what was changed, and the numbers.
 
 Wire-level protocol framing lives at
 [PROTOCOL_NEGOTIATION.md](PROTOCOL_NEGOTIATION.md) (linked from the docs

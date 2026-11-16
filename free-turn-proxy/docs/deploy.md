@@ -3,7 +3,7 @@
 ## Установка скриптом (рекомендуется)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samosvalishe/free-turn-proxy/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/hackdiaz-dev/free-turn-proxy/master/scripts/install.sh | sudo bash
 ```
 
 Мастер спросит:
@@ -27,7 +27,7 @@ freeturn client remove phone
 Без вопросов:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samosvalishe/free-turn-proxy/master/scripts/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/hackdiaz-dev/free-turn-proxy/master/scripts/install.sh | \
   sudo bash -s -- -y --backend=new --method=docker
 ```
 
@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/samosvalishe/free-turn-proxy/master
 ```yaml
 services:
   free-turn-proxy:
-    image: ghcr.io/samosvalishe/free-turn-proxy:latest
+    image: ghcr.io/hackdiaz-dev/free-turn-proxy:latest
     network_mode: host
     restart: unless-stopped
     environment:
@@ -68,7 +68,7 @@ services:
 ```bash
 sudo mkdir -p /opt/free-turn-proxy
 sudo curl -L -o /opt/free-turn-proxy/server \
-  https://github.com/samosvalishe/free-turn-proxy/releases/latest/download/server-linux-amd64
+  https://github.com/hackdiaz-dev/free-turn-proxy/releases/latest/download/server-linux-amd64
 sudo chmod +x /opt/free-turn-proxy/server
 ```
 
@@ -104,4 +104,4 @@ sudo CLIENTS_FILE=/opt/free-turn-proxy/clients.json \
 
 ## Порт
 
-Откройте внешний порт по **UDP** (при `MODE=tcp` тоже): `sudo ufw allow 56000/udp`. Скрипт делает это сам.
+Откройте внешний порт по **UDP** (при `MODE=tcp` тоже): `sudo ufw allow 56000/udp` (firewalld: `sudo firewall-cmd --permanent --add-port=56000/udp && sudo firewall-cmd --reload`). Скрипт делает это сам.

@@ -3,15 +3,53 @@
 
     const { local: LOCAL, upstream: UPSTREAM } = window.__ftpCaptcha ?? {};
     const PROXY = '/generic_proxy?proxy_url=';
-    const RESULT = '/local-captcha-result';
+    const RESULT = window.__ftpCaptcha?.resultPath;
+    const POW_RESULT = window.__ftpCaptcha?.powPath;
     const CHECK = 'captchaNotRobot.check';
+
+    function proxyUrl(abs) {
+        try {
+            const url = new URL(abs);
+            if (url.protocol === 'https:') {
+                return '/_p/' + url.host + url.pathname + url.search;
+            }
+        } catch (e) { /* use the legacy proxy URL below */ }
+        return PROXY + encodeURIComponent(abs);
+    }
+
+    // In auto mode, use the actual browser's computed PoW envelope. This runs
+    // before VK's inline PoW script, so its final assignment is observable.
+    if (window.__ftpCaptcha?.capturePow && POW_RESULT) {
+        let powValue = window.captchaPowResult;
+        const capturePow = (value) => {
+            if (typeof value !== 'string') return;
+            const dot = value.indexOf('.');
+            if (dot < 0) return;
+            try {
+                const envelope = JSON.parse(atob(value.slice(dot + 1)));
+                if (!/^[0-9a-f]{64}$/.test(envelope.hash || '') || envelope.error || !envelope.telemetry) return;
+                const body = `pow=${encodeURIComponent(value)}`;
+                fetch(POW_RESULT, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body,
+                }).then(() => showDone()).catch(() => {});
+            } catch {}
+        };
+        Object.defineProperty(window, 'captchaPowResult', {
+            configurable: true,
+            enumerable: true,
+            get: () => powValue,
+            set: (value) => { powValue = value; capturePow(value); },
+        });
+    }
 
     function rewriteUrl(url) {
         if (!url || typeof url !== 'string') return url;
         if (url.startsWith(LOCAL)) return url;
         if (url.startsWith(UPSTREAM)) return LOCAL + url.slice(UPSTREAM.length);
-        if (url.startsWith('//')) return PROXY + encodeURIComponent(location.protocol + url);
-        if (url.startsWith('http://') || url.startsWith('https://')) return PROXY + encodeURIComponent(url);
+        if (url.startsWith('//')) return proxyUrl(new URL(UPSTREAM).protocol + url);
+        if (url.startsWith('http://') || url.startsWith('https://')) return proxyUrl(url);
         return url;
     }
 
@@ -32,7 +70,7 @@
     const extractToken = (data) => data?.response?.success_token;
 
     function sendToken(token) {
-        if (!token) return;
+        if (!token || !RESULT) return;
         const body = `token=${encodeURIComponent(token)}`;
 
         // sendBeacon переживает уход со страницы (mobile Safari)

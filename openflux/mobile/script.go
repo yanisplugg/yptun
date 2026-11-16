@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +60,83 @@ func ScriptSettings(data []byte, sig []byte, pubkeyHex, valuesJSON, lang string)
 	}
 	b, _ := json.Marshal(script.BuildSettings(data, sig, pubkeyHex, values, lang))
 	return string(b)
+}
+
+// scriptSetup is the one setup wizard that runs (the apps open one at a time).
+var scriptSetup struct {
+	mu sync.Mutex
+	s  *script.SetupSession
+}
+
+// scriptSetupPageWait is how long ScriptSetupStart waits for the wizard's page.
+const scriptSetupPageWait = 15 * time.Second
+
+type scriptSetupReply struct {
+	OK     bool   `json:"ok"`
+	URL    string `json:"url,omitempty"`
+	HTML   string `json:"html,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+func scriptSetupFail(msg string) string {
+	b, _ := json.Marshal(scriptSetupReply{Error: msg})
+	return string(b)
+}
+
+// ScriptSetupStart runs the setup wizard (Transport.setup) of an installed
+// script and returns a JSON reply {ok, url | html, reason, error}: the page the
+// wizard raised, which the app shows like any script's own setup page (the
+// script's own server on 127.0.0.1, or inline html) and whose window.openfluxSubmit
+// payload ({client, node} or flat) the app reads itself. Unlike ScriptSettings
+// the script really runs here, with its sockets, http and httpserver, because
+// a wizard has to sign in to a service and check what it was given.
+//
+// path is the installed .flux or signed .js (its .sig beside it), pubkeyHex the
+// key the user pinned (a script that does not verify against it does not run),
+// valuesJSON what is known so far as a JSON object of strings ("" for none).
+// One wizard runs at a time: a new start ends the old one. ScriptSetupStop ends
+// it when the page is done.
+func ScriptSetupStart(path, pubkeyHex, valuesJSON string) string {
+	var values map[string]string
+	if valuesJSON != "" {
+		if err := json.Unmarshal([]byte(valuesJSON), &values); err != nil {
+			return scriptSetupFail("значения не JSON-объект строк: " + err.Error())
+		}
+	}
+	pub, err := script.DecodePublicKeyHex(strings.ReplaceAll(strings.TrimSpace(pubkeyHex), " ", ""))
+	if err != nil {
+		return scriptSetupFail("ключ автора не читается: " + err.Error())
+	}
+	scriptSetup.mu.Lock()
+	defer scriptSetup.mu.Unlock()
+	if scriptSetup.s != nil {
+		scriptSetup.s.Close()
+		scriptSetup.s = nil
+	}
+	s, err := script.StartSetup(path, pub, values)
+	if err != nil {
+		return scriptSetupFail(err.Error())
+	}
+	page, err := s.Page(scriptSetupPageWait)
+	if err != nil {
+		s.Close()
+		return scriptSetupFail(err.Error())
+	}
+	scriptSetup.s = s
+	b, _ := json.Marshal(scriptSetupReply{OK: true, URL: page.URL, HTML: page.HTML, Reason: page.Reason})
+	return string(b)
+}
+
+// ScriptSetupStop ends the setup wizard ScriptSetupStart started, its server
+// and sockets with it. Harmless when none runs.
+func ScriptSetupStop() {
+	scriptSetup.mu.Lock()
+	defer scriptSetup.mu.Unlock()
+	if scriptSetup.s != nil {
+		scriptSetup.s.Close()
+		scriptSetup.s = nil
+	}
 }
 
 // ScriptFingerprint returns the SHA-256 (hex) of an author public key, the

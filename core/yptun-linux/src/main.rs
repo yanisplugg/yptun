@@ -860,6 +860,8 @@ struct SavedState {
     locations: Vec<LocationRow>,
     bypass_lan: bool,
     bypass_russia: bool,
+    #[serde(default)]
+    bypass_china: bool,
     auto_start: bool,
     system_proxy: bool,
     custom_rules: String,
@@ -926,6 +928,7 @@ struct YpTunApp {
     locations: Vec<LocationRow>,
     bypass_lan: bool,
     bypass_russia: bool,
+    bypass_china: bool,
     auto_start: bool,
     system_proxy: bool,
     custom_rules: String,
@@ -1044,6 +1047,7 @@ impl Default for YpTunApp {
             }],
             bypass_lan: true,
             bypass_russia: false,
+            bypass_china: false,
             auto_start: false,
             system_proxy: false,
             custom_rules: "domain:myserver.lan -> Direct".to_owned(),
@@ -1671,6 +1675,7 @@ impl YpTunApp {
                 }
                 self.bypass_lan = saved.bypass_lan;
                 self.bypass_russia = saved.bypass_russia;
+                self.bypass_china = saved.bypass_china;
                 self.auto_start = saved.auto_start;
                 self.system_proxy = saved.system_proxy;
                 self.custom_rules = saved.custom_rules;
@@ -1784,6 +1789,7 @@ impl YpTunApp {
             locations: self.locations.clone(),
             bypass_lan: self.bypass_lan,
             bypass_russia: self.bypass_russia,
+            bypass_china: self.bypass_china,
             auto_start: self.auto_start,
             system_proxy: self.system_proxy,
             custom_rules: self.custom_rules.clone(),
@@ -1822,6 +1828,30 @@ impl YpTunApp {
         if let Ok(json) = serde_json::to_vec_pretty(&state) {
             let _ = fs::write(path, json);
         }
+    }
+
+    fn download_china_geofiles() {
+        std::thread::spawn(|| {
+            let dir = std::env::var_os("XDG_DATA_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                        .join(".local/share")
+                })
+                .join("yptun/geo");
+            let _ = std::fs::create_dir_all(&dir);
+            let geoip_path = dir.join("geoip.dat");
+            let geosite_path = dir.join("geosite.dat");
+
+            let _ = std::process::Command::new("curl")
+                .args(["-fsSL", "-o", geoip_path.to_str().unwrap_or(""), "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"])
+                .status();
+            let _ = std::process::Command::new("curl")
+                .args(["-fsSL", "-o", geosite_path.to_str().unwrap_or(""), "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"])
+                .status();
+        });
     }
 
     fn row_from_entry(entry: &yptun_core::location::LocationEntry) -> LocationRow {
@@ -2528,6 +2558,38 @@ impl YpTunApp {
                         .inner_margin(egui::Margin::same(16.0))
                         .show(ui, |ui| {
                             ui.label(
+                                egui::RichText::new("ПРЕСЕТЫ МАРШРУТИЗАЦИИ (ROUTING PRESETS)")
+                                    .size(13.0)
+                                    .strong()
+                                    .color(COLOR_ON_SURFACE_VARIANT),
+                            );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button(egui::RichText::new("Россия напрямую").size(13.0)).clicked() {
+                                    self.bypass_russia = true;
+                                    self.bypass_china = false;
+                                    self.dns_direct = "77.88.8.8".to_owned();
+                                    self.save_state();
+                                }
+                                if ui.button(egui::RichText::new("Китай напрямую (China Direct)").size(13.0)).clicked() {
+                                    self.bypass_china = true;
+                                    self.bypass_russia = false;
+                                    self.dns_direct = "223.5.5.5".to_owned();
+                                    self.dns_remote = "1.1.1.1".to_owned();
+                                    Self::download_china_geofiles();
+                                    self.save_state();
+                                }
+                            });
+                        });
+
+                    ui.add_space(16.0);
+
+                    egui::Frame::none()
+                        .fill(COLOR_SURFACE_CONTAINER)
+                        .rounding(28.0)
+                        .inner_margin(egui::Margin::same(16.0))
+                        .show(ui, |ui| {
+                            ui.label(
                                 egui::RichText::new("ОБХОД И ПРАВИЛА ПО УМОЛЧАНИЮ")
                                     .size(13.0)
                                     .strong()
@@ -2554,6 +2616,26 @@ impl YpTunApp {
                                 "Маршрутизация российских доменов (.ru, .рф, Yandex, VK, Gosuslugi) напрямую в обход туннеля",
                                 &mut self.bypass_russia,
                             ) {
+                                if self.bypass_russia {
+                                    self.bypass_china = false;
+                                }
+                                self.save_state();
+                            }
+
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.add_space(10.0);
+
+                            if setting_toggle_row(
+                                ui,
+                                "Обход ресурсов Китая (China Direct)",
+                                "Маршрутизация китайских доменов (.cn, QQ, WeChat, Baidu, Alibaba) и AliDNS (223.5.5.5) напрямую в обход туннеля",
+                                &mut self.bypass_china,
+                            ) {
+                                if self.bypass_china {
+                                    self.bypass_russia = false;
+                                    Self::download_china_geofiles();
+                                }
                                 self.save_state();
                             }
 
@@ -2791,7 +2873,9 @@ impl YpTunApp {
                         self.page = Page::ConnectionSettings;
                     }
                     ui.separator();
-                    let routing_summary = if self.bypass_russia {
+                    let routing_summary = if self.bypass_china {
+                        "Bypass LAN & China (China Direct)"
+                    } else if self.bypass_russia {
                         "Bypass LAN & Russia, Adblock"
                     } else {
                         "Bypass LAN, пользовательские правила"

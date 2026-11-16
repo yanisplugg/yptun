@@ -103,9 +103,10 @@ type captchaSession struct {
 	checked bool
 
 	// browserFP - visitorId FingerprintJS: у живого посетителя стабилен между сессиями.
-	browserFP string
-	debugInfo string
-	powHash   string
+	browserFP  string
+	debugInfo  string
+	powHash    string
+	browserPow string
 
 	// downlink - у живого клиента одно значение на всю captcha, не отдельное на тик.
 	downlink float64
@@ -133,6 +134,35 @@ func Solve(
 	profile browserprofile.Profile,
 	log logx.Logger,
 ) (string, error) {
+	return solve(ctx, captchaErr, streamID, client, profile, log, "")
+}
+
+// SolveWithBrowserPow uses the completed PoW envelope produced by the real
+// browser for this captcha flow.
+func SolveWithBrowserPow(
+	ctx context.Context,
+	captchaErr *Error,
+	streamID int,
+	client tlsclient.HttpClient,
+	profile browserprofile.Profile,
+	log logx.Logger,
+	browserPow string,
+) (string, error) {
+	if browserPow == "" {
+		return "", errors.New("browser pow envelope is empty")
+	}
+	return solve(ctx, captchaErr, streamID, client, profile, log, browserPow)
+}
+
+func solve(
+	ctx context.Context,
+	captchaErr *Error,
+	streamID int,
+	client tlsclient.HttpClient,
+	profile browserprofile.Profile,
+	log logx.Logger,
+	browserPow string,
+) (string, error) {
 	if captchaErr == nil || captchaErr.SessionToken == "" {
 		return "", fmt.Errorf("no session_token in redirect_uri")
 	}
@@ -140,16 +170,17 @@ func Solve(
 	l.Infof("[STREAM %d] [Captcha] Solving VK Smart Captcha automatically...", streamID)
 
 	s := &captchaSession{
-		ctx:       ctx,
-		client:    client,
-		profile:   profile,
-		domain:    captchaDomain,
-		apiHost:   captchaAPIHost,
-		log:       l,
-		browserFP: profile.VisitorID,
-		downlink:  sessionDownlink(),
-		sensors:   defaultSensorConfig(),
-		started:   time.Now(),
+		ctx:        ctx,
+		client:     client,
+		profile:    profile,
+		domain:     captchaDomain,
+		apiHost:    captchaAPIHost,
+		log:        l,
+		browserFP:  profile.VisitorID,
+		browserPow: browserPow,
+		downlink:   sessionDownlink(),
+		sensors:    defaultSensorConfig(),
+		started:    time.Now(),
 	}
 
 	var solveErr error
@@ -177,7 +208,7 @@ func Solve(
 	return "", fmt.Errorf("captcha attempts exhausted: %w", solveErr)
 }
 
-func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
+func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) { //nolint:funlen // лимит превышен на 4 оператора из-за ветки browser PoW; разбиение ухудшит читаемость
 	s.domain = captchaDomainFromRedirectURI(captchaErr.RedirectURI)
 	s.setPageURL(captchaErr.RedirectURI)
 	s.logger().Debugf("[Captcha] using domain=%s page=%s", s.domain, SafeURL(s.pageURL))
@@ -195,19 +226,28 @@ func (s *captchaSession) solveOnce(captchaErr *Error) (string, error) {
 	}
 
 	// Браузер тянет подресурсы параллельно с исполнением скрипта, не после него.
+	s.logger().Debugf("[Captcha] solving pow difficulty=%d", page.Pow.Difficulty)
+	if s.browserPow != "" {
+		s.powHash, err = validateBrowserPow(s.browserPow, page.Pow)
+		if err != nil {
+			return "", err
+		}
+		s.profile = profileFromBrowserPow(s.profile, s.browserPow)
+	}
+
 	assets := parsePageAssets(html)
 	assetsDone := make(chan struct{})
 	go func() {
 		defer close(assetsDone)
 		s.loadAssets(assets)
 	}()
-	// Ранний выход не оставляет догрузку в фоне следующей попытке.
+	// Ранний выход не оставляет догрузку в фоне следующей попытки.
 	defer func() { <-assetsDone }()
-
-	s.logger().Debugf("[Captcha] solving pow difficulty=%d assets=%d", page.Pow.Difficulty, len(assets))
-	s.powHash, err = s.powEnvelope(page.Pow)
-	if err != nil {
-		return "", err
+	if s.browserPow == "" {
+		s.powHash, err = s.powEnvelope(page.Pow)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	s.debugInfo = page.DebugInfo

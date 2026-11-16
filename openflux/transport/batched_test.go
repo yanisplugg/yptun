@@ -367,3 +367,35 @@ func TestBatchedTransportStopInterruptsCarrierRetry(t *testing.T) {
 	case <-time.After(30 * time.Millisecond):
 	}
 }
+
+func TestBatchedTransportLoneIdlePacketIsNotLingeredOnCheapCarrier(t *testing.T) {
+	send := func(cheap bool) time.Duration {
+		f := &fakeTransport{}
+		b := NewBatchedTransport(f)
+		b.lingerMs = 200
+		b.gate.cheapBytes = cheap
+		if err := b.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer b.Stop()
+		t0 := time.Now()
+		if err := b.Send([]byte("a lone packet after a pause")); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.After(2 * time.Second)
+		for f.sendCount() == 0 {
+			select {
+			case <-deadline:
+				t.Fatal("packet was never sent")
+			case <-time.After(time.Millisecond):
+			}
+		}
+		return time.Since(t0)
+	}
+	if d := send(true); d > 100*time.Millisecond {
+		t.Fatalf("cheap carrier: lone packet waited %v", d)
+	}
+	if d := send(false); d < 150*time.Millisecond {
+		t.Fatalf("carrier with costly messages must still coalesce, packet went after %v", d)
+	}
+}

@@ -22,9 +22,11 @@ type Config struct {
 	Credentials     []VKCredentials
 	Dialer          net.Dialer
 	ManualOnly      bool
+	AdvancedCaptcha bool
 	StreamsPerCache int
 	StreamsAlive    func() int32
 	AutoSolver      AutoSolveFunc
+	PowCapture      PowCaptureFunc
 	ManualSolver    ManualSolveFunc
 	Platform        browserprofile.Platform
 	FingerprintSeed string
@@ -33,14 +35,16 @@ type Config struct {
 }
 
 type Client struct {
-	credentials []VKCredentials
-	dialer      net.Dialer
-	manualOnly  bool
-	platform    browserprofile.Platform
-	streamsFn   func() int32
-	autoSolver  AutoSolveFunc
-	manualSolve ManualSolveFunc
-	log         logx.Logger
+	credentials     []VKCredentials
+	dialer          net.Dialer
+	manualOnly      bool
+	advancedCaptcha bool
+	platform        browserprofile.Platform
+	streamsFn       func() int32
+	autoSolver      AutoSolveFunc
+	powCapture      PowCaptureFunc
+	manualSolve     ManualSolveFunc
+	log             logx.Logger
 
 	store *Store
 
@@ -62,15 +66,17 @@ type tokenChainFn func(ctx context.Context, link string, streamID int, creds VKC
 
 func New(cfg Config) *Client {
 	c := &Client{
-		credentials: cfg.Credentials,
-		dialer:      cfg.Dialer,
-		manualOnly:  cfg.ManualOnly,
-		platform:    cfg.Platform,
-		streamsFn:   cfg.StreamsAlive,
-		autoSolver:  cfg.AutoSolver,
-		manualSolve: cfg.ManualSolver,
-		log:         cfg.Log,
-		store:       NewStore(cfg.StreamsPerCache),
+		credentials:     cfg.Credentials,
+		dialer:          cfg.Dialer,
+		manualOnly:      cfg.ManualOnly,
+		advancedCaptcha: cfg.AdvancedCaptcha,
+		platform:        cfg.Platform,
+		streamsFn:       cfg.StreamsAlive,
+		autoSolver:      cfg.AutoSolver,
+		powCapture:      cfg.PowCapture,
+		manualSolve:     cfg.ManualSolver,
+		log:             cfg.Log,
+		store:           NewStore(cfg.StreamsPerCache),
 	}
 	if len(c.credentials) == 0 {
 		c.credentials = DefaultCredentials

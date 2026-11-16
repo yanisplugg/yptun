@@ -144,24 +144,32 @@ func runBenchSend(trans transport.Transport, mb int, compressible bool) {
 		}
 		sent += benchPktSize
 	}
-	for trans.Send(benchSentinel) != nil {
-		time.Sleep(time.Millisecond)
-	}
-
 	el := time.Since(start)
 	st := trans.Stats()
 	tunnelPkts := sent / benchPktSize
 	log.Printf("[BENCH-SEND] enqueued %.2f MB in %.2fs", float64(sent)/1e6, el.Seconds())
 	log.Printf("[BENCH-SEND] channel msgs=%d, %.1f tunnel pkts/msg, channel bytes=%.2f MB",
 		st.PacketsSent, ratio(tunnelPkts, int64(st.PacketsSent)), float64(st.BytesSent)/1e6)
-	log.Printf("[BENCH-SEND] draining to channel...")
+	// Drain the send queue before the end marker. An over-paced sender keeps a
+	// shared queue full, and CoDel drops at the head: a sentinel sent right
+	// after the data overtakes the backlog and ends the sink early, making the
+	// sink report DONE on a fraction of the bytes. Waiting here means DONE
+	// stands for "the queue really drained".
 	drain := envSeconds("BENCH_SEND_DRAIN_SEC")
 	if drain == 0 {
 		drain = 3 * time.Second
 	}
+	before := st
+	log.Printf("[BENCH-SEND] draining %s before end marker...", drain)
 	time.Sleep(drain)
 	st = trans.Stats()
-	log.Printf("[BENCH-SEND] after drain: channel msgs=%d channel bytes=%.2f MB", st.PacketsSent, float64(st.BytesSent)/1e6)
+	log.Printf("[BENCH-SEND] after drain: channel msgs=%d (+%d) channel bytes=%.2f MB (+%.2f)",
+		st.PacketsSent, st.PacketsSent-before.PacketsSent, float64(st.BytesSent)/1e6,
+		float64(st.BytesSent-before.BytesSent)/1e6)
+	for trans.Send(benchSentinel) != nil {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(2 * time.Second)
 }
 
 func envSeconds(name string) time.Duration {
