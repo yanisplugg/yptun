@@ -42,7 +42,7 @@ import (
 // ---------------------------------------------------------------------------
 // log bus: every core writes into one bounded channel the host polls.
 
-var logCh = make(chan string, 4096)
+var logCh = make(chan string, 256)
 
 // PushLog queues one line for PollLog; drops on overflow rather than block a core goroutine.
 func PushLog(tag, line string) {
@@ -72,10 +72,10 @@ func init() {
 		PushLog("masterdns", line)
 	})
 	if runtime.GOOS == "ios" {
-		// The packet-tunnel extension has a strict 15 MB memory budget enforced by iOS Jetsam.
-		// Go must stay strictly under 8 MB so that hev-socks5-tunnel, Rust, and Swift runtime have headroom.
+		// Limit threads and Go memory strictly to stay under iOS NetworkExtension memory ceiling.
+		runtime.GOMAXPROCS(1)
 		debug.SetGCPercent(20)
-		debug.SetMemoryLimit(8 << 20)
+		debug.SetMemoryLimit(24 << 20)
 	}
 }
 

@@ -125,7 +125,13 @@ public enum AppleTunnelStore {
 
     public static func appendLog(_ line: String) throws {
         let fileURL = try url(for: logFileName)
-        if !FileManager.default.fileExists(atPath: fileURL.path) {
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+               let size = attrs[.size] as? UInt64, size > 256 * 1024 {
+                try? remove(logFileName)
+                try? write(Data("[log rotated]\n".utf8), to: logFileName)
+            }
+        } else {
             try write(Data(), to: logFileName)
         }
         let handle = try FileHandle(forWritingTo: fileURL)

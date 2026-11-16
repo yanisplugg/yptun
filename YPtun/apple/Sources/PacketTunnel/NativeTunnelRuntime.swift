@@ -15,6 +15,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private var watchdogFailures = 0
     private weak var provider: NEPacketTunnelProvider?
     private var watchdog: DispatchSourceTimer?
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     func start(
         provider: NEPacketTunnelProvider,
@@ -40,6 +41,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 cacheFilePath: cacheURL.path
             )
 
+            startMemoryPressureMonitoring()
             startLogPump()
             try startEngines(
                 plan,
@@ -82,6 +84,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 
     func stop() {
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
         watchdog?.cancel()
         watchdog = nil
         setPumpingLogs(false)
@@ -364,6 +368,19 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         )
     }
 
+    private func startMemoryPressureMonitoring() {
+        memoryPressureSource?.cancel()
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
+        source.setEventHandler {
+            let availableBytes = os_proc_available_memory()
+            let availableMB = Double(availableBytes) / 1024.0 / 1024.0
+            NSLog("YPtun: Memory pressure warning received. Available: %.1f MB. Freeing Go and system memory...", availableMB)
+            CoreapiFreeOSMemory()
+        }
+        source.resume()
+        self.memoryPressureSource = source
+    }
+
     private func startLogPump() {
         setPumpingLogs(true)
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -385,6 +402,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
+            if os_proc_available_memory() < 12 * 1024 * 1024 {
+                CoreapiFreeOSMemory()
+            }
             if self.coresRunning(plan) {
                 self.resetWatchdogFailures()
                 return
