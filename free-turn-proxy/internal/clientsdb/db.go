@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -221,23 +220,9 @@ func idRecord(clientID string, mode byte) []byte {
 	return append(buf, mode, idVersionAck)
 }
 
-// legacyServer - ЛОКАЛЬНЫЙ ПАТЧ YPtun. С 4.0.0 клиент обязан дождаться ack от сервера, а серверы
-// 3.4.0 и старше (все уже установленные автоустановщиком/панелью) его не шлют: клиент 7 секунд
-// повторял ID и падал с ErrNoIDAck, то есть новое ядро не работало со старыми нодами. Здесь нет
-// ack после всех повторов - считаем сервер старым (как до 4.0.0) и дальше пишем ID один раз без
-// ожидания. Флаг на процесс; сервер 4.x подтверждает как обычно и флаг не взводит.
-// Не терять при ре-вендоре.
-var legacyServer atomic.Bool //nolint:gochecknoglobals // состояние на процесс, см. выше
-
 func WriteClientID(ctx context.Context, conn net.Conn, clientID string, mode byte) error {
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	rec := idRecord(clientID, mode)
-	if legacyServer.Load() {
-		if _, err := conn.Write(rec); err != nil {
-			return fmt.Errorf("send client ID: %w", err)
-		}
-		return nil
-	}
 	var buf [16]byte
 	for _, wait := range idRetransmit {
 		if _, err := conn.Write(rec); err != nil {
@@ -263,11 +248,7 @@ func WriteClientID(ctx context.Context, conn net.Conn, clientID string, mode byt
 			return ctx.Err()
 		}
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	legacyServer.Store(true)
-	return nil
+	return ErrNoIDAck
 }
 
 func readClientID(conn net.Conn) (string, byte, byte, error) {

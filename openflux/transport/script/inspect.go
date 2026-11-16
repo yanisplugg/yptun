@@ -78,5 +78,6 @@ func Inspect(src []byte) (Info, error) {
 		return Info{}, err
 	}
 	_, info.CustomSettings = goja.AssertFunction(obj.Get("settings"))
+	_, info.SetupWizard = goja.AssertFunction(obj.Get("setup"))
 	return info, nil
 }

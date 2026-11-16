@@ -112,6 +112,10 @@ impl EngineCore for MockCore {
     fn awg_stop(&self) {
         self.0.call("awg_stop");
     }
+    fn ft_set_auto_captcha(&self, _enabled: bool) -> CoreResult<()> {
+        self.0.call("ft_set_auto_captcha");
+        Ok(())
+    }
     fn ft_start(&self, _uri: &str, _listen_addr: &str, _vk_link: &str, _n_streams: i32) -> CoreResult<()> {
         self.0.call("ft_start");
         Ok(())

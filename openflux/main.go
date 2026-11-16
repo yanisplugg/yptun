@@ -235,6 +235,12 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--node-wizard" {
 		os.Exit(runNodeWizard(os.Stdin, os.Stdout))
 	}
+	// What this core can do, one word a line, for node-install.sh to ask
+	// before it relies on it (an older core fails on the unknown flag).
+	if len(os.Args) == 2 && os.Args[1] == "--features" {
+		fmt.Print(coreFeatures)
+		return
+	}
 	// The core's own openflux:// parser and builder for apps and scripts,
 	// so a link is read and made the same way everywhere: JSON on stdout,
 	// before any banner.
@@ -310,6 +316,7 @@ func main() {
 	scriptPath := flag.String("script-path", "", "Path to the script transport's <name>.flux or <name>.js (needs <name>.js.sig beside a bare .js)")
 	scriptPubkey := flag.String("script-pubkey", "", "Hex-encoded ed25519 public key the script transport's signature is checked against")
 	scriptName := flag.String("script-name", "", "Carrier name for the script transport (default: the name in its own info())")
+	refusePeerLogin := flag.Bool("refuse-peer-login", false, "Exit: take no account sign-in (Yandex, Mail.ru login cookies) from clients over the Session; only the owner's push over SSH (node-install.sh set-cookies) changes it")
 	scriptAutoUpdate := flag.Bool("script-auto-update", false, "Node: keep .flux transports current and self-heal (check/apply auto-OK updates, roll back, hot-swap without a restart)")
 	scriptUpdateChannel := flag.String("script-update-channel", "stable", "Node: update channel for --script-auto-update (stable | nightly)")
 	configPath := flag.String("config", "",
@@ -552,6 +559,9 @@ DEPRECATED (removed in v2)
 		if v, ok := confValue(conf.Interface, "ScriptAutoUpdate"); ok && !setFlags["script-auto-update"] {
 			*scriptAutoUpdate = confBool(v, false)
 		}
+		if v, ok := confValue(conf.Interface, "RefusePeerLogin"); ok && !setFlags["refuse-peer-login"] {
+			*refusePeerLogin = confBool(v, false)
+		}
 		if v, ok := confValue(conf.Interface, "Sensitive"); ok && !setFlags["sensitive"] && !setFlags["sensetive"] {
 			*sensitive = confBool(v, *sensitive)
 		}
@@ -574,6 +584,9 @@ DEPRECATED (removed in v2)
 					"dial":    t.Values["Dial"],
 					"listen":  t.Values["Listen"],
 					"is_exit": isExit,
+				}
+				if v := t.Values["Prefer"]; v != "" {
+					spec.Params["prefer"] = confBool(v, true)
 				}
 			}
 			if spec.Type == "oneme" {
@@ -1030,6 +1043,13 @@ DEPRECATED (removed in v2)
 					utils.Debugf("[COOKIE] replay %s: %v", spec.Name, err)
 				}
 			}
+			// The exit keeps its owner's sign-ins fresh: pushes over SSH
+			// (the inbox, SIGHUP), what the services refresh, and a state
+			// file the owner's app reads (signin_node.go).
+			if isExit {
+				managerInst.SetRefusePeerLogin(*refusePeerLogin)
+				startExitSignInKeeper(managerInst, store)
+			}
 		}
 
 		// Hook the Session control dispatcher into the manager.
@@ -1050,7 +1070,7 @@ DEPRECATED (removed in v2)
 
 			// Checks for local transports go to the app as-is; checks the
 			// exit reports are marked Remote, to be passed from its address.
-			managerInst.SetCaptchaNotifier(func(name, url, html, reason string) {
+			managerInst.SetPromptNotifier(func(name, url, html, reason string) {
 				_ = srv.SendCookiesRequest(localCheckRequest(name, url, html, reason))
 			})
 			if *role == roleClient {
@@ -1333,9 +1353,9 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 // streamCarrier builds the carrier the stream mux rides.
 func streamCarrier(transportType, url string) phpbox.Carrier {
 	switch transportType {
-	case "cupsonline", "yandex", "", "vyandex", "mailru":
+	case "cupsonline", "avito", "yandex", "", "vyandex", "mailru":
 	default:
-		log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
+		log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, avito, yandex, vyandex, mailru)", transportType)
 	}
 	t, err := registry.New(transportType, url, nil, registry.Options{
 		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile, AvitoCookies: avitoCookiesStr,

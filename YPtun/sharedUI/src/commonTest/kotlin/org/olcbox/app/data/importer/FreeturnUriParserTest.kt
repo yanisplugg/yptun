@@ -51,6 +51,22 @@ class FreeturnUriParserTest {
         assertEquals("W", parsed.comment)
     }
 
+    @OptIn(ExperimentalEncodingApi::class)
+    @Test
+    fun editorPreservesV4WireObfuscationFields() {
+        val esc = wgConf.replace("\\", "\\\\").replace("\n", "\\n")
+        val key = "ab".repeat(32)
+        val json = """{"v":1,"provider":"vk","peer":"203.0.113.7:56000","transport":"tcp","mode":"udp","obf":"rtpopus3","key":"$key","timing":20,"n":12,"spc":6,"cid":"client-42","mcap":true,"wg":"$esc"}"""
+        val uri = "freeturn://" + Base64.UrlSafe.encode(json.encodeToByteArray()).trimEnd('=')
+        val draft = VkTurnComposer.decompose(org.olcbox.app.data.model.VkTurnConfig(uri = uri), null)
+        assertEquals("rtpopus3", draft.obfProfile)
+        assertEquals(key, draft.obfKey)
+        assertEquals("20", draft.obfTimingMs)
+        assertEquals("6", draft.streamsPerCred)
+        assertEquals("client-42", draft.clientId)
+        assertTrue(draft.manualCaptcha)
+    }
+
     @Test
     fun parsesPeerAndEmbeddedWireGuard() {
         val parsed = FreeturnUriParser.parse(link())!!

@@ -47,11 +47,12 @@ func TestDirectTransportLoopback(t *testing.T) {
 	}
 	defer client.Stop()
 
-	// Wait until the exit sees the client's connection.
+	// Wait until the client is connected: the exit counts the connection once
+	// its first record comes (see adopt).
 	deadline := time.Now().Add(3 * time.Second)
-	for !exit.IsConnected() {
+	for !client.IsConnected() {
 		if time.Now().After(deadline) {
-			t.Fatal("exit did not accept within 3s")
+			t.Fatal("client did not connect within 3s")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

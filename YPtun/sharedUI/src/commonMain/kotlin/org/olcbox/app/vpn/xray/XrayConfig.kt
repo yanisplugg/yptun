@@ -431,7 +431,20 @@ object XrayConfig {
                     put("listen", "127.0.0.1")
                     put("port", cascadeLoopPort)
                     put("protocol", "socks")
-                    putJsonObject("settings") { put("udp", true); put("auth", "noauth") }
+                    putJsonObject("settings") {
+                        put("udp", true)
+                        if (socksUsername.isNotBlank()) {
+                            put("auth", "password")
+                            putJsonArray("accounts") {
+                                addJsonObject {
+                                    put("user", socksUsername)
+                                    put("pass", socksPassword)
+                                }
+                            }
+                        } else {
+                            put("auth", "noauth")
+                        }
+                    }
                 }
             }
 
@@ -511,7 +524,18 @@ object XrayConfig {
                         put("protocol", "socks")
                         putJsonObject("settings") {
                             putJsonArray("servers") {
-                                addJsonObject { put("address", "127.0.0.1"); put("port", cascadeLoopPort) }
+                                addJsonObject {
+                                    put("address", "127.0.0.1")
+                                    put("port", cascadeLoopPort)
+                                    if (socksUsername.isNotBlank()) {
+                                        putJsonArray("users") {
+                                            addJsonObject {
+                                                put("user", socksUsername)
+                                                put("pass", socksPassword)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -768,7 +792,14 @@ object XrayConfig {
             it["protocol"]?.jsonPrimitive?.contentOrNull == "socks"
         }
         val nonSocks = existingInbounds.filter {
-            it["protocol"]?.jsonPrimitive?.contentOrNull != "socks"
+            val proto = it["protocol"]?.jsonPrimitive?.contentOrNull?.lowercase()
+            if (proto == "socks") return@filter false
+            // When authenticated SOCKS is required (e.g. TUN mode), do not expose unauthenticated HTTP/SOCKS inbounds
+            if (socksUsername.isNotBlank() && proto == "http") {
+                val accounts = (it["settings"] as? JsonObject)?.get("accounts") as? JsonArray
+                if (accounts.isNullOrEmpty()) return@filter false
+            }
+            true
         }
 
         val socksInbound = buildJsonObject {
@@ -878,7 +909,18 @@ object XrayConfig {
             put("protocol", "socks")
             putJsonObject("settings") {
                 putJsonArray("servers") {
-                    addJsonObject { put("address", "127.0.0.1"); put("port", cascadeLoopPort) }
+                    addJsonObject {
+                        put("address", "127.0.0.1")
+                        put("port", cascadeLoopPort)
+                        if (socksUsername.isNotBlank()) {
+                            putJsonArray("users") {
+                                addJsonObject {
+                                    put("user", socksUsername)
+                                    put("pass", socksPassword)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else null
@@ -888,7 +930,20 @@ object XrayConfig {
             put("listen", "127.0.0.1")
             put("port", cascadeLoopPort)
             put("protocol", "socks")
-            putJsonObject("settings") { put("udp", true); put("auth", "noauth") }
+            putJsonObject("settings") {
+                put("udp", true)
+                if (socksUsername.isNotBlank()) {
+                    put("auth", "password")
+                    putJsonArray("accounts") {
+                        addJsonObject {
+                            put("user", socksUsername)
+                            put("pass", socksPassword)
+                        }
+                    }
+                } else {
+                    put("auth", "noauth")
+                }
+            }
         } else null
         // HONOR THE CONFIG'S OWN ROUTING: when the raw config already ships routing rules, the embedded
         // routing takes precedence and the app's routing profile is NOT overlaid. Overlaying it injected

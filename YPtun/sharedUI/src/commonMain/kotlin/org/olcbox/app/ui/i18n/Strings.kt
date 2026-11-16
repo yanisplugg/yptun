@@ -276,6 +276,8 @@ interface Strings {
     val showSystemApps: String
     val bypassRussia: String
     val bypassRussiaSubtitle: String
+    val bypassChina: String
+    val bypassChinaSubtitle: String
     val blockAds: String
     val blockAdsSubtitle: String
     val directDomains: String
@@ -283,6 +285,7 @@ interface Strings {
     val domainsPlaceholder: String
     val presets: String
     val presetRuDirect: String
+    val presetCnDirect: String
     val presetAdsBlock: String
     val presetRuAds: String
     val presetAllVpn: String
@@ -1185,6 +1188,8 @@ object RuStrings : Strings {
     override val showSystemApps = "Системные приложения"
     override val bypassRussia = "Обход России"
     override val bypassRussiaSubtitle = "RU-сайты и IP идут напрямую (geoip + geosite)"
+    override val bypassChina = "Обход Китая"
+    override val bypassChinaSubtitle = "CN-сайты и IP идут напрямую (AliDNS + geoip + geosite)"
     override val blockAds = "Блокировка рекламы"
     override val blockAdsSubtitle = "Блокировать рекламные и трекинговые домены"
     override val directDomains = "Прямые домены"
@@ -1192,6 +1197,7 @@ object RuStrings : Strings {
     override val domainsPlaceholder = "example.com, по одному на строку"
     override val presets = "Пресеты"
     override val presetRuDirect = "Россия напрямую"
+    override val presetCnDirect = "Китай напрямую"
     override val presetAdsBlock = "Блок рекламы"
     override val presetRuAds = "Россия + без рекламы"
     override val presetAllVpn = "Всё через VPN"
@@ -2054,6 +2060,8 @@ object EnStrings : Strings {
     override val showSystemApps = "System apps"
     override val bypassRussia = "Bypass Russia"
     override val bypassRussiaSubtitle = "RU sites & IPs go direct (geoip + geosite)"
+    override val bypassChina = "Bypass China"
+    override val bypassChinaSubtitle = "CN sites & IPs go direct (AliDNS + geoip + geosite)"
     override val blockAds = "Block ads"
     override val blockAdsSubtitle = "Reject ad / tracker domains"
     override val directDomains = "Direct domains"
@@ -2061,6 +2069,7 @@ object EnStrings : Strings {
     override val domainsPlaceholder = "example.com, one per line"
     override val presets = "Presets"
     override val presetRuDirect = "Russia direct"
+    override val presetCnDirect = "China direct"
     override val presetAdsBlock = "Block ads"
     override val presetRuAds = "Russia + no ads"
     override val presetAllVpn = "All via VPN"
@@ -2919,6 +2928,8 @@ object FaStrings : Strings {
     override val showSystemApps = "برنامه‌های سیستمی"
     override val bypassRussia = "دور زدن روسیه"
     override val bypassRussiaSubtitle = "سایت‌ها و IPهای روسیه مستقیم می‌روند (geoip + geosite)"
+    override val bypassChina = "دور زدن چین"
+    override val bypassChinaSubtitle = "سایت‌ها و IPهای چین مستقیم می‌روند (AliDNS + geoip + geosite)"
     override val blockAds = "مسدودسازی تبلیغات"
     override val blockAdsSubtitle = "رد کردن دامنه‌های تبلیغاتی/ردیاب"
     override val directDomains = "دامنه‌های مستقیم"
@@ -2926,6 +2937,7 @@ object FaStrings : Strings {
     override val domainsPlaceholder = "example.com، هر کدام در یک خط"
     override val presets = "پیش‌تنظیم‌ها"
     override val presetRuDirect = "روسیه مستقیم"
+    override val presetCnDirect = "چین مستقیم"
     override val presetAdsBlock = "مسدودسازی تبلیغات"
     override val presetRuAds = "روسیه + بدون تبلیغات"
     override val presetAllVpn = "همه از طریق VPN"
@@ -3788,6 +3800,8 @@ object ZhStrings : Strings {
     override val showSystemApps = "系统应用"
     override val bypassRussia = "绕过俄罗斯"
     override val bypassRussiaSubtitle = "RU 站点和 IP 直连（geoip + geosite）"
+    override val bypassChina = "绕过中国"
+    override val bypassChinaSubtitle = "中国站点和 IP 直连（AliDNS + geoip + geosite）"
     override val blockAds = "拦截广告"
     override val blockAdsSubtitle = "拒绝广告/跟踪域名"
     override val directDomains = "直连域名"
@@ -3795,6 +3809,7 @@ object ZhStrings : Strings {
     override val domainsPlaceholder = "example.com，每行一个"
     override val presets = "预设"
     override val presetRuDirect = "俄罗斯直连"
+    override val presetCnDirect = "中国直连"
     override val presetAdsBlock = "拦截广告"
     override val presetRuAds = "俄罗斯 + 无广告"
     override val presetAllVpn = "全部走 VPN"

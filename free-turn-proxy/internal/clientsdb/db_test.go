@@ -245,35 +245,3 @@ func (c *netTimeout) Read(b []byte) (int, error) {
 	}
 	return n, err
 }
-
-// ЛОКАЛЬНЫЙ ПАТЧ YPtun: сервер до 4.0.0 не шлёт ack - клиент не должен падать, а обязан
-// считать сервер старым и дальше писать ID один раз без ожидания.
-func TestNoAckMeansLegacyServer(t *testing.T) {
-	saved := idRetransmit
-	idRetransmit = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
-	legacyServer.Store(false)
-	t.Cleanup(func() { idRetransmit = saved; legacyServer.Store(false) })
-
-	client, server := pipe()
-	go func() { // старый сервер: читает записи и молчит
-		buf := make([]byte, 64)
-		for {
-			if _, err := server.Read(buf); err != nil {
-				return
-			}
-		}
-	}()
-	if err := WriteClientID(t.Context(), client, testID, ModeUDP); err != nil {
-		t.Fatalf("WriteClientID against a legacy server: %v", err)
-	}
-	if !legacyServer.Load() {
-		t.Fatal("legacy flag not set")
-	}
-	start := time.Now()
-	if err := WriteClientID(t.Context(), client, testID, ModeUDP); err != nil {
-		t.Fatalf("second WriteClientID: %v", err)
-	}
-	if time.Since(start) > 5*time.Millisecond {
-		t.Fatalf("legacy write must not wait, took %v", time.Since(start))
-	}
-}

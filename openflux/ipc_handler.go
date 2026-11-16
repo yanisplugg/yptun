@@ -54,7 +54,7 @@ func wireCheckNotifier(carrier transport.Transport, srv *ipc.Server) bool {
 //
 // It receives commands and cookies from the mobile app and forwards them
 // to the manager. When the core needs fresh cookies (SmartCaptcha), the
-// manager calls SetCaptchaNotifier, whose callback fires into IPC.
+// manager calls SetPromptNotifier, whose callback fires into IPC.
 type coreIPCHandler struct {
 	manager *manager.Manager
 	// exchanger takes the cookies on the classic path without a Session

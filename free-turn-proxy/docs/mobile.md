@@ -7,7 +7,7 @@
 - Переключайте серверы, настраивайте раздельное туннелирование и делитесь доступом.
 - Сохраняйте настройки в зашифрованную резервную копию.
 
-[Скачать APK](https://github.com/samosvalishe/turn-proxy-android/releases/latest)
+[Скачать APK](https://github.com/hackdiaz-dev/turn-proxy-android/releases/latest)
 
 Требования: Android 7.0+ и устройство ARM (arm64-v8a или armeabi-v7a). Для собственного подключения нужен VPS; в режиме Relay также нужна ссылка на звонок.
 
@@ -29,7 +29,7 @@
 
 ```bash
 termux-wake-lock
-curl -L -o client https://github.com/samosvalishe/free-turn-proxy/releases/latest/download/client-android-arm64
+curl -L -o client https://github.com/hackdiaz-dev/free-turn-proxy/releases/latest/download/client-android-arm64
 chmod +x client
 # Замените <ip_dns_оператора> на DNS вашего провайдера
 ./client -listen 127.0.0.1:9000 -peer <vps>:56000 -link "<call-link>" -dns-servers <ip_dns_оператора>
@@ -44,7 +44,7 @@ chmod +x client
 ```bash
 apk update
 apk add curl
-curl -L -o client https://github.com/samosvalishe/free-turn-proxy/releases/latest/download/client-linux-386
+curl -L -o client https://github.com/hackdiaz-dev/free-turn-proxy/releases/latest/download/client-linux-386
 chmod +x client
 GOMAXPROCS=1 GODEBUG=asyncpreemptoff=1 ./client -listen 127.0.0.1:9000 -peer <vps>:56000 -link "<call-link>"
 ```

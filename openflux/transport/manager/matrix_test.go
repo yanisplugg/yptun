@@ -31,7 +31,7 @@ var matrixTypes = []struct {
 	{"oneme", 40, false},
 }
 
-var errCaptcha = errors.New("captcha required")
+var errPrompt = errors.New("captcha required")
 
 // wire is one fake carrier shared by a client and an exit, like a document
 // both attach to. Its exit side can be stuck behind a check until it is
@@ -82,7 +82,7 @@ func (e *wireEnd) Start() error {
 	e.w.mu.Unlock()
 	if down {
 		e.report()
-		return errCaptcha
+		return errPrompt
 	}
 	e.mu.Lock()
 	if !e.started {
@@ -121,7 +121,7 @@ func (e *wireEnd) report() {
 	n := e.notify
 	e.mu.Unlock()
 	if n != nil {
-		n(errCaptcha, e.w.name, "https://"+e.w.name+".example/check", "", "smartcaptcha")
+		n(errPrompt, e.w.name, "https://"+e.w.name+".example/check", "", "smartcaptcha")
 	}
 }
 
@@ -168,7 +168,7 @@ func (e *wireEnd) Send(b []byte) error {
 		if blackhole {
 			return nil
 		}
-		return errCaptcha
+		return errPrompt
 	}
 	if peerBlocked {
 		return nil // the other side is stuck: the message goes nowhere

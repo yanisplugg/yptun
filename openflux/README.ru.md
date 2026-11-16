@@ -1,6 +1,30 @@
-# OpenFlux
+<p align="center">
+  <img src="docs/images/icon.png" width="120" alt="OpenFlux">
+</p>
 
-[English](README.md) | **Русский**
+<h1 align="center">OpenFlux</h1>
+
+<p align="center">
+  Туннель поверх обычных веб-сервисов, с подключаемыми транспортами и двумя бэкендами выходной ноды.
+</p>
+
+<p align="center">
+  <a href="../../releases/latest"><img alt="Релиз" src="https://img.shields.io/github/v/release/OpenFluxTeam/OpenFlux?display_name=tag&color=4F7CFF"></a>
+  <a href="LICENSE"><img alt="Лицензия" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
+  <img alt="Go" src="https://img.shields.io/badge/core-Go-00ADD8">
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> · <b>Русский</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/OpenFluxTeam/OpenFlux">Core</a> · <a href="https://github.com/OpenFluxTeam/OpenFluxDesktop">Desktop</a> · <a href="https://github.com/OpenFluxTeam/OpenFluxAndroid">Android</a> · <a href="https://testflight.apple.com/join/BwnAcdus">iOS (TestFlight, скоро в App Store)</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/home-states.png" alt="Приложения OpenFlux на телефоне: выключено, подключение, подключено" width="760">
+</p>
 
 Исследовательский инструмент сетевого стека. IPv4 TCP/UDP-туннель с подключаемыми
 транспортами, батчированным zstd-кодеком и двумя бэкендами выходной ноды
@@ -39,24 +63,13 @@
 | **macOS**   | сборка из исходников | CLI + utun L3-клиент (`--inbound=tun`, по умолчанию на macOS) |
 | **Linux**   | сборка из исходников | CLI-клиент (SOCKS5) / выходная нода (L3 или L4) |
 | **Windows** | сборка из исходников | CLI-клиент (SOCKS5, либо `--inbound=tun` через Wintun - нужны права администратора) / выходная нода (`l4`, либо `l3` через QEMU - см. TODO) |
-| **Desktop** | [Релизы OpenFluxDesktop](https://github.com/p1neappleXpress/OpenFluxDesktop) | Windows/macOS/Linux: полный туннель или SOCKS5/HTTP-прокси, сессии с несколькими транспортами, шифрование, мастер разворачивания ноды по SSH из приложения |
-| **Android** | [Релизы OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid) | Системный VPN или локальный SOCKS5, сессии с несколькими транспортами и переключением между ними, шифрование, обработка капчи во встроенном браузере |
-| **Android** | [Релизы OpenFlux-Android](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Форк: системный VPN или SOCKS5-прокси, сессии с несколькими транспортами, обработка капчи, телефон как выходная нода |
+| **Desktop** | [Релизы OpenFluxDesktop](https://github.com/OpenFluxTeam/OpenFluxDesktop) | Windows/macOS/Linux: полный туннель или SOCKS5/HTTP-прокси, сессии с несколькими транспортами, шифрование, мастер разворачивания ноды по SSH из приложения |
+| **Android** | [Релизы OpenFluxAndroid](https://github.com/OpenFluxTeam/OpenFluxAndroid) | Системный VPN или локальный SOCKS5, сессии с несколькими транспортами и переключением между ними, шифрование, обработка капчи во встроенном браузере |
 | **iOS**     | [TestFlight бета](https://testflight.apple.com/join/BwnAcdus) | Системный VPN через Network Extension |
 
 > **iOS-приложение** сделано [@saharev1](https://github.com/saharev1) -
 > полноценный iOS-клиент, пайплайн TestFlight, системный VPN, DNS-over-TLS
 > и множество фиксов стабильности. ОГРОМНОЕ спасибо!
->
-> **OpenFlux-Android** сделан [@damnurmum](https://github.com/damnurmum) -
-> Android-клиент с системным VPN и режимом локального SOCKS5-прокси, профилями
-> подключений, сессиями с несколькими транспортами и переключением между ними
-> (включая direct), обработкой SmartCaptcha и входа во встроенном браузере (в том
-> числе капчи выходной ноды, которая проходится через туннель с её адреса),
-> режимом выходной ноды l4 на телефоне, Kill Switch и маршрутизацией по
-> приложениям и доменам. Также внёс в этот репозиторий сквозное шифрование (#38),
-> транспорт Mail.ru (#60) и устойчивость сессий с обработкой капчи ноды (#93).
-> ОГРОМНОЕ спасибо!
 >
 > **OpenFluxAndroid и OpenFluxDesktop** используют Compose Multiplatform
 > приложение и общий модуль (сессии с несколькими транспортами, шифрование,
@@ -65,9 +78,13 @@
 > [OpenFluxClient](https://github.com/meepo161/OpenFluxClient) и перенесённые
 > в эти репозитории с его согласия. ОГРОМНОЕ спасибо!
 >
-> **Android-приложение** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid),
-> **desktop-приложение** - [p1neappleXpress/OpenFluxDesktop](https://github.com/p1neappleXpress/OpenFluxDesktop),
-> общий модуль обоих - [p1neappleXpress/OpenFluxClientShared](https://github.com/p1neappleXpress/OpenFluxClientShared).
+> **Android-приложение** - [OpenFluxTeam/OpenFluxAndroid](https://github.com/OpenFluxTeam/OpenFluxAndroid),
+> **desktop-приложение** - [OpenFluxTeam/OpenFluxDesktop](https://github.com/OpenFluxTeam/OpenFluxDesktop),
+> общий модуль обоих - [OpenFluxTeam/OpenFluxClientShared](https://github.com/OpenFluxTeam/OpenFluxClientShared).
+
+<p align="center">
+  <img src="docs/images/desktop-home.png" alt="Приложение для компьютера, подключено" width="820">
+</p>
 
 ## Архитектура
 
@@ -162,6 +179,13 @@ RST, которые локально генерирует ядро выходн�
   идёт по самому приоритетному из тех, что реально доходят до другой стороны,
   и переключается при его отказе. См.
   [Сессии с несколькими транспортами](#сессии-с-несколькими-транспортами).
+- **Direct первым и быстрее** - живой `direct` используется раньше
+  документных транспортов (`Prefer = no` или `OPENFLUX_DIRECT_FIRST=0`
+  отключают это), с переиспользуемыми буферами, zstd по условию, MTU туннеля
+  16000 на direct и Reno на потоках direct. Метод и замеры:
+  [TRANSPORT_PERFORMANCE.md](TRANSPORT_PERFORMANCE.md).
+- **Stripe-группы** - несколько транспортов одного или разных типов работают
+  как один stripe, по одной полосе на транспорт (`--lanes N`, `Lanes = N`).
 - **Обработка капчи** - PoW-капча Яндекса решается автоматически. SmartCaptcha
   и требование входа уходят приложению через IPC; те, в которые упирается
   выходная нода, пересылаются клиенту по любому работающему транспорту вместе

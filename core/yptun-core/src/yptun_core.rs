@@ -31,7 +31,7 @@ pub const SYMBOLS: &[&str] = &[
     "YpXraySetAssetPath", "YpXrayVersion", "YpXrayStart", "YpXrayStop", "YpXrayRunning", "YpXrayMeasureDelay",
     "YpAwgVersion", "YpAwgStart", "YpAwgStop", "YpAwgRunning", "YpAwgProbe", "YpAwgMeasureDelay", "YpAwgGenerateKeyPair",
     "YpTgAwgStart", "YpTgAwgStop", "YpTgAwgRunning",
-    "YpFtVersion", "YpFtStart", "YpFtStop", "YpFtRunning", "YpFtConnectedStreams", "YpFtCaptchaURL", "YpFtCaptchaActive",
+    "YpFtVersion", "YpFtSetAutoCaptcha", "YpFtStart", "YpFtStop", "YpFtRunning", "YpFtConnectedStreams", "YpFtCaptchaURL", "YpFtCaptchaActive",
     "YpWdttStart", "YpWdttLastError", "YpWdttWaitConfig", "YpWdttStop", "YpWdttRunning", "YpWdttPushCaptcha", "YpWdttVersion",
     "YpMasterDnsStart", "YpMasterDnsStop", "YpMasterDnsRunning", "YpMasterDnsLastError", "YpMasterDnsVersion",
     "YpRtcVersion", "YpRtcSetTransport", "YpRtcSetTelemostCookies", "YpRtcSetDNS", "YpRtcSetSocksListenHost",
@@ -73,6 +73,7 @@ pub trait YpTunCoreLib: Send + Sync {
     fn tg_awg_running(&self) -> i32;
 
     fn ft_version(&self) -> Option<String>;
+    fn ft_set_auto_captcha(&self, enabled: i32);
     fn ft_start(&self, uri: &str, listen_addr: &str, vk_link: &str, n_streams: i32) -> Option<String>;
     fn ft_stop(&self);
     fn ft_running(&self) -> i32;
@@ -400,6 +401,10 @@ impl YpTunCore {
     }
     pub fn ft_start(&self, uri: &str, listen_addr: &str, vk_link: &str, n_streams: i32) -> CoreResult<()> {
         check(self.lib()?.ft_start(uri, listen_addr, vk_link, n_streams), "VK-TURN start failed")
+    }
+    pub fn ft_set_auto_captcha(&self, enabled: bool) -> CoreResult<()> {
+        self.lib()?.ft_set_auto_captcha(i32::from(enabled));
+        Ok(())
     }
     pub fn ft_stop(&self) {
         if let Some(l) = self.opt() {

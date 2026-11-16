@@ -89,9 +89,9 @@ func TestAuthRequiredRoundTrip(t *testing.T) {
 	asked := make(chan [3]string, 1)
 	client.SetRemoteAuthNotifier(func(name, url, html, reason string) { asked <- [3]string{name, url, reason} })
 	var localReports int
-	exit.SetCaptchaNotifier(func(string, string, string, string) { localReports++ })
+	exit.SetPromptNotifier(func(string, string, string, string) { localReports++ })
 
-	exit.NotifyCaptcha("yandex", "https://docs.example/d", "", "smartcaptcha")
+	exit.NotifyPrompt("yandex", "https://docs.example/d", "", "smartcaptcha")
 	select {
 	case got := <-asked:
 		if got != [3]string{"yandex", "https://docs.example/d", "smartcaptcha"} {
@@ -124,7 +124,7 @@ func TestClientDoesNotForwardAuth(t *testing.T) {
 	client, exit := connectedManagers(t, &fakeCookieProvider{})
 	asked := make(chan struct{}, 1)
 	exit.SetRemoteAuthNotifier(func(string, string, string, string) { asked <- struct{}{} })
-	client.NotifyCaptcha("yandex", "https://docs.example/d", "", "smartcaptcha")
+	client.NotifyPrompt("yandex", "https://docs.example/d", "", "smartcaptcha")
 	select {
 	case <-asked:
 		t.Fatal("client forwarded its own check to the exit")

@@ -63,15 +63,18 @@ var (
 	// servers for per-connection load-balancing. Each relay has its own cancel + done; Stop cancels
 	// all and waits. run() is instance-local (provider/dialers/listener), so concurrent relays don't
 	// clash — the only shared state is [streams] (an aggregate readiness counter, fine for the gate).
-	cancels []context.CancelFunc
-	dones   []chan struct{}
-	debug   atomic.Bool
+	cancels     []context.CancelFunc
+	dones       []chan struct{}
+	debug       atomic.Bool
+	autoCaptcha atomic.Bool
 	// relayStreams holds ONE live-stream counter per active relay (per freeturn server). A relay's
 	// counter >0 means its VK TURN path (DTLS + TURN allocation) is up. ConnectedStreams sums them
 	// (readiness gate); ActiveRelays counts how many servers are actually connected (for the
 	// "N/total servers" notification). Guarded by [mu].
 	relayStreams []*atomic.Int32
 )
+
+func init() { autoCaptcha.Store(true) }
 
 // relaySpec is one freeturn server to relay through: its freeturn:// uri, the local listen address the
 // WireGuard/Xray outbound dials, the VK call link(s), and the parallel TURN stream count. StartMulti
@@ -95,13 +98,17 @@ func SetLogWriter(w LogWriter) {
 
 // freeturnVersion is the vendored upstream free-turn-proxy release this client is built from.
 // Bump it whenever the vendored core is updated; surfaced in the app's settings.
-const freeturnVersion = "4.0.1"
+const freeturnVersion = "4.1.5"
 
 // Version returns the free-turn-proxy (VK-TURN) core version for display in the app.
 func Version() string { return freeturnVersion }
 
 // SetDebug toggles verbose logging for subsequent Start calls.
 func SetDebug(enabled bool) { debug.Store(enabled) }
+
+// SetAutoCaptcha controls the VK proof-of-work captcha solver for subsequent Start calls.
+// Disabling it falls back to the registered manual captcha presenter.
+func SetAutoCaptcha(enabled bool) { autoCaptcha.Store(enabled) }
 
 // IsRunning reports whether a freeturn client is currently active.
 func IsRunning() bool { return running.Load() }
@@ -245,6 +252,13 @@ func buildClientConfig(uri, listenAddr, vkLink string, nStreams int) (*config.Cl
 	if err != nil {
 		return nil, nil, fmt.Errorf("freeturn config: %w", err)
 	}
+	// App-owned values must win over values embedded in a share URI. This is especially important
+	// for multi-server mode, where every relay gets a distinct loopback listener.
+	cfg.Proxy.Listen = listenAddr
+	if nStreams > 0 {
+		cfg.TURN.N = nStreams
+	}
+	cfg.VK.AutoCaptcha = autoCaptcha.Load()
 	return cfg, links, nil
 }
 
@@ -410,7 +424,7 @@ func buildProvider(cfg *config.Client, links []string, dialer net.Dialer, connec
 				Platform:        string(cfg.VK.Platform),
 				FingerprintSeed: cfg.ClientID,
 				Dialer:          dialer,
-				ManualOnly:      cfg.VK.ManualCaptcha,
+				ManualOnly:      cfg.VK.ManualCaptcha || !cfg.VK.AutoCaptcha,
 				StreamsPerCache: cfg.VK.StreamsPerCred,
 				StreamsAlive:    connected.Load,
 				Log:             logger,

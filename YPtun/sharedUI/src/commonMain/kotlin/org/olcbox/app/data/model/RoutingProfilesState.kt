@@ -42,6 +42,18 @@ data class RoutingProfilesState(
     /** True when at least one applicable profile references geo selectors needing the `.dat` files. */
     fun anyNeedsGeoFiles(): Boolean = profiles.any { it.needsGeoFiles() }
 
+    /** Ensures built-in presets (Russia direct & China direct) are present in the profiles list. */
+    fun withPresets(): RoutingProfilesState {
+        val list = profiles.toMutableList()
+        if (list.none { it.id == RoutingProfile.DEFAULT_RU_DIRECT_ID }) {
+            list.add(0, RoutingProfile.russiaDirect())
+        }
+        if (list.none { it.id == RoutingProfile.PRESET_CN_DIRECT_ID }) {
+            list.add(RoutingProfile.chinaDirect())
+        }
+        return copy(profiles = list)
+    }
+
     /**
      * Encodes the WHOLE routing setup (every profile + global choice + geo sources) into a single
      * `yptun://routing/<base64url-json>` link for one-tap export/import. Round-trips via [fromRoutingLink].

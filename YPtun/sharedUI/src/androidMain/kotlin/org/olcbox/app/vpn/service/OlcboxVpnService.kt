@@ -15,6 +15,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
+import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -246,6 +247,12 @@ class OlcboxVpnService : VpnService() {
     private var splitTunnelMode = AndroidSplitTunnelMode.AllApps
     private var splitTunnelProxyApps = emptySet<String>()
     private var splitTunnelBypassApps = emptySet<String>()
+    @Volatile
+    private var cachedAllowedUids = emptySet<Int>()
+    @Volatile
+    private var cachedDisallowedUids = emptySet<Int>()
+    @Volatile
+    private var cachedSplitMode = AndroidSplitTunnelMode.AllApps
     private var socksProxy: AuthenticatedSocksProxy? = null
     private var httpProxyBridge: HttpProxyBridge? = null
     private var singBox: SingBoxEngine? = null
@@ -403,6 +410,7 @@ class OlcboxVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        activeService = this
         // Boot / QS tile / widget can start this service with no Activity ever created, and the
         // language then never leaves its default -> notifications in the wrong language.
         AppLocale.ensureLoaded(applicationContext)
@@ -611,6 +619,9 @@ class OlcboxVpnService : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (activeService === this) {
+            activeService = null
+        }
         VpnSocketProtectBridge.protect = null
         cleanup(stopService = false)
     }
@@ -2264,6 +2275,7 @@ class OlcboxVpnService : VpnService() {
             } else {
                 // freeturn client: local WireGuard entry listener tunnelling through VK.
                 Freeturn.setDebug(false)
+                Freeturn.setAutoCaptcha(vk.autoCaptcha)
                 Freeturn.setLogWriter(object : FreeturnLogWriter {
                     override fun writeLog(line: String) {
                         val trimmed = line.trimEnd()
@@ -3157,6 +3169,32 @@ class OlcboxVpnService : VpnService() {
         val disallowedApplied = plan.disallowedPackages.associateWith { target ->
             addDisallowedApp(builder, target, if (target == packageName) "Olcbox" else target)
         }
+
+        cachedSplitMode = splitTunnelMode
+        val myUid = android.os.Process.myUid()
+        val pm = packageManager
+
+        val allowed = hashSetOf<Int>()
+        for (pkg in plan.allowedPackages) {
+            runCatching {
+                val uid = pm.getApplicationInfo(pkg, 0).uid
+                allowed.add(uid)
+                allowed.add(uid % 100000)
+            }
+        }
+        cachedAllowedUids = allowed
+
+        val disallowed = hashSetOf<Int>()
+        disallowed.add(myUid)
+        disallowed.add(myUid % 100000)
+        for (pkg in plan.disallowedPackages) {
+            runCatching {
+                val uid = pm.getApplicationInfo(pkg, 0).uid
+                disallowed.add(uid)
+                disallowed.add(uid % 100000)
+            }
+        }
+        cachedDisallowedUids = disallowed
         return when (splitTunnelMode) {
             AndroidSplitTunnelMode.AllApps -> {
                 addLog("Split tunneling: all apps use TUN")
@@ -3212,6 +3250,71 @@ class OlcboxVpnService : VpnService() {
         }.getOrElse {
             addLog("Failed to bypass $label from TUN: ${it.message}")
             false
+        }
+    }
+
+    fun isConnectionAllowed(
+        protocol: Int,
+        srcIp: String,
+        srcPort: Int,
+        dstIp: String,
+        dstPort: Int
+    ): Boolean {
+        // Hotspot/tethering clients use their own subnet (e.g. 192.168.43.x), not the TUN IP.
+        // They are legitimate forwarded flows and must pass through the VPN.
+        if (srcIp != "10.0.88.88" && srcIp != "fdfe:dcba:9876::1") {
+            return true
+        }
+
+        // On Android versions below 10 (Q / API 29), getConnectionOwnerUid is unavailable.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return true
+        }
+
+        val cm = connectivityManager ?: return true
+        val uid = try {
+            cm.getConnectionOwnerUid(
+                protocol,
+                InetSocketAddress(srcIp, srcPort),
+                InetSocketAddress(dstIp, dstPort)
+            )
+        } catch (e: Exception) {
+            android.os.Process.INVALID_UID
+        }
+
+        val myUid = android.os.Process.myUid()
+        if (uid == myUid || (uid >= 0 && (uid % 100000) == (myUid % 100000))) {
+            return false
+        }
+
+        // System services, root, and kernel (UID < 10000) are allowed to route to the tunnel
+        if (uid in 0 until 10000) {
+            return true
+        }
+
+        val mode = cachedSplitMode
+        return when (mode) {
+            AndroidSplitTunnelMode.AllApps -> true
+
+            AndroidSplitTunnelMode.ProxySelected -> {
+                if (uid == android.os.Process.INVALID_UID) {
+                    protocol == OsConstants.IPPROTO_UDP && (dstPort == 53 || srcPort == 53)
+                } else {
+                    uid in cachedAllowedUids || (uid % 100000) in cachedAllowedUids
+                }
+            }
+
+            AndroidSplitTunnelMode.BypassSelected -> {
+                if (uid == android.os.Process.INVALID_UID) {
+                    if (protocol == OsConstants.IPPROTO_TCP) {
+                        false
+                    } else {
+                        dstPort == 53 || srcPort == 53
+                    }
+                } else {
+                    uid !in cachedDisallowedUids && (uid % 100000) !in cachedDisallowedUids
+                }
+            }
         }
     }
 
@@ -3350,6 +3453,11 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun cleanup(stopService: Boolean = true) {
+        if (stopService) {
+            cachedAllowedUids = emptySet()
+            cachedDisallowedUids = emptySet()
+            cachedSplitMode = AndroidSplitTunnelMode.AllApps
+        }
         // Explicit user stop (ACTION_STOP_VPN / revoke / manager.stopVpn) resets the timer; a bare
         // onDestroy (stopService=false, e.g. process teardown on app-swipe) must NOT, so the
         // auto-restarted service can restore the running clock.
@@ -4763,6 +4871,21 @@ class OlcboxVpnService : VpnService() {
     }
 
     companion object {
+        @Volatile
+        private var activeService: OlcboxVpnService? = null
+
+        @JvmStatic
+        fun checkConnectionAllowed(
+            protocol: Int,
+            srcIp: String,
+            srcPort: Int,
+            dstIp: String,
+            dstPort: Int
+        ): Boolean {
+            val service = activeService ?: return true
+            return service.isConnectionAllowed(protocol, srcIp, srcPort, dstIp, dstPort)
+        }
+
         @Volatile
         private var nativeLibrariesLoaded = false
         private var nativeLibrariesLoadError: Throwable? = null

@@ -177,13 +177,36 @@ an `httpserver.listen()` this transport started and has not closed; anything
 else (another `http` host, a foreign loopback port, `file:`/`javascript:`/`data:`,
 `html` with `url`) throws a `TypeError` into the script. `IsOwnPage` marks the
 page the script's own (inline, or its loopback server): the IPC request and the
-mobile bridge carry it (`CookiesRequestPayload.Own`, `PendingCaptchaOwn`), so no
+mobile bridge carry it (`CookiesRequestPayload.Own`, `PendingPromptOwn`), so no
 app guesses from the URL, and the app gives such a page `window.openfluxSubmit`,
 collects no cookies, and shows `reason` as the dialog title. A check an exit
 node reports whose address is on loopback is dropped by the client's core
 (`AcceptRemoteCheck`). What a page submits is read by `FlattenSubmission` (flat
 or `{client: {...}}`; strings, numbers, booleans) and delivered through
 `ApplyCookies` as `onEvent("cookiesApplied")`.
+
+**Sign-in windows (`window.openfluxLogin`).** An own page may ask the app for a
+window onto a site, for a sign-in that lives in `localStorage` instead of
+cookies (MAX's web client keeps `{"viewerId", "token"}` under `__oneme_auth`),
+where the cookie check page has nothing to collect:
+
+```js
+window.openfluxLogin({
+  url: "https://web.max.ru",              // https only, no login in the address
+  title: "Вход в MAX",                    // the dialog's title
+  capture: { localStorage: "__oneme_auth" }
+}).then(function (stored) { /* the key's text, JSON.parse it yourself */ })
+  .catch(function (e) { /* e.message: why not (Back, timeout, refused) */ });
+```
+
+The app opens the site on top of the page (the page stays alive underneath),
+starts it with that origin's storage emptied so what comes back is the account
+just signed in, reads that one key every moment the window is on that origin,
+closes the window as soon as it is there and settles the promise with its text.
+Nothing else of the site is read, and only on the page's request. The function
+exists only in apps that can show such a window (the Android app today): a page
+checks `typeof window.openfluxLogin === "function"` and falls back to asking for
+the data by hand, as the `oneme-webrtc` wizard does with a pasted token.
 
 **`devhost`** (`transport/script/devhost`) plays the app for a script under
 development; `scripttest` uses it (`-settings`, `-open`, `-submit`). It is the

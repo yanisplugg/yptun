@@ -406,3 +406,43 @@ need_jq() { command -v jq >/dev/null 2>&1 || skip "нет jq"; }
     client_delete phone
     [ ! -L "$WEB_ROOT/$tok" ]
 }
+
+@test "step: при сбое называет шаг и показывает последние 20 строк" {
+    export TMPDIR="$BATS_TEST_TMPDIR"
+    _IS_RPC=0; HAS_GUM=0
+    run step "Тестовый шаг" bash -c 'for i in $(seq 1 30); do echo "строка-$i"; done; exit 3'
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"Шаг «Тестовый шаг» не удался (код 3)"* ]]
+    [[ "$output" == *"строка-30"* ]]
+    [[ "$output" == *"строка-11"* ]]
+    [[ "$output" != *"строка-10"* ]]
+}
+
+@test "_install_docker не запускает sh, если скачивание не удалось" {
+    _dl() { return 22; }
+    sh() { touch "$BATS_TEST_TMPDIR/sh-called"; }
+    run _install_docker
+    [ "$status" -eq 22 ]
+    [ ! -e "$BATS_TEST_TMPDIR/sh-called" ]
+}
+
+@test "_install_docker запускает скачанный скрипт" {
+    _dl() { echo x >"$2"; }
+    sh() { touch "$BATS_TEST_TMPDIR/sh-called"; }
+    run _install_docker
+    [ "$status" -eq 0 ]
+    [ -e "$BATS_TEST_TMPDIR/sh-called" ]
+}
+
+@test "неожиданный выход в обычном режиме называет этап" {
+    export TMPDIR="$BATS_TEST_TMPDIR"
+    run bash -c 'source "$1"; _IS_RPC=0; HAS_GUM=0; _STAGE="Загрузка образа"; false' _ "$SCRIPT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Установка прервана на этапе «Загрузка образа»"* ]]
+}
+
+@test "with_lock не глушит stderr навсегда" {
+    command -v flock >/dev/null 2>&1 || skip "нет flock"
+    run bash -c 'source "$1"; with_lock; echo err-visible >&2' _ "$SCRIPT"
+    [[ "$output" == *"err-visible"* ]]
+}

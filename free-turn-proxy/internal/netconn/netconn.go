@@ -57,7 +57,7 @@ func (DirectNet) ListenTCP(network string, laddr *net.TCPAddr) (transport.TCPLis
 	if laddr != nil {
 		addr = laddr.String()
 	}
-	l, err := (&net.ListenConfig{Control: netctl.Apply}).Listen(context.Background(), network, addr)
+	l, err := netctl.NoMPTCP(&net.ListenConfig{Control: netctl.Apply}).Listen(context.Background(), network, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (d directDialer) Dial(network, address string) (net.Conn, error) {
 }
 
 func (d directListenConfig) Listen(ctx context.Context, network, address string) (net.Listener, error) {
-	return d.ListenConfig.Listen(ctx, network, address)
+	return netctl.NoMPTCP(d.ListenConfig).Listen(ctx, network, address)
 }
 
 func (d directListenConfig) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {

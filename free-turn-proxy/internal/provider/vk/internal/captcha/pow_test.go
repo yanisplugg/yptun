@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
@@ -139,11 +140,80 @@ func TestPowEnvelope(t *testing.T) {
 
 	hash, nonce := solvePoW(context.Background(), "input", 1)
 	want := `{"hash":"` + hash + `","nonce":` + strconv.Itoa(nonce) +
-		`,"duration_ms":` + strconv.FormatInt(powDurationMs(nonce), 10) +
+		`,"error":"","duration_ms":` + strconv.FormatInt(powDurationMs(nonce), 10) +
 		`,"telemetry":` + goldenTelemetry + `,"tel_hash":"` + goldenTelHash + `"}`
 	if string(raw) != want {
 		t.Fatalf("envelope =\n%s\nwant\n%s", raw, want)
 	}
+}
+
+func TestValidateBrowserPow(t *testing.T) {
+	p := powParams{Input: "challenge-input", Difficulty: 2, Prefix: "v2."}
+	value := makeBrowserPowEnvelope(t, p)
+
+	got, err := validateBrowserPow(value, p)
+	if err != nil {
+		t.Fatalf("validateBrowserPow() error = %v", err)
+	}
+	if got != value {
+		t.Fatalf("validateBrowserPow() = %q, want original envelope", got)
+	}
+}
+
+func TestValidateBrowserPowRejectsInvalidDifficulty(t *testing.T) {
+	for _, difficulty := range []int{-1, 0, sha256.Size*2 + 1} {
+		t.Run(strconv.Itoa(difficulty), func(t *testing.T) {
+			_, err := validateBrowserPow("v2.e30=", powParams{Prefix: "v2.", Difficulty: difficulty})
+			if err == nil {
+				t.Fatalf("validateBrowserPow() error = nil for difficulty %d", difficulty)
+			}
+		})
+	}
+}
+
+func TestValidateBrowserPowRejectsMismatchedEnvelope(t *testing.T) {
+	p := powParams{Input: "challenge-input", Difficulty: 2, Prefix: "v2."}
+	value := makeBrowserPowEnvelope(t, p)
+
+	tests := []struct {
+		name   string
+		value  string
+		params powParams
+	}{
+		{name: "wrong prefix", value: "v1." + strings.TrimPrefix(value, p.Prefix), params: p},
+		{name: "wrong challenge input", value: value, params: powParams{Input: "other-input", Difficulty: p.Difficulty, Prefix: p.Prefix}},
+		{name: "missing telemetry", value: makeBrowserPowValue(t, p, json.RawMessage(`null`), ""), params: p},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := validateBrowserPow(tc.value, tc.params); err == nil {
+				t.Fatal("validateBrowserPow() error = nil, want rejection")
+			}
+		})
+	}
+}
+
+func makeBrowserPowEnvelope(t *testing.T, p powParams) string {
+	t.Helper()
+	telemetry := json.RawMessage(`{"ua":{"ok":true,"result":{"userAgent":"fixture"}}}`)
+	telHash, err := telemetryHash(telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return makeBrowserPowValue(t, p, telemetry, telHash)
+}
+
+func makeBrowserPowValue(t *testing.T, p powParams, telemetry json.RawMessage, telHash string) string {
+	t.Helper()
+	hash, nonce := solvePoW(context.Background(), p.Input, p.Difficulty)
+	envelope, err := marshalJS(powResult{
+		Hash: hash, Nonce: nonce, DurationMs: 12,
+		Telemetry: telemetry, TelHash: telHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.Prefix + base64.StdEncoding.EncodeToString(envelope)
 }
 
 func TestTelemetryHashCanonicalizesKeys(t *testing.T) {

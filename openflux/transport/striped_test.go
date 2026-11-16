@@ -269,3 +269,42 @@ func TestSenderGivesUpOnAGoneReceiver(t *testing.T) {
 		t.Fatalf("low=%d seq=%d gaveUp=%d: the stale pieces still hold the window", q.low, q.seq, q.gaveUp)
 	}
 }
+
+// A sender whose receiver went away keeps sending its keepalives into the
+// lanes for hours, and gives each up after a while. What it gave up on must
+// not keep the lanes' windows full: the next receiver (the client connecting
+// again) would get nothing from it while it still hears and acks that client.
+func TestSenderLaneWindowFreesOnAGoneReceiver(t *testing.T) {
+	var q sender
+	q.init()
+	now := time.Now()
+	const lanes = 2
+	for i := 0; i < lanes; i++ {
+		q.lane[i].start(now)
+		q.lane[i].noPace, q.lane[i].winOn = true, true
+	}
+	// A keepalive every ten seconds, nobody acking: a few hours' worth.
+	for i := 0; i < 1000; i++ {
+		q.enqueue([]byte{byte(i)})
+		q.pull(i%lanes, 4, now)
+		now = now.Add(10 * time.Second)
+		q.detectLoss(now)
+		for j := 0; j < lanes; j++ {
+			q.pull(j, 4, now) // resends
+		}
+	}
+	q.detectLoss(now.Add(giveUpAfter + time.Second))
+	now = now.Add(giveUpAfter + time.Second)
+	if q.low != q.seq+1 {
+		t.Fatalf("low=%d seq=%d: pieces still in flight", q.low, q.seq)
+	}
+	q.enqueue([]byte("hello, new client"))
+	sent := 0
+	for j := 0; j < lanes; j++ {
+		sent += len(q.pull(j, 4, now))
+	}
+	if sent == 0 {
+		t.Fatalf("no lane sends a new piece after the receiver came back: inflight %d/%d, windows %.0f/%.0f",
+			q.laneTx[0]-q.laneAck[0], q.laneTx[1]-q.laneAck[1], q.lane[0].win, q.lane[1].win)
+	}
+}

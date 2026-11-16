@@ -123,17 +123,18 @@ func ContextOf(c Config) string {
 
 // NodeConfig is the configuration of a channel the node wizard sets up
 // (desktop and Android build it here, so their links are the same): the
-// Yandex document first, direct to dial (host:port) as the backup, the
-// document as the context, and the channel key.
+// Yandex document first, direct to dial (host:port) as the backup, and the
+// channel key. The context is left unset, so Make derives the one fixed
+// placeholder both peers use (see transport.KDFContexts) — the document no
+// longer decides it, and this stays in step with provision.ShareLink.
 func NodeConfig(name, documentURL, key, dial string) Config {
 	return Config{
 		Name:      name,
 		Negotiate: true,
 		Secret:    key,
-		Context:   documentURL,
 		Transports: []Transport{
 			{Type: "vyandex", URL: documentURL, Priority: 100},
-			{Type: "direct", Dial: dial, Priority: 50},
+			{Type: "direct", Dial: dial, Priority: 110},
 		},
 	}
 }

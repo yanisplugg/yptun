@@ -24,7 +24,10 @@ func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
 	if err != nil {
 		return fmt.Errorf("new sub pc: %w", err)
 	}
-	sub.OnConnectionStateChange(s.onSubscriberConnectionStateChange)
+	// ai-generated: bind the callback to this peer generation for issue #90.
+	sub.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		s.onSubscriberConnectionStateChange(sub, state)
+	})
 	sub.OnTrack(s.onSubscriberTrack)
 	s.pcSub.Store(sub)
 
@@ -32,7 +35,10 @@ func (s *Session) setupPeerConnections(config webrtc.Configuration) error {
 	if err != nil {
 		return fmt.Errorf("new pub pc: %w", err)
 	}
-	pub.OnConnectionStateChange(s.onPublisherConnectionStateChange)
+	// ai-generated: bind the callback to this peer generation for issue #90.
+	pub.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		s.onPublisherConnectionStateChange(pub, state)
+	})
 	s.pcPub.Store(pub)
 
 	return s.attachPendingVideoTracks(pub)

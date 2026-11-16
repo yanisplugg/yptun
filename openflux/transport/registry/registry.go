@@ -17,7 +17,6 @@ import (
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/avito"
-	"github.com/p1neappleXpress/OpenFlux/transport/bitrix24"
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
@@ -51,7 +50,7 @@ type Options struct {
 // existed; moving every user-facing word out of the core is a separate step.
 
 // Types are the transport types New accepts, in the order the apps list them.
-var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "avito", "telemost", "bitrix24", "oneme", "direct", "script"}
+var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "avito", "telemost", "oneme", "direct", "script"}
 
 // New builds the raw carrier of the given type. params carries what a type
 // needs beyond its url: "token"/"uid" (and "exit") for oneme, "dial"/"listen"
@@ -98,8 +97,6 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 		return cupsonline.NewCupsonlineTransport(url, base, !roleParam(params, "exit", o.IsExit)), nil
 	case "avito":
 		return avito.NewAvitoTransport(url, base, o.AvitoCookies, !roleParam(params, "exit", o.IsExit)), nil
-	case "bitrix24":
-		return bitrix24.NewBitrix24Transport(url, base, str("cookies"), str("sessid"), str("chat_id")), nil
 	case "oneme":
 		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
 		return oneme.NewOneMeTransport(roleParam(params, "exit", o.IsExit), str("token"), uid, base), nil
@@ -195,6 +192,7 @@ func newDirect(params map[string]interface{}, o Options) (transport.Transport, e
 		listen = dial // a profile keeps one address per transport
 	}
 	dcfg.DialAddr, dcfg.ListenAddr = dial, listen
+	dcfg.Unpreferred = !preferParam(params)
 	if o.StrictDirect {
 		if dcfg.IsExit && listen == "" {
 			return nil, errors.New("direct: не указан адрес для прослушивания (host:port)")
@@ -275,4 +273,24 @@ func withRole(params map[string]interface{}, isExit bool) map[string]interface{}
 		out["exit"] = isExit
 	}
 	return out
+}
+
+// preferParam reads a direct transport's "prefer" parameter: true unless the
+// profile says no. A profile may carry it as a bool, a number or a string
+// (true/false, yes/no, on/off, 1/0).
+func preferParam(params map[string]interface{}) bool {
+	switch v := params["prefer"].(type) {
+	case bool:
+		return v
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "no", "off", "false", "0":
+			return false
+		}
+	}
+	return true
 }

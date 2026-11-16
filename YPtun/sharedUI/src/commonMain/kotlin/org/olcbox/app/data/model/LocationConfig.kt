@@ -76,6 +76,9 @@ data class VkTurnConfig(
     val listenPort: Int = LocationConfig.DEFAULT_FREETURN_PORT,
     /** Parallel TURN relay streams (freeturn -n); 0 keeps the client default (10). */
     val streams: Int = 0,
+    /** Let free-turn-proxy solve VK's proof-of-work captcha without opening a manual dialog. */
+    @SerialName("auto_captcha")
+    val autoCaptcha: Boolean = true,
     /**
      * Optional proxy share link (vless/vmess/trojan/ss) chained ON TOP of the WG-over-VK tunnel:
      * the proxy server is dialed THROUGH WireGuard (sing-box detour). Blank = plain WG only.

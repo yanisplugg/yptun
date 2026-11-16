@@ -26,6 +26,20 @@ func TestParseClientJSONFillsDefaults(t *testing.T) {
 	if !reflect.DeepEqual(*c, want) {
 		t.Errorf("parsed config differs from defaults:\n got %+v\nwant %+v", *c, want)
 	}
+	if !c.VK.AutoCaptcha {
+		t.Fatal("omitted vk.autoCaptcha disabled automatic CAPTCHA solving")
+	}
+}
+
+func TestParseClientJSONHonorsExplicitAutoCaptchaFalse(t *testing.T) {
+	in := `{"peer":"1.2.3.4:5000","vk":{"links":["https://vk.ru/call/join/CODE"],"autoCaptcha":false}}`
+	c, err := ParseClientJSON([]byte(in), "")
+	if err != nil {
+		t.Fatalf("ParseClientJSON() error = %v", err)
+	}
+	if c.VK.AutoCaptcha {
+		t.Fatal("explicit vk.autoCaptcha=false was ignored")
+	}
 }
 
 func TestParseClientJSONAppliesFields(t *testing.T) {

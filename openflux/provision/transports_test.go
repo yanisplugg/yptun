@@ -1,6 +1,8 @@
 package provision
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -57,18 +59,18 @@ func TestCheckTransportsRefuses(t *testing.T) {
 	}
 }
 
-func TestSessionContextPicksTheTopDocument(t *testing.T) {
-	for _, c := range []struct {
-		ts   []ChannelTransport
-		want string
-	}{
-		{[]ChannelTransport{{Type: "vyandex", URL: testVolga}, {Type: "mailru", URL: testMailru}}, testVolga},
-		{[]ChannelTransport{{Type: "cupsonline", URL: testRooms}, {Type: "mailru", URL: testMailru}}, testMailru},
-		{[]ChannelTransport{{Type: "cupsonline", URL: testRooms}}, "http://#"},
-		{nil, "http://#"},
+// Without an explicit context every channel uses the one fixed placeholder:
+// the documents no longer decide the context, so two peers cannot disagree
+// over it. See transport.KDFContexts.
+func TestSessionContextIsFixed(t *testing.T) {
+	for _, ts := range [][]ChannelTransport{
+		{{Type: "vyandex", URL: testVolga}, {Type: "mailru", URL: testMailru}},
+		{{Type: "cupsonline", URL: testRooms}, {Type: "mailru", URL: testMailru}},
+		{{Type: "cupsonline", URL: testRooms}},
+		nil,
 	} {
-		if got := SessionContext(c.ts); got != c.want {
-			t.Errorf("SessionContext(%+v) = %q, want %q", c.ts, got, c.want)
+		if got := SessionContext(ts); got != "http://#" {
+			t.Errorf("SessionContext(%+v) = %q, want the fixed placeholder", ts, got)
 		}
 	}
 }
@@ -83,13 +85,13 @@ func TestShareLinkCarriesTheChosenTransports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Negotiate || c.Secret != key || c.Context != testMailru || c.Name != "Нода" {
+	if !c.Negotiate || c.Secret != key || c.Context != "http://#" || c.Name != "Нода" {
 		t.Fatalf("link: %+v", c)
 	}
 	want := []share.Transport{
 		{Type: "mailru", URL: testMailru, Priority: 90},
 		{Type: "cupsonline", URL: testRooms, Priority: 70},
-		{Type: "direct", Dial: "203.0.113.5:8445", Priority: 50},
+		{Type: "direct", Dial: "203.0.113.5:8445", Priority: 110},
 	}
 	if len(c.Transports) != len(want) {
 		t.Fatalf("transports: %+v", c.Transports)
@@ -167,8 +169,9 @@ func TestCheckTransportsYandexDocsAndBoards(t *testing.T) {
 	if _, err := CheckTransports([]ChannelTransport{{Type: "yandex", URL: "https://disk.yandex.ru/i/AbCdEf123"}}); err != nil {
 		t.Fatalf("public disk link: %v", err)
 	}
-	// A channel of a board alone derives its context from the board.
-	if c := SessionContext([]ChannelTransport{{Type: "boards", URL: board}}); c != board {
+	// The context no longer comes from the documents: a board-only channel
+	// uses the fixed placeholder like every other (transport.KDFContexts).
+	if c := SessionContext([]ChannelTransport{{Type: "boards", URL: board}}); c != "http://#" {
 		t.Fatalf("board context %q", c)
 	}
 }
@@ -259,5 +262,41 @@ func TestChannelMode(t *testing.T) {
 	ch.Mode = "bogus"
 	if _, err := ch.config(); err == nil {
 		t.Error("a bad mode is refused before it reaches the server")
+	}
+}
+
+func TestChannelCookiesGoToTheDocumentOfTheirService(t *testing.T) {
+	both := []ChannelTransport{{Type: "vyandex", URL: testVolga}, {Type: "mailru", URL: testMailru}}
+	decode := func(c string) map[string]map[string]string {
+		raw, err := base64.StdEncoding.DecodeString(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]map[string]string
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	y, err := ChannelCookies(both, "Session_id=s; yandex_login=ivan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := decode(y); len(m) != 1 || m[testVolga]["Session_id"] != "s" {
+		t.Fatalf("a Yandex sign-in must go to the Yandex document alone: %v", m)
+	}
+	mr, err := ChannelCookies(both, "Mpop=p; t=t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := decode(mr); len(m) != 1 || m[testMailru]["Mpop"] != "p" {
+		t.Fatalf("a Mail.ru sign-in must go to the Mail.ru document alone: %v", m)
+	}
+	// No sign-in in the header, or a sign-in for a service the channel does not use.
+	if _, err := ChannelCookies(both, "foo=bar"); err == nil {
+		t.Fatal("cookies without a login must be refused")
+	}
+	if _, err := ChannelCookies([]ChannelTransport{{Type: "mailru", URL: testMailru}}, "Session_id=s"); err == nil {
+		t.Fatal("a Yandex sign-in must not land on a Mail.ru-only channel")
 	}
 }

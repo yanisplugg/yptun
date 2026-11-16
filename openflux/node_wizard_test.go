@@ -55,7 +55,7 @@ func TestNodeWizardProtocolLines(t *testing.T) {
 
 func TestNodeWizardNeedsConnection(t *testing.T) {
 	w := newNodeWizard()
-	for _, m := range []string{"plan", "apply", "setCookies", "remove", "showChannel", "setTransports"} {
+	for _, m := range []string{"plan", "apply", "setCookies", "pushSignIn", "remove", "showChannel", "setTransports"} {
 		r := wizardCall(t, w, m, map[string]string{"channel": "c1"})
 		if r["ok"] != false || r["error"] != "нет подключения к серверу" {
 			t.Fatalf("%s: %v", m, r)
@@ -130,7 +130,7 @@ func TestNodeWizardShareLinkAndSignIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Negotiate || c.Secret != key || c.Context != doc || len(c.Transports) != 2 ||
+	if !c.Negotiate || c.Secret != key || c.Context != "http://#" || len(c.Transports) != 2 ||
 		c.Transports[0].Type != "vyandex" || c.Transports[1].Dial != "203.0.113.5:8445" {
 		t.Fatalf("link config: %+v", c)
 	}
@@ -158,7 +158,7 @@ func TestNodeWizardShareLinkWithChosenTransports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Context != mailru || len(c.Transports) != 3 || c.Transports[0].Type != "mailru" ||
+	if c.Context != "http://#" || len(c.Transports) != 3 || c.Transports[0].Type != "mailru" ||
 		c.Transports[1].Type != "cupsonline" || c.Transports[2].Dial != "203.0.113.5:8445" {
 		t.Fatalf("link config: %+v", c)
 	}
@@ -283,5 +283,29 @@ func TestNodeWizardRefusesUnknownSource(t *testing.T) {
 	r := wizardCall(t, w, "connect", wizardParams{Host: "h", User: "u", Password: "p", Source: "elsewhere"})
 	if r["ok"] != false || !strings.Contains(r["error"].(string), "источник") || dialled {
 		t.Fatalf("connect with an unknown source: %v (dialled %v)", r, dialled)
+	}
+}
+
+// The helper's kit renders without a connection, with the chosen installer, and shows what the client needs of the channel.
+func TestNodeWizardKit(t *testing.T) {
+	w := newNodeWizard()
+	w.newScript = func(source string) (provision.Script, error) { return provision.PinnedFor(source) }
+	key := strings.Repeat("ab", 32)
+	out := wizardCall(t, w, "kit", map[string]interface{}{
+		"channel": "of-kit", "key": key, "autoUpdate": true, "mode": "l3", "source": "official",
+		"transports": []map[string]interface{}{{"type": "mailru", "url": "https://cloud.mail.ru/public/DEmN/ETbZW2MPY"}},
+	})
+	if out["ok"] != true {
+		t.Fatalf("kit: %v", out)
+	}
+	kit := out["kit"].(*provision.Kit)
+	if !strings.Contains(kit.Script, "mode=l3") || !strings.Contains(kit.Script, provision.OfficialSHA256) || !strings.Contains(kit.Script, key) {
+		t.Errorf("kit script = %.400s", kit.Script)
+	}
+	if bad := wizardCall(t, w, "kit", map[string]interface{}{"channel": "of-kit", "key": "short"}); bad["ok"] != false {
+		t.Errorf("a short key made a kit: %v", bad)
+	}
+	if bad := wizardCall(t, w, "kit", map[string]interface{}{"channel": "of-kit", "key": key, "source": "nonsense"}); bad["ok"] != false {
+		t.Errorf("an unknown source made a kit: %v", bad)
 	}
 }

@@ -35,6 +35,7 @@ type powParams struct {
 type powResult struct {
 	Hash       string          `json:"hash"`
 	Nonce      int             `json:"nonce"`
+	Error      string          `json:"error"`
 	DurationMs int64           `json:"duration_ms"`
 	Telemetry  json.RawMessage `json:"telemetry"`
 	TelHash    string          `json:"tel_hash"`
@@ -82,6 +83,81 @@ func (s *captchaSession) powEnvelope(p powParams) (string, error) {
 	// Печатаем до base64: диффать с живым браузером (см. DecodePowEnvelope) иначе нечем.
 	s.logger().Debugf("[Captcha] pow envelope: %s", envelope)
 	return p.Prefix + base64.StdEncoding.EncodeToString(envelope), nil
+}
+
+func validateBrowserPow(value string, p powParams) (string, error) {
+	if p.Difficulty <= 0 || p.Difficulty > sha256.Size*2 {
+		return "", fmt.Errorf("invalid browser pow difficulty %d", p.Difficulty)
+	}
+	if !strings.HasPrefix(value, p.Prefix) {
+		return "", errors.New("browser pow prefix does not match captcha page")
+	}
+	var result powResult
+	if err := json.Unmarshal([]byte(DecodePowEnvelope(value)), &result); err != nil {
+		return "", fmt.Errorf("decode browser pow: %w", err)
+	}
+	if result.Error != "" {
+		return "", fmt.Errorf("browser pow failed: %s", result.Error)
+	}
+	if len(result.Hash) != 64 || result.Nonce < 0 || !strings.HasPrefix(result.Hash, strings.Repeat("0", p.Difficulty)) {
+		return "", errors.New("browser pow hash does not satisfy captcha difficulty")
+	}
+	sum := sha256.Sum256([]byte(p.Input + strconv.Itoa(result.Nonce)))
+	if hex.EncodeToString(sum[:]) != result.Hash {
+		return "", errors.New("browser pow does not match captcha page input")
+	}
+	var telemetryObject map[string]json.RawMessage
+	if len(result.Telemetry) == 0 || json.Unmarshal(result.Telemetry, &telemetryObject) != nil || telemetryObject == nil {
+		return "", errors.New("browser pow has no telemetry")
+	}
+	telHash, err := telemetryHash(result.Telemetry)
+	if err != nil {
+		return "", fmt.Errorf("browser pow telemetry: %w", err)
+	}
+	if result.TelHash != "" && result.TelHash != telHash {
+		return "", errors.New("browser pow telemetry hash mismatch")
+	}
+	return value, nil
+}
+
+func profileFromBrowserPow(profile browserprofile.Profile, value string) browserprofile.Profile {
+	var envelope struct {
+		Telemetry struct {
+			UA struct {
+				Result struct {
+					UserAgent     string `json:"userAgent"`
+					UserAgentData *struct {
+						Brands   []browserprofile.Brand `json:"brands"`
+						Platform string                 `json:"platform"`
+						Mobile   bool                   `json:"mobile"`
+					} `json:"userAgentData"`
+				} `json:"result"`
+			} `json:"ua"`
+		} `json:"telemetry"`
+	}
+	if json.Unmarshal([]byte(DecodePowEnvelope(value)), &envelope) != nil {
+		return profile
+	}
+	ua := envelope.Telemetry.UA.Result
+	if ua.UserAgent != "" {
+		profile.UserAgent = ua.UserAgent
+	}
+	if data := ua.UserAgentData; data != nil {
+		if len(data.Brands) > 0 {
+			brands := make([]string, 0, len(data.Brands))
+			for _, brand := range data.Brands {
+				brands = append(brands, fmt.Sprintf("%q;v=%q", brand.Brand, brand.Version))
+			}
+			profile.SecChUa = strings.Join(brands, ", ")
+		}
+		profile.SecChUaPlatform = fmt.Sprintf("%q", data.Platform)
+		if data.Mobile {
+			profile.SecChUaMobile = "?1"
+		} else {
+			profile.SecChUaMobile = "?0"
+		}
+	}
+	return profile
 }
 
 // DecodePowEnvelope разворачивает значение window.captchaPowResult обратно в JSON.

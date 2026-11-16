@@ -33,8 +33,10 @@ type raw struct {
 	ObfTiming  time.Duration
 	GenObfKey  bool
 
-	ManualCaptcha bool
-	Platform      string
+	ManualCaptcha   bool
+	AutoCaptcha     bool
+	AdvancedCaptcha bool
+	Platform        string
 
 	DNSMode    string
 	DNSServers string
@@ -151,10 +153,12 @@ func assemble(r raw) (*Client, error) {
 		},
 		Provider: ProviderOpts{Name: r.Provider},
 		VK: VKOpts{
-			Links:          normalizeVKLinks(r.Links, r.Link),
-			StreamsPerCred: r.StreamsPerCred,
-			ManualCaptcha:  r.ManualCaptcha,
-			Platform:       platform,
+			Links:           normalizeVKLinks(r.Links, r.Link),
+			StreamsPerCred:  r.StreamsPerCred,
+			ManualCaptcha:   r.ManualCaptcha,
+			AutoCaptcha:     r.AutoCaptcha,
+			AdvancedCaptcha: r.AdvancedCaptcha,
+			Platform:        platform,
 		},
 		DNS: DNSOpts{Mode: r.DNSMode},
 		Log: LogOpts{Debug: r.Debug},

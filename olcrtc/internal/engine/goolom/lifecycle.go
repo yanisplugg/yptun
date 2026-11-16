@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -149,14 +150,52 @@ func (s *Session) onConnectionStateChange(state webrtc.PeerConnectionState) {
 	}
 }
 
-func (s *Session) onSubscriberConnectionStateChange(state webrtc.PeerConnectionState) {
+const disconnectedReconnectGrace = 5 * time.Second
+
+// reconnectAfterDisconnect rebuilds the session when one of the current peer
+// connections stays disconnected past pion's transient recovery window.
+// Providers can retire a media allocation without moving the connection to
+// Failed. Leaving Disconnected untreated keeps the runtime alive while its
+// media path carries no traffic.
+//
+// ai-generated: issue yanisplugg/yptun#90.
+func (s *Session) reconnectAfterDisconnect(
+	pc *webrtc.PeerConnection,
+	current func() *webrtc.PeerConnection,
+	stateVersion *atomic.Uint64,
+	version uint64,
+	side string,
+) {
+	s.goLaunch(func() {
+		timer := time.NewTimer(disconnectedReconnectGrace)
+		defer timer.Stop()
+		select {
+		case <-s.closeCh:
+			return
+		case <-timer.C:
+		}
+		if s.closed.Load() || current() != pc || stateVersion.Load() != version ||
+			pc.ConnectionState() != webrtc.PeerConnectionStateDisconnected {
+			return
+		}
+		logger.Warnf("goolom %s PC stayed disconnected for %s - triggering reconnect", side, disconnectedReconnectGrace)
+		s.queueReconnect()
+	})
+}
+
+// ai-generated: the peer identity parameter prevents stale callbacks from a
+// replaced connection from reconnecting the new generation.
+func (s *Session) onSubscriberConnectionStateChange(pc *webrtc.PeerConnection, state webrtc.PeerConnectionState) {
+	version := s.subscriberState.Add(1)
 	logger.Debugf("goolom subscriber state: %s", state.String())
 	switch state {
 	case webrtc.PeerConnectionStateConnected:
 		s.subscriberReady.Store(true)
 		s.signalSubscriberConn()
-	case webrtc.PeerConnectionStateDisconnected,
-		webrtc.PeerConnectionStateFailed,
+	case webrtc.PeerConnectionStateDisconnected:
+		s.subscriberReady.Store(false)
+		s.reconnectAfterDisconnect(pc, s.subPC, &s.subscriberState, version, "subscriber")
+	case webrtc.PeerConnectionStateFailed,
 		webrtc.PeerConnectionStateClosed:
 		s.subscriberReady.Store(false)
 	case webrtc.PeerConnectionStateUnknown,
@@ -166,13 +205,18 @@ func (s *Session) onSubscriberConnectionStateChange(state webrtc.PeerConnectionS
 	s.onConnectionStateChange(state)
 }
 
-func (s *Session) onPublisherConnectionStateChange(state webrtc.PeerConnectionState) {
+// ai-generated: the peer identity parameter prevents stale callbacks from a
+// replaced connection from reconnecting the new generation.
+func (s *Session) onPublisherConnectionStateChange(pc *webrtc.PeerConnection, state webrtc.PeerConnectionState) {
+	version := s.publisherState.Add(1)
 	logger.Debugf("goolom publisher state: %s", state.String())
 	switch state {
 	case webrtc.PeerConnectionStateConnected:
 		s.publisherReady.Store(true)
-	case webrtc.PeerConnectionStateDisconnected,
-		webrtc.PeerConnectionStateFailed,
+	case webrtc.PeerConnectionStateDisconnected:
+		s.publisherReady.Store(false)
+		s.reconnectAfterDisconnect(pc, s.pubPC, &s.publisherState, version, "publisher")
+	case webrtc.PeerConnectionStateFailed,
 		webrtc.PeerConnectionStateClosed:
 		s.publisherReady.Store(false)
 		// Publisher failure triggers a full reconnect so the data VP8 track
