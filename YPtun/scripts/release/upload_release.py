@@ -130,6 +130,11 @@ while True:
     try:
         upload(name)
         log(f"готово: {name}")
+        for _ in range(6):
+            time.sleep(2)
+            have = assets()
+            if have.get(name, {}).get("state") == "uploaded" and have[name].get("size") == local[name]:
+                break
     except Exception as e:
         log(f"обрыв на {name}: {e} — повторю")
         time.sleep(5)
