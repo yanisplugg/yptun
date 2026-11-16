@@ -56,7 +56,43 @@ public actor AppleApplicationBootstrapper {
         guard let json = String(data: data, encoding: .utf8) else {
             throw RustMigrationValidationError.invalidUTF8(.locationsV4)
         }
-        let catalog = try appleLocationCatalog(bundleJson: json)
+
+        // Automatically de-duplicate locations on disk if multiple duplicate servers exist
+        var effectiveData = data
+        var effectiveJson = json
+        if var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           var locs = root["locations"] as? [[String: Any]] {
+            var seenKeys = Set<String>()
+            var cleanLocs: [[String: Any]] = []
+            for loc in locs {
+                let subUrl = (loc["subscription_url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let cfg = loc["config"] as? [String: Any]
+                let engine = cfg?["engine"] as? String ?? ""
+                let name = (loc["metadata"] as? [String: Any])?["name"] as? String ?? ""
+                let host = cfg?["server"] as? String ?? (cfg?["endpoint"] as? String ?? "")
+                let port = cfg?["server_port"] as? Int ?? (cfg?["port"] as? Int ?? 0)
+                let key = "\(subUrl)|\(engine)|\(name)|\(host):\(port)"
+                if !seenKeys.contains(key) {
+                    seenKeys.insert(key)
+                    cleanLocs.append(loc)
+                }
+            }
+            if cleanLocs.count != locs.count {
+                root["locations"] = cleanLocs
+                if let activeId = root["active_location_id"] as? String,
+                   !cleanLocs.contains(where: { ($0["storage_id"] as? String) == activeId }) {
+                    root["active_location_id"] = cleanLocs.first?["storage_id"] as? String
+                }
+                if let cleanData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted]),
+                   let cleanStr = String(data: cleanData, encoding: .utf8) {
+                    effectiveData = cleanData
+                    effectiveJson = cleanStr
+                    try? AtomicFileIO.writeBytesAtomically(cleanData, to: bundleURL)
+                }
+            }
+        }
+
+        let catalog = try appleLocationCatalog(bundleJson: effectiveJson)
         do {
             try refreshTunnelRequest(for: catalog.activeLocationId)
         } catch {
@@ -65,7 +101,7 @@ public actor AppleApplicationBootstrapper {
             try? AppleTunnelStore.clearRequest()
         }
         var metadataByStorageID: [String: (used: String?, available: String?, email: String?, updateInterval: Int?, lastRefresh: Int64?)] = [:]
-        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        if let root = try? JSONSerialization.jsonObject(with: effectiveData) as? [String: Any],
            let locs = root["locations"] as? [[String: Any]] {
             for loc in locs {
                 guard let sid = loc["storage_id"] as? String else { continue }
@@ -91,6 +127,9 @@ public actor AppleApplicationBootstrapper {
                       let members = group["members"] as? [String] else { continue }
                 for member in members {
                     customGroupByStorageID[member] = groupName
+                    if member.hasPrefix("loc:") {
+                        customGroupByStorageID[String(member.dropFirst(4))] = groupName
+                    }
                 }
             }
         }
@@ -210,19 +249,97 @@ public actor AppleApplicationBootstrapper {
             text = trimmed
         }
 
-        let existing: String
+        var existing: String
         if let existingURL = locationBundleURL(in: paths) {
             existing = try readTextIfPresent(at: existingURL) ?? ""
         } else {
             existing = ""
         }
+
+        // Before importing/refreshing a subscription, remove its existing servers to prevent duplication
+        if let subUrlStr = subscriptionURL?.absoluteString {
+            let cleanSubUrl = subUrlStr.trimmingCharacters(in: .whitespacesAndNewlines)
+            if var root = try? JSONSerialization.jsonObject(with: Data(existing.utf8)) as? [String: Any],
+               var locs = root["locations"] as? [[String: Any]] {
+                locs.removeAll { loc in
+                    let locSubUrl = (loc["subscription_url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return locSubUrl == cleanSubUrl
+                }
+                root["locations"] = locs
+                if let cleanData = try? JSONSerialization.data(withJSONObject: root),
+                   let cleanStr = String(data: cleanData, encoding: .utf8) {
+                    existing = cleanStr
+                }
+            }
+        }
+
         let imported = try appleImportLocations(
             bundleJson: existing,
             text: text,
             subscriptionUrl: subscriptionURL?.absoluteString
         )
+
+        // De-duplicate any duplicate entries in the imported bundle
+        var finalJson = imported.normalizedBundleJson
+        if var root = try? JSONSerialization.jsonObject(with: Data(finalJson.utf8)) as? [String: Any],
+           var locs = root["locations"] as? [[String: Any]] {
+            var seenKeys = Set<String>()
+            var cleanLocs: [[String: Any]] = []
+            for loc in locs {
+                let subUrl = (loc["subscription_url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let cfg = loc["config"] as? [String: Any]
+                let engine = cfg?["engine"] as? String ?? ""
+                let name = (loc["metadata"] as? [String: Any])?["name"] as? String ?? ""
+                let host = cfg?["server"] as? String ?? (cfg?["endpoint"] as? String ?? "")
+                let port = cfg?["server_port"] as? Int ?? (cfg?["port"] as? Int ?? 0)
+                let key = "\(subUrl)|\(engine)|\(name)|\(host):\(port)"
+                if !seenKeys.contains(key) {
+                    seenKeys.insert(key)
+                    cleanLocs.append(loc)
+                }
+            }
+            if cleanLocs.count != locs.count {
+                root["locations"] = cleanLocs
+                if let activeId = root["active_location_id"] as? String,
+                   !cleanLocs.contains(where: { ($0["storage_id"] as? String) == activeId }) {
+                    root["active_location_id"] = cleanLocs.first?["storage_id"] as? String
+                }
+                if let cleanData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted]),
+                   let cleanStr = String(data: cleanData, encoding: .utf8) {
+                    finalJson = cleanStr
+                }
+            }
+        }
+
         try AtomicFileIO.writeBytesAtomically(
-            Data(imported.normalizedBundleJson.utf8),
+            Data(finalJson.utf8),
+            to: paths.destination(for: .locationsV4)
+        )
+        return try await load()
+    }
+
+    public func deleteLocations(ids: [String]) async throws -> AppleApplicationSnapshot {
+        let idSet = Set(ids)
+        let paths = try systemPaths()
+        guard let bundleURL = locationBundleURL(in: paths) else {
+            throw AppleApplicationBootstrapError.locationBundleMissing
+        }
+        let existing = try readTextIfPresent(at: bundleURL) ?? ""
+        guard var root = try? JSONSerialization.jsonObject(with: Data(existing.utf8)) as? [String: Any],
+              var locs = root["locations"] as? [[String: Any]] else {
+            return try await load()
+        }
+        locs.removeAll { loc in
+            guard let sid = loc["storage_id"] as? String else { return false }
+            return idSet.contains(sid)
+        }
+        root["locations"] = locs
+        if let activeId = root["active_location_id"] as? String, idSet.contains(activeId) {
+            root["active_location_id"] = locs.first?["storage_id"] as? String
+        }
+        let cleanData = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted])
+        try AtomicFileIO.writeBytesAtomically(
+            cleanData,
             to: paths.destination(for: .locationsV4)
         )
         return try await load()

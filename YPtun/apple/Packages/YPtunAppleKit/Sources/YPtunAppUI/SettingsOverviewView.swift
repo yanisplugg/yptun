@@ -99,7 +99,7 @@ public struct SettingsOverviewView: View {
                                 title: "Настройки трафика",
                                 subtitle: "DNS, MTU, TCP Mux, TLS-фрагментация",
                                 icon: "point.3.connected.trianglepath.dotted",
-                                iconColor: .purple
+                                iconColor: YPtunColor.accent
                             )
                         }
                         .buttonStyle(.plain)
@@ -236,7 +236,7 @@ public struct SettingsOverviewView: View {
 
                 // About Footer
                 VStack(spacing: 6) {
-                    Text("YPtun для iOS · Версия 4.0.0 (506)")
+                    Text("YPtun для iOS · Версия 4.0.0 (507)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(YPtunColor.textSecondary)
                     Text("Rust Core · sing-box · Xray-core · AmneziaWG · NetworkExtension")

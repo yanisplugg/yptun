@@ -34,7 +34,7 @@ public struct RoutingSettingsView: View {
                         title: "Блокировка рекламы и трекеров",
                         subtitle: "Фильтрация известных рекламных сетей на уровне ядра",
                         icon: "shield.fill",
-                        iconColor: .purple,
+                        iconColor: YPtunColor.accent,
                         isOn: $blockAds
                     )
                     SettingsCardDivider()

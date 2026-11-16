@@ -319,9 +319,16 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
-    public func autoConnectFastest() {
+    public func autoConnectFastest(onlyIDs: [String]? = nil) {
         guard !isAutoConnecting else { return }
-        let candidates = autoConnectCandidates
+        let all = autoConnectCandidates
+        let candidates: [LocationListItem]
+        if let onlyIDs {
+            let idSet = Set(onlyIDs)
+            candidates = all.filter { idSet.contains($0.id) }
+        } else {
+            candidates = all
+        }
         guard !candidates.isEmpty else {
             presentedNotice = YPtunNotice(
                 title: "Нет готовых локаций",
@@ -449,15 +456,10 @@ public final class YPtunApplicationModel: ObservableObject {
         guard !ids.isEmpty else { return }
 
         let restartAfterDelete = isTunnelActive && ids.contains(selectedLocationID ?? "")
-        var latestSnapshot: AppleApplicationSnapshot?
         do {
-            for id in ids {
-                latestSnapshot = try await bootstrapper.deleteLocation(id: id)
-            }
-            if let latestSnapshot {
-                locations = latestSnapshot.locations
-                selectedLocationID = latestSnapshot.activeLocationID
-            }
+            let latestSnapshot = try await bootstrapper.deleteLocations(ids: ids)
+            locations = latestSnapshot.locations
+            selectedLocationID = latestSnapshot.activeLocationID
             if restartAfterDelete {
                 await restartTunnelAfterConfigurationChange()
             }
@@ -469,6 +471,89 @@ public final class YPtunApplicationModel: ObservableObject {
             presentedNotice = YPtunNotice(
                 title: "Удалено не всё",
                 message: "Часть конфигураций не удалось удалить: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    public func deleteDuplicateLocations() async {
+        var seen = Set<String>()
+        var duplicateIDs: [String] = []
+        for loc in locations {
+            let key = "\(loc.subscriptionID ?? "")|\(loc.cleanName)|\(loc.protocolTag)"
+            if seen.contains(key) {
+                duplicateIDs.append(loc.id)
+            } else {
+                seen.insert(key)
+            }
+        }
+        guard !duplicateIDs.isEmpty else {
+            presentedNotice = YPtunNotice(
+                title: "Дубликатов не найдено",
+                message: "Все конфигурации уникальны."
+            )
+            return
+        }
+        do {
+            let snapshot = try await bootstrapper.deleteLocations(ids: duplicateIDs)
+            locations = snapshot.locations
+            selectedLocationID = snapshot.activeLocationID
+            presentedNotice = YPtunNotice(
+                title: "Дубликаты удалены",
+                message: "Удалено дубликатов: \(duplicateIDs.count)"
+            )
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Ошибка удаления",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    public func deleteUnreachableLocations() async {
+        let unreachableIDs = locations.filter { loc in
+            if let ping = uiBehavior.savedPings[loc.id] {
+                if case .offline = ping { return true }
+            }
+            return false
+        }.map(\.id)
+
+        guard !unreachableIDs.isEmpty else {
+            presentedNotice = YPtunNotice(
+                title: "Недоступных серверов нет",
+                message: "Все проверенные серверы отвечают или еще не были проверены."
+            )
+            return
+        }
+        do {
+            let snapshot = try await bootstrapper.deleteLocations(ids: unreachableIDs)
+            locations = snapshot.locations
+            selectedLocationID = snapshot.activeLocationID
+            presentedNotice = YPtunNotice(
+                title: "Недоступные серверы удалены",
+                message: "Удалено недоступных серверов: \(unreachableIDs.count)"
+            )
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Ошибка удаления",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    public func deleteSubscriptionGroup(ids: [String]) async {
+        guard !ids.isEmpty else { return }
+        let restart = isTunnelActive && ids.contains(selectedLocationID ?? "")
+        do {
+            let snapshot = try await bootstrapper.deleteLocations(ids: ids)
+            locations = snapshot.locations
+            selectedLocationID = snapshot.activeLocationID
+            if restart {
+                await restartTunnelAfterConfigurationChange()
+            }
+        } catch {
+            presentedNotice = YPtunNotice(
+                title: "Ошибка удаления подписки",
+                message: error.localizedDescription
             )
         }
     }

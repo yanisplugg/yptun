@@ -49,7 +49,7 @@ public struct ExperimentalSettingsView: View {
                         title: "AmneziaWG (AWG)",
                         subtitle: "Модифицированный WireGuard с обфускацией заголовков Jc/Jmin/H1..H4",
                         icon: "shield.checkered",
-                        iconColor: .purple,
+                        iconColor: YPtunColor.accent,
                         isOn: $amneziaWgEnabled
                     )
                     SettingsCardDivider()

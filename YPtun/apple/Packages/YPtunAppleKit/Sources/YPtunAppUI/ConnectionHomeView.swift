@@ -13,11 +13,11 @@ public struct ConnectionHomeView: View {
     public var body: some View {
         ScrollView {
             LazyVStack(spacing: 14) {
-                // Connection Timer
+                // Connection Timer (Android Compose ConnectionTimer style)
                 ConnectionTimer(state: model.connectionState)
-                    .padding(.top, 14)
+                    .padding(.top, 10)
 
-                // Circular Power Button with "Авто" next to it
+                // Main Connect Button with Satellite "Авто" button (Android StartButton style)
                 ZStack {
                     AndroidStyleStartButton(
                         state: model.connectionState,
@@ -35,41 +35,37 @@ public struct ConnectionHomeView: View {
                                         .tint(YPtunColor.accent)
                                 } else {
                                     Text("Авто")
-                                        .font(.system(size: 14, weight: .bold))
+                                        .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(YPtunColor.accent)
                                 }
                             }
-                            .frame(width: 54, height: 54)
+                            .frame(width: 56, height: 56)
                             .background(YPtunColor.cardSurfaceHigh, in: Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(YPtunColor.accent.opacity(0.3), lineWidth: 1)
-                            )
                         }
                         .buttonStyle(.plain)
                         .disabled(model.isAutoConnecting || model.isBootstrapping)
-                        .offset(x: 95)
-                        .accessibilityLabel("Подключиться к лучшей локации")
+                        .offset(x: 100)
+                        .accessibilityLabel("Авто — выбор быстрейшего")
                     }
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
 
-                // Subtitle / Session Overview Link
+                // Session Overview Pill (if connected, matching Android SessionSheet link)
                 if model.connectionState == .connected && !model.uiBehavior.hideSessionButton {
                     NavigationLink {
                         SessionOverviewView(model: model)
                     } label: {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             Image(systemName: "globe")
-                                .font(.system(size: 12))
+                                .font(.system(size: 14))
                                 .foregroundStyle(YPtunColor.accent)
-                            Text("Информация о сессии")
+                            Text("Сессия")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(YPtunColor.textPrimary)
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, 18)
                         .frame(minHeight: 36)
-                        .background(YPtunColor.cardSurface, in: Capsule())
+                        .background(YPtunColor.cardSurfaceHigh, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -83,7 +79,7 @@ public struct ConnectionHomeView: View {
                         .background(YPtunColor.cardSurface, in: RoundedRectangle(cornerRadius: 16))
                 }
 
-                // "Обновить подписки" Full-Width Button
+                // "Обновить подписки" Full-Width Button (Android SubscriptionsRefreshRow)
                 if locationSections.contains(where: \.isSubscription) {
                     Button {
                         Task { await model.refreshSubscriptions() }
@@ -104,7 +100,7 @@ public struct ConnectionHomeView: View {
                         }
                         .padding(.horizontal, 18)
                         .frame(minHeight: 48)
-                        .background(YPtunColor.cardSurface, in: RoundedRectangle(cornerRadius: 18))
+                        .background(YPtunColor.cardSurface, in: RoundedRectangle(cornerRadius: YPtunRadius.card))
                     }
                     .buttonStyle(.plain)
                     .disabled(model.isRefreshingSubscriptions)
@@ -121,7 +117,7 @@ public struct ConnectionHomeView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(YPtunColor.textMuted)
                 }
-                .padding(.top, 8)
+                .padding(.top, 4)
                 .padding(.horizontal, 4)
 
                 // Locations & Subscriptions Content
@@ -132,7 +128,7 @@ public struct ConnectionHomeView: View {
                         if section.isSubscription {
                             SubscriptionCardView(
                                 title: section.title,
-                                subscriptionID: section.locations.first?.subscriptionID,
+                                subscriptionID: section.subscriptionURL,
                                 locations: section.locations,
                                 selectedLocationID: model.selectedLocationID,
                                 savedPings: model.uiBehavior.savedPings,
@@ -145,7 +141,11 @@ public struct ConnectionHomeView: View {
                                     Task { _ = try? await model.importLocations(from: url) }
                                 },
                                 onPingAll: { ids in
-                                    // Pings all locations in subscription
+                                    model.autoConnectFastest(onlyIDs: ids)
+                                },
+                                onDeleteSubscription: {
+                                    let ids = section.locations.map(\.id)
+                                    Task { await model.deleteSubscriptionGroup(ids: ids) }
                                 }
                             )
                         } else {
@@ -274,15 +274,31 @@ public struct ConnectionHomeView: View {
     private var locationSections: [LocationSection] {
         var sections: [LocationSection] = []
         for location in model.locations {
-            let key = location.subscriptionID ?? "__custom__"
+            let isSub = location.isFromSubscription || location.subscriptionID != nil
+            let key: String
+            let subURL: String?
+            if isSub {
+                let subName = location.subscriptionName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let urlStr = location.subscriptionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let combined = [subName, urlStr].filter { !$0.isEmpty }.joined(separator: "|")
+                key = combined.isEmpty ? (location.customGroup ?? "Подписка") : combined
+                subURL = urlStr.isEmpty ? nil : urlStr
+            } else {
+                key = "__custom__"
+                subURL = nil
+            }
+
             if let index = sections.firstIndex(where: { $0.id == key }) {
-                sections[index].locations.append(location)
+                if !sections[index].locations.contains(where: { $0.id == location.id }) {
+                    sections[index].locations.append(location)
+                }
             } else {
                 sections.append(
                     LocationSection(
                         id: key,
                         title: sectionTitle(for: location),
-                        isSubscription: location.subscriptionID != nil,
+                        isSubscription: isSub,
+                        subscriptionURL: subURL,
                         locations: [location]
                     )
                 )
@@ -292,32 +308,54 @@ public struct ConnectionHomeView: View {
     }
 
     private func sectionTitle(for location: LocationListItem) -> String {
-        guard let subscriptionID = location.subscriptionID else { return "Мои конфигурации" }
-        if let name = location.subscriptionName { return name }
-        return URL(string: subscriptionID)?.host ?? "Подписка"
+        guard location.isFromSubscription || location.subscriptionID != nil else {
+            return "Мои конфигурации"
+        }
+        if let name = location.subscriptionName, !name.isEmpty { return name }
+        if let subID = location.subscriptionID, let host = URL(string: subID)?.host, !host.isEmpty {
+            return host
+        }
+        return "Подписка"
     }
 
     private var homeMenu: some View {
         Menu {
             NavigationLink {
+                AppearanceSettingsView(model: model)
+            } label: {
+                Label("Вид списка", systemImage: "square.grid.2x2")
+            }
+
+            NavigationLink {
+                PingSettingsView(model: model)
+            } label: {
+                Label("Настройки пинга", systemImage: "bolt.horizontal")
+            }
+
+            NavigationLink {
                 TunnelLogView()
             } label: {
                 Label("Логи подключения", systemImage: "text.alignleft")
             }
+
             Divider()
-            if let location = model.selectedLocation {
-                Button {
-                    model.locationEditorRequest = LocationEditorRequest(locationID: location.id)
-                } label: {
-                    Label("Редактировать выбранную", systemImage: "pencil")
-                }
-                Button(role: .destructive) {
-                    model.requestLocationDeletion(location)
-                } label: {
-                    Label("Удалить выбранную", systemImage: "trash")
-                }
-                Divider()
+
+            Text("ОЧИСТКА")
+                .font(.caption2)
+                .foregroundStyle(YPtunColor.textMuted)
+
+            Button {
+                Task { await model.deleteUnreachableLocations() }
+            } label: {
+                Label("Удалить недоступные", systemImage: "wifi.slash")
             }
+
+            Button {
+                Task { await model.deleteDuplicateLocations() }
+            } label: {
+                Label("Удалить дубликаты", systemImage: "doc.on.doc")
+            }
+
             if model.locations.contains(where: \.isFromSubscription) {
                 Button(role: .destructive) {
                     model.requestBulkDeletion(.subscriptions)
@@ -352,6 +390,7 @@ private struct LocationSection: Identifiable {
     let id: String
     let title: String
     let isSubscription: Bool
+    let subscriptionURL: String?
     var locations: [LocationListItem]
 }
 
@@ -366,7 +405,7 @@ private struct ConnectionTimer: View {
                 .foregroundStyle(YPtunColor.textSecondary)
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(formattedElapsed(at: context.date))
-                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .tracking(2)
                     .foregroundStyle(YPtunColor.textPrimary)
@@ -407,16 +446,16 @@ private struct AndroidStyleStartButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Outer Pulse Ring
+                // Outer Ring matching Android StartButton size 132dp
                 Circle()
                     .fill(ringColor)
-                    .frame(width: 140, height: 140)
+                    .frame(width: 132, height: 132)
 
-                // Main Circular Button
+                // Inner Main Button matching Android StartButton size 88dp
                 Circle()
                     .fill(buttonColor)
-                    .frame(width: 96, height: 96)
-                    .shadow(color: isActive ? YPtunColor.accentGlow : Color.clear, radius: 16)
+                    .frame(width: 88, height: 88)
+                    .shadow(color: isActive ? YPtunColor.accentGlow : Color.clear, radius: 14)
 
                 if isLoading || state == .connecting || state == .disconnecting {
                     ProgressView()
@@ -424,7 +463,7 @@ private struct AndroidStyleStartButton: View {
                         .tint(contentColor)
                 } else {
                     Image(systemName: symbol)
-                        .font(.system(size: 38, weight: .bold))
+                        .font(.system(size: 42, weight: .semibold))
                         .foregroundStyle(contentColor)
                 }
             }
@@ -436,8 +475,8 @@ private struct AndroidStyleStartButton: View {
 
     private var isActive: Bool { state == .connected }
     private var ringColor: Color { isActive ? YPtunColor.ringActive : YPtunColor.ringIdle }
-    private var buttonColor: Color { isActive ? YPtunColor.accent : YPtunColor.cardSurfaceHigh }
-    private var contentColor: Color { isActive ? Color.black : YPtunColor.textPrimary }
+    private var buttonColor: Color { isActive ? YPtunColor.accent : YPtunColor.cardSurfaceHighest }
+    private var contentColor: Color { isActive ? Color.white : YPtunColor.textSecondary }
     private var symbol: String { isActive ? "pause.fill" : requiresSetup ? "plus" : "power" }
 
     private var accessibilityTitle: String {

@@ -107,7 +107,7 @@ struct SessionOverviewView: View {
                             title: "Протокол и транспорт",
                             subtitle: loc.protocolTag.isEmpty ? (loc.detail.isEmpty ? "VLESS / VMess" : loc.detail) : loc.protocolTag,
                             icon: "network.badge.shield.half.filled",
-                            iconColor: .purple,
+                            iconColor: YPtunColor.accent,
                             showChevron: false
                         )
 
