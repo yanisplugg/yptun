@@ -4,12 +4,12 @@ public final class YPtunThemeManager: ObservableObject, @unchecked Sendable {
     public static let shared = YPtunThemeManager()
 
     private let lock = NSLock()
-    private var _accentHex: UInt
+    private var storedAccentHex: UInt
 
     @Published public var accentHex: UInt {
         didSet {
             lock.lock()
-            _accentHex = accentHex
+            storedAccentHex = accentHex
             lock.unlock()
             UserDefaults.standard.set(String(format: "%06X", accentHex), forKey: "yptun_accent_hex")
         }
@@ -37,14 +37,14 @@ public final class YPtunThemeManager: ObservableObject, @unchecked Sendable {
         } else {
             val = Self.defaultAccentHex
         }
-        self._accentHex = val
+        self.storedAccentHex = val
         self.accentHex = val
     }
 
     public var currentHex: UInt {
         lock.lock()
         defer { lock.unlock() }
-        return _accentHex
+        return storedAccentHex
     }
 
     public var accent: Color {
