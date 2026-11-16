@@ -28,7 +28,9 @@ public struct ConnectionHomeView: View {
                     .disabled(model.isBootstrapping || model.isAutoConnecting)
 
                     if model.uiBehavior.showAutoButton && model.locations.contains(where: \.isComplete) {
-                        Button(action: model.autoConnectFastest) {
+                        Button {
+                            model.autoConnectFastest()
+                        } label: {
                             Group {
                                 if model.isAutoConnecting {
                                     ProgressView()

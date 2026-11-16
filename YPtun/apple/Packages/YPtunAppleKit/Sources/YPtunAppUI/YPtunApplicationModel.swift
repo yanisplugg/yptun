@@ -319,7 +319,11 @@ public final class YPtunApplicationModel: ObservableObject {
         }
     }
 
-    public func autoConnectFastest(onlyIDs: [String]? = nil) {
+    public func autoConnectFastest() {
+        autoConnectFastest(onlyIDs: nil)
+    }
+
+    public func autoConnectFastest(onlyIDs: [String]?) {
         guard !isAutoConnecting else { return }
         let all = autoConnectCandidates
         let candidates: [LocationListItem]

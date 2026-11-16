@@ -236,7 +236,7 @@ public struct SettingsOverviewView: View {
 
                 // About Footer
                 VStack(spacing: 6) {
-                    Text("YPtun для iOS · Версия 4.0.0 (507)")
+                    Text("YPtun для iOS · Версия 4.0.0 (508)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(YPtunColor.textSecondary)
                     Text("Rust Core · sing-box · Xray-core · AmneziaWG · NetworkExtension")
