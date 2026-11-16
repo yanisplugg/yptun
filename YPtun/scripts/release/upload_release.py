@@ -19,11 +19,16 @@ RID = sys.argv[1]
 DIR = sys.argv[2]
 STALL_SEC = 120
 CHUNK = 256 * 1024
-# The PAT is embedded in the origin URL of this checkout.
-remote = subprocess.check_output(
-    ["git", "-C", os.path.dirname(os.path.abspath(__file__)), "remote", "get-url", "origin"], text=True
-).strip()
-TOKEN = remote.split("://", 1)[1].split("@", 1)[0].split(":", 1)[1]
+# Check environment variable first, then fallback to origin URL
+TOKEN = os.environ.get("GITHUB_TOKEN")
+if not TOKEN:
+    try:
+        remote = subprocess.check_output(
+            ["git", "-C", os.path.dirname(os.path.abspath(__file__)), "remote", "get-url", "origin"], text=True
+        ).strip()
+        TOKEN = remote.split("://", 1)[1].split("@", 1)[0].split(":", 1)[1]
+    except Exception:
+        raise RuntimeError("No GITHUB_TOKEN environment variable and could not extract PAT from origin URL")
 AUTH = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/vnd.github+json"}
 
 
