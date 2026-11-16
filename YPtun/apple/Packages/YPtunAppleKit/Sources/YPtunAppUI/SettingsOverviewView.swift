@@ -3,7 +3,7 @@ import YPtunMigrationSupport
 
 public struct SettingsOverviewView: View {
     @ObservedObject private var model: YPtunApplicationModel
-    private let bootstrapper = AppleApplicationBootstrapper()
+    @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
 
     public init(model: YPtunApplicationModel) {
@@ -13,37 +13,32 @@ public struct SettingsOverviewView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                // Header (1:1 with Android Compose Settings Header)
-                HStack(spacing: 14) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(YPtunColor.accent)
-                        .frame(width: 48, height: 48)
-                        .background(YPtunColor.cardSurfaceSelected, in: Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(YPtunColor.accent.opacity(0.2), lineWidth: 1)
-                        )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Настройки")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundStyle(YPtunColor.textPrimary)
-                        Text("Параметры подключения и системы")
-                            .font(.system(size: 13))
-                            .foregroundStyle(YPtunColor.textSecondary)
-                    }
+                // Sheet Header: "Настройки" title on left, "✕" close button on right (matching Screenshot 6)
+                HStack {
+                    Text("Настройки")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(YPtunColor.textPrimary)
                     Spacer()
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(YPtunColor.textSecondary)
+                            .frame(width: 32, height: 32)
+                            .background(YPtunColor.cardSurfaceHigh, in: Circle())
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 4)
-                .padding(.top, 8)
+                .padding(.top, 4)
 
-                // Search Bar
+                // Search Bar: "🔍 Поиск по настройкам"
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 15))
                         .foregroundStyle(YPtunColor.textMuted)
-                    TextField("Поиск настроек…", text: $searchText)
+                    TextField("Поиск по настройкам", text: $searchText)
                         .font(.system(size: 14))
                     if !searchText.isEmpty {
                         Button {
@@ -58,19 +53,19 @@ public struct SettingsOverviewView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(YPtunColor.cardSurface, in: RoundedRectangle(cornerRadius: 14))
-                .padding(.bottom, 4)
+                .padding(.bottom, 2)
 
-                // 1. Connection
-                if matchesSearch("подключение", "режим", "socks", "прокси", "авто", "туннель") {
-                    SettingsCaption("Подключение")
+                // 1. ПОДКЛЮЧЕНИЕ (Screenshot 6: Настройки подключения, Маршрутизация и правила, Настройки трафика)
+                if matchesSearch("подключение", "режим", "socks", "прокси", "авто", "туннель", "маршрутизация", "трафик", "dns") {
+                    SettingsCaption("ПОДКЛЮЧЕНИЕ")
                     SettingsCard {
                         NavigationLink {
                             ConnectionSettingsView(model: model)
                         } label: {
                             SettingsCardRow(
-                                title: "Параметры подключения",
-                                subtitle: "Режим VPN/Прокси, SOCKS5-порт, автоподключение",
-                                icon: "bolt.shield.fill",
+                                title: "Настройки подключения",
+                                subtitle: "TUN · Полный туннель",
+                                icon: "shield",
                                 iconColor: YPtunColor.accent
                             )
                         }
@@ -82,10 +77,10 @@ public struct SettingsOverviewView: View {
                             RoutingSettingsView(model: model)
                         } label: {
                             SettingsCardRow(
-                                title: "Маршрутизация",
-                                subtitle: "Обход РФ (.ru), блокировка рекламы, пресеты",
+                                title: "Маршрутизация и правила",
+                                subtitle: "Нарр-совместимые правила — глобально или для отдельной локации",
                                 icon: "arrow.triangle.branch",
-                                iconColor: .blue
+                                iconColor: YPtunColor.accent
                             )
                         }
                         .buttonStyle(.plain)
@@ -97,8 +92,8 @@ public struct SettingsOverviewView: View {
                         } label: {
                             SettingsCardRow(
                                 title: "Настройки трафика",
-                                subtitle: "DNS, MTU, TCP Mux, TLS-фрагментация",
-                                icon: "point.3.connected.trianglepath.dotted",
+                                subtitle: "DNS, мультиплексирование, стратегия доменов",
+                                icon: "server.rack",
                                 iconColor: YPtunColor.accent
                             )
                         }
@@ -106,18 +101,34 @@ public struct SettingsOverviewView: View {
                     }
                 }
 
-                // 2. Appearance & List View
-                if matchesSearch("вид", "оформление", "тема", "пинг", "скорость", "авто", "список") {
-                    SettingsCaption("Отображение и интерфейс")
+                // 2. ПРИЛОЖЕНИЕ (Screenshot 6: Язык, Оформление, Конфиденциальность)
+                if matchesSearch("приложение", "язык", "оформление", "цвет", "тема", "конфиденциальность") {
+                    SettingsCaption("ПРИЛОЖЕНИЕ")
                     SettingsCard {
+                        Menu {
+                            Button("Русский") {}
+                            Button("English") {}
+                        } label: {
+                            SettingsCardRow(
+                                title: "Язык",
+                                subtitle: nil,
+                                value: "Русский",
+                                icon: "globe",
+                                iconColor: YPtunColor.accent
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        SettingsCardDivider()
+
                         NavigationLink {
                             AppearanceSettingsView(model: model)
                         } label: {
                             SettingsCardRow(
-                                title: "Вид списка и главный экран",
-                                subtitle: "Кнопка «Авто», автовыбор ⚡, двухколоночный режим",
-                                icon: "rectangle.grid.1x2.fill",
-                                iconColor: .yellow
+                                title: "Оформление",
+                                subtitle: "Цвета YPtun · Тёмный фон",
+                                icon: "paintpalette",
+                                iconColor: YPtunColor.accent
                             )
                         }
                         .buttonStyle(.plain)
@@ -125,109 +136,59 @@ public struct SettingsOverviewView: View {
                         SettingsCardDivider()
 
                         NavigationLink {
-                            PingSettingsView(model: model)
+                            AppBehaviorSettingsView(model: model)
                         } label: {
                             SettingsCardRow(
-                                title: "Тест задержки и пинг",
-                                subtitle: "Формат результата, потоки, таймаут проверки",
-                                icon: "timer",
-                                iconColor: YPtunColor.pingGreen
+                                title: "Конфиденциальность",
+                                subtitle: "Что приложение отправляет наружу",
+                                icon: "lock",
+                                iconColor: YPtunColor.accent
                             )
                         }
                         .buttonStyle(.plain)
                     }
                 }
 
-                // 3. Subscriptions
-                if matchesSearch("подписки", "сервера", "конфигурации", "ссылки", "yptun") {
-                    SettingsCaption("Подписки и конфигурации")
+                // 3. ЕЩЁ (Screenshot 6: Дополнительно, Поддержать, Логи)
+                if matchesSearch("ещё", "дополнительно", "vless", "ядро", "лог", "поддержать") {
+                    SettingsCaption("ЕЩЁ")
                     SettingsCard {
-                        NavigationLink {
-                            SubscriptionsSettingsView(model: model)
-                        } label: {
-                            SettingsCardRow(
-                                title: "Управление подписками",
-                                subtitle: "Период автообновления, ссылки, защита от удаления",
-                                icon: "dot.radiowaves.left.and.right",
-                                iconColor: .cyan
-                            )
-                        }
-                        .buttonStyle(.plain)
-
-                        SettingsCardDivider()
-
-                        NavigationLink {
-                            SubscriptionLocationsView(model: model)
-                        } label: {
-                            SettingsCardRow(
-                                title: "Все локации из подписок",
-                                subtitle: "\(model.locations.filter(\.isFromSubscription).count) серверов добавлено",
-                                icon: "globe",
-                                iconColor: .indigo
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                // 4. System & Diagnostics
-                if matchesSearch("логи", "журнал", "сессия", "эксперимент", "ядра", "json") {
-                    SettingsCaption("Система и диагностика")
-                    SettingsCard {
-                        NavigationLink {
-                            TunnelLogView()
-                        } label: {
-                            SettingsCardRow(
-                                title: "Журнал логов",
-                                subtitle: "Логи сетевого туннеля и внутренних ядер",
-                                icon: "text.alignleft",
-                                iconColor: .gray
-                            )
-                        }
-                        .buttonStyle(.plain)
-
-                        SettingsCardDivider()
-
-                        NavigationLink {
-                            SessionOverviewView(model: model)
-                        } label: {
-                            SettingsCardRow(
-                                title: "Информация о сессии",
-                                subtitle: "Текущий IP, статус соединения и протокол",
-                                icon: "info.circle.fill",
-                                iconColor: .blue
-                            )
-                        }
-                        .buttonStyle(.plain)
-
-                        SettingsCardDivider()
-
                         NavigationLink {
                             ExperimentalSettingsView(model: model)
                         } label: {
                             SettingsCardRow(
-                                title: "Экспериментальные функции",
-                                subtitle: "Выбор ядра (sing-box/Xray), VK Turn, сырой JSON",
-                                icon: "flask.fill",
-                                iconColor: .orange
+                                title: "Дополнительно",
+                                subtitle: "Движок VLESS, схемы URI, редактор...",
+                                icon: "wrench.and.screwdriver",
+                                iconColor: YPtunColor.accent
                             )
                         }
                         .buttonStyle(.plain)
-                    }
-                }
 
-                // 5. Support Project
-                if matchesSearch("поддержать", "донат", "звезда", "ton", "usdt", "разработка") {
-                    SettingsCaption("Поддержать проект")
-                    SettingsCard {
+                        SettingsCardDivider()
+
                         NavigationLink {
                             SupportProjectView()
                         } label: {
                             SettingsCardRow(
-                                title: "Поддержать развитие YPtun",
-                                subtitle: "Криптовалюта (TON/USDT), карты РФ, звезда на GitHub",
+                                title: "Поддержать проект",
+                                subtitle: "Помощь разработчикам и реквизиты",
                                 icon: "heart.fill",
                                 iconColor: .pink
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        SettingsCardDivider()
+
+                        NavigationLink {
+                            TunnelLogView()
+                        } label: {
+                            SettingsCardRow(
+                                title: "Логи приложения",
+                                subtitle: "Журнал подключений и ядра",
+                                icon: "text.alignleft",
+                                iconColor: YPtunColor.textSecondary
                             )
                         }
                         .buttonStyle(.plain)
@@ -236,7 +197,7 @@ public struct SettingsOverviewView: View {
 
                 // About Footer
                 VStack(spacing: 6) {
-                    Text("YPtun для iOS · Версия 4.0.0 (508)")
+                    Text("YPtun для iOS · Версия 4.0.0 (509)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(YPtunColor.textSecondary)
                     Text("Rust Core · sing-box · Xray-core · AmneziaWG · NetworkExtension")

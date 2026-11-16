@@ -1,27 +1,86 @@
 import SwiftUI
 
+public final class YPtunThemeManager: ObservableObject, @unchecked Sendable {
+    public static let shared = YPtunThemeManager()
+
+    private let lock = NSLock()
+    private var _accentHex: UInt
+
+    @Published public var accentHex: UInt {
+        didSet {
+            lock.lock()
+            _accentHex = accentHex
+            lock.unlock()
+            UserDefaults.standard.set(String(format: "%06X", accentHex), forKey: "yptun_accent_hex")
+        }
+    }
+
+    // Default to Lavender / Purple (0xB388FF) matching user's configuration
+    public static let defaultAccentHex: UInt = 0xB388FF
+
+    public static let accentPresets: [(name: String, hex: UInt)] = [
+        ("Фиолетовый", 0xB388FF),
+        ("Синий", 0x3B8EF7),
+        ("Бирюзовый", 0x4DD0E1),
+        ("Мятный", 0x7CF2C0),
+        ("Розовый", 0xF7AFCD),
+        ("Малиновый", 0xFF6FA5),
+        ("Янтарный", 0xFFFFD479),
+        ("Коралловый", 0xFFFF8A80)
+    ]
+
+    public init() {
+        let val: UInt
+        if let stored = UserDefaults.standard.string(forKey: "yptun_accent_hex"),
+           let parsed = UInt(stored, radix: 16) {
+            val = parsed
+        } else {
+            val = Self.defaultAccentHex
+        }
+        self._accentHex = val
+        self.accentHex = val
+    }
+
+    public var currentHex: UInt {
+        lock.lock()
+        defer { lock.unlock() }
+        return _accentHex
+    }
+
+    public var accent: Color {
+        Color(hex: currentHex)
+    }
+
+    public var accentContainer: Color {
+        Color(hex: currentHex).opacity(0.18)
+    }
+
+    public var accentGlow: Color {
+        Color(hex: currentHex).opacity(0.35)
+    }
+}
+
 public enum YPtunColor {
-    // Pure Black Canvas & Surfaces matching Android Material 3 Compose (0xFF000000, 0xFF161719, 0xFF222427)
+    // Pure Black Canvas & Surfaces matching Android Material 3 Compose
     public static let canvas = Color(hex: 0x000000)
     public static let surface = Color(hex: 0x000000)
     public static let cardSurface = Color(hex: 0x161719)               // surfaceContainer #161719
     public static let cardSurfaceHigh = Color(hex: 0x222427)           // surfaceContainerHigh #222427
     public static let cardSurfaceHighest = Color(hex: 0x2A2C2E)        // surfaceContainerHighest #2A2C2E
-    public static let cardSurfaceSelected = Color(hex: 0x12395F)       // primaryContainer #12395F
-    public static let groupCard = Color(hex: 0x21384E)                 // secondaryContainer #21384E
-    public static let groupCardSubtle = Color(hex: 0x1B3A5B)           // tertiaryContainer #1B3A5B
+    public static var cardSurfaceSelected: Color { YPtunThemeManager.shared.accent.opacity(0.16) }
+    public static let groupCard = Color(hex: 0x181522)                 // subscription container background
+    public static var groupBorder: Color { YPtunThemeManager.shared.accent.opacity(0.35) }
 
-    // Electric Blue Primary Accent (matching Android 0xFF3B8EF7)
-    public static let accent = Color(hex: 0x3B8EF7)                    // primary #3B8EF7
-    public static let accentContainer = Color(hex: 0x12395F)           // primaryContainer #12395F
-    public static let onPrimaryContainer = Color(hex: 0xD3E4FF)        // onPrimaryContainer #D3E4FF
-    public static let accentSecondary = Color(hex: 0x9FC0E8)           // secondary #9FC0E8
-    public static let accentDeep = Color(hex: 0x1E5BA3)
-    public static let accentPurple = Color(hex: 0x3B8EF7)
-    public static let accentGlow = Color(hex: 0x3B8EF7).opacity(0.35)
-    public static let ringActive = Color(hex: 0x12395F)                // ringColor when active
-    public static let ringIdle = Color(hex: 0x161719)                  // ringColor when idle
-    public static let outline = Color(hex: 0x3C3E42)                   // outline #3C3E42
+    // Dynamic Accent
+    public static var accent: Color { YPtunThemeManager.shared.accent }
+    public static var accentContainer: Color { YPtunThemeManager.shared.accentContainer }
+    public static let onPrimaryContainer = Color(hex: 0xECEDEF)
+    public static var accentSecondary: Color { YPtunThemeManager.shared.accent.opacity(0.7) }
+    public static var accentPurple: Color { Color(hex: 0xB388FF) }
+    public static var accentGlow: Color { YPtunThemeManager.shared.accentGlow }
+    public static var ringActive: Color { YPtunThemeManager.shared.accent.opacity(0.25) }
+    public static let ringIdle = Color(hex: 0x161719)
+    public static let outline = Color(hex: 0x3C3E42)
 
     // Status / Feedback
     public static let pingGreen = Color(hex: 0x22C55E)                 // Emerald Green #22C55E
@@ -45,7 +104,7 @@ public extension Color {
 }
 
 public enum YPtunRadius {
-    public static let card: CGFloat = 24
+    public static let card: CGFloat = 20
     public static let pill: CGFloat = 16
     public static let badge: CGFloat = 10
 }

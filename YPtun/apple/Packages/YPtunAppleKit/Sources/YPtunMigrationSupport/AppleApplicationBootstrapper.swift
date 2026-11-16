@@ -57,40 +57,8 @@ public actor AppleApplicationBootstrapper {
             throw RustMigrationValidationError.invalidUTF8(.locationsV4)
         }
 
-        // Automatically de-duplicate locations on disk if multiple duplicate servers exist
-        var effectiveData = data
-        var effectiveJson = json
-        if var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           var locs = root["locations"] as? [[String: Any]] {
-            var seenKeys = Set<String>()
-            var cleanLocs: [[String: Any]] = []
-            for loc in locs {
-                let subUrl = (loc["subscription_url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let cfg = loc["config"] as? [String: Any]
-                let engine = cfg?["engine"] as? String ?? ""
-                let name = (loc["metadata"] as? [String: Any])?["name"] as? String ?? ""
-                let host = cfg?["server"] as? String ?? (cfg?["endpoint"] as? String ?? "")
-                let port = cfg?["server_port"] as? Int ?? (cfg?["port"] as? Int ?? 0)
-                let key = "\(subUrl)|\(engine)|\(name)|\(host):\(port)"
-                if !seenKeys.contains(key) {
-                    seenKeys.insert(key)
-                    cleanLocs.append(loc)
-                }
-            }
-            if cleanLocs.count != locs.count {
-                root["locations"] = cleanLocs
-                if let activeId = root["active_location_id"] as? String,
-                   !cleanLocs.contains(where: { ($0["storage_id"] as? String) == activeId }) {
-                    root["active_location_id"] = cleanLocs.first?["storage_id"] as? String
-                }
-                if let cleanData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted]),
-                   let cleanStr = String(data: cleanData, encoding: .utf8) {
-                    effectiveData = cleanData
-                    effectiveJson = cleanStr
-                    try? AtomicFileIO.writeBytesAtomically(cleanData, to: bundleURL)
-                }
-            }
-        }
+        let effectiveData = data
+        let effectiveJson = json
 
         let catalog = try appleLocationCatalog(bundleJson: effectiveJson)
         do {
@@ -279,40 +247,8 @@ public actor AppleApplicationBootstrapper {
             subscriptionUrl: subscriptionURL?.absoluteString
         )
 
-        // De-duplicate any duplicate entries in the imported bundle
-        var finalJson = imported.normalizedBundleJson
-        if var root = try? JSONSerialization.jsonObject(with: Data(finalJson.utf8)) as? [String: Any],
-           var locs = root["locations"] as? [[String: Any]] {
-            var seenKeys = Set<String>()
-            var cleanLocs: [[String: Any]] = []
-            for loc in locs {
-                let subUrl = (loc["subscription_url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let cfg = loc["config"] as? [String: Any]
-                let engine = cfg?["engine"] as? String ?? ""
-                let name = (loc["metadata"] as? [String: Any])?["name"] as? String ?? ""
-                let host = cfg?["server"] as? String ?? (cfg?["endpoint"] as? String ?? "")
-                let port = cfg?["server_port"] as? Int ?? (cfg?["port"] as? Int ?? 0)
-                let key = "\(subUrl)|\(engine)|\(name)|\(host):\(port)"
-                if !seenKeys.contains(key) {
-                    seenKeys.insert(key)
-                    cleanLocs.append(loc)
-                }
-            }
-            if cleanLocs.count != locs.count {
-                root["locations"] = cleanLocs
-                if let activeId = root["active_location_id"] as? String,
-                   !cleanLocs.contains(where: { ($0["storage_id"] as? String) == activeId }) {
-                    root["active_location_id"] = cleanLocs.first?["storage_id"] as? String
-                }
-                if let cleanData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted]),
-                   let cleanStr = String(data: cleanData, encoding: .utf8) {
-                    finalJson = cleanStr
-                }
-            }
-        }
-
         try AtomicFileIO.writeBytesAtomically(
-            Data(finalJson.utf8),
+            Data(imported.normalizedBundleJson.utf8),
             to: paths.destination(for: .locationsV4)
         )
         return try await load()

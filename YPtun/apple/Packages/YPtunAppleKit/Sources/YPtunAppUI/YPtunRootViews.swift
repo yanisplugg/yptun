@@ -3,29 +3,17 @@ import SwiftUI
 #if os(iOS)
 public struct YPtunIOSRootView: View {
     @ObservedObject private var model: YPtunApplicationModel
-    @State private var selection = YPtunAppSection.connection
 
     public init(model: YPtunApplicationModel) {
         self.model = model
     }
 
     public var body: some View {
-        TabView(selection: $selection) {
-            NavigationStack {
-                ConnectionHomeView(model: model)
-            }
-            .tabItem { Label("Подключение", systemImage: "bolt.fill") }
-            .tag(YPtunAppSection.connection)
-
-            NavigationStack {
-                SettingsOverviewView(model: model)
-            }
-            .tabItem { Label("Настройки", systemImage: "gearshape") }
-            .tag(YPtunAppSection.settings)
+        NavigationStack {
+            ConnectionHomeView(model: model)
         }
         .tint(YPtunColor.accent)
         .preferredColorScheme(.dark)
-        .toolbarBackground(.ultraThinMaterial, for: .tabBar)
         .task { await model.bootstrap() }
         .onOpenURL { url in
             Task { _ = await model.importLocations(from: url.absoluteString) }
@@ -61,7 +49,7 @@ public struct YPtunMacRootView: View {
                 }
             }
         }
-        .tint(Color(red: 59.0 / 255, green: 142.0 / 255, blue: 247.0 / 255))
+        .tint(YPtunColor.accent)
         .task { await model.bootstrap() }
         .onOpenURL { url in
             Task { _ = await model.importLocations(from: url.absoluteString) }

@@ -44,8 +44,8 @@ public struct LocationRowView: View {
                         .frame(width: 32, alignment: .center)
                 }
 
-                // Name and Protocol Endpoint
-                VStack(alignment: .leading, spacing: 4) {
+                // Name and Protocol / Endpoint subtitle
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(location.cleanName)
                             .font(.system(size: 15, weight: .semibold))
@@ -80,38 +80,43 @@ public struct LocationRowView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Ping Badge (e.g. 85 ms / offline)
+                // Ping Result (matches Android LocationRow 1:1)
                 if let savedPing {
                     switch savedPing {
                     case let .latency(ms):
                         HStack(spacing: 4) {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                                 .foregroundStyle(YPtunColor.pingGreen)
                             Text("\(ms) ms")
                                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                                 .foregroundStyle(YPtunColor.pingGreen)
                         }
-                        .padding(.horizontal, 7)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 3)
                         .background(YPtunColor.pingGreenBg, in: Capsule())
 
                     case .offline:
                         HStack(spacing: 4) {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                                 .foregroundStyle(YPtunColor.offlineRed)
                             Text("offline")
                                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                                 .foregroundStyle(YPtunColor.offlineRed)
                         }
-                        .padding(.horizontal, 7)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 3)
                         .background(YPtunColor.offlineRedBg, in: Capsule())
                     }
+                } else {
+                    Text("—")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(YPtunColor.textSecondary)
+                        .padding(.horizontal, 4)
                 }
 
-                // Context Menu Button
+                // Three dots context menu
                 Menu {
                     Button(action: onEdit) {
                         Label("Редактировать", systemImage: "pencil")
@@ -121,19 +126,30 @@ public struct LocationRowView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 16))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(YPtunColor.textSecondary)
-                        .frame(width: 28, height: 40)
+                        .frame(width: 28, height: 36)
                 }
                 .buttonStyle(.plain)
+
+                // Radio selection indicator on the far right (matches Screenshot 7)
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(YPtunColor.accent)
+                } else {
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.35), lineWidth: 2)
+                        .frame(width: 22, height: 22)
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(minHeight: 68)
-            .background(isSelected ? YPtunColor.cardSurfaceSelected : YPtunColor.cardSurface)
-            .clipShape(RoundedRectangle(cornerRadius: YPtunRadius.card))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .frame(minHeight: 64)
+            .background(isSelected ? YPtunColor.cardSurfaceSelected : YPtunColor.cardSurfaceHigh)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(
-                RoundedRectangle(cornerRadius: YPtunRadius.card)
+                RoundedRectangle(cornerRadius: 14)
                     .stroke(isSelected ? YPtunColor.accent : Color.clear, lineWidth: 1.5)
             )
         }
