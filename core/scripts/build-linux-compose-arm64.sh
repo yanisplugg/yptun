@@ -2,9 +2,24 @@
 set -euo pipefail
 
 cache_dir="/mnt/d/yptun/.arm64-cache"
+mkdir -p "$cache_dir"
+if [[ ! -f "$cache_dir/appimagetool.AppImage" ]]; then
+    curl -fsSL -o "$cache_dir/appimagetool.AppImage" "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+    chmod +x "$cache_dir/appimagetool.AppImage"
+fi
+if [[ ! -f "$cache_dir/jre-arm64.tar.gz" ]]; then
+    echo "Downloading Temurin ARM64 JRE..."
+    curl -fsSL -o "$cache_dir/jre-arm64.tar.gz" "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.6%2B7/OpenJDK21U-jre_aarch64_linux_hotspot_21.0.6_7.tar.gz"
+fi
+if [[ ! -f "$cache_dir/skiko-arm64.jar" ]]; then
+    echo "Downloading Skiko ARM64..."
+    curl -fsSL -o "$cache_dir/skiko-arm64.jar" "https://repo1.maven.org/maven2/org/jetbrains/skiko/skiko-awt-runtime-linux-arm64/0.148.1/skiko-awt-runtime-linux-arm64-0.148.1.jar"
+fi
+
 work_dir="/tmp/work-arm64"
 appdir="$work_dir/AppDir-arm64"
 debdir="$work_dir/deb-arm64"
+out="/mnt/d/yptun/release-4.0.0"
 
 rm -rf "$work_dir"
 mkdir -p "$work_dir"
@@ -24,6 +39,22 @@ chmod 755 "$appdir/lib/app/libskiko-linux-arm64.so"
 rm -f "$appdir/lib/app/libskiko-linux-x64.so"
 cp "$cache_dir/skiko-arm64.jar" "$appdir/lib/app/skiko-awt-runtime-linux-arm64-0.148.1.jar"
 rm -f "$appdir/lib/app/skiko-awt-runtime-linux-x64-"*.jar
+
+echo "=== Stripping foreign binaries from desktopApp jar for ARM64 ==="
+python3 -c "
+import zipfile, os, glob, shutil
+
+jars = glob.glob('$appdir/lib/app/desktopApp-*.jar')
+for jar_path in jars:
+    tmp_path = jar_path + '.stripped'
+    with zipfile.ZipFile(jar_path, 'r') as zin, zipfile.ZipFile(tmp_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+        for item in zin.infolist():
+            if item.filename.startswith('native/'):
+                if not ('-linux-arm64' in item.filename or item.filename.startswith('native/olcrtc-data/')):
+                    continue
+            zout.writestr(item, zin.read(item.filename))
+    shutil.move(tmp_path, jar_path)
+"
 
 echo "=== Updating YPtun.cfg ==="
 sed -i "s/skiko-awt-runtime-linux-x64-[^.]*\.jar/skiko-awt-runtime-linux-arm64-0.148.1.jar/g" "$appdir/lib/app/YPtun.cfg"
@@ -47,11 +78,11 @@ exec "$APPDIR/lib/runtime/bin/java" \
 LAUNCHER
 chmod +x "$appdir/bin/YPtun"
 
-echo "=== Building ARM64 AppImage ==="
-rm -f /mnt/d/yptun/release-4.0.0/YPtun-4.0.0-arm64.AppImage
-ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 "$cache_dir/appimagetool.AppImage" "$appdir" /mnt/d/yptun/release-4.0.0/YPtun-4.0.0-arm64.AppImage
+echo "=== Building Slimmed ARM64 AppImage ==="
+rm -f "$out/YPtun-4.0.0-arm64.AppImage"
+ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 "$cache_dir/appimagetool.AppImage" "$appdir" "$out/YPtun-4.0.0-arm64.AppImage"
 
-echo "=== Building ARM64 DEB ==="
+echo "=== Building Slimmed ARM64 DEB ==="
 mkdir -p "$debdir/DEBIAN"
 mkdir -p "$debdir/opt/yptun"
 cp -a "$appdir/lib" "$debdir/opt/yptun/"
@@ -73,8 +104,8 @@ Description: YPtun Compose Linux client
 Depends: libasound2t64, libc6, libexpat1, libfontconfig1, libfreetype6, libgl1, libx11-6, libxext6, libxi6, libxrender1, libxtst6, xdg-utils, zlib1g
 CONTROL
 
-rm -f /mnt/d/yptun/release-4.0.0/YPtun-4.0.0-arm64.deb
-dpkg-deb --build --root-owner-group "$debdir" /mnt/d/yptun/release-4.0.0/YPtun-4.0.0-arm64.deb
+rm -f "$out/YPtun-4.0.0-arm64.deb"
+dpkg-deb -Zxz --build --root-owner-group "$debdir" "$out/YPtun-4.0.0-arm64.deb"
 
 echo "=== Clean up temp dirs ==="
 rm -rf "$work_dir"
