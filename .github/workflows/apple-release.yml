@@ -8,7 +8,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "513"
+        default: "514"
       comment:
         description: Build comment
         required: false
@@ -331,12 +331,27 @@ jobs:
           /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.networking.networkextension" "$RUNNER_TEMP/widget.entitlements" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Delete :keychain-access-groups:1" "$RUNNER_TEMP/widget.entitlements" 2>/dev/null || true
 
+          sign_item() {
+            local target="$1"
+            shift
+            local attempts=0
+            until codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$@" "$target"; do
+              attempts=$((attempts + 1))
+              if [ $attempts -ge 5 ]; then
+                echo "Failed to sign $target after $attempts attempts" >&2
+                return 1
+              fi
+              echo "codesign failed for $target (possibly timestamp server glitch), retrying in 3s ($attempts/5)..."
+              sleep 3
+            done
+          }
+
           find Payload/YPtun.app -depth \( -name '*.framework' -o -name '*.dylib' \) | while read fw; do
-            codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$fw"
+            sign_item "$fw"
           done
-          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --entitlements "$RUNNER_TEMP/widget.entitlements" Payload/YPtun.app/PlugIns/YPtunWidget.appex
-          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --entitlements "$RUNNER_TEMP/tunnel.entitlements" Payload/YPtun.app/PlugIns/YPtunPacketTunnel.appex
-          codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" --entitlements "$RUNNER_TEMP/app.entitlements" Payload/YPtun.app
+          sign_item Payload/YPtun.app/PlugIns/YPtunWidget.appex --entitlements "$RUNNER_TEMP/widget.entitlements"
+          sign_item Payload/YPtun.app/PlugIns/YPtunPacketTunnel.appex --entitlements "$RUNNER_TEMP/tunnel.entitlements"
+          sign_item Payload/YPtun.app --entitlements "$RUNNER_TEMP/app.entitlements"
           codesign --verify --strict --verbose=2 Payload/YPtun.app/PlugIns/YPtunWidget.appex
           codesign --verify --strict --verbose=2 Payload/YPtun.app/PlugIns/YPtunPacketTunnel.appex
           codesign --verify --strict --verbose=2 Payload/YPtun.app
