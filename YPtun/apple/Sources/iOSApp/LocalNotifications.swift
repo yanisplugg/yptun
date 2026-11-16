@@ -6,7 +6,7 @@ import UserNotifications
 /// drives the Live Activity, so the Kotlin ↔ Swift bridge stays as it is:
 /// `org.yptun.notify.authorize` when the user turns a push on, `org.yptun.notify.post` with
 /// `[identifier, title, body]` for each notification.
-final class LocalNotifications: NSObject, UNUserNotificationCenterDelegate {
+final class LocalNotifications: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate {
     /// UNUserNotificationCenter holds its delegate weakly.
     static let shared = LocalNotifications()
 

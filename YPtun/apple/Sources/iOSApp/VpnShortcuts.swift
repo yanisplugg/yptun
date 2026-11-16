@@ -35,8 +35,8 @@ public enum VpnControlBridge {
 
 @available(iOS 16.0, *)
 public struct ToggleVpnIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Переключить VPN"
-    public static var description = IntentDescription("Включает или выключает VPN.")
+    public static let title: LocalizedStringResource = "Переключить VPN"
+    public static let description = IntentDescription("Включает или выключает VPN.")
 
     public init() {}
 
@@ -50,8 +50,8 @@ public struct ToggleVpnIntent: AppIntent {
 
 @available(iOS 16.0, *)
 public struct ConnectVpnIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Подключить VPN"
-    public static var description = IntentDescription("Включает VPN соединение.")
+    public static let title: LocalizedStringResource = "Подключить VPN"
+    public static let description = IntentDescription("Включает VPN соединение.")
 
     public init() {}
 
@@ -64,8 +64,8 @@ public struct ConnectVpnIntent: AppIntent {
 
 @available(iOS 16.0, *)
 public struct DisconnectVpnIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Отключить VPN"
-    public static var description = IntentDescription("Отключает VPN соединение.")
+    public static let title: LocalizedStringResource = "Отключить VPN"
+    public static let description = IntentDescription("Отключает VPN соединение.")
 
     public init() {}
 
@@ -78,8 +78,8 @@ public struct DisconnectVpnIntent: AppIntent {
 
 @available(iOS 16.0, *)
 public struct GetVpnStatusIntent: AppIntent {
-    public static var title: LocalizedStringResource = "Статус VPN"
-    public static var description = IntentDescription("Возвращает 'true', если VPN сейчас подключен.")
+    public static let title: LocalizedStringResource = "Статус VPN"
+    public static let description = IntentDescription("Возвращает 'true', если VPN сейчас подключен.")
 
     public init() {}
 
