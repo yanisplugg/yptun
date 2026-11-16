@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "512"
+    CURRENT_PROJECT_VERSION: "513"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -57,6 +57,7 @@ targets:
           - "-framework"
           - "SharedUI"
           - "-lresolv"
+          - "-Wl,-no_compact_unwind"
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared

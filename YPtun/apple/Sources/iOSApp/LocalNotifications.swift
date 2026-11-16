@@ -1,5 +1,5 @@
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 
 /// The local notifications the shared code asks for — subscription expiry and panel announcements,
 /// the same pushes Android shows. Kotlin signals through NotificationCenter by name, the way it already
