@@ -118,10 +118,7 @@ public struct SubscriptionCardView: View {
             }
 
             if let refreshMs = sampleItem?.lastRefreshEpochMs, refreshMs > 0 {
-                let date = Date(timeIntervalSince1970: TimeInterval(refreshMs) / 1000.0)
-                let formatter = DateFormatter()
-                formatter.dateFormat = "dd.MM.yyyy HH:mm:ss"
-                Text("Обновлена \(formatter.string(from: date))")
+                Text("Обновлена \(formattedRefreshDate(refreshMs))")
                     .font(.system(size: 12))
                     .foregroundStyle(YPtunColor.textMuted)
             }
@@ -215,5 +212,12 @@ public struct SubscriptionCardView: View {
             result[key, default: []].append(item)
         }
         return result
+    }
+
+    private func formattedRefreshDate(_ refreshMs: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(refreshMs) / 1000.0)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd.MM.yyyy HH:mm:ss"
+        return formatter.string(from: date)
     }
 }
