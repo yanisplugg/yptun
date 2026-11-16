@@ -83,7 +83,9 @@ def upload(name):
     size = os.path.getsize(path)
     ctype = ("application/vnd.android.package-archive" if name.endswith(".apk")
              else "application/vnd.debian.binary-package" if name.endswith(".deb")
-             else "application/gzip" if name.endswith(".gz") else "application/octet-stream")
+             else "application/gzip" if name.endswith((".gz", ".tar.gz"))
+             else "application/zip" if name.endswith(".zip")
+             else "application/octet-stream")
     conn = http.client.HTTPSConnection("uploads.github.com", timeout=STALL_SEC)
     try:
         conn.putrequest("POST", f"/repos/{REPO}/releases/{RID}/assets?name={urllib.parse.quote(name)}")
@@ -110,7 +112,7 @@ def upload(name):
 
 
 local = {f: os.path.getsize(os.path.join(DIR, f)) for f in os.listdir(DIR)
-         if f.endswith((".apk", ".exe", ".patch.gz", ".patch", ".deb", ".AppImage"))}
+         if f.endswith((".apk", ".exe", ".patch.gz", ".patch", ".deb", ".AppImage", ".zip", ".tar.gz"))}
 log(f"файлов: {len(local)}, всего {sum(local.values()) / 1e9:.2f} ГБ")
 while True:
     have = assets()
