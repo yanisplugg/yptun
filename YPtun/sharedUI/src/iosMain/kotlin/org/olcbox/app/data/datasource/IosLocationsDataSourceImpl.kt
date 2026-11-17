@@ -9,7 +9,9 @@ import org.olcbox.app.data.LEGACY_LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.model.LocationBundleV4
 import platform.Foundation.NSApplicationSupportDirectory
+import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSString
 import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSURL

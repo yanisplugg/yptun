@@ -48,6 +48,7 @@ import org.olcbox.app.vpn.telegram.TelegramProxyState
 import platform.UIKit.UIViewController
 
 class IosAppFactory {
+    @OptIn(kotlin.experimental.ExperimentalNativeApi::class)
     fun createSession(
         platformBridge: IosPlatformBridge,
         coreBridge: IosCoreBridge
