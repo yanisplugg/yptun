@@ -368,11 +368,12 @@ jobs:
             local attempts=0
             until codesign --force --timestamp --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$@" "$target"; do
               attempts=$((attempts + 1))
-              if [ $attempts -ge 5 ]; then
-                echo "Failed to sign $target after $attempts attempts" >&2
-                return 1
+              if [ $attempts -ge 2 ]; then
+                echo "Apple timestamp server unreachable for $target; falling back to --timestamp=none..." >&2
+                codesign --force --timestamp=none --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$@" "$target"
+                return $?
               fi
-              echo "codesign failed for $target (possibly timestamp server glitch), retrying in 3s ($attempts/5)..."
+              echo "codesign failed for $target (possibly timestamp server glitch), retrying in 3s ($attempts/2)..."
               sleep 3
             done
           }
