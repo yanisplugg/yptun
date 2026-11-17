@@ -90,6 +90,10 @@ pub const DEFAULT_RU_DIRECT_ID: &str = "default-ru-direct";
 pub const PRESET_CN_DIRECT_ID: &str = "preset-cn-direct";
 /// Name of the "China direct" preset when the UI passes no localized one.
 pub const CHINA_DIRECT_DEFAULT_NAME: &str = "China direct";
+/// Stable id of the "Iran direct" preset, so adding it twice replaces rather than duplicates it.
+pub const PRESET_IR_DIRECT_ID: &str = "preset-ir-direct";
+/// Name of the "Iran direct" preset when the UI passes no localized one.
+pub const IRAN_DIRECT_DEFAULT_NAME: &str = "Iran direct";
 pub const DEFAULT_GEOIP_URL: &str = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat";
 pub const DEFAULT_GEOSITE_URL: &str = "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat";
 pub const ROUTE_ORDERS: [&str; 4] = ["block-direct-proxy", "block-proxy-direct", "direct-block-proxy", "proxy-block-direct"];
@@ -332,10 +336,23 @@ impl RoutingProfile {
 
     /// The built-in "Russia direct" profile seeded on first run.
     pub fn russia_direct() -> Self {
+        let list = |items: &[&str]| -> Vec<String> { items.iter().map(|s| s.to_string()).collect() };
         Self {
             name: "Россия напрямую".into(),
-            direct_sites: vec!["domain:ru".into()],
-            direct_ip: vec!["geoip:ru".into()],
+            direct_sites: list(&[
+                "geosite:ru", "domain:ru", "domain:su", "domain:xn--p1ai",
+                "domain:vk.com", "domain:vk.ru", "domain:vkvideo.ru", "domain:ok.ru",
+                "domain:yandex.ru", "domain:ya.ru", "domain:yandex.net", "domain:mail.ru",
+                "domain:gosuslugi.ru", "domain:mos.ru", "domain:nalog.gov.ru", "domain:cbr.ru",
+                "domain:sberbank.ru", "domain:sber.ru", "domain:tinkoff.ru", "domain:t-bank.ru",
+                "domain:tbank.ru", "domain:vtb.ru", "domain:alfabank.ru",
+                "domain:avito.ru", "domain:ozon.ru", "domain:wildberries.ru", "domain:wb.ru",
+                "domain:rutube.ru", "domain:dzen.ru", "domain:kinopoisk.ru", "domain:2gis.ru",
+            ]),
+            direct_ip: list(&[
+                "geoip:ru",
+                "77.88.8.8/32", "77.88.8.1/32",
+            ]),
             id: DEFAULT_RU_DIRECT_ID.into(),
             ..Default::default()
         }
@@ -381,6 +398,42 @@ impl RoutingProfile {
             global_proxy: true,
             route_order: "block-direct-proxy".into(),
             id: PRESET_CN_DIRECT_ID.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The "Iran direct" preset under its default (English) name; see [`RoutingProfile::iran_direct_named`].
+    pub fn iran_direct() -> Self {
+        Self::iran_direct_named(IRAN_DIRECT_DEFAULT_NAME)
+    }
+
+    /// Preset: Iranian sites and IPs go direct, everything else through the proxy.
+    pub fn iran_direct_named(name: &str) -> Self {
+        let list = |items: &[&str]| -> Vec<String> { items.iter().map(|s| s.to_string()).collect() };
+        Self {
+            name: name.into(),
+            direct_sites: list(&[
+                "geosite:ir", "domain:ir", "domain:xn--mgba3a4f16a",
+                "domain:aparat.com", "domain:digikala.com", "domain:shaparak.ir", "domain:divar.ir",
+                "domain:torob.com", "domain:snapp.ir", "domain:tci.ir", "domain:bale.ai",
+                "domain:rubika.ir", "domain:eitaa.com", "domain:telewebion.com", "domain:varzesh3.com",
+                "domain:bmi.ir", "domain:banksepah.ir", "domain:tejaratbank.ir", "domain:bsi.ir",
+                "domain:mellatbank.ir",
+            ]),
+            direct_ip: list(&[
+                "geoip:ir",
+                "178.22.122.100/32", "185.51.200.2/32", "10.202.10.202/32", "10.202.10.10/32",
+            ]),
+            remote_dns_type: "DoU".into(),
+            remote_dns_ip: "1.1.1.1".into(),
+            domestic_dns_type: "DoU".into(),
+            domestic_dns_ip: "178.22.122.100".into(),
+            domain_strategy: "IPIfNonMatch".into(),
+            global_proxy: true,
+            route_order: "block-direct-proxy".into(),
+            geoip_url: "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat".into(),
+            geosite_url: "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat".into(),
+            id: PRESET_IR_DIRECT_ID.into(),
             ..Default::default()
         }
     }

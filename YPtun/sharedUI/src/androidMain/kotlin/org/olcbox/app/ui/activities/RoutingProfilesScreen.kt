@@ -314,12 +314,15 @@ internal fun RoutingProfilesContent(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Ready-made profiles; hidden once added (it is in the list, and re-adding would reset edits).
-                    if (state.profiles.none { it.id == RoutingProfile.PRESET_CN_DIRECT_ID }) {
+                    if (state.profiles.none { it.id == RoutingProfile.PRESET_CN_DIRECT_ID } ||
+                        state.profiles.none { it.id == RoutingProfile.PRESET_IR_DIRECT_ID }) {
                         Text(
                             s.routingPresets,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    if (state.profiles.none { it.id == RoutingProfile.PRESET_CN_DIRECT_ID }) {
                         OutlinedButton(
                             onClick = {
                                 val cn = RoutingProfile.chinaDirect(s.routingPresetChina)
@@ -336,6 +339,28 @@ internal fun RoutingProfilesContent(
                         ) { Text(s.routingPresetChina) }
                         Text(
                             s.routingPresetChinaDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    if (state.profiles.none { it.id == RoutingProfile.PRESET_IR_DIRECT_ID }) {
+                        OutlinedButton(
+                            onClick = {
+                                val ir = RoutingProfile.iranDirect(s.routingPresetIran)
+                                onSaveProfile(ir)
+                                onSetGlobal(ir.id)
+                                if (ir.geoipUrl.isNotBlank() && ir.geositeUrl.isNotBlank()) {
+                                    onSetGeoSources(ir.geoipUrl, ir.geositeUrl)
+                                }
+                                onUpdateGeo()
+                                showAddDialog = false
+                                importError = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(s.routingPresetIran) }
+                        Text(
+                            s.routingPresetIranDesc,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

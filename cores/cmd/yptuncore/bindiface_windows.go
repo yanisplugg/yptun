@@ -5,12 +5,25 @@ package main
 import (
 	"encoding/binary"
 	"syscall"
+	"unsafe"
 )
 
 // IP_UNICAST_IF (ws2ipdef.h). Forces every packet sent on the socket out of one interface,
 // regardless of what the routing table says — the Windows equivalent of Android's
 // VpnService.protect() for a core that has no interface-binding of its own.
 const ipUnicastIf = 31
+
+var (
+	kernel32DLL        = syscall.NewLazyDLL("kernel32.dll")
+	procSetDllDirectory = kernel32DLL.NewProc("SetDllDirectoryW")
+)
+
+func setPlatformDllDirectory(dir string) {
+	p, err := syscall.UTF16PtrFromString(dir)
+	if err == nil {
+		procSetDllDirectory.Call(uintptr(unsafe.Pointer(p)))
+	}
+}
 
 // bindSocketToInterface pins one outbound IPv4 socket to interface [index]. The caller decides
 // WHICH sockets get pinned (see shouldPinSocket); this only applies the option.

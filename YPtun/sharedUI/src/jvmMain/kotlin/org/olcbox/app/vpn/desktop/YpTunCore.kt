@@ -188,10 +188,21 @@ internal object YpTunCore {
                 mapOf(Library.OPTION_STRING_ENCODING to "UTF-8")
             )
             startLogPump(lib)
+            // Ensure wintun.dll is unpacked on Windows for in-core TUN mode
+            runCatching {
+                DesktopNativeAssets.ensureWintun()
+            }
             // NaïveProxy's cronet library is loaded lazily, by name, from PATH — point the core at
             // the directory we unpack the bundled natives into (see DesktopNativeAssets).
             runCatching {
-                lib.YpAddNativeSearchPath(DesktopNativeAssets.resolveCronetLibraryDir().toString())
+                val binDir = DesktopNativeAssets.resolveCronetLibraryDir().toString()
+                lib.YpAddNativeSearchPath(binDir)
+                if (System.getProperty("os.name").orEmpty().lowercase().contains("windows")) {
+                    val kernel32 = com.sun.jna.NativeLibrary.getInstance("kernel32")
+                    val setDllDirectory = kernel32.getFunction("SetDllDirectoryW")
+                    val wpath = com.sun.jna.WString(binDir)
+                    setDllDirectory.invokeVoid(arrayOf(wpath))
+                }
             }
             lib
         } catch (e: Throwable) {

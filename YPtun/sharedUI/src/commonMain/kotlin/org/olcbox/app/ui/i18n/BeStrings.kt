@@ -213,6 +213,7 @@ object BeStrings : Strings {
     override val presets = "Шаблоны"
     override val presetRuDirect = "Расія наўпрост"
     override val presetCnDirect = "Кітай наўпрост"
+    override val presetIrDirect = "Іран наўпрост"
     override val presetAdsBlock = "Блакаваць рэкламу"
     override val presetRuAds = "Расія + без рэкламы"
     override val presetAllVpn = "Усё праз VPN"

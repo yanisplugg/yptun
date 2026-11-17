@@ -220,6 +220,7 @@ object CsStrings : Strings {
     override val presets = "Předvolby"
     override val presetRuDirect = "Rusko přímo"
     override val presetCnDirect = "Čína přímo"
+    override val presetIrDirect = "Írán přímo"
     override val presetAdsBlock = "Blokovat reklamy"
     override val presetRuAds = "Rusko + bez reklam"
     override val presetAllVpn = "Vše přes VPN"

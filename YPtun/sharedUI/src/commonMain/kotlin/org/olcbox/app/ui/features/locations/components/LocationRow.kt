@@ -115,6 +115,13 @@ val LocalConnectedSpeed = staticCompositionLocalOf<SpeedSample?> { null }
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
 
+/** Latency colour: green for fast (<150ms), amber for moderate (150-350ms), red for slow (>350ms). */
+private fun pingLatencyColor(ms: Int): Color = when {
+    ms < 150 -> PingOkGreen
+    ms < 350 -> Color(0xFFF59E0B)
+    else -> Color(0xFFEF4444)
+}
+
 /** Download / upload accent colours for the Home speed line (match the notification's green/blue). */
 private val SpeedDownGreen = Color(0xFF22C55E)
 private val SpeedUpBlue = Color(0xFF3B82F6)
@@ -293,7 +300,7 @@ fun LocationRow(
                     PingGlyph(
                         imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
-                        tint = PingOkGreen,
+                        tint = pingLatencyColor(pingMs),
                         modifier = Modifier.size(20.dp),
                         text = "$pingMs ms",
                         fontSize = 14.sp,
@@ -302,8 +309,8 @@ fun LocationRow(
                     Text(
                         text = "$pingMs ms",
                         fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontWeight = FontWeight.SemiBold,
+                        color = pingLatencyColor(pingMs)
                     )
                 }
             }
@@ -654,7 +661,7 @@ private fun CompactPingIndicator(
             PingGlyph(
                 imageVector = Icons.Rounded.CheckCircle,
                 contentDescription = org.olcbox.app.ui.i18n.LocalStrings.current.pingOnline,
-                tint = PingOkGreen,
+                tint = pingLatencyColor(pingMs),
                 modifier = Modifier.size(18.dp),
                 text = "$pingMs ms",
                 fontSize = 12.sp,
@@ -663,8 +670,8 @@ private fun CompactPingIndicator(
             Text(
                 text = "$pingMs ms",
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                fontWeight = FontWeight.SemiBold,
+                color = pingLatencyColor(pingMs)
             )
         }
 

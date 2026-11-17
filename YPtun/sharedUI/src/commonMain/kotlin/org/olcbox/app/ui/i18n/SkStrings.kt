@@ -220,6 +220,7 @@ object SkStrings : Strings {
     override val presets = "Predvoľby"
     override val presetRuDirect = "Rusko priamo"
     override val presetCnDirect = "Čína priamo"
+    override val presetIrDirect = "Irán priamo"
     override val presetAdsBlock = "Blokovať reklamy"
     override val presetRuAds = "Rusko + bez reklám"
     override val presetAllVpn = "Všetko cez VPN"

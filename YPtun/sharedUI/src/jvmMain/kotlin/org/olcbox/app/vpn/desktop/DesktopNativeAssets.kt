@@ -90,6 +90,14 @@ internal object DesktopNativeAssets {
     }
 
     /**
+     * Unpacks wintun.dll next to the other binaries so sing-box's in-core TUN on Windows can load it.
+     */
+    fun ensureWintun(): Path? {
+        if (DesktopPaths.os != DesktopOs.Windows) return null
+        return runCatching { copyRuntimeAsset("wintun.dll") }.getOrNull()
+    }
+
+    /**
      * Unpacks cronet (NaïveProxy's HTTP/2+QUIC engine) next to the other natives and returns the
      * directory, which the core adds to its PATH so the `with_purego` loader can find it by name.
      *

@@ -26,3 +26,5 @@ func bindSocketToInterface(conn syscall.RawConn, index uint32) error {
 	})
 	return nil
 }
+
+func setPlatformDllDirectory(_ string) {}

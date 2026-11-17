@@ -119,14 +119,46 @@
             {
                 "type": "field",
                 "domain": [
-                    "domain:ru"
+                    "geosite:ru",
+                    "domain:ru",
+                    "domain:su",
+                    "domain:xn--p1ai",
+                    "domain:vk.com",
+                    "domain:vk.ru",
+                    "domain:vkvideo.ru",
+                    "domain:ok.ru",
+                    "domain:yandex.ru",
+                    "domain:ya.ru",
+                    "domain:yandex.net",
+                    "domain:mail.ru",
+                    "domain:gosuslugi.ru",
+                    "domain:mos.ru",
+                    "domain:nalog.gov.ru",
+                    "domain:cbr.ru",
+                    "domain:sberbank.ru",
+                    "domain:sber.ru",
+                    "domain:tinkoff.ru",
+                    "domain:t-bank.ru",
+                    "domain:tbank.ru",
+                    "domain:vtb.ru",
+                    "domain:alfabank.ru",
+                    "domain:avito.ru",
+                    "domain:ozon.ru",
+                    "domain:wildberries.ru",
+                    "domain:wb.ru",
+                    "domain:rutube.ru",
+                    "domain:dzen.ru",
+                    "domain:kinopoisk.ru",
+                    "domain:2gis.ru"
                 ],
                 "outboundTag": "direct"
             },
             {
                 "type": "field",
                 "ip": [
-                    "geoip:ru"
+                    "geoip:ru",
+                    "77.88.8.8/32",
+                    "77.88.8.1/32"
                 ],
                 "outboundTag": "direct"
             }
