@@ -11,7 +11,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "517"
+        default: "518"
       comment:
         description: Build comment
         required: false

@@ -8,7 +8,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "517"
+        default: "518"
       comment:
         description: Build comment
         required: false
@@ -246,10 +246,25 @@ jobs:
             YPtun/sharedUI/build/generated/cores/ios/CsqttCore.xcframework
           key: ${{ steps.apple-framework-cache.outputs.cache-primary-key }}
 
+      - name: Restore Compose SharedUI framework
+        id: sharedui-framework-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: YPtun/sharedUI/build/bin/iosArm64/releaseFramework
+          key: ${{ runner.os }}-sharedui-framework-${{ hashFiles('YPtun/sharedUI/src/**', 'YPtun/sharedUI/build.gradle.kts', 'YPtun/gradle/libs.versions.toml') }}
+
       - name: Pre-build Compose Multiplatform SharedUI framework
+        if: steps.sharedui-framework-cache.outputs.cache-hit != 'true'
         working-directory: YPtun
         run: |
-          ./gradlew :sharedUI:linkReleaseFrameworkIosArm64 --no-configuration-cache
+          ./gradlew :sharedUI:linkReleaseFrameworkIosArm64 --build-cache --no-configuration-cache
+
+      - name: Save Compose SharedUI framework
+        if: steps.sharedui-framework-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: YPtun/sharedUI/build/bin/iosArm64/releaseFramework
+          key: ${{ steps.sharedui-framework-cache.outputs.cache-primary-key }}
 
       - name: Build unsigned device release
         working-directory: YPtun/apple

@@ -3,14 +3,15 @@ name: YPtunApple
 options:
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
     macOS: "14.0"
 
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "517"
-    SWIFT_VERSION: "5.0"
+    CURRENT_PROJECT_VERSION: "518"
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
