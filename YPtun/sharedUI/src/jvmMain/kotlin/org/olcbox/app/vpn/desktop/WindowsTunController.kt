@@ -239,8 +239,16 @@ internal class WindowsTunController(
             Get-NetRoute -InterfaceIndex ${'$'}ifIndex -DestinationPrefix '128.0.0.0/1' -ErrorAction SilentlyContinue |
               Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
 
-            New-NetRoute -InterfaceIndex ${'$'}ifIndex -DestinationPrefix '0.0.0.0/1' -NextHop '0.0.0.0' -RouteMetric 1 | Out-Null
-            New-NetRoute -InterfaceIndex ${'$'}ifIndex -DestinationPrefix '128.0.0.0/1' -NextHop '0.0.0.0' -RouteMetric 1 | Out-Null
+            try {
+              New-NetRoute -InterfaceIndex ${'$'}ifIndex -DestinationPrefix '0.0.0.0/1' -NextHop '0.0.0.0' -RouteMetric 1 -ErrorAction Stop | Out-Null
+            } catch {
+              route.exe add 0.0.0.0 mask 128.0.0.0 0.0.0.0 if ${'$'}ifIndex metric 1
+            }
+            try {
+              New-NetRoute -InterfaceIndex ${'$'}ifIndex -DestinationPrefix '128.0.0.0/1' -NextHop '0.0.0.0' -RouteMetric 1 -ErrorAction Stop | Out-Null
+            } catch {
+              route.exe add 128.0.0.0 mask 128.0.0.0 0.0.0.0 if ${'$'}ifIndex metric 1
+            }
             Set-DnsClientServerAddress -InterfaceIndex ${'$'}ifIndex -ServerAddresses '$MAPDNS_ADDRESS'
             """.trimIndent()
         )
@@ -268,6 +276,8 @@ internal class WindowsTunController(
               Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
             Get-NetRoute -InterfaceIndex ${'$'}ifIndex -DestinationPrefix '128.0.0.0/1' -ErrorAction SilentlyContinue |
               Remove-NetRoute -Confirm:${'$'}false -ErrorAction SilentlyContinue
+            route.exe delete 0.0.0.0 mask 128.0.0.0 if ${'$'}ifIndex *>${'$'}null
+            route.exe delete 128.0.0.0 mask 128.0.0.0 if ${'$'}ifIndex *>${'$'}null
             Set-DnsClientServerAddress -InterfaceIndex ${'$'}ifIndex -ResetServerAddresses -ErrorAction SilentlyContinue
             Get-NetIPAddress -InterfaceIndex ${'$'}ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
               Where-Object { ${'$'}_.IPAddress -eq '$TUN_IPV4_ADDRESS' } |

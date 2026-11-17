@@ -148,3 +148,30 @@ fn china_preset_shape() {
         TrafficSettings::default()
     );
 }
+
+#[test]
+fn iran_preset_shape() {
+    let ir = RoutingProfile::iran_direct_named("Иран напрямую");
+    assert_eq!(ir.name, "Иран напрямую");
+    assert_eq!(ir.id, PRESET_IR_DIRECT_ID);
+    assert_eq!(
+        RoutingProfile::iran_direct().name,
+        IRAN_DIRECT_DEFAULT_NAME
+    );
+    assert!(ir.needs_geo_files());
+    let fallback = ir.without_geo_selectors();
+    assert!(fallback
+        .direct_sites
+        .iter()
+        .all(|s| s.starts_with("domain:")));
+    assert_eq!(
+        fallback.direct_ip,
+        [
+            "178.22.122.100/32",
+            "185.51.200.2/32",
+            "10.202.10.202/32",
+            "10.202.10.10/32"
+        ]
+    );
+    assert_eq!(ir.domestic_dns_address().as_deref(), Some("178.22.122.100"));
+}

@@ -182,8 +182,20 @@ data class RoutingProfile(
 
         fun russiaDirect(): RoutingProfile = RoutingProfile(
             name = "Россия напрямую",
-            directSites = listOf("domain:ru"),
-            directIp = listOf("geoip:ru"),
+            directSites = listOf(
+                "geosite:ru", "domain:ru", "domain:su", "domain:xn--p1ai",
+                "domain:vk.com", "domain:vk.ru", "domain:vkvideo.ru", "domain:ok.ru",
+                "domain:yandex.ru", "domain:ya.ru", "domain:yandex.net", "domain:mail.ru",
+                "domain:gosuslugi.ru", "domain:mos.ru", "domain:nalog.gov.ru", "domain:cbr.ru",
+                "domain:sberbank.ru", "domain:sber.ru", "domain:tinkoff.ru", "domain:t-bank.ru",
+                "domain:tbank.ru", "domain:vtb.ru", "domain:alfabank.ru",
+                "domain:avito.ru", "domain:ozon.ru", "domain:wildberries.ru", "domain:wb.ru",
+                "domain:rutube.ru", "domain:dzen.ru", "domain:kinopoisk.ru", "domain:2gis.ru",
+            ),
+            directIp = listOf(
+                "geoip:ru",
+                "77.88.8.8/32", "77.88.8.1/32",
+            ),
             globalProxy = true,
             routeOrder = "block-direct-proxy",
             id = DEFAULT_RU_DIRECT_ID,
@@ -191,6 +203,9 @@ data class RoutingProfile(
 
         /** Stable id of the "China direct" preset, so adding it twice replaces rather than duplicates it. */
         const val PRESET_CN_DIRECT_ID = "preset-cn-direct"
+
+        /** Stable id of the "Iran direct" preset, so adding it twice replaces rather than duplicates it. */
+        const val PRESET_IR_DIRECT_ID = "preset-ir-direct"
 
         /**
          * Preset: Chinese sites and IPs go direct, everything else through the proxy.
@@ -231,6 +246,35 @@ data class RoutingProfile(
             geoipUrl = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
             geositeUrl = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
             id = PRESET_CN_DIRECT_ID,
+        )
+
+        /**
+         * Preset: Iranian sites and IPs go direct, everything else through the proxy.
+         */
+        fun iranDirect(name: String = "Iran direct"): RoutingProfile = RoutingProfile(
+            name = name,
+            directSites = listOf(
+                "geosite:ir", "domain:ir", "domain:xn--mgba3a4f16a",
+                "domain:aparat.com", "domain:digikala.com", "domain:shaparak.ir", "domain:divar.ir",
+                "domain:torob.com", "domain:snapp.ir", "domain:tci.ir", "domain:bale.ai",
+                "domain:rubika.ir", "domain:eitaa.com", "domain:telewebion.com", "domain:varzesh3.com",
+                "domain:bmi.ir", "domain:banksepah.ir", "domain:tejaratbank.ir", "domain:bsi.ir",
+                "domain:mellatbank.ir",
+            ),
+            directIp = listOf(
+                "geoip:ir",
+                "178.22.122.100/32", "185.51.200.2/32", "10.202.10.202/32", "10.202.10.10/32",
+            ),
+            remoteDnsType = "DoU",
+            remoteDnsIp = "1.1.1.1",
+            domesticDnsType = "DoU",
+            domesticDnsIp = "178.22.122.100",
+            domainStrategy = "IPIfNonMatch",
+            globalProxy = true,
+            routeOrder = "block-direct-proxy",
+            geoipUrl = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
+            geositeUrl = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
+            id = PRESET_IR_DIRECT_ID,
         )
 
         /**

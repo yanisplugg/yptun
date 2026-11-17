@@ -120,24 +120,97 @@
             },
             {
                 "rule_set": [
+                    "geosite-ru",
                     "geoip-ru"
                 ],
                 "outbound": "wireguard-base"
             },
             {
                 "domain_suffix": [
-                    ".ru"
+                    ".ru",
+                    ".su",
+                    ".xn--p1ai",
+                    ".vk.com",
+                    ".vk.ru",
+                    ".vkvideo.ru",
+                    ".ok.ru",
+                    ".yandex.ru",
+                    ".ya.ru",
+                    ".yandex.net",
+                    ".mail.ru",
+                    ".gosuslugi.ru",
+                    ".mos.ru",
+                    ".nalog.gov.ru",
+                    ".cbr.ru",
+                    ".sberbank.ru",
+                    ".sber.ru",
+                    ".tinkoff.ru",
+                    ".t-bank.ru",
+                    ".tbank.ru",
+                    ".vtb.ru",
+                    ".alfabank.ru",
+                    ".avito.ru",
+                    ".ozon.ru",
+                    ".wildberries.ru",
+                    ".wb.ru",
+                    ".rutube.ru",
+                    ".dzen.ru",
+                    ".kinopoisk.ru",
+                    ".2gis.ru"
                 ],
                 "outbound": "wireguard-base"
             },
             {
                 "domain": [
-                    "ru"
+                    "ru",
+                    "su",
+                    "xn--p1ai",
+                    "vk.com",
+                    "vk.ru",
+                    "vkvideo.ru",
+                    "ok.ru",
+                    "yandex.ru",
+                    "ya.ru",
+                    "yandex.net",
+                    "mail.ru",
+                    "gosuslugi.ru",
+                    "mos.ru",
+                    "nalog.gov.ru",
+                    "cbr.ru",
+                    "sberbank.ru",
+                    "sber.ru",
+                    "tinkoff.ru",
+                    "t-bank.ru",
+                    "tbank.ru",
+                    "vtb.ru",
+                    "alfabank.ru",
+                    "avito.ru",
+                    "ozon.ru",
+                    "wildberries.ru",
+                    "wb.ru",
+                    "rutube.ru",
+                    "dzen.ru",
+                    "kinopoisk.ru",
+                    "2gis.ru"
+                ],
+                "outbound": "wireguard-base"
+            },
+            {
+                "ip_cidr": [
+                    "77.88.8.8/32",
+                    "77.88.8.1/32"
                 ],
                 "outbound": "wireguard-base"
             }
         ],
         "rule_set": [
+            {
+                "type": "remote",
+                "tag": "geosite-ru",
+                "format": "binary",
+                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ru.srs",
+                "download_detour": "direct"
+            },
             {
                 "type": "remote",
                 "tag": "geoip-ru",

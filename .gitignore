@@ -44,3 +44,4 @@ YPtun/*-build/
 YPtun/build-native/
 YPtun/linux-rust-release/
 
+.arm64-cache/

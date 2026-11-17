@@ -45,6 +45,7 @@ impl Opts<'_> {
         match self.str_opt("routingPreset").as_deref() {
             Some("russiaDirect") => Some(RoutingProfile::russia_direct()),
             Some("chinaDirect") => Some(RoutingProfile::china_direct()),
+            Some("iranDirect") => Some(RoutingProfile::iran_direct()),
             _ => self.o.get("routingProfile").map(|v| serde_json::from_value(v.clone()).unwrap()),
         }
     }
