@@ -5,33 +5,36 @@ import SwiftUI
 import UIKit
 import WidgetKit
 
+private func uncaughtExceptionHandler(_ exception: NSException) {
+    let symbols = exception.callStackSymbols.joined(separator: "\n")
+    let log = """
+    [CRASH: NSException] \(exception.name.rawValue): \(exception.reason ?? "no reason")
+    User Info: \(String(describing: exception.userInfo))
+    Stack:
+    \(symbols)
+    """
+    AppCrashReporter.saveCrashLog(log)
+}
+
+private func posixSignalHandler(_ sig: Int32) {
+    let symbols = Thread.callStackSymbols.joined(separator: "\n")
+    let log = """
+    [CRASH: Signal \(sig)]
+    Stack:
+    \(symbols)
+    """
+    AppCrashReporter.saveCrashLog(log)
+    exit(128 + sig)
+}
+
 /// Records uncaught exceptions and fatal signals to files so startup errors can be inspected.
 enum AppCrashReporter {
     static let appGroup = "group.org.yptun.app"
 
     static func install() {
-        NSSetUncaughtExceptionHandler { exception in
-            let symbols = exception.callStackSymbols.joined(separator: "\n")
-            let log = """
-            [CRASH: NSException] \(exception.name.rawValue): \(exception.reason ?? "no reason")
-            User Info: \(String(describing: exception.userInfo))
-            Stack:
-            \(symbols)
-            """
-            saveCrashLog(log)
-        }
-
+        NSSetUncaughtExceptionHandler(uncaughtExceptionHandler)
         for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP] {
-            signal(sig) { signal in
-                let symbols = Thread.callStackSymbols.joined(separator: "\n")
-                let log = """
-                [CRASH: Signal \(signal)]
-                Stack:
-                \(symbols)
-                """
-                AppCrashReporter.saveCrashLog(log)
-                exit(128 + signal)
-            }
+            signal(sig, posixSignalHandler)
         }
     }
 
