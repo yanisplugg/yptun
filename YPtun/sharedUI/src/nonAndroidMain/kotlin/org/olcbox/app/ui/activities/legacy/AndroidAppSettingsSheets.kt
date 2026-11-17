@@ -3129,7 +3129,7 @@ private fun RoutingContent(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = false,
-                        onClick = { bypassLan = true; bypassRu = true; blockAds = false },
+                        onClick = { bypassLan = true; bypassRu = true; bypassCn = false; blockAds = false },
                         label = { Text(s.presetRuDirect) }
                     )
                     FilterChip(
@@ -3146,6 +3146,21 @@ private fun RoutingContent(
                         },
                         label = { Text(s.presetCnDirect) }
                     )
+                    FilterChip(
+                        selected = false,
+                        onClick = {
+                            bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false
+                            val irProfile = org.olcbox.app.data.model.RoutingProfile.iranDirect(s.presetIrDirect)
+                            onSaveProfile(irProfile)
+                            onSetGlobal(irProfile.id)
+                            if (irProfile.geoipUrl.isNotBlank() && irProfile.geositeUrl.isNotBlank()) {
+                                onSetGeoSources(irProfile.geoipUrl, irProfile.geositeUrl)
+                            }
+                            onUpdateGeo()
+                        },
+                        label = { Text(s.presetIrDirect) }
+                    )
+
                     FilterChip(
                         selected = false,
                         onClick = { bypassLan = true; blockAds = true; bypassRu = false },
@@ -3172,8 +3187,6 @@ private fun RoutingContent(
                 }
 
                 RoutingToggleRow(s.bypassLan, s.bypassLanSubtitle, bypassLan) { bypassLan = it }
-                RoutingToggleRow(s.bypassRussia, s.bypassRussiaSubtitle, bypassRu) { bypassRu = it; if (it) onUpdateGeo() }
-                RoutingToggleRow(s.bypassChina, s.bypassChinaSubtitle, bypassCn) { bypassCn = it; if (it) onUpdateGeo() }
                 RoutingToggleRow(s.blockAds, s.blockAdsSubtitle, blockAds) { blockAds = it }
 
                 // Direct/blocked domain fields and the raw sing-box "advanced" routing editor are

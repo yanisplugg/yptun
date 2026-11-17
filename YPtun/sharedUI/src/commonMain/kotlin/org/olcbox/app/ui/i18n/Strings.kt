@@ -286,6 +286,7 @@ interface Strings {
     val presets: String
     val presetRuDirect: String
     val presetCnDirect: String
+    val presetIrDirect: String get() = "Iran direct"
     val presetAdsBlock: String
     val presetRuAds: String
     val presetAllVpn: String
@@ -357,6 +358,8 @@ interface Strings {
     val routingPresets: String get() = "Presets"
     val routingPresetChina: String get() = "China direct"
     val routingPresetChinaDesc: String get() = "Chinese sites and IPs go direct, everything else through the proxy"
+    val routingPresetIran: String get() = "Iran direct"
+    val routingPresetIranDesc: String get() = "Iranian sites and IPs go direct, everything else through the proxy"
     val routingProfileDnsHint: String get() = "DNS of this profile (empty — use the traffic settings)"
     val routingProfileImportLink: String
     val routingProfilePasteHint: String
@@ -1198,6 +1201,7 @@ object RuStrings : Strings {
     override val presets = "Пресеты"
     override val presetRuDirect = "Россия напрямую"
     override val presetCnDirect = "Китай напрямую"
+    override val presetIrDirect = "Иран напрямую"
     override val presetAdsBlock = "Блок рекламы"
     override val presetRuAds = "Россия + без рекламы"
     override val presetAllVpn = "Всё через VPN"
@@ -1265,6 +1269,8 @@ object RuStrings : Strings {
     override val routingPresets = "Готовые пресеты"
     override val routingPresetChina = "Китай напрямую"
     override val routingPresetChinaDesc = "Сайты и IP Китая — напрямую, всё остальное через прокси"
+    override val routingPresetIran = "Иран напрямую"
+    override val routingPresetIranDesc = "Сайты и IP Ирана — напрямую, всё остальное через прокси"
     override val routingProfileDnsHint = "DNS профиля (пусто — как в настройках трафика)"
     override val routingProfileImportLink = "Импорт по ссылке happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
@@ -2070,6 +2076,7 @@ object EnStrings : Strings {
     override val presets = "Presets"
     override val presetRuDirect = "Russia direct"
     override val presetCnDirect = "China direct"
+    override val presetIrDirect = "Iran direct"
     override val presetAdsBlock = "Block ads"
     override val presetRuAds = "Russia + no ads"
     override val presetAllVpn = "All via VPN"
@@ -2938,6 +2945,7 @@ object FaStrings : Strings {
     override val presets = "پیش‌تنظیم‌ها"
     override val presetRuDirect = "روسیه مستقیم"
     override val presetCnDirect = "چین مستقیم"
+    override val presetIrDirect = "ایران مستقیم"
     override val presetAdsBlock = "مسدودسازی تبلیغات"
     override val presetRuAds = "روسیه + بدون تبلیغات"
     override val presetAllVpn = "همه از طریق VPN"
@@ -3005,6 +3013,8 @@ object FaStrings : Strings {
     override val routingPresets = "پیش‌تنظیم‌ها"
     override val routingPresetChina = "چین مستقیم"
     override val routingPresetChinaDesc = "سایت‌ها و IPهای چین مستقیم، بقیه از طریق پراکسی"
+    override val routingPresetIran = "ایران مستقیم"
+    override val routingPresetIranDesc = "سایت‌ها و IPهای ایران مستقیم، بقیه از طریق پراکسی"
     override val routingProfileDnsHint = "DNS این نمایه (خالی — مطابق تنظیمات ترافیک)"
     override val routingProfileImportLink = "درون‌ریزی پیوند ‎happ://"
     override val routingProfilePasteHint = "happ://routing/add/…"
@@ -3810,6 +3820,7 @@ object ZhStrings : Strings {
     override val presets = "预设"
     override val presetRuDirect = "俄罗斯直连"
     override val presetCnDirect = "中国直连"
+    override val presetIrDirect = "伊朗直连"
     override val presetAdsBlock = "拦截广告"
     override val presetRuAds = "俄罗斯 + 无广告"
     override val presetAllVpn = "全部走 VPN"
@@ -3877,6 +3888,8 @@ object ZhStrings : Strings {
     override val routingPresets = "预设"
     override val routingPresetChina = "中国直连"
     override val routingPresetChinaDesc = "中国大陆网站和 IP 直连，其余走代理"
+    override val routingPresetIran = "伊朗直连"
+    override val routingPresetIranDesc = "伊朗网站和 IP 直连，其余走代理"
     override val routingProfileDnsHint = "此方案的 DNS（留空则使用流量设置）"
     override val routingProfileImportLink = "导入 happ:// 链接"
     override val routingProfilePasteHint = "happ://routing/add/…"

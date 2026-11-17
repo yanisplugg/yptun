@@ -76,6 +76,7 @@ class ConfigParityExport {
             get() = when (strOrNull("routingPreset")) {
                 "russiaDirect" -> RoutingProfile.russiaDirect()
                 "chinaDirect" -> RoutingProfile.chinaDirect()
+                "iranDirect" -> RoutingProfile.iranDirect()
                 else -> o["routingProfile"]?.let { json.decodeFromJsonElement(RoutingProfile.serializer(), it) }
             }
     }

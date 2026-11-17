@@ -312,6 +312,7 @@ func MeasureDelay(iniConfig, url, method string, timeoutMs int) int64 {
 	}
 	client := &http.Client{
 		Timeout: timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{
 			DisableKeepAlives: true,
 			// Every connection (incl. DNS) rides the AmneziaWG netstack tunnel.

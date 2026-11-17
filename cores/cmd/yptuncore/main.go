@@ -184,6 +184,7 @@ func YpAddNativeSearchPath(dir *C.char) {
 	for _, name := range []string{"PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"} {
 		prependSearchPath(name, d)
 	}
+	setPlatformDllDirectory(d)
 }
 
 func prependSearchPath(name, dir string) {
