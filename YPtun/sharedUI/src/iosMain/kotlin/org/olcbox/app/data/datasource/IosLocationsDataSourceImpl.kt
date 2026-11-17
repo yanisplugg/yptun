@@ -99,14 +99,20 @@ class IosLocationsDataSourceImpl(
     }
 
     private fun applicationSupportDirectory(appDirectoryName: String): String {
-        val base = NSFileManager.defaultManager
-            .URLsForDirectory(NSApplicationSupportDirectory, NSUserDomainMask)
-            .firstOrNull()
-            ?.let { it as? NSURL }
-            ?.path
-            ?: error("Application Support directory is unavailable")
+        val base = runCatching {
+            NSFileManager.defaultManager
+                .URLsForDirectory(NSApplicationSupportDirectory, NSUserDomainMask)
+                .firstOrNull()
+                ?.let { it as? NSURL }
+                ?.path
+        }.getOrNull()
+            ?: runCatching {
+                NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true)
+                    .firstOrNull() as? String
+            }.getOrNull()
+            ?: "/tmp"
         val path = base.childPath(appDirectoryName)
-        ensureDirectory(path)
+        runCatching { ensureDirectory(path) }
         return path
     }
 

@@ -52,6 +52,14 @@ class IosAppFactory {
         platformBridge: IosPlatformBridge,
         coreBridge: IosCoreBridge
     ): IosAppSession {
+        runCatching {
+            kotlin.native.setUnhandledExceptionHook { throwable ->
+                val errorDetails = "Kotlin Unhandled: ${throwable::class.simpleName}: ${throwable.message}\n" +
+                    throwable.stackTraceToString()
+                println(errorDetails)
+                runCatching { IosSharedStore.appendLog(errorDetails) }
+            }
+        }
         return IosAppSession(platformBridge, coreBridge)
     }
 

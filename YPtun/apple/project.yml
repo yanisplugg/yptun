@@ -3,15 +3,14 @@ name: YPtunApple
 options:
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "15.0"
     macOS: "14.0"
 
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "516"
-    SWIFT_VERSION: "6.0"
-    SWIFT_STRICT_CONCURRENCY: complete
+    CURRENT_PROJECT_VERSION: "517"
+    SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     GENERATE_INFOPLIST_FILE: NO
@@ -47,6 +46,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../sharedUI/build/bin/iosArm64/releaseFramework"
@@ -59,10 +59,6 @@ targets:
           - "-lresolv"
           - "-Wl,-no_compact_unwind"
     dependencies:
-      - package: YPtunAppleKit
-        product: YPtunShared
-      - package: YPtunRustBridge
-        product: YPtunRustBridge
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
@@ -112,6 +108,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Configuration/iOS/PacketTunnel.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"]
         OTHER_LDFLAGS:
           - "$(inherited)"
           - "-Wl,-no_compact_unwind"
@@ -145,6 +142,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Configuration/iOS/Widget.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"]
     dependencies:
       - package: YPtunAppleKit
         product: YPtunShared

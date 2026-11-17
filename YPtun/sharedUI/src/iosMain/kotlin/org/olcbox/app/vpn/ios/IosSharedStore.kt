@@ -55,12 +55,18 @@ object IosSharedStore {
      * on a build that couldn't run the extension anyway.
      */
     val dir: String by lazy {
-        val group = NSFileManager.defaultManager
-            .containerURLForSecurityApplicationGroupIdentifier(APP_GROUP)?.path
-        val base = group ?: (NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true)
-            .firstOrNull() as? String ?: "")
+        val group = runCatching {
+            NSFileManager.defaultManager
+                .containerURLForSecurityApplicationGroupIdentifier(APP_GROUP)?.path
+        }.getOrNull()
+        val base = group ?: runCatching {
+            NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true)
+                .firstOrNull() as? String
+        }.getOrNull() ?: "/tmp"
         "$base/yptun".also {
-            NSFileManager.defaultManager.createDirectoryAtPath(it, true, null, null)
+            runCatching {
+                NSFileManager.defaultManager.createDirectoryAtPath(it, true, null, null)
+            }
         }
     }
 

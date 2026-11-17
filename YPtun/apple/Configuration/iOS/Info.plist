@@ -18,6 +18,23 @@
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера нужна, чтобы сканировать QR-коды с конфигурациями.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Фотографии нужны для сканирования QR-кодов с конфигурациями из медиатеки.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -44,19 +61,34 @@
 			</array>
 		</dict>
 	</array>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>org.yptun.control.start</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Подключить VPN</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>bolt.fill</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>org.yptun.control.stop</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Отключить VPN</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>bolt.slash.fill</string>
+		</dict>
+	</array>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSCameraUsageDescription</key>
-	<string>Камера используется только для сканирования QR-кодов конфигураций VPN.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
