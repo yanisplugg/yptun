@@ -49,6 +49,33 @@ enum AppCrashReporter {
             try? content.write(to: file, atomically: true, encoding: .utf8)
         }
     }
+
+    static func getSavedCrashLog() -> String? {
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let file = docs.appendingPathComponent("crash.log")
+            if let str = try? String(contentsOf: file, encoding: .utf8), !str.isEmpty {
+                return str
+            }
+        }
+        if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) {
+            let file = group.appendingPathComponent("crash.log")
+            if let str = try? String(contentsOf: file, encoding: .utf8), !str.isEmpty {
+                return str
+            }
+        }
+        return nil
+    }
+
+    static func clearCrashLog() {
+        if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let file = docs.appendingPathComponent("crash.log")
+            try? FileManager.default.removeItem(at: file)
+        }
+        if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) {
+            let file = group.appendingPathComponent("crash.log")
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
 }
 
 /// Home-screen quick actions («Подключить / Отключить VPN»).
@@ -79,20 +106,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         if let shortcutItem = options.shortcutItem {
             Self.deliver(shortcutItem)
         }
-        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
-        configuration.delegateClass = QuickActionSceneDelegate.self
-        return configuration
+        return UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
     }
-}
 
-/// Receives quick actions while the app is running.
-final class QuickActionSceneDelegate: NSObject, UIWindowSceneDelegate {
-    func windowScene(
-        _ windowScene: UIWindowScene,
+    func application(
+        _ application: UIApplication,
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
-        AppDelegate.deliver(shortcutItem)
+        Self.deliver(shortcutItem)
         completionHandler(true)
     }
 }
@@ -108,6 +130,9 @@ struct OlcboxIosApp: App {
 
     init() {
         AppCrashReporter.install()
+        if let previousCrash = AppCrashReporter.getSavedCrashLog() {
+            _startupError = State(initialValue: "Предыдущий запуск завершился сбоем:\n\n" + previousCrash)
+        }
         LocalNotifications.shared.install()
         if #available(iOS 16.2, *) {
             NotificationCenter.default.addObserver(forName: NSNotification.Name("org.yptun.vpn.connected"), object: nil, queue: .main) { _ in
@@ -126,6 +151,7 @@ struct OlcboxIosApp: App {
 
                 if let error = startupError {
                     StartupErrorView(error: error) {
+                        AppCrashReporter.clearCrashLog()
                         startupError = nil
                         bootstrap()
                     }
@@ -144,7 +170,7 @@ struct OlcboxIosApp: App {
                 }
             }
             .onAppear {
-                if !hasBootstrapped {
+                if !hasBootstrapped && startupError == nil {
                     hasBootstrapped = true
                     bootstrap()
                 }

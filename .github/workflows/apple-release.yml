@@ -8,7 +8,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "519"
+        default: "520"
       comment:
         description: Build comment
         required: false
