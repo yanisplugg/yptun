@@ -13,14 +13,12 @@ import org.jetbrains.compose.resources.Font
 
 @Composable
 fun getAppTypography(): Typography {
-    val googleSansFlex = runCatching {
-        FontFamily(
-            Font(Res.font.google_sans_flex_regular, weight = FontWeight.Normal),
-            Font(Res.font.google_sans_flex_medium, weight = FontWeight.Medium),
-            Font(Res.font.google_sans_flex_semi_bold, weight = FontWeight.SemiBold),
-            Font(Res.font.google_sans_flex_bold, weight = FontWeight.Bold)
-        )
-    }.getOrNull() ?: FontFamily.Default
+    val googleSansFlex = FontFamily(
+        Font(Res.font.google_sans_flex_regular, weight = FontWeight.Normal),
+        Font(Res.font.google_sans_flex_medium, weight = FontWeight.Medium),
+        Font(Res.font.google_sans_flex_semi_bold, weight = FontWeight.SemiBold),
+        Font(Res.font.google_sans_flex_bold, weight = FontWeight.Bold)
+    )
 
     val defaultTypography = Typography()
 
