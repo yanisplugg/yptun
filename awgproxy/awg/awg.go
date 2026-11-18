@@ -72,6 +72,11 @@ func SetProtector(p Protector) {
 	protectorMu.Lock()
 	protector = p
 	protectorMu.Unlock()
+	if p != nil {
+		conn.SetSocketProtector(p.Protect)
+	} else {
+		conn.SetSocketProtector(nil)
+	}
 }
 
 // protectBind protects the UDP socket(s) the WireGuard bind has just opened (after device Up), so
@@ -111,7 +116,7 @@ func SetLogWriter(w LogWriter) {
 
 // awgVersion is the amneziawg-go tag vendored at olcvpn-client/amneziawg-go. Bump it on every
 // re-vendor — the settings screen shows it and it's the only way to tell which AWG is inside.
-const awgVersion = "3.1.20260828"
+const awgVersion = "3.1.20261116"
 
 // Version reports the vendored AmneziaWG core version (shown in the app's settings).
 func Version() string { return awgVersion }

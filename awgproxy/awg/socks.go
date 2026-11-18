@@ -9,10 +9,17 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 )
+
+type udpTargetSession struct {
+	conn       net.Conn
+	lastClient atomic.Pointer[net.UDPAddr]
+}
 
 // serveSocks accepts SOCKS5 clients on ln and routes them through the AmneziaWG netstack tnet.
 func serveSocks(ln net.Listener, tnet *netstack.Net) {
@@ -111,11 +118,15 @@ func socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 
 	// Per-target UDP conns through the tunnel; return packets are wrapped back to the client addr.
 	// The netstack Dial returns a gVisor gonet conn (net.Conn), NOT *net.UDPConn — never assert.
-	conns := make(map[string]net.Conn)
+	var connsMu sync.Mutex
+	conns := make(map[string]*udpTargetSession)
 	defer func() {
-		for _, c := range conns {
-			_ = c.Close()
+		connsMu.Lock()
+		for _, s := range conns {
+			_ = s.conn.Close()
 		}
+		conns = make(map[string]*udpTargetSession)
+		connsMu.Unlock()
 	}()
 
 	// Close the relay when the TCP control connection drops.
@@ -132,28 +143,48 @@ func socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 			continue
 		}
 		target := net.JoinHostPort(dstHost, strconv.Itoa(dstPort))
-		uc := conns[target]
-		if uc == nil {
+
+		connsMu.Lock()
+		sess := conns[target]
+		if sess == nil {
 			rc, derr := tnet.Dial("udp", target)
 			if derr != nil {
+				connsMu.Unlock()
 				continue
 			}
-			uc = rc
-			conns[target] = uc
-			go udpReturn(relay, uc, from, dstHost, dstPort)
+			sess = &udpTargetSession{conn: rc}
+			sess.lastClient.Store(from)
+			conns[target] = sess
+			go udpReturn(relay, sess, target, dstHost, dstPort, func() {
+				connsMu.Lock()
+				if conns[target] == sess {
+					delete(conns, target)
+				}
+				connsMu.Unlock()
+				_ = rc.Close()
+			})
+		} else {
+			sess.lastClient.Store(from)
 		}
-		_, _ = uc.Write(payload)
+		connsMu.Unlock()
+
+		_, _ = sess.conn.Write(payload)
 	}
 }
 
 // udpReturn reads replies from the tunnel UDP conn and forwards them (SOCKS5-wrapped) to client.
-func udpReturn(relay *net.UDPConn, uc net.Conn, client *net.UDPAddr, host string, port int) {
+func udpReturn(relay *net.UDPConn, sess *udpTargetSession, target, host string, port int, cleanup func()) {
+	defer cleanup()
 	buf := make([]byte, 64*1024)
 	for {
-		_ = uc.SetReadDeadline(time.Now().Add(60 * time.Second))
-		n, err := uc.Read(buf)
+		_ = sess.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		n, err := sess.conn.Read(buf)
 		if err != nil {
 			return
+		}
+		client := sess.lastClient.Load()
+		if client == nil {
+			continue
 		}
 		out := buildUDPReply(host, port, buf[:n])
 		if _, err := relay.WriteToUDP(out, client); err != nil {
