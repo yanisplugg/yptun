@@ -2,15 +2,10 @@ import Coreapi
 import Darwin
 import Foundation
 import SharedUI
-#if canImport(SnolcCore)
-import SnolcCore
-#endif
-#if canImport(CsqttCore)
-import CsqttCore
-#endif
 
-/// Kotlin's `IosCoreBridge`, forwarded 1:1 to the gomobile framework of `kazcores/coreapi`.
-/// Compiled into both the app (server pings) and the packet-tunnel extension (the tunnel itself).
+/// Kotlin's `IosCoreBridge` for the main UI app (server pings and diagnostics).
+/// Tunnel engines (SnolcCore, CsqttCore, etc.) run exclusively inside YPtunPacketTunnelIOS
+/// so the main app avoids linking multiple Rust personality routines and keeps Mach-O compact unwind valid.
 /// Error convention of the Kotlin side: "" = success, otherwise the error text.
 final class SwiftCoreBridge: NSObject, IosCoreBridge {
     private func err(_ call: (NSErrorPointer) -> Bool) -> String {
@@ -278,81 +273,21 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         return nil
     }
 
-    func snolcVersion() -> String {
-        #if canImport(SnolcCore)
-        guard let v = snolc_ffi_version() else { return "" }
-        return String(cString: v)
-        #else
-        return ""
-        #endif
-    }
+    func snolcVersion() -> String { "" }
 
-    func snolcStart(configTomlPath: String) -> String {
-        #if canImport(SnolcCore)
-        guard let err = snolc_ffi_start(configTomlPath) else { return "" }
-        let msg = String(cString: err)
-        snolc_ffi_free_string(err)
-        return msg
-        #else
-        return "SnolcCore framework not linked"
-        #endif
-    }
+    func snolcStart(configTomlPath: String) -> String { "SnolcCore runs inside PacketTunnel" }
 
-    func snolcStop() {
-        #if canImport(SnolcCore)
-        snolc_ffi_stop()
-        #endif
-    }
+    func snolcStop() {}
 
-    func snolcRunning() -> Bool {
-        #if canImport(SnolcCore)
-        return snolc_ffi_is_running()
-        #else
-        return false
-        #endif
-    }
+    func snolcRunning() -> Bool { false }
 
-    func csqttVersion() -> String {
-        #if canImport(CsqttCore)
-        guard let v = csqtt_ffi_version() else { return "" }
-        return String(cString: v)
-        #else
-        return ""
-        #endif
-    }
+    func csqttVersion() -> String { "" }
 
-    func csqttStart(optionsJson: String) -> String {
-        #if canImport(CsqttCore)
-        guard let err = csqtt_ffi_start(optionsJson, { conf in
-            guard let conf = conf else { return }
-            let confStr = String(cString: conf)
-            var err: NSError?
-            _ = CoreapiCsqttBridgeSetTunnel(confStr, &err)
-        }, { logLine in
-            guard let logLine = logLine else { return }
-            CoreapiPushLog("csqtt", String(cString: logLine))
-        }) else { return "" }
-        let msg = String(cString: err)
-        csqtt_ffi_free_string(err)
-        return msg
-        #else
-        return "CsqttCore framework not linked"
-        #endif
-    }
+    func csqttStart(optionsJson: String) -> String { "CsqttCore runs inside PacketTunnel" }
 
-    func csqttStop() {
-        #if canImport(CsqttCore)
-        csqtt_ffi_stop()
-        #endif
-    }
+    func csqttStop() {}
 
-    func csqttRunning() -> Bool {
-        #if canImport(CsqttCore)
-        return csqtt_ffi_is_running()
-        #else
-        return false
-        #endif
-    }
+    func csqttRunning() -> Bool { false }
 
     func csqttBridgeStart(socksAddr: String, clientUdpAddr: String, mtu: Int32) -> String {
         err { CoreapiCsqttBridgeStart(socksAddr, clientUdpAddr, Int(mtu), $0) }

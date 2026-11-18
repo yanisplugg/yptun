@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "521"
+    CURRENT_PROJECT_VERSION: "522"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -58,13 +58,8 @@ targets:
           - "-framework"
           - "SharedUI"
           - "-lresolv"
-          - "-Wl,-no_compact_unwind"
     dependencies:
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
-        embed: false
-      - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
-        embed: false
-      - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
         embed: false
       - target: YPtunPacketTunnelIOS
         embed: true
