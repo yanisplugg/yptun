@@ -587,6 +587,18 @@ class IosVpnManager(
                     }
                 }
             }
+            behavior.pingMode == AppBehaviorSettings.PING_ICMP -> {
+                // ICMP raw sockets are unavailable inside sandboxed iOS apps; fall back to direct TCP ping.
+                if (isLoopbackHost(profile.server)) null
+                else {
+                    val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
+                    if (connected) {
+                        directTcpPingViaExtension(profile.server, port, timeoutMs)
+                    } else {
+                        core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+                    }
+                }
+            }
             else -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
@@ -778,13 +790,6 @@ class IosVpnManager(
                     "dns", "policy" -> Unit
                     else -> put(k, v)
                 }
-            }
-            putJsonObject("dns") {
-                putJsonArray("servers") {
-                    add(JsonPrimitive("1.1.1.1"))
-                    add(JsonPrimitive("8.8.8.8"))
-                }
-                put("queryStrategy", "UseIPv4")
             }
             putJsonObject("policy") {
                 putJsonObject("levels") {

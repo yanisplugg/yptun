@@ -83,7 +83,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 cacheFilePath: cacheURL.path
             )
             let settings = networkSettings(from: plan.tunnel, extraExcludedIPv4: extraExcludedIPv4)
-            let bridgeYaml = plan.bridge.yaml
+            var bridgeYaml = plan.bridge.yaml
+            if plan.snolc != nil {
+                bridgeYaml = bridgeYaml.replacingOccurrences(of: "udp: 'udp'", with: "udp: 'tcp'")
+            }
             provider.setTunnelNetworkSettings(settings) { [weak self] error in
                 guard error == nil else {
                     self?.record(error: error!)
@@ -659,7 +662,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             if file.relativePath == "snolc.toml" {
                 contents = tuneSnolcEngineTomlForIOS(contents)
             } else if file.relativePath == "modules/socks5.toml" {
-                contents = contents.replacingOccurrences(of: "max_connections = 128", with: "max_connections = 96")
+                contents = contents.replacingOccurrences(of: "max_connections = 128", with: "max_connections = 119")
                 if let port = extractListenPort(from: contents) {
                     listenPort = port
                 }
@@ -708,12 +711,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
     private func tuneSnolcEngineTomlForIOS(_ toml: String) -> String {
         var out = toml
-        // Single client session on iOS with 96 concurrent user streams (max_streams_per_session = 97)
+        // Single client session on iOS with 119 concurrent user streams (max_streams_per_session = 120)
         // so iPhone background connections/DNS never hit "yamux user stream limit is exhausted",
         // while keeping lazy socket buffers (32 KiB TCP / 64 KiB UDP) and 32 MiB ceiling inside Jetsam.
-        // Invariants: 97 * 262144 = 25,427,968 <= max_managed_bytes (33,554,432), max_flows (128) >= 1 * 96.
+        // Invariants: 120 * 262144 = 31,457,280 <= max_managed_bytes (33,554,432), max_flows (128) >= 1 * 119.
         let replacements: [(String, String)] = [
             ("max_sessions = 4", "max_sessions = 1"),
+            ("max_flows = 256", "max_flows = 128"),
             ("max_flows = 512", "max_flows = 128"),
             ("max_pending_sessions = 4", "max_pending_sessions = 1"),
             ("max_pending_opens = 64", "max_pending_opens = 32"),
@@ -724,8 +728,11 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             ("tcp_socket_tx_bytes = 65536", "tcp_socket_tx_bytes = 32768"),
             ("udp_socket_rx_bytes = 131072", "udp_socket_rx_bytes = 65536"),
             ("udp_socket_tx_bytes = 131072", "udp_socket_tx_bytes = 65536"),
-            ("max_streams_per_session = 129", "max_streams_per_session = 97"),
-            ("receive_window_bytes = 33816576", "receive_window_bytes = 25427968"),
+            ("max_streams_per_session = 65", "max_streams_per_session = 120"),
+            ("max_streams_per_session = 129", "max_streams_per_session = 120"),
+            ("receive_window_bytes = 17039360", "receive_window_bytes = 31457280"),
+            ("receive_window_bytes = 33816576", "receive_window_bytes = 31457280"),
+            ("levels = [\"warning\", \"error\"]", "levels = [\"warning\", \"error\", \"debug\"]"),
             ("limit = \"8mb\"", "limit = \"1mb\""),
         ]
         for (old, new) in replacements {
@@ -1060,6 +1067,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         setPumpingLogs(true)
         DispatchQueue.global(qos: .utility).async { [weak self] in
             while self?.shouldPumpLogs == true {
+                self?.flushSnolcLog()
                 let line = CoreapiPollLog(1_000)
                 guard !line.isEmpty,
                       !line.hasPrefix("openflux: <-"),

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.olcbox.app.data.identity.DeviceInfo
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.ui.components.SettingsCaption
 import org.olcbox.app.ui.components.SettingsCard
@@ -151,11 +152,14 @@ fun ListViewSheet(
             }
         }
 
+        val isIos = DeviceInfo.os.contains("iOS", ignoreCase = true) || DeviceInfo.os.contains("iPadOS", ignoreCase = true)
         SettingsCard {
-            SettingsCardToggle(s.hideSshInstall, s.hideSshInstallSubtitle, settings.hideSshInstall) {
-                onChanged(settings.copy(hideSshInstall = it))
+            if (!isIos) {
+                SettingsCardToggle(s.hideSshInstall, s.hideSshInstallSubtitle, settings.hideSshInstall) {
+                    onChanged(settings.copy(hideSshInstall = it))
+                }
+                SettingsCardDivider()
             }
-            SettingsCardDivider()
             SettingsCardToggle(s.hideSessionButton, s.hideSessionButtonSubtitle, settings.hideSessionButton) {
                 onChanged(settings.copy(hideSessionButton = it))
             }
