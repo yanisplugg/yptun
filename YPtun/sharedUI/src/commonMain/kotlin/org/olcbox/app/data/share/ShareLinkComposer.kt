@@ -28,6 +28,9 @@ object ShareLinkComposer {
         if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
             return profile.ttConfig.takeIf { it.isNotBlank() }
         }
+        if (profile.type == ProxyProfile.TYPE_MIERU) {
+            return profile.mieruConfig.takeIf { it.isNotBlank() }
+        }
         val p = profile.enrichedFromRaw()
         val standardLink = when (p.type) {
             ProxyProfile.TYPE_VLESS -> if (p.uuid.isNotBlank() && p.server.isNotBlank()) composeVless(p) else null

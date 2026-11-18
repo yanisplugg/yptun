@@ -212,6 +212,14 @@ class LocationViewModel(
                 return@with csqttPeer.isNotBlank() &&
                     (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
             }
+            if (core.equals(VkTurnConfig.CORE_TURNABLE, ignoreCase = true)) {
+                val config = turnableConfig.trim()
+                val configOk = config.startsWith("turnable://", ignoreCase = true) ||
+                    (config.startsWith("{") && config.endsWith("}"))
+                return@with configOk &&
+                    (listenPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
+                    wgPrivateKey.isNotBlank() && wgPeerPublicKey.isNotBlank() && wgAddress.isNotBlank()
+            }
             val peerOk = peerHost.isNotBlank() &&
                 (peerPort.trim().toIntOrNull() ?: 0) in 1..65535 &&
                 (listenPort.trim().toIntOrNull() ?: 0) in 1..65535
@@ -774,9 +782,9 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(proxyEnabled = enabled)
     }
 
-    /** Enables/disables Cloudflare WARP chaining for VLESS connections (strictly in Server mode on iOS). */
+    /** Enables/disables Cloudflare WARP chaining for VLESS connections (Client or Server mode). */
     fun onWarpEnabledChanged(enabled: Boolean) {
-        editingConfig = editingConfig.copy(warpEnabled = enabled, warpMode = WarpMode.Server)
+        editingConfig = editingConfig.copy(warpEnabled = enabled)
     }
 
     /** Changes whether WARP runs on client side (WARP -> VLESS) or server side (VLESS -> WARP). */

@@ -552,7 +552,7 @@ class IosVpnManager(
      * works while disconnected. A verbatim config is probed through its own proxy outbound.
      */
     private fun proxyUrlTest(profile: ProxyProfile, url: String, method: String, timeoutMs: Int = PING_TIMEOUT_MS): Long? {
-        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2) return null
+        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_MIERU) return null
         val listenPort = (20_000..60_000).random()
         val raw = profile.rawXrayConfig
         val configJson = if (!raw.isNullOrBlank()) {
@@ -582,7 +582,24 @@ class IosVpnManager(
         val routingJson = IosSharedStore.readText("routing.json") ?: "{}"
         val routingProfilesJson = IosSharedStore.readText("routing_profiles.json") ?: "{}"
         val appBehaviorJson = IosSharedStore.readText("app_behavior.json") ?: "{}"
-        val warpConfig = org.olcbox.app.vpn.warp.WarpConfigStore.loadConfig().orEmpty()
+        var warpConfig = org.olcbox.app.vpn.warp.WarpConfigStore.loadConfig().orEmpty()
+        if (warpConfig.isNotBlank() && !warpConfig.contains("PrivateKey", ignoreCase = true)) {
+            warpConfig = ""
+        }
+        if (location.warpEnabled && warpConfig.isBlank()) {
+            addLog("WARP: generating Cloudflare WARP config...")
+            val generated = withContext(Dispatchers.Default) {
+                runCatching {
+                    org.olcbox.app.vpn.warp.WarpConfigGenerator.generate { msg -> addLog(msg) }
+                }.onFailure {
+                    addLog("WARP: generation failed: ${it.message}")
+                }.getOrNull()
+            }
+            if (!generated.isNullOrBlank()) {
+                runCatching { org.olcbox.app.vpn.warp.WarpConfigStore.saveConfig(generated) }
+                warpConfig = generated
+            }
+        }
 
         val requestPayload = buildJsonObject {
             put("locationJSON", JsonPrimitive(locJson))

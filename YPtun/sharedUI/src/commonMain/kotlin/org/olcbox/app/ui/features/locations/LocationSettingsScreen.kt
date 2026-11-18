@@ -539,13 +539,43 @@ fun LocationSettingsScreen(
                             )
                             if (config.warpEnabled) {
                                 Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
-                                    // iOS: WARP runs on the server side only (VLESS -> WARP), so there is no client/server picker.
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
-                                            text = LocalStrings.current.warpModeServerSubtitle,
+                                            text = LocalStrings.current.warpModeSection,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        val modes = listOf(WarpMode.Client, WarpMode.Server)
+                                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                            modes.forEachIndexed { index, mode ->
+                                                SegmentedButton(
+                                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                                                    selected = config.warpMode == mode,
+                                                    onClick = { viewModel.onWarpModeChanged(mode) },
+                                                    enabled = !isSaving,
+                                                    label = {
+                                                        Text(
+                                                            text = if (mode == WarpMode.Client) {
+                                                                LocalStrings.current.warpModeClient
+                                                            } else {
+                                                                LocalStrings.current.warpModeServer
+                                                            },
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = if (config.warpMode == WarpMode.Client) {
+                                                LocalStrings.current.warpModeClientSubtitle
+                                            } else {
+                                                LocalStrings.current.warpModeServerSubtitle
+                                            },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -1175,7 +1205,7 @@ private fun LazyListScope.vkTurnSection(
     onCsqttAutoInstall: () -> Unit,
     onFreeturnAutoInstall: () -> Unit
 ) {
-    item {
+    if (draft.core != VkTurnConfig.CORE_TURNABLE) item {
         VkTurnLinksField(
             value = draft.vkLink,
             enabled = enabled,
@@ -1183,8 +1213,7 @@ private fun LazyListScope.vkTurnSection(
         )
     }
 
-    // VK-TURN transport core: freeturn (default) vs WDTT. WDTT aggregates a single WG flow across the
-    // VK call-links via chunk-affinity dispatch; it dials its own wdtt-server and reuses the WG exit below.
+    // VK-TURN transport core: freeturn (default) vs WDTT vs csqtt vs Turnable.
     item {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1192,22 +1221,44 @@ private fun LazyListScope.vkTurnSection(
         ) {
             SectionTitle(
                 title = "Транспортное ядро VK-TURN",
-                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация одного WG-потока по звонкам, TURN по TCP, маскировка под аудио/видео; csqtt — туннель поверх TURN/RTP (Rust), только Android и ПК"
+                subtitle = "freeturn — стандартный клиент; qWDTT — агрегация по звонкам; csqtt — TURN/RTP (Rust); Turnable — клиент turnable:// / JSON"
             )
             SettingsDropdown(
                 label = "Ядро",
                 selectedValue = draft.core.ifBlank { VkTurnConfig.CORE_FREETURN },
-                options = listOf(VkTurnConfig.CORE_FREETURN, VkTurnConfig.CORE_WDTT, VkTurnConfig.CORE_CSQTT),
+                options = listOf(
+                    VkTurnConfig.CORE_FREETURN,
+                    VkTurnConfig.CORE_WDTT,
+                    VkTurnConfig.CORE_CSQTT,
+                    VkTurnConfig.CORE_TURNABLE
+                ),
                 enabled = enabled,
-                onValueSelected = { v -> onChange { it.copy(core = v) } },
+                onValueSelected = { v ->
+                    onChange {
+                        it.copy(
+                            core = v,
+                            outbound = if (v == VkTurnConfig.CORE_TURNABLE) VkTurnConfig.OUTBOUND_WIREGUARD else it.outbound
+                        )
+                    }
+                },
                 valueLabel = {
                     when (it) {
                         VkTurnConfig.CORE_WDTT -> "qWDTT (агрегация по звонкам)"
                         VkTurnConfig.CORE_CSQTT -> "csqtt (TURN/RTP, Rust)"
+                        VkTurnConfig.CORE_TURNABLE -> "Turnable (relay/mpath)"
                         else -> "freeturn (стандарт)"
                     }
                 }
             )
+            if (draft.core == VkTurnConfig.CORE_TURNABLE) {
+                VkTurnField(
+                    value = draft.turnableConfig,
+                    onValueChange = { value -> onChange { it.copy(turnableConfig = value) } },
+                    label = "Конфиг Turnable",
+                    placeholder = "turnable://… или JSON",
+                    enabled = enabled
+                )
+            }
             if (draft.core == VkTurnConfig.CORE_CSQTT) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1328,7 +1379,9 @@ private fun LazyListScope.vkTurnSection(
 
     // freeturn-only transport/exit section — entirely hidden for the WDTT core (it connects purely by the
     // wdtt-server IP[:port] above and fetches its WireGuard config from the server).
-    if (draft.core != VkTurnConfig.CORE_WDTT && draft.core != VkTurnConfig.CORE_CSQTT) item {
+    if (draft.core != VkTurnConfig.CORE_WDTT &&
+        draft.core != VkTurnConfig.CORE_CSQTT &&
+        draft.core != VkTurnConfig.CORE_TURNABLE) item {
         val isWdtt = false
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -4148,6 +4201,7 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_TRUSTTUNNEL -> "Trust Tunnel"
     ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
     ProxyProfile.TYPE_NAIVE -> "Naive"
+    ProxyProfile.TYPE_MIERU -> "Mieru"
     else -> type.uppercase()
 }
 

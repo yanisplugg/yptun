@@ -21,6 +21,7 @@ object ShareLinkParser {
             trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
             trimmed.startsWith("hysteria2://", true) || trimmed.startsWith("hy2://", true) -> parseHysteria2(trimmed)
             trimmed.startsWith("naive+", true) || trimmed.startsWith("naive://", true) -> parseNaive(trimmed)
+            trimmed.startsWith("mieru://", true) || trimmed.startsWith("mierus://", true) -> parseMieru(trimmed)
             // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
             trimmed.startsWith("amneziawg://", true) -> {
                 val rest = trimmed.substring("amneziawg://".length)
@@ -43,6 +44,53 @@ object ShareLinkParser {
             trimmed.startsWith("{") || trimmed.startsWith("[") -> parseJson(trimmed)
             else -> null
         }
+    }
+
+    // --- mieru://<full-config-protobuf> / mierus://user:pass@host?... ---
+    private fun parseMieru(uri: String): ProxyProfile? {
+        if (uri.startsWith("mieru://", ignoreCase = true)) {
+            val payload = uri.substring("mieru://".length).substringBefore('#')
+            if (payload.isBlank()) return null
+            val remark = UriCodec.percentDecode(uri.substringAfter('#', "")).ifBlank { "Mieru" }
+            return ProxyProfile(
+                tag = remark,
+                type = ProxyProfile.TYPE_MIERU,
+                server = "mieru-config",
+                serverPort = 1,
+                mieruConfig = uri,
+            )
+        }
+
+        val body = uri.substring("mierus://".length)
+        val remark = UriCodec.percentDecode(body.substringAfter('#', ""))
+        val beforeFragment = body.substringBefore('#')
+        val query = beforeFragment.substringAfter('?', "")
+        val authority = beforeFragment.substringBefore('?')
+        val at = authority.lastIndexOf('@')
+        if (at <= 0) return null
+        val credentials = authority.substring(0, at)
+        val colon = credentials.indexOf(':')
+        if (colon <= 0) return null
+        val user = UriCodec.percentDecode(credentials.substring(0, colon))
+        val password = UriCodec.percentDecode(credentials.substring(colon + 1))
+        val server = UriCodec.percentDecode(authority.substring(at + 1)).trim().removePrefix("[").removeSuffix("]")
+        if (user.isBlank() || password.isBlank() || server.isBlank()) return null
+        val pairs = query.split('&').mapNotNull { part ->
+            if (part.isBlank()) null else UriCodec.percentDecode(part.substringBefore('=')) to
+                UriCodec.percentDecode(part.substringAfter('=', ""))
+        }
+        val port = pairs.firstOrNull { it.first.equals("port", ignoreCase = true) }
+            ?.second?.substringBefore('-')?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 1
+        val profileName = pairs.firstOrNull { it.first.equals("profile", ignoreCase = true) }?.second.orEmpty()
+        return ProxyProfile(
+            tag = remark.ifBlank { profileName.ifBlank { "Mieru" } },
+            type = ProxyProfile.TYPE_MIERU,
+            server = server,
+            serverPort = port,
+            username = user,
+            password = password,
+            mieruConfig = uri,
+        )
     }
 
     /** Parses a pasted raw JSON config (Xray full config, Xray outbound or sing-box outbound). */

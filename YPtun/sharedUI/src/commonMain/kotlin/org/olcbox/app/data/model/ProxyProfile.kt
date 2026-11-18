@@ -162,6 +162,12 @@ data class ProxyProfile(
     @SerialName("tt_config")
     val ttConfig: String = "",
     /**
+     * Mieru ([TYPE_MIERU]) standard (`mieru://`) or simple (`mierus://`) share link.
+     * Consumed by the in-process Mieru Go runtime (`CoreapiMieruStart`) on Apple and subprocess on Android/Desktop.
+     */
+    @SerialName("mieru_config")
+    val mieruConfig: String = "",
+    /**
      * Hysteria2 ([TYPE_HYSTERIA2]) parameters. Auth uses [password]; server/[serverPort], [sni],
      * [alpn] and [allowInsecure] are reused. The hysteria2proxy module raises a local SOCKS5 from
      * these (like AmneziaWG). Obfs is Salamander when [hy2Obfs] == "salamander"; [hy2Ports] is an
@@ -222,6 +228,8 @@ data class ProxyProfile(
         if (type == TYPE_NAIVE) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
         if (type == TYPE_TRUSTTUNNEL) return ttConfig.isNotBlank()
+        if (type == TYPE_MIERU) return mieruConfig.startsWith("mieru://", ignoreCase = true) ||
+            mieruConfig.startsWith("mierus://", ignoreCase = true)
         if (!rawXrayConfig.isNullOrBlank()) return true
         if (!rawOutbound.isNullOrBlank()) return true
         if (server.isBlank() || serverPort !in 1..65535) return false
@@ -324,6 +332,7 @@ data class ProxyProfile(
         const val TYPE_TRUSTTUNNEL = "trusttunnel"
         const val TYPE_HYSTERIA2 = "hysteria2"
         const val TYPE_NAIVE = "naive"
+        const val TYPE_MIERU = "mieru"
         const val TYPE_SOCKS = "socks"
 
         const val NETWORK_TCP = "tcp"

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 @preconcurrency import NetworkExtension
 import Coreapi
 import CsqttCore
@@ -13,9 +14,18 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private var running = false
     private var pumpingLogs = false
     private var watchdogFailures = 0
+    private var activePlan: AppleNativeRuntimePlan?
+    private var lastSleepAt: Date?
+    private var lastRefreshAt: Date?
+    private var isRefreshing = false
+    private var lastPathInitialized = false
+    private var lastPathSatisfied = true
+    private var lastPrimaryInterface = ""
     private weak var provider: NEPacketTunnelProvider?
     private var watchdog: DispatchSourceTimer?
     private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private var pathMonitor: NWPathMonitor?
+    private let pathQueue = DispatchQueue(label: "org.yptun.tunnel.pathMonitor", qos: .utility)
 
     func start(
         provider: NEPacketTunnelProvider,
@@ -61,6 +71,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 }
                 do {
                     try self?.startBridge(yaml: bridgeYaml)
+                    self?.setActivePlan(plan)
                     self?.setRunning(true)
                     try? AppleTunnelStore.writeText(
                         VPNConnectionState.connected.rawValue,
@@ -72,6 +83,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                     )
                     self?.log("Tunnel connected: \(plan.displayName)")
                     self?.startWatchdog(plan)
+                    self?.startPathMonitoring()
                     CoreapiFreeOSMemory()
                     completion(nil)
                 } catch {
@@ -92,6 +104,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         memoryPressureSource = nil
         watchdog?.cancel()
         watchdog = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        setActivePlan(nil)
         setPumpingLogs(false)
         Socks5Tunnel.quit()
         CoreapiSbStop()
@@ -124,6 +139,34 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         try? AppleTunnelStore.remove(AppleTunnelStore.connectedAtFileName)
     }
 
+    func handleSleep() {
+        lock.lock()
+        lastSleepAt = Date()
+        lock.unlock()
+        log("Device entering sleep; freeing Go memory")
+        CoreapiFreeOSMemory()
+    }
+
+    func handleWake() {
+        lock.lock()
+        let sleepDate = lastSleepAt
+        lastSleepAt = nil
+        lock.unlock()
+        CoreapiFreeOSMemory()
+        guard let sleepDate else {
+            log("Device woke up")
+            return
+        }
+        let sleptSeconds = Date().timeIntervalSince(sleepDate)
+        log("Device woke up after \(Int(sleptSeconds))s sleep")
+        // After ~45s+ of iOS screen-off sleep, carrier NAT / Wi-Fi routers often silently
+        // drop idle TCP/H2/xhttp sockets. Soft-restarting only the proxy engine flushes
+        // stale pooled connections without tearing down the iOS VPN tunnel.
+        if sleptSeconds >= 45 {
+            refreshProxyAfterNetworkChange(reason: "wake after \(Int(sleptSeconds))s sleep")
+        }
+    }
+
     func handle(message: String) -> String {
         switch message {
         case "status":
@@ -133,6 +176,99 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             return "error:restart-required"
         default:
             return ""
+        }
+    }
+
+    private func startPathMonitoring() {
+        pathMonitor?.cancel()
+        lock.lock()
+        lastPathInitialized = false
+        lastPathSatisfied = true
+        lastPrimaryInterface = ""
+        lock.unlock()
+
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let satisfied = path.status == .satisfied
+            let primaryIface = path.availableInterfaces
+                .first(where: { !$0.name.hasPrefix("utun") })?.name ?? ""
+
+            self.lock.lock()
+            let initialized = self.lastPathInitialized
+            let prevSatisfied = self.lastPathSatisfied
+            let prevIface = self.lastPrimaryInterface
+            self.lastPathInitialized = true
+            self.lastPathSatisfied = satisfied
+            if !primaryIface.isEmpty {
+                self.lastPrimaryInterface = primaryIface
+            }
+            self.lock.unlock()
+
+            guard initialized else { return }
+            let networkRestored = satisfied && !prevSatisfied
+            let interfaceSwitched = satisfied && !primaryIface.isEmpty && !prevIface.isEmpty && primaryIface != prevIface
+            guard networkRestored || interfaceSwitched else { return }
+
+            let reason = networkRestored
+                ? "network restored (\(primaryIface))"
+                : "interface switched (\(prevIface) -> \(primaryIface))"
+            self.log("Network path change: \(reason)")
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.refreshProxyAfterNetworkChange(reason: reason)
+            }
+        }
+        monitor.start(queue: pathQueue)
+        pathMonitor = monitor
+    }
+
+    /// Soft-restarts ONLY the active proxy engine (sing-box / xray / mieru) in-place while
+    /// keeping `utun` and `hev-socks5-tunnel` alive. Fixes the iOS "10-minute sleep" freeze
+    /// and Wi-Fi <-> LTE handoff drops by discarding stale NAT / HTTP2 / xmux sockets.
+    private func refreshProxyAfterNetworkChange(reason: String) {
+        let proxyToRefresh: AppleProxyRuntimePlan
+        lock.lock()
+        guard running, !isRefreshing, let proxy = activePlan?.proxy else {
+            lock.unlock()
+            return
+        }
+        if let lastRefresh = lastRefreshAt, Date().timeIntervalSince(lastRefresh) < 15 {
+            lock.unlock()
+            return
+        }
+        isRefreshing = true
+        proxyToRefresh = proxy
+        lock.unlock()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            defer {
+                self.lock.lock()
+                self.lastRefreshAt = Date()
+                self.isRefreshing = false
+                self.lock.unlock()
+            }
+            guard self.isRunning else { return }
+            self.log("Soft-refreshing proxy core (\(reason))...")
+            do {
+                switch proxyToRefresh.kind {
+                case .singBox:
+                    CoreapiSbStop()
+                    try self.callCore { CoreapiSbStart(proxyToRefresh.config, $0) }
+                case .xray:
+                    CoreapiXrayStop()
+                    try self.callCore { CoreapiXrayStart(proxyToRefresh.config, $0) }
+                case .mieru:
+                    CoreapiMieruStop()
+                    try self.callCore {
+                        CoreapiMieruStart(proxyToRefresh.config, "127.0.0.1:\(proxyToRefresh.listenPort)", $0)
+                    }
+                }
+                CoreapiFreeOSMemory()
+                self.log("Proxy core refreshed cleanly (\(reason))")
+            } catch {
+                self.log("Proxy core refresh failed (\(reason)): \(error.localizedDescription)")
+            }
         }
     }
 
@@ -148,14 +284,16 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             try startOlcRtc(olcrtc)
         }
         if !plan.startAmneziaWgAfterProxy {
-            try startAmneziaWg(plan.amneziaWg)
+            let awgIPs = try startAmneziaWg(plan.amneziaWg)
+            extraExcludedIPv4.append(contentsOf: awgIPs)
         }
         if let snolc = plan.snolc {
             let ips = try startSnolc(snolc)
             extraExcludedIPv4.append(contentsOf: ips)
         }
         if let csqtt = plan.csqtt {
-            try startCsqtt(csqtt)
+            let csqttIPs = try startCsqtt(csqtt)
+            extraExcludedIPv4.append(contentsOf: csqttIPs)
         }
         if let turnable = plan.turnable {
             try callCore {
@@ -210,16 +348,38 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
         }
         if plan.startAmneziaWgAfterProxy {
-            try startAmneziaWg(plan.amneziaWg)
+            _ = try startAmneziaWg(plan.amneziaWg)
         }
         return extraExcludedIPv4
     }
 
-    private func startAmneziaWg(_ plan: AppleAmneziaWgRuntimePlan?) throws {
-        guard let plan else { return }
+    private func startAmneziaWg(_ plan: AppleAmneziaWgRuntimePlan?) throws -> [String] {
+        guard let plan else { return [] }
+        var excluded: [String] = []
+        if let host = extractWgEndpointHost(from: plan.iniConfig),
+           host != "127.0.0.1", host != "::1", host.lowercased() != "localhost" {
+            if isIPv4(host) {
+                excluded.append(host)
+            } else if !isIPv6(host), let ip = resolveHostname(host), isIPv4(ip) {
+                excluded.append(ip)
+            }
+        }
         try callCore {
             CoreapiAwgStart(plan.iniConfig, plan.listenAddress, $0)
         }
+        return excluded
+    }
+
+    private func extractWgEndpointHost(from ini: String) -> String? {
+        for line in ini.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.lowercased().hasPrefix("endpoint"),
+                  let eq = trimmed.firstIndex(of: "=") else { continue }
+            let value = trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            let (host, _) = splitHostPort(value)
+            if !host.isEmpty { return host }
+        }
+        return nil
     }
 
     private func startOlcRtc(_ plan: AppleOlcRtcRuntimePlan) throws {
@@ -289,7 +449,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: modulesDir, withIntermediateDirectories: true)
 
-        // Clear previous snolc log so any error we read belongs to this attempt.
         let snolcLogURL = stateDir.appendingPathComponent("snolc.log")
         try? FileManager.default.removeItem(at: snolcLogURL)
 
@@ -327,7 +486,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             throw NativeTunnelRuntimeError.specializedCore("snolc start failed: \(message)")
         }
 
-        // Wait for snolc SOCKS5 listener to actually come up (up to 10s), failing fast if snolc exits.
         let deadline = Date().addingTimeInterval(10.0)
         while Date() < deadline {
             if !snolc_ffi_is_running() {
@@ -349,11 +507,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         throw NativeTunnelRuntimeError.specializedCore(detail)
     }
 
-    /// Lowers snolc's desktop memory limits (256 MiB / 33.8 MiB yamux window) to fit inside
-    /// iOS PacketTunnel's strict 50 MiB Jetsam budget while satisfying all snolc config invariants:
-    ///   receive_window_bytes >= max_streams_per_session * 256 KiB (33 * 262144 = 8650752)
-    ///   max_managed_bytes    >= receive_window_bytes * max_sessions (2 * 8650752 = 17301504)
-    ///   max_flows            >= max_sessions * (max_streams_per_session - 1) (2 * 32 = 64)
     private func tuneSnolcEngineTomlForIOS(_ toml: String) -> String {
         var out = toml
         let replacements: [(String, String)] = [
@@ -388,8 +541,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         return nil
     }
 
-    /// snolc-carrier-tcp requires `endpoint_ip` to be an IP SocketAddr (rejects hostnames).
-    /// Resolves any domain name to an IP address and returns the IPv4 address for route exclusion.
     private func resolveSnolcTcpEndpoint(_ toml: String) -> (String, String?) {
         var lines = toml.components(separatedBy: "\n")
         var resolvedIPv4: String?
@@ -478,6 +629,37 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         return ipv6Fallback
     }
 
+    private func resolveAllIPv4(_ host: String) -> [String] {
+        if isIPv4(host) { return [host] }
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else {
+            return []
+        }
+        defer { freeaddrinfo(first) }
+        var ips: [String] = []
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let current = cursor {
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(
+                current.pointee.ai_addr,
+                current.pointee.ai_addrlen,
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 {
+                let ip = String(cString: buffer)
+                if !ips.contains(ip) { ips.append(ip) }
+            }
+            cursor = current.pointee.ai_next
+        }
+        return ips
+    }
+
     private func isLocalPortOpen(port: UInt16) -> Bool {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
@@ -501,7 +683,24 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         return lines.joined(separator: " | ")
     }
 
-    private func startCsqtt(_ plan: AppleCsqttRuntimePlan) throws {
+    private func startCsqtt(_ plan: AppleCsqttRuntimePlan) throws -> [String] {
+        var candidateHosts: [String] = ["calls.vk.com", "api.vk.com", "ok.ru"]
+        if let data = plan.optionsJson.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let peer = json["peer"] as? String {
+                let (host, _) = splitHostPort(peer)
+                if !host.isEmpty { candidateHosts.append(host) }
+            }
+            if let turnHost = json["turn_host"] as? String, !turnHost.isEmpty {
+                let (host, _) = splitHostPort(turnHost)
+                candidateHosts.append(host.isEmpty ? turnHost : host)
+            }
+        }
+        var excludedIPv4: [String] = []
+        for host in Set(candidateHosts) {
+            excludedIPv4.append(contentsOf: resolveAllIPv4(host))
+        }
+
         try callCore {
             CoreapiCsqttBridgeStart(
                 plan.bridgeSocksAddress,
@@ -527,6 +726,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 "CSQTT tunnel handshake timed out"
             )
         }
+        return Array(Set(excludedIPv4))
     }
 
     private func startBridge(yaml: String) throws {
@@ -639,6 +839,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             if os_proc_available_memory() < 12 * 1024 * 1024 {
                 CoreapiFreeOSMemory()
             }
+            if self.isCurrentlyRefreshing {
+                return
+            }
             if self.coresRunning(plan) {
                 self.resetWatchdogFailures()
                 return
@@ -698,6 +901,18 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return running
+    }
+
+    private var isCurrentlyRefreshing: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isRefreshing
+    }
+
+    private func setActivePlan(_ plan: AppleNativeRuntimePlan?) {
+        lock.lock()
+        activePlan = plan
+        lock.unlock()
     }
 
     private func setRunning(_ value: Bool) {
