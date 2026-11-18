@@ -236,6 +236,9 @@ class IosSettingsController {
         ) {
             platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.authorize", null)
         }
+        if (!value.notifySubscriptionExpiry && old.notifySubscriptionExpiry) {
+            platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.clearExpiry", null)
+        }
         _appBehavior.value = value
         SubscriptionUserAgentHolder.mode = value.subscriptionUserAgent
         IosSharedStore.saveAppBehavior(value)

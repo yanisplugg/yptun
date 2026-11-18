@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "525"
+    CURRENT_PROJECT_VERSION: "526"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -139,6 +139,7 @@ targets:
     platform: iOS
     sources:
       - path: Sources/Widget
+      - path: Sources/iOSApp/VpnActivityAttributes.swift
     settings:
       base:
         PRODUCT_NAME: YPtunWidget
@@ -154,6 +155,7 @@ targets:
         product: YPtunShared
       - package: YPtunAppleKit
         product: YPtunVPNControl
+      - sdk: ActivityKit.framework
       - sdk: AppIntents.framework
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework

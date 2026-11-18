@@ -3,8 +3,11 @@ package org.olcbox.app.vpn
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.head
+import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
+import io.ktor.http.HttpHeaders
 import org.olcbox.app.data.datasource.createProxyHttpClient
+import org.olcbox.app.data.importer.TrustTunnelParser
 
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -180,21 +183,43 @@ class IosVpnManager(
      * memory. Swift posts the notification (LocalNotifications.swift).
      */
     override fun notifyExpiringSubscriptions(subscriptions: List<ExpiringSubscriptionInfo>) {
-        if (!IosSharedStore.loadAppBehavior().notifySubscriptionExpiry) return
+        if (!IosSharedStore.loadAppBehavior().notifySubscriptionExpiry) {
+            NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.clearExpiry", null)
+            return
+        }
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         val dayMs = 24L * 60L * 60L * 1_000L
         val strings = org.olcbox.app.ui.i18n.stringsFor(org.olcbox.app.ui.i18n.LocalizationState.effective)
         subscriptions.forEach { sub ->
             val remainingMs = sub.expiresAtEpochMs - now
-            if (remainingMs <= 0L || remainingMs > AppBehaviorSettings.SUBSCRIPTION_EXPIRY_NOTIFY_DAYS * dayMs) return@forEach
-            val daysLeft = (remainingMs + dayMs - 1) / dayMs // ceil → 3, 2, 1
-            if (!markNotified("e|${sub.name.hashCode()}|$daysLeft")) return@forEach
+            if (remainingMs <= 0L) return@forEach
             val until = org.olcbox.app.util.IsoTime.formatLocalDateTime(sub.expiresAtEpochMs)
-            postLocalNotification(
-                id = "yptun.expiry.${sub.name.hashCode()}",
-                title = strings.subscriptionExpiringSoon,
-                body = "«${sub.name}»: ${strings.subscriptionExpiryFull(until, daysLeft)}",
-            )
+
+            // 1. Immediate notification if already within the last N days (deduplicated per day left).
+            if (remainingMs <= AppBehaviorSettings.SUBSCRIPTION_EXPIRY_NOTIFY_DAYS * dayMs) {
+                val daysLeft = (remainingMs + dayMs - 1) / dayMs // ceil → 3, 2, 1
+                if (markNotified("e|${sub.name.hashCode()}|$daysLeft")) {
+                    postLocalNotification(
+                        id = "yptun.expiry.${sub.name.hashCode()}.now.$daysLeft",
+                        title = strings.subscriptionExpiringSoon,
+                        body = "«${sub.name}»: ${strings.subscriptionExpiryFull(until, daysLeft)}",
+                    )
+                }
+            }
+
+            // 2. Schedule future UNCalendarNotificationTrigger alerts at -3d / -2d / -1d so iOS delivers
+            // them even when the app stays completely closed.
+            for (daysBefore in AppBehaviorSettings.SUBSCRIPTION_EXPIRY_NOTIFY_DAYS downTo 1) {
+                val fireAtMs = sub.expiresAtEpochMs - daysBefore * dayMs
+                if (fireAtMs > now + 60_000L) {
+                    scheduleLocalNotification(
+                        id = "yptun.expiry.${sub.name.hashCode()}.d$daysBefore",
+                        title = strings.subscriptionExpiringSoon,
+                        body = "«${sub.name}»: ${strings.subscriptionExpiryFull(until, daysBefore.toLong())}",
+                        fireAtEpochSec = fireAtMs / 1_000L,
+                    )
+                }
+            }
         }
     }
 
@@ -219,6 +244,13 @@ class IosVpnManager(
     /** Same channel as the Live Activity signals: a named NSNotification Swift listens for. */
     private fun postLocalNotification(id: String, title: String, body: String) {
         NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.post", listOf(id, title, body))
+    }
+
+    private fun scheduleLocalNotification(id: String, title: String, body: String, fireAtEpochSec: Long) {
+        NSNotificationCenter.defaultCenter.postNotificationName(
+            "org.yptun.notify.schedule",
+            listOf(id, title, body, fireAtEpochSec.toString())
+        )
     }
 
     override fun startVpn() {
@@ -385,50 +417,75 @@ class IosVpnManager(
         return best
     }
 
+    private suspend fun isSameAsActiveLocation(config: LocationConfig): Boolean {
+        val activeEntry = locationsRepository.getActiveLocation() ?: return false
+        val active = activeEntry.location.normalized()
+        if (config.id.isNotBlank() && active.id.isNotBlank()) {
+            return config.id == active.id
+        }
+        if (config.engine != active.engine) return false
+        if (config.displayName() == active.displayName()) {
+            val p1 = config.proxy
+            val p2 = active.proxy
+            if (p1 == null && p2 == null) return true
+            if (p1 != null && p2 != null) {
+                return p1.type == p2.type && p1.server == p2.server && p1.serverPort == p2.serverPort &&
+                    p1.ttConfig == p2.ttConfig
+            }
+        }
+        return false
+    }
+
+    /**
+     * Direct TCP ping executed inside PacketTunnelProvider when VPN is connected, so iOS bypasses
+     * utun and FakeDNS (100.64.0.x) and measures real direct server latency with zero double-hop.
+     */
+    private suspend fun directTcpPingViaExtension(host: String, port: Int, timeoutMs: Int): Long? {
+        if (host.isBlank() || isLoopbackHost(host) || port !in 1..65535) return null
+        val currentManager = manager ?: loadManager(createIfMissing = false)
+        val session = currentManager?.connection as? NETunnelProviderSession ?: return null
+        if (currentManager.connection.status != NEVPNStatusConnected) return null
+        val reply = withTimeoutOrNull((timeoutMs + 1_000).toLong()) {
+            askExtension(session, "tcpping:$host|$port|$timeoutMs")
+        }
+        return reply?.trim()?.toLongOrNull()?.takeIf { it > 0 }
+    }
+
     private suspend fun pingOnce(locationConfig: LocationConfig): Long? = withContext(Dispatchers.Default) {
         val config = locationConfig.normalized()
         val behavior = IosSharedStore.loadAppBehavior()
         val timeoutMs = pingTimeoutMs.toInt()
         val profile = config.proxy
         val method = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) "GET" else "HEAD"
-        val isActiveLocation = locationsRepository.getActiveLocationId() == locationConfig.id
+        val connected = status.value == VpnStatus.Connected
+        val isActiveLocation = connected && isSameAsActiveLocation(config)
         val pingMs = when {
-            config.engine == EngineType.Stealth -> rtcPing(config)
-            config.engine == EngineType.VkTurn -> {
-                if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    tunnelPing()
-                } else {
-                    null
-                }
+            config.engine == EngineType.Stealth -> {
+                if (isActiveLocation) tunnelPing() else rtcPing(config)
             }
-            config.engine == EngineType.MasterDns -> {
-                if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    tunnelPing()
-                } else {
-                    null
-                }
-            }
-            config.engine == EngineType.OpenFlux -> {
-                if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    tunnelPing()
-                } else {
-                    null
-                }
+            config.engine == EngineType.VkTurn ||
+                config.engine == EngineType.MasterDns ||
+                config.engine == EngineType.OpenFlux ||
+                config.engine == EngineType.Snolc -> {
+                if (isActiveLocation) tunnelPing() else null
             }
             profile == null -> null
+            isActiveLocation -> {
+                tunnelPing()
+            }
+            profile.type == ProxyProfile.TYPE_TRUSTTUNNEL -> {
+                val ep = TrustTunnelParser.endpoints(profile.ttConfig).firstOrNull()
+                if (ep == null) null
+                else if (connected) {
+                    directTcpPingViaExtension(ep.first, ep.second, timeoutMs)
+                } else {
+                    core.tcpPing(ep.first, ep.second, timeoutMs).takeIf { it > 0 }
+                }
+            }
             profile.type == ProxyProfile.TYPE_AMNEZIAWG -> {
                 val awgConfig = profile.awgConfig.orEmpty()
                 if (awgConfig.isBlank()) null
-                else if (status.value == VpnStatus.Connected && isActiveLocation) {
-                    tunnelPing() ?: run {
-                        val url = behavior.effectivePingUrl()
-                        val ms = core.awgMeasureDelay(awgConfig, url, method, timeoutMs)
-                        if (ms > 0) ms else {
-                            val probeMs = core.awgProbe(awgConfig)
-                            if (probeMs > 0) probeMs else null
-                        }
-                    }
-                } else {
+                else {
                     val url = behavior.effectivePingUrl()
                     val ms = core.awgMeasureDelay(awgConfig, url, method, timeoutMs)
                     if (ms > 0) ms else {
@@ -437,14 +494,23 @@ class IosVpnManager(
                     }
                 }
             }
-            status.value == VpnStatus.Connected && isActiveLocation -> {
-                tunnelPing()
-            }
-            behavior.pingMode == AppBehaviorSettings.PING_TCP -> {
+            connected -> {
+                // While VPN is active on iOS, main-app sockets route through utun (double-hopping
+                // through the active server + hitting FakeDNS 100.64.0.x). Probing via PacketTunnelProvider
+                // bypasses utun and measures true direct latency over Wi-Fi/LTE.
                 if (isLoopbackHost(profile.server)) null
                 else {
-                    val ms = core.tcpPing(profile.server, profile.serverPort, timeoutMs)
-                    if (ms > 0) ms else null
+                    val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
+                    directTcpPingViaExtension(profile.server, port, timeoutMs)
+                }
+            }
+            behavior.pingMode == AppBehaviorSettings.PING_TCP ||
+                profile.type == ProxyProfile.TYPE_MIERU ||
+                profile.type == ProxyProfile.TYPE_HYSTERIA2 -> {
+                if (isLoopbackHost(profile.server)) null
+                else {
+                    val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
+                    core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
                 }
             }
             else -> {
@@ -514,9 +580,15 @@ class IosVpnManager(
         val mark = kotlin.time.TimeSource.Monotonic.markNow()
         val ok = runCatching {
             val response: HttpResponse = if (behavior.pingMode == AppBehaviorSettings.PING_PROXY_GET) {
-                pingClient.get(urlString)
+                pingClient.get(urlString) {
+                    header(HttpHeaders.Connection, "close")
+                    header(HttpHeaders.CacheControl, "no-cache")
+                }
             } else {
-                pingClient.head(urlString)
+                pingClient.head(urlString) {
+                    header(HttpHeaders.Connection, "close")
+                    header(HttpHeaders.CacheControl, "no-cache")
+                }
             }
             response.status.value in 200..399 || response.status.value == 204
         }.getOrDefault(false)

@@ -17,8 +17,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private var watchdogFailures = 0
     private var activePlan: AppleNativeRuntimePlan?
     private var runtimeDirectoryPath: String = ""
+    private var snolcLogURL: URL?
+    private var snolcLogOffset: UInt64 = 0
     private var trustTunnelClient: VpnClient?
     private var trustTunnelStartHandled = false
+    private var trustTunnelStartTimer: DispatchSourceTimer?
+    private let trustTunnelQueue = DispatchQueue(label: "org.yptun.tunnel.trusttunnel", qos: .userInitiated)
     private var lastSleepAt: Date?
     private var lastRefreshAt: Date?
     private var isRefreshing = false
@@ -33,7 +37,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
     func start(
         provider: NEPacketTunnelProvider,
-        completion: @escaping (Error?) -> Void
+        completion: @escaping @Sendable (Error?) -> Void
     ) {
         do {
             self.provider = provider
@@ -123,13 +127,24 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         pathMonitor = nil
         setActivePlan(nil)
         setPumpingLogs(false)
+        flushSnolcLog()
         lock.lock()
+        snolcLogURL = nil
+        snolcLogOffset = 0
+        trustTunnelStartTimer?.cancel()
+        trustTunnelStartTimer = nil
         let ttClient = trustTunnelClient
         trustTunnelClient = nil
         lock.unlock()
         if let ttClient {
-            _ = ttClient.stop()
-            NativeLogger.setCallback(nil)
+            let ttStopGroup = DispatchGroup()
+            ttStopGroup.enter()
+            trustTunnelQueue.async {
+                _ = ttClient.stop()
+                NativeLogger.setCallback(nil)
+                ttStopGroup.leave()
+            }
+            _ = ttStopGroup.wait(timeout: .now() + 2.0)
         }
         Socks5Tunnel.quit()
         CoreapiSbStop()
@@ -169,7 +184,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.unlock()
         if let ttClient {
             log("Device entering sleep; notifying TrustTunnel")
-            ttClient.notify_sleep()
+            trustTunnelQueue.async {
+                ttClient.notify_sleep()
+            }
             return
         }
         log("Device entering sleep; freeing Go memory")
@@ -184,7 +201,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.unlock()
         if let ttClient {
             log("Device woke up; notifying TrustTunnel")
-            ttClient.notify_wake()
+            trustTunnelQueue.async {
+                ttClient.notify_wake()
+            }
             return
         }
         CoreapiFreeOSMemory()
@@ -202,16 +221,105 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         }
     }
 
-    func handle(message: String) -> String {
+    func handle(message: String, completion: @escaping @Sendable (String) -> Void) {
+        if message.hasPrefix("tcpping:") {
+            let payload = String(message.dropFirst("tcpping:".count))
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else {
+                    completion("-1")
+                    return
+                }
+                let ms = self.directTcpPing(payload: payload)
+                completion(String(ms))
+            }
+            return
+        }
+        if message.hasPrefix("resolve:") {
+            let host = String(message.dropFirst("resolve:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self, !host.isEmpty else {
+                    completion("")
+                    return
+                }
+                let ip = self.resolveAllIPv4(host).first ?? ""
+                completion(ip)
+            }
+            return
+        }
         switch message {
         case "status":
             // IosVpnManager.watchCaptcha polls "status" expecting "" or an http:// captcha URL.
-            return ""
+            completion("")
         case "reload":
-            return "error:restart-required"
+            completion("error:restart-required")
         default:
-            return ""
+            completion("")
         }
+    }
+
+    /// Direct non-blocking TCP ping executed inside PacketTunnelProvider, where iOS guarantees
+    /// both DNS and sockets bypass the VPN utun interface and use the physical Wi-Fi/LTE path.
+    /// Payload format: `<host>|<port>|<timeoutMs>` (or legacy `<host>:<port>:<timeoutMs>`).
+    private func directTcpPing(payload: String) -> Int64 {
+        let parts = payload.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2 else { return -1 }
+        let host = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty,
+              let port = Int(parts[1]), port > 0, port <= 65535 else { return -1 }
+        let lower = host.lowercased()
+        if lower == "127.0.0.1" || lower == "localhost" || lower == "::1" || lower == "0.0.0.0" {
+            return -1
+        }
+        let timeoutMs = min(max((parts.count >= 3 ? Int(parts[2]) : nil) ?? 4_000, 500), 10_000)
+
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &res) == 0, let first = res else {
+            return -1
+        }
+        defer { freeaddrinfo(first) }
+
+        // Prefer IPv4 address if available, falling back to first returned address.
+        var chosen: UnsafeMutablePointer<addrinfo> = first
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let cur = cursor {
+            if cur.pointee.ai_family == AF_INET {
+                chosen = cur
+                break
+            }
+            cursor = cur.pointee.ai_next
+        }
+
+        let fd = socket(chosen.pointee.ai_family, chosen.pointee.ai_socktype, chosen.pointee.ai_protocol)
+        guard fd >= 0 else { return -1 }
+        defer { close(fd) }
+
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        let start = DispatchTime.now()
+        let ret = connect(fd, chosen.pointee.ai_addr, chosen.pointee.ai_addrlen)
+        if ret == 0 {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+            return max(1, Int64(elapsed / 1_000_000))
+        }
+        if errno != EINPROGRESS {
+            return -1
+        }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let pollRet = poll(&pfd, 1, Int32(timeoutMs))
+        if pollRet > 0 && (pfd.revents & Int16(POLLOUT)) != 0 && (pfd.revents & (Int16(POLLERR) | Int16(POLLHUP))) == 0 {
+            var errVal: Int32 = 0
+            var len = socklen_t(MemoryLayout<Int32>.size)
+            if getsockopt(fd, SOL_SOCKET, SO_ERROR, &errVal, &len) == 0 && errVal == 0 {
+                let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+                return max(1, Int64(elapsed / 1_000_000))
+            }
+        }
+        return -1
     }
 
     private func startPathMonitoring() {
@@ -484,6 +592,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
         let snolcLogURL = stateDir.appendingPathComponent("snolc.log")
         try? FileManager.default.removeItem(at: snolcLogURL)
+        lock.lock()
+        self.snolcLogURL = snolcLogURL
+        self.snolcLogOffset = 0
+        lock.unlock()
 
         var listenPort: UInt16 = 10_808
         var excludedIPv4: [String] = []
@@ -542,20 +654,61 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
     private func tuneSnolcEngineTomlForIOS(_ toml: String) -> String {
         var out = toml
+        // Mirror SnolcFiles.kt lowMemory profile with generous socket headroom under iOS's 50 MiB
+        // PacketTunnel Jetsam budget (17 * 256 KiB = 4,456,448 B window per session; 2 sessions =
+        // ~8.9 MiB yamux windows + ~16 MiB headroom inside max_managed_bytes = 24 MiB).
         let replacements: [(String, String)] = [
             ("max_sessions = 4", "max_sessions = 2"),
-            ("max_flows = 512", "max_flows = 64"),
+            ("max_flows = 512", "max_flows = 32"),
             ("max_pending_sessions = 4", "max_pending_sessions = 2"),
-            ("max_pending_opens = 64", "max_pending_opens = 32"),
-            ("max_managed_bytes = 268435456", "max_managed_bytes = 17301504"),
-            ("max_streams_per_session = 129", "max_streams_per_session = 33"),
-            ("receive_window_bytes = 33816576", "receive_window_bytes = 8650752"),
+            ("max_pending_opens = 64", "max_pending_opens = 16"),
+            ("max_managed_bytes = 268435456", "max_managed_bytes = 25165824"),
+            ("max_commands = 64", "max_commands = 16"),
+            ("max_events = 256", "max_events = 64"),
+            ("tcp_socket_rx_bytes = 65536", "tcp_socket_rx_bytes = 32768"),
+            ("tcp_socket_tx_bytes = 65536", "tcp_socket_tx_bytes = 32768"),
+            ("udp_socket_rx_bytes = 131072", "udp_socket_rx_bytes = 65536"),
+            ("udp_socket_tx_bytes = 131072", "udp_socket_tx_bytes = 65536"),
+            ("max_streams_per_session = 129", "max_streams_per_session = 17"),
+            ("receive_window_bytes = 33816576", "receive_window_bytes = 4456448"),
             ("limit = \"8mb\"", "limit = \"1mb\""),
         ]
         for (old, new) in replacements {
             out = out.replacingOccurrences(of: old, with: new)
         }
         return out
+    }
+
+    private func flushSnolcLog() {
+        lock.lock()
+        guard let url = snolcLogURL else {
+            lock.unlock()
+            return
+        }
+        let offset = snolcLogOffset
+        lock.unlock()
+
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        let fileSize = handle.seekToEndOfFile()
+        guard fileSize > offset else { return }
+        handle.seek(toFileOffset: offset)
+        let chunk = handle.readData(ofLength: Int(min(fileSize - offset, 16_384)))
+        let newOffset = offset + UInt64(chunk.count)
+
+        lock.lock()
+        if snolcLogURL == url {
+            snolcLogOffset = newOffset
+        }
+        lock.unlock()
+
+        guard let text = String(data: chunk, encoding: .utf8) else { return }
+        for raw in text.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !line.isEmpty {
+                try? AppleTunnelStore.appendLog("snolc: \(line)")
+            }
+        }
     }
 
     private func extractListenPort(from toml: String) -> UInt16? {
@@ -872,6 +1025,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             if os_proc_available_memory() < 16 * 1024 * 1024 {
                 CoreapiFreeOSMemory()
             }
+            if plan.snolc != nil {
+                self.flushSnolcLog()
+            }
             if self.isCurrentlyRefreshing {
                 return
             }
@@ -1011,19 +1167,55 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             log("Xray geo assets missing (geoip=\(geoipSize)B, geosite=\(geositeSize)B); stripping geosite/geoip selectors")
         }
 
-        let tuned = tuneXrayConfigForIOS(config, stripGeoSelectors: !hasGeoAssets, stripOnlyTag: nil)
-        do {
-            try callCore { CoreapiXrayStart(tuned, $0) }
-        } catch {
-            let msg = error.localizedDescription.lowercased()
-            if hasGeoAssets && (msg.contains("geosite") || msg.contains("geoip") || msg.contains("list not found") || msg.contains("failed to load")) {
-                log("Xray geo selector error (\(error.localizedDescription)); retrying with missing geo selectors stripped")
+        var currentConfig = tuneXrayConfigForIOS(config, stripGeoSelectors: !hasGeoAssets, stripOnlyTag: nil)
+        var strippedTags: Set<String> = []
+        for attempt in 0..<6 {
+            do {
+                try callCore { CoreapiXrayStart(currentConfig, $0) }
+                return
+            } catch {
+                let rawMsg = error.localizedDescription
+                let msg = rawMsg.lowercased()
+                let isGeoError = hasGeoAssets && (
+                    msg.contains("geosite") || msg.contains("geoip") ||
+                    msg.contains("list not found") || msg.contains("failed to load") ||
+                    msg.contains("failed to check code")
+                )
+                guard isGeoError else { throw error }
+
+                // Prefer stripping ONLY the single missing selector (e.g. `geosite:ru` absent from
+                // russia-v2ray-rules-dat) so all remaining selectors (`geosite:category-ru`,
+                // `geosite:yandex`, `geoip:ru`, `geoip:private`) stay active!
+                if let badTag = extractFailingGeoSelector(from: rawMsg), !strippedTags.contains(badTag.lowercased()) {
+                    strippedTags.insert(badTag.lowercased())
+                    log("Xray missing geo selector '\(badTag)'; stripping only '\(badTag)' (attempt \(attempt + 1))")
+                    currentConfig = tuneXrayConfigForIOS(currentConfig, stripGeoSelectors: false, stripOnlyTag: badTag)
+                    continue
+                }
+
+                log("Xray geo selector error (\(rawMsg)); retrying with all geo selectors stripped")
                 let fallback = tuneXrayConfigForIOS(config, stripGeoSelectors: true, stripOnlyTag: nil)
                 try callCore { CoreapiXrayStart(fallback, $0) }
-            } else {
-                throw error
+                return
             }
         }
+        let fallback = tuneXrayConfigForIOS(config, stripGeoSelectors: true, stripOnlyTag: nil)
+        try callCore { CoreapiXrayStart(fallback, $0) }
+    }
+
+    private func extractFailingGeoSelector(from message: String) -> String? {
+        for marker in ["illegal domain rule: ", "illegal ip rule: "] {
+            if let range = message.range(of: marker, options: .caseInsensitive) {
+                let tail = message[range.upperBound...]
+                let token = tail.prefix { !$0.isWhitespace && $0 != ">" && $0 != "," && $0 != ";" }
+                let tag = String(token).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                let lower = tag.lowercased()
+                if lower.hasPrefix("geosite:") || lower.hasPrefix("geoip:") {
+                    return tag
+                }
+            }
+        }
+        return nil
     }
 
     /// Injects iOS-safe per-connection buffer/timeout policy into Xray JSON (8 KiB bufferSize
@@ -1213,8 +1405,11 @@ final class NativeTunnelRuntime: @unchecked Sendable {
               let loc = (try? JSONSerialization.jsonObject(with: locData)) as? [String: Any] else {
             return nil
         }
-        let engine = (loc["engine"] as? String) ?? "Standard"
-        guard engine.caseInsensitiveCompare("Standard") == .orderedSame else { return nil }
+        if let engine = loc["engine"] as? String,
+           !engine.isEmpty,
+           engine.caseInsensitiveCompare("Standard") != .orderedSame {
+            return nil
+        }
         guard let proxy = loc["proxy"] as? [String: Any],
               let proxyType = proxy["type"] as? String,
               proxyType.caseInsensitiveCompare("trusttunnel") == .orderedSame,
@@ -1254,7 +1449,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private func startTrustTunnel(
         provider: NEPacketTunnelProvider,
         spec: TrustTunnelSpec,
-        completion: @escaping (Error?) -> Void
+        completion: @escaping @Sendable (Error?) -> Void
     ) {
         log("Starting TrustTunnel: \(spec.displayName)")
         startMemoryPressureMonitoring()
@@ -1282,16 +1477,47 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             return
         }
 
-        let excludedLanCidrs: [String] = spec.bypassLan
-            ? ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "255.255.255.255/32"]
-            : ["127.0.0.0/8", "224.0.0.0/4", "255.255.255.255/32"]
-        let excludedTomlList = excludedLanCidrs.map { "\"\($0)\"" }.joined(separator: ", ")
+        let endpointAddresses = extractTomlStringArray(key: "addresses", from: endpointToml)
+        let dnsUpstreams = extractTomlStringArray(key: "dns_upstreams", from: endpointToml)
+        log("TrustTunnel endpoint decoded (addresses=\(endpointAddresses.count), dns_upstreams=\(dnsUpstreams.count), mtu=\(spec.mtu))")
 
+        var remoteAddr = "127.0.0.1"
+        var excludedEndpointCidrs: [String] = []
+        for addr in endpointAddresses {
+            let (host, _) = splitHostPort(addr)
+            if isIPv4(host) {
+                if remoteAddr == "127.0.0.1" { remoteAddr = host }
+                excludedEndpointCidrs.append("\(host)/32")
+            } else if isIPv6(host) {
+                if remoteAddr == "127.0.0.1" { remoteAddr = host }
+                excludedEndpointCidrs.append("\(host)/128")
+            } else if !host.isEmpty {
+                let resolved = resolveAllIPv4(host)
+                if remoteAddr == "127.0.0.1", let first = resolved.first { remoteAddr = first }
+                for ip in resolved {
+                    excludedEndpointCidrs.append("\(ip)/32")
+                }
+            }
+        }
+
+        var excludedCidrs: [String] = ["0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/3", "255.255.255.255/32"]
+        if spec.bypassLan {
+            excludedCidrs.append(contentsOf: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"])
+        }
+        for cidr in excludedEndpointCidrs where !excludedCidrs.contains(cidr) {
+            excludedCidrs.append(cidr)
+        }
+        let excludedTomlList = excludedCidrs.map { "\"\($0)\"" }.joined(separator: ", ")
+
+        // TrustTunnelConfig::build_config (v1.1.12) requires top-level `vpn_mode = "general"`.
+        let trimmedEndpoint = endpointToml.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullToml = """
         loglevel = "info"
+        vpn_mode = "general"
         killswitch_enabled = false
+        exclusions = []
 
-        \(endpointToml.trimmingCharacters(in: .whitespacesAndNewlines))
+        \(trimmedEndpoint)
 
         [listener.tun]
         mtu_size = \(spec.mtu)
@@ -1299,54 +1525,43 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         excluded_routes = [\(excludedTomlList)]
         """
 
-        let endpointAddresses = extractTrustTunnelEndpointAddresses(from: endpointToml)
-        var remoteAddr = "127.0.0.1"
-        var excludedIPv4: [String] = []
-        for addr in endpointAddresses {
-            let (host, _) = splitHostPort(addr)
-            if isIPv4(host) {
-                if remoteAddr == "127.0.0.1" { remoteAddr = host }
-                excludedIPv4.append(host)
-            } else if isIPv6(host) {
-                if remoteAddr == "127.0.0.1" { remoteAddr = host }
-            } else if !host.isEmpty {
-                let resolved = resolveAllIPv4(host)
-                if remoteAddr == "127.0.0.1", let first = resolved.first { remoteAddr = first }
-                excludedIPv4.append(contentsOf: resolved)
+        // Use RFC 2544 TUN IPv4 (198.18.0.2/24) so RFC1918 LAN exclusions never overlap the utun address,
+        // and compute exact split includedRoutes via VpnClient.excludeCidr (same as official TrustTunnelClient).
+        let computedIncluded = VpnClient.excludeCidr(["0.0.0.0/0", "::/0"], excludeRoutes: excludedCidrs)
+        var v4Included: [NEIPv4Route] = []
+        var v6Included: [NEIPv6Route] = []
+        for route in computedIncluded {
+            let parts = route.split(separator: "/")
+            guard parts.count == 2, let prefix = Int(parts[1]) else { continue }
+            let ip = String(parts[0])
+            if ip.contains(":") {
+                v6Included.append(NEIPv6Route(destinationAddress: ip, networkPrefixLength: NSNumber(value: prefix)))
+            } else {
+                v4Included.append(NEIPv4Route(destinationAddress: ip, subnetMask: ipv4Mask(forPrefixLength: prefix)))
             }
         }
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddr)
         settings.mtu = NSNumber(value: spec.mtu)
 
-        let ipv4 = NEIPv4Settings(addresses: ["172.16.209.2"], subnetMasks: ["255.255.255.252"])
-        ipv4.includedRoutes = [.default()]
-        var excludedRoutes: [NEIPv4Route] = []
-        if spec.bypassLan {
-            excludedRoutes.append(contentsOf: [
-                NEIPv4Route(destinationAddress: "10.0.0.0", subnetMask: "255.0.0.0"),
-                NEIPv4Route(destinationAddress: "172.16.0.0", subnetMask: "255.240.0.0"),
-                NEIPv4Route(destinationAddress: "192.168.0.0", subnetMask: "255.255.0.0"),
-                NEIPv4Route(destinationAddress: "169.254.0.0", subnetMask: "255.255.0.0"),
-            ])
-        }
-        for ip in Set(excludedIPv4) where isIPv4(ip) {
-            excludedRoutes.append(NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255"))
-        }
-        ipv4.excludedRoutes = excludedRoutes
+        let ipv4 = NEIPv4Settings(addresses: ["198.18.0.2"], subnetMasks: ["255.255.255.0"])
+        ipv4.includedRoutes = v4Included.isEmpty ? [.default()] : v4Included
         settings.ipv4Settings = ipv4
 
-        let ipv6 = NEIPv6Settings(addresses: ["fd00::2"], networkPrefixLengths: [126])
-        ipv6.includedRoutes = [.default()]
+        let ipv6 = NEIPv6Settings(addresses: ["fd00::1"], networkPrefixLengths: [64])
+        ipv6.includedRoutes = v6Included.isEmpty ? [.default()] : v6Included
         settings.ipv6Settings = ipv6
 
-        let hasDnsUpstreams = endpointToml.contains("dns_upstreams")
-        let dns = NEDNSSettings(servers: hasDnsUpstreams ? ["198.18.53.53"] : ["1.1.1.1", "8.8.8.8"])
+        // Official TrustTunnelClient uses 198.18.53.53 ONLY when endpoint.dns_upstreams is non-empty;
+        // when empty, real DNS servers must be configured directly so queries resolve through the tunnel.
+        let dns = NEDNSSettings(servers: dnsUpstreams.isEmpty ? ["1.1.1.1", "8.8.8.8"] : ["198.18.53.53"])
         dns.matchDomains = [""]
         settings.dnsSettings = dns
 
         lock.lock()
         trustTunnelStartHandled = false
+        trustTunnelStartTimer?.cancel()
+        trustTunnelStartTimer = nil
         lock.unlock()
 
         provider.setTunnelNetworkSettings(settings) { [weak self, weak provider] error in
@@ -1358,101 +1573,140 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 return
             }
 
-            let client: VpnClient? = VpnClient(
-                config: fullToml,
-                connectionInfoHandler: { _ in },
-                stateChangeHandler: { [weak self, weak provider] rawState in
+            self.trustTunnelQueue.async { [weak self, weak provider] in
+                guard let self, let provider else { return }
+
+                let finishStart: @Sendable (Error?) -> Void = { [weak self] startError in
                     guard let self else { return }
-                    switch rawState {
-                    case 2: // connected
-                        self.lock.lock()
-                        let alreadyHandled = self.trustTunnelStartHandled
-                        self.trustTunnelStartHandled = true
-                        self.lock.unlock()
-                        provider?.reasserting = false
-                        if !alreadyHandled {
-                            self.setRunning(true)
-                            try? AppleTunnelStore.writeText(
-                                VPNConnectionState.connected.rawValue,
-                                to: AppleTunnelStore.statusFileName
-                            )
-                            try? AppleTunnelStore.writeText(
-                                String(Date().timeIntervalSince1970),
-                                to: AppleTunnelStore.connectedAtFileName
-                            )
-                            self.log("Tunnel connected: \(spec.displayName)")
-                            completion(nil)
-                        }
-                    case 3, 4, 5: // waiting_for_recovery, recovering, waiting_for_network
-                        provider?.reasserting = true
-                    case 0: // disconnected
-                        self.lock.lock()
-                        let alreadyHandled = self.trustTunnelStartHandled
-                        self.trustTunnelStartHandled = true
-                        self.lock.unlock()
-                        if !alreadyHandled {
-                            let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to connect")
-                            self.record(error: err)
-                            self.stop()
-                            completion(err)
-                        } else if self.isRunning {
-                            self.log("TrustTunnel disconnected")
-                            self.stop()
-                            provider?.cancelTunnelWithError(nil)
-                            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {
-                                exit(0)
-                            }
-                        }
-                    default:
-                        break
+                    self.lock.lock()
+                    let alreadyHandled = self.trustTunnelStartHandled
+                    self.trustTunnelStartHandled = true
+                    self.trustTunnelStartTimer?.cancel()
+                    self.trustTunnelStartTimer = nil
+                    self.lock.unlock()
+                    guard !alreadyHandled else { return }
+                    if let startError {
+                        self.record(error: startError)
+                        self.stop()
+                        completion(startError)
+                    } else {
+                        self.setRunning(true)
+                        try? AppleTunnelStore.writeText(
+                            VPNConnectionState.connected.rawValue,
+                            to: AppleTunnelStore.statusFileName
+                        )
+                        try? AppleTunnelStore.writeText(
+                            String(Date().timeIntervalSince1970),
+                            to: AppleTunnelStore.connectedAtFileName
+                        )
+                        self.log("Tunnel connected: \(spec.displayName)")
+                        completion(nil)
                     }
                 }
-            )
 
-            guard let client else {
-                let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to initialize client")
-                self.record(error: err)
-                self.stop()
-                completion(err)
-                return
-            }
+                let client: VpnClient? = VpnClient(
+                    config: fullToml,
+                    connectionInfoHandler: { _ in },
+                    stateChangeHandler: { [weak self, weak provider] rawState in
+                        guard let self else { return }
+                        self.log("TrustTunnel state -> \(rawState)")
+                        switch rawState {
+                        case 2: // connected
+                            self.trustTunnelQueue.async {
+                                provider?.reasserting = false
+                                finishStart(nil)
+                            }
+                        case 3, 4, 5: // waiting_for_recovery, recovering, waiting_for_network
+                            self.trustTunnelQueue.async {
+                                provider?.reasserting = true
+                            }
+                        case 0: // disconnected
+                            self.trustTunnelQueue.async { [weak self, weak provider] in
+                                guard let self else { return }
+                                self.lock.lock()
+                                let alreadyHandled = self.trustTunnelStartHandled
+                                self.lock.unlock()
+                                if !alreadyHandled {
+                                    finishStart(NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to connect"))
+                                } else if self.isRunning {
+                                    self.log("TrustTunnel disconnected")
+                                    self.stop()
+                                    provider?.cancelTunnelWithError(nil)
+                                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {
+                                        exit(0)
+                                    }
+                                }
+                            }
+                        default:
+                            break
+                        }
+                    }
+                )
 
-            self.lock.lock()
-            self.trustTunnelClient = client
-            self.lock.unlock()
+                guard let client else {
+                    finishStart(NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to initialize client (invalid TOML or network monitor)"))
+                    return
+                }
 
-            if !client.start(provider.packetFlow) {
                 self.lock.lock()
-                let alreadyHandled = self.trustTunnelStartHandled
-                self.trustTunnelStartHandled = true
+                self.trustTunnelClient = client
+                let timer = DispatchSource.makeTimerSource(queue: self.trustTunnelQueue)
+                timer.schedule(deadline: .now() + 20)
+                timer.setEventHandler {
+                    finishStart(NativeTunnelRuntimeError.specializedCore("TrustTunnel connection timed out (20s)"))
+                }
+                self.trustTunnelStartTimer = timer
                 self.lock.unlock()
-                if !alreadyHandled {
-                    let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel client start returned false")
-                    self.record(error: err)
-                    self.stop()
-                    completion(err)
+                timer.resume()
+
+                if !client.start(provider.packetFlow) {
+                    finishStart(NativeTunnelRuntimeError.specializedCore("TrustTunnel client start returned false"))
                 }
             }
         }
     }
 
-    private func extractTrustTunnelEndpointAddresses(from toml: String) -> [String] {
-        var addresses: [String] = []
-        for rawLine in toml.split(separator: "\n") {
+    private func extractTomlStringArray(key: String, from toml: String) -> [String] {
+        var values: [String] = []
+        let keyLower = key.lowercased()
+        let lines = toml.components(separatedBy: "\n")
+        var collecting = false
+        var buffer = ""
+
+        for rawLine in lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.lowercased().hasPrefix("addresses"),
-                  let startBracket = line.firstIndex(of: "["),
-                  let endBracket = line.lastIndex(of: "]"),
-                  startBracket < endBracket else { continue }
-            let inside = line[line.index(after: startBracket)..<endBracket]
-            for item in inside.split(separator: ",") {
-                let cleaned = item.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
-                if !cleaned.isEmpty {
-                    addresses.append(cleaned)
+            if !collecting {
+                guard line.lowercased().hasPrefix(keyLower) else { continue }
+                let afterKey = line.dropFirst(keyLower.count).trimmingCharacters(in: .whitespaces)
+                guard afterKey.hasPrefix("="), let openBracket = afterKey.firstIndex(of: "[") else { continue }
+                buffer = String(afterKey[afterKey.index(after: openBracket)...])
+                collecting = true
+            } else {
+                buffer.append(" ")
+                buffer.append(line)
+            }
+
+            if collecting, let closeBracket = buffer.firstIndex(of: "]") {
+                let inside = buffer[..<closeBracket]
+                for item in inside.split(separator: ",") {
+                    let cleaned = item.trimmingCharacters(
+                        in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'"))
+                    )
+                    if !cleaned.isEmpty {
+                        values.append(cleaned)
+                    }
                 }
+                collecting = false
+                buffer = ""
             }
         }
-        return addresses
+        return values
+    }
+
+    private func ipv4Mask(forPrefixLength length: Int) -> String {
+        let clamped = max(0, min(32, length))
+        let mask: UInt32 = clamped == 0 ? 0 : ~UInt32(0) << (32 - clamped)
+        return "\(mask >> 24 & 0xff).\(mask >> 16 & 0xff).\(mask >> 8 & 0xff).\(mask & 0xff)"
     }
 }
 

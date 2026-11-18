@@ -1,6 +1,6 @@
 import ActivityKit
 import Foundation
-import NetworkExtension
+@preconcurrency import NetworkExtension
 
 @available(iOS 16.2, *)
 enum LiveActivityManager {
@@ -16,6 +16,21 @@ enum LiveActivityManager {
         return text.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
 
+    static func syncWithCurrentStatus() {
+        Task { @MainActor in
+            guard isEnabled(), ActivityAuthorizationInfo().areActivitiesEnabled else {
+                endAll()
+                return
+            }
+            let manager = try? await NETunnelProviderManager.loadAllFromPreferences().first
+            if manager?.connection.status == .connected {
+                onConnected(date: manager?.connection.connectedDate)
+            } else {
+                endAll()
+            }
+        }
+    }
+
     static func onConnected(date: Date? = nil) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         guard isEnabled() else {
@@ -24,16 +39,12 @@ enum LiveActivityManager {
         }
 
         Task { @MainActor in
-            var startDate = date
-            if startDate == nil {
-                if let manager = try? await NETunnelProviderManager.loadAllFromPreferences().first,
-                   let connDate = manager.connection.connectedDate {
-                    startDate = connDate
-                }
+            let manager = try? await NETunnelProviderManager.loadAllFromPreferences().first
+            guard manager?.connection.status == .connected else {
+                endAll()
+                return
             }
-            if startDate == nil {
-                startDate = Date()
-            }
+            let startDate = date ?? manager?.connection.connectedDate ?? Date()
 
             let (flag, name) = loadServerInfo()
             let state = VpnActivityAttributes.ContentState(

@@ -572,9 +572,20 @@ private fun IosApp(
                         if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
                     },
                     appBehavior = appBehavior,
-                    onAppBehaviorChanged = {
-                        dependencies.settings.setAppBehavior(it)
-                        if (homeState.isVpnConnected) dependencies.homeViewModel.restartVpnIfRunning()
+                    onAppBehaviorChanged = { updated ->
+                        val prev = appBehavior
+                        dependencies.settings.setAppBehavior(updated)
+                        if ((updated.notifySubscriptionExpiry && !prev.notifySubscriptionExpiry) ||
+                            (updated.notifyPanelAnnouncements && !prev.notifyPanelAnnouncements)
+                        ) {
+                            dependencies.homeViewModel.recheckNotifications()
+                        }
+                        val tunnelChanged = updated.globalProxyCore != prev.globalProxyCore ||
+                            updated.telemostCookiesEnabled != prev.telemostCookiesEnabled ||
+                            updated.telemostCookies != prev.telemostCookies
+                        if (tunnelChanged && homeState.isVpnConnected) {
+                            dependencies.homeViewModel.restartVpnIfRunning()
+                        }
                     },
                     // Telegram-over-WARP is an Android/desktop feature; the section is hidden on iOS.
                     telegramProxyState = TelegramProxyState.Stopped,

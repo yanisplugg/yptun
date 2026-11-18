@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct OlcboxIosApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     private let platformBridge: SwiftPlatformBridge
     private let coreBridge: SwiftCoreBridge
     private let appSession: IosAppSession
@@ -77,6 +78,13 @@ struct OlcboxIosApp: App {
             .ignoresSafeArea()
             .onOpenURL { url in
                 handleUrl(url, session: appSession)
+            }
+            .onChange(of: scenePhase) { newPhase in
+                if newPhase == .active {
+                    if #available(iOS 16.2, *) {
+                        LiveActivityManager.syncWithCurrentStatus()
+                    }
+                }
             }
         }
     }

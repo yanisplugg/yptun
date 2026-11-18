@@ -233,10 +233,15 @@ fun LocationRow(
             // Subscription-supplied description (Happ `meta.serverDescription`), shown right under the
             // name and ABOVE the protocol/IP subtitle. Display-only; absent when the source has none.
             val description = location.config?.description?.takeIf { it.isNotBlank() }
+            val descriptionColor = if (isSelected) {
+                MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.88f)
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
             description?.let { desc ->
                 Text(
                     text = rememberLinkified(desc),
-                    color = MaterialTheme.colorScheme.primary,
+                    color = descriptionColor,
                     fontSize = 12.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -315,7 +320,7 @@ fun LocationRow(
                         text = "$pingMs ms",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = secondaryTextColor
                     )
                 }
             }
@@ -325,7 +330,7 @@ fun LocationRow(
                     text = "—",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = secondaryTextColor
                 )
             }
 
@@ -366,7 +371,7 @@ fun LocationRow(
                 Icon(
                     imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
                     contentDescription = "Pin",
-                    tint = if (isPinned) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (isPinned) MaterialTheme.colorScheme.error else secondaryTextColor
                 )
             }
         }
@@ -460,7 +465,7 @@ private fun LocationSelectionIndicator(isSelected: Boolean) {
         Icon(
             imageVector = Icons.Rounded.CheckCircle,
             contentDescription = "Selected location",
-            tint = MaterialTheme.colorScheme.primary,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier.size(24.dp)
         )
     } else {
@@ -575,11 +580,16 @@ fun LocationGridCell(
             // grid cell used to drop it entirely ("не видно описаний"). Falls back to the protocol/IP
             // endpoint when there's no description (same rule as the full row).
             val description = location.config?.description?.takeIf { it.isNotBlank() }
+            val descriptionColor = if (isSelected) {
+                MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.88f)
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
             description?.let { desc ->
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
                     text = rememberLinkified(desc),
-                    color = MaterialTheme.colorScheme.primary,
+                    color = descriptionColor,
                     fontSize = 11.sp,
                     lineHeight = 13.sp,
                     maxLines = 2,
@@ -591,7 +601,7 @@ fun LocationGridCell(
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(
                     text = locationSubtitle(location),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = secondaryTextColor,
                     fontSize = 11.sp,
                     lineHeight = 13.sp,
                     maxLines = 2,
@@ -610,7 +620,8 @@ fun LocationGridCell(
                 location = location,
                 isLoading = isLoading,
                 pingMs = pingMs,
-                isError = isError
+                isError = isError,
+                secondaryColor = secondaryTextColor
             )
 
             if (selectionMode) {
@@ -622,7 +633,7 @@ fun LocationGridCell(
                             Icon(
                                 imageVector = if (isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
                                 contentDescription = "Pin",
-                                tint = if (isPinned) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = if (isPinned) MaterialTheme.colorScheme.error else secondaryTextColor,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -632,7 +643,7 @@ fun LocationGridCell(
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
                                 contentDescription = "Settings",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = secondaryTextColor,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -642,7 +653,7 @@ fun LocationGridCell(
                         Icon(
                             imageVector = Icons.Rounded.CheckCircle,
                             contentDescription = "Selected location",
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -658,7 +669,8 @@ private fun CompactPingIndicator(
     location: LocationItem,
     isLoading: Boolean,
     pingMs: Int?,
-    isError: Boolean
+    isError: Boolean,
+    secondaryColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
 ) {
     val isVkTurn = location.config?.engine == EngineType.VkTurn
     // MasterDNS is an obfuscated DNS tunnel: it has no directly-probeable endpoint, so a NULL ping means
@@ -685,7 +697,7 @@ private fun CompactPingIndicator(
                 text = "$pingMs ms",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = secondaryColor
             )
         }
 
@@ -693,7 +705,7 @@ private fun CompactPingIndicator(
             text = "—",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = secondaryColor
         )
 
         isError -> if (iconResult) {

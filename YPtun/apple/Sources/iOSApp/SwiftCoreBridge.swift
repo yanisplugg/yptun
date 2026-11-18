@@ -54,12 +54,18 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
 
         let IP_BOUND_IF: Int32 = 25
         let IPV6_BOUND_IF: Int32 = 125
-        if let ifIndex = SwiftCoreBridge.getPhysicalInterfaceIndex() {
-            var idx = ifIndex
+        if let physical = SwiftCoreBridge.getPhysicalInterface(for: info.pointee.ai_family) {
+            var idx = physical.index
             if info.pointee.ai_family == AF_INET {
                 _ = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
             } else if info.pointee.ai_family == AF_INET6 {
                 _ = setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            }
+            var addrStorage = physical.address
+            _ = withUnsafePointer(to: &addrStorage) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    bind(fd, sa, physical.addressLength)
+                }
             }
         }
 
@@ -249,28 +255,59 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         return ips.joined(separator: ",")
     }
 
-    private static func getPhysicalInterfaceIndex() -> UInt32? {
+    private struct PhysicalInterface {
+        let index: UInt32
+        let address: sockaddr_storage
+        let addressLength: socklen_t
+    }
+
+    private static func getPhysicalInterface(for family: Int32) -> PhysicalInterface? {
         var ifaddrs: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrs) == 0, let first = ifaddrs else { return nil }
         defer { freeifaddrs(first) }
 
+        var fallback: PhysicalInterface?
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let cur = ptr {
             let name = String(cString: cur.pointee.ifa_name)
             let flags = Int(cur.pointee.ifa_flags)
             if (flags & Int(IFF_UP)) != 0 && (flags & Int(IFF_RUNNING)) != 0 && (flags & Int(IFF_LOOPBACK)) == 0 {
-                if !name.hasPrefix("utun") && !name.hasPrefix("lo") && !name.hasPrefix("awdl") && !name.hasPrefix("llw") && !name.hasPrefix("p2p") {
-                    if let addr = cur.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) || addr.pointee.sa_family == UInt8(AF_INET6) {
-                        let idx = if_nametoindex(cur.pointee.ifa_name)
-                        if idx > 0 {
-                            return idx
+                let isVirtual = name.hasPrefix("utun") || name.hasPrefix("lo") ||
+                    name.hasPrefix("awdl") || name.hasPrefix("llw") ||
+                    name.hasPrefix("p2p") || name.hasPrefix("ipsec") ||
+                    name.hasPrefix("bridge")
+                if !isVirtual, let addr = cur.pointee.ifa_addr, Int32(addr.pointee.sa_family) == family {
+                    // Skip IPv6 link-local (fe80::)
+                    var skip = false
+                    if family == AF_INET6 {
+                        let sin6 = addr.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee }
+                        if sin6.sin6_addr.__u6_addr.__u6_addr8.0 == 0xfe &&
+                           (sin6.sin6_addr.__u6_addr.__u6_addr8.1 & 0xc0) == 0x80 {
+                            skip = true
+                        }
+                    }
+                    let idx = if_nametoindex(cur.pointee.ifa_name)
+                    if !skip && idx > 0 {
+                        var storage = sockaddr_storage()
+                        let len = socklen_t(addr.pointee.sa_len)
+                        withUnsafeMutableBytes(of: &storage) { dst in
+                            let src = UnsafeRawBufferPointer(start: addr, count: min(Int(len), dst.count))
+                            dst.copyBytes(from: src)
+                        }
+                        let candidate = PhysicalInterface(index: idx, address: storage, addressLength: len)
+                        // Prefer primary Wi-Fi (en0) or cellular (pdp_ip0)
+                        if name == "en0" || name == "pdp_ip0" {
+                            return candidate
+                        }
+                        if fallback == nil {
+                            fallback = candidate
                         }
                     }
                 }
             }
             ptr = cur.pointee.ifa_next
         }
-        return nil
+        return fallback
     }
 
     func snolcVersion() -> String { "" }

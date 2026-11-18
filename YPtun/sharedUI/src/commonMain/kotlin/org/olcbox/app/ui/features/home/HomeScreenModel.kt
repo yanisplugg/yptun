@@ -1072,6 +1072,8 @@ class HomeScreenViewModel(
                 subscriptionProxy = vpnManager.subscriptionFetchProxy()
             )
             loadCurrentConfigNow()
+            notifyExpiringSubscriptions()
+            notifyPanelAnnouncements()
             onComplete(updatedCount)
         }
     }
@@ -1086,15 +1088,30 @@ class HomeScreenViewModel(
                 subscriptionProxy = vpnManager.subscriptionFetchProxy()
             )
             loadCurrentConfigNow()
+            notifyExpiringSubscriptions()
+            notifyPanelAnnouncements()
             onComplete(updatedCount)
+        }
+    }
+
+    /** Re-evaluates cached subscription expiry & panel announcements immediately (e.g. when a toggle is enabled). */
+    fun recheckNotifications() {
+        viewModelScope.launch {
+            notifyExpiringSubscriptions()
+            notifyPanelAnnouncements()
         }
     }
 
     private fun startSubscriptionAutoRefresh() {
         viewModelScope.launch {
+            // Check already-cached subscriptions quickly so iOS/desktop schedules expiry reminders
+            // and shows announcements even if the user closes the app within a few seconds.
+            delay(2_000L)
+            notifyExpiringSubscriptions()
+            notifyPanelAnnouncements()
             // Initial delay so cold startup renders cached locations and subscriptions instantly without
             // locking the mutation mutex behind slow/blocked subscription network calls.
-            delay(15_000L)
+            delay(13_000L)
             backfillMissingSubscriptionExpiry()
             // Once per launch: retry overdue subscriptions even if they failed last time (keyed off the
             // last successful refresh). The periodic poll keeps the failure backoff to avoid hammering.

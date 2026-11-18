@@ -2,15 +2,21 @@ import Darwin
 import Foundation
 @preconcurrency import NetworkExtension
 
+private final class SendableCallbackBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
+}
+
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let runtime = NativeTunnelRuntime()
 
     override func startTunnel(
-        options: [String: NSObject]?,
+        options: [String: NSObject]? = nil,
         completionHandler: @escaping (Error?) -> Void
     ) {
+        let done = SendableCallbackBox(completionHandler)
         runtime.start(provider: self) { error in
-            completionHandler(error)
+            done.value(error)
             if error != nil {
                 // Exit cleanly after reporting start failure so iOS spawns a fresh
                 // extension process on the next connect with zero lingering sockets
@@ -49,7 +55,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler: ((Data?) -> Void)?
     ) {
         let message = String(data: messageData, encoding: .utf8) ?? ""
-        let response = runtime.handle(message: message)
-        completionHandler?(Data(response.utf8))
+        let reply = SendableCallbackBox(completionHandler)
+        runtime.handle(message: message) { response in
+            reply.value?(Data(response.utf8))
+        }
     }
 }
