@@ -3,7 +3,7 @@ module github.com/olc/awgproxy
 go 1.25.5
 
 require (
-	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
+	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20261116
 	golang.org/x/crypto v0.42.0
 )
 
