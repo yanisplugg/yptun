@@ -513,6 +513,13 @@ private fun IosApp(
                         }
                     )
                     dependencies.settings.setAppBehavior(updated)
+                },
+                appBehavior = appBehavior,
+                onAppBehaviorChanged = { updated ->
+                    dependencies.settings.setAppBehavior(updated)
+                },
+                onShareSubscriptionRequested = { url ->
+                    platformBridge.shareText("Subscription", ConfigShareService.subscriptionQrText(url))
                 }
             )
             }

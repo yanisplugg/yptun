@@ -13,6 +13,7 @@ import YPtunShared
 final class NativeTunnelRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private var running = false
+    private var stopping = false
     private var pumpingLogs = false
     private var watchdogFailures = 0
     private var activePlan: AppleNativeRuntimePlan?
@@ -23,6 +24,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private var trustTunnelStartHandled = false
     private var trustTunnelStartTimer: DispatchSourceTimer?
     private let trustTunnelQueue = DispatchQueue(label: "org.yptun.tunnel.trusttunnel", qos: .userInitiated)
+    private let xrayPingSemaphore = DispatchSemaphore(value: 2)
     private var lastSleepAt: Date?
     private var lastRefreshAt: Date?
     private var isRefreshing = false
@@ -40,6 +42,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         completion: @escaping @Sendable (Error?) -> Void
     ) {
         do {
+            setStopping(false)
             self.provider = provider
             let request = try AppleTunnelStore.loadRequest()
             let logURL = try AppleTunnelStore.url(for: AppleTunnelStore.logFileName)
@@ -119,6 +122,17 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 
     func stop() {
+        // Mark stopping & non-running FIRST so asynchronous callbacks (such as TrustTunnel's
+        // VPN_SS_DISCONNECTED during vpn_stop) never re-enter stop() or call cancelTunnelWithError.
+        lock.lock()
+        stopping = true
+        running = false
+        trustTunnelStartTimer?.cancel()
+        trustTunnelStartTimer = nil
+        let ttClient = trustTunnelClient
+        trustTunnelClient = nil
+        lock.unlock()
+
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
         watchdog?.cancel()
@@ -131,10 +145,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.lock()
         snolcLogURL = nil
         snolcLogOffset = 0
-        trustTunnelStartTimer?.cancel()
-        trustTunnelStartTimer = nil
-        let ttClient = trustTunnelClient
-        trustTunnelClient = nil
         lock.unlock()
         if let ttClient {
             let ttStopGroup = DispatchGroup()
@@ -144,7 +154,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 NativeLogger.setCallback(nil)
                 ttStopGroup.leave()
             }
-            _ = ttStopGroup.wait(timeout: .now() + 2.0)
+            _ = ttStopGroup.wait(timeout: .now() + 5.0)
         }
         Socks5Tunnel.quit()
         CoreapiSbStop()
@@ -222,6 +232,18 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     }
 
     func handle(message: String, completion: @escaping @Sendable (String) -> Void) {
+        if message.hasPrefix("xrayping:") {
+            let payload = String(message.dropFirst("xrayping:".count))
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else {
+                    completion("-1")
+                    return
+                }
+                let ms = self.directXrayPing(payload: payload)
+                completion(String(ms))
+            }
+            return
+        }
         if message.hasPrefix("tcpping:") {
             let payload = String(message.dropFirst("tcpping:".count))
             DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -255,6 +277,38 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         default:
             completion("")
         }
+    }
+
+    /// Real end-to-end proxy URL test executed inside PacketTunnelProvider (bypassing utun),
+    /// throttled to 2 concurrent probes and guarded by available-memory check so it stays safely
+    /// within the 50 MiB PacketTunnel Jetsam budget.
+    /// Payload format: `<timeoutMs>|<method>|<url>|<configJson>`
+    private func directXrayPing(payload: String) -> Int64 {
+        let parts = payload.split(separator: "|", maxSplits: 3, omittingEmptySubsequences: false)
+        guard parts.count == 4,
+              let rawTimeout = Int(parts[0]) else { return -1 }
+        let method = String(parts[1])
+        let url = String(parts[2])
+        let configJson = String(parts[3])
+        guard !url.isEmpty, !configJson.isEmpty else { return -1 }
+        let timeoutMs = min(max(rawTimeout, 1_500), 12_000)
+
+        guard xrayPingSemaphore.wait(timeout: .now() + .milliseconds(timeoutMs)) == .success else {
+            return -1
+        }
+        defer {
+            xrayPingSemaphore.signal()
+            CoreapiFreeOSMemory()
+        }
+        guard !isStopping else { return -1 }
+        // Guard against Jetsam OOM: require at least 14 MiB headroom before spawning a throwaway Xray.
+        if os_proc_available_memory() < 14 * 1024 * 1024 {
+            CoreapiFreeOSMemory()
+            if os_proc_available_memory() < 12 * 1024 * 1024 {
+                return -2 // Caller may fall back to direct TCP ping
+            }
+        }
+        return CoreapiXrayMeasureDelay(configJson, url, method, timeoutMs)
     }
 
     /// Direct non-blocking TCP ping executed inside PacketTunnelProvider, where iOS guarantees
@@ -605,7 +659,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             if file.relativePath == "snolc.toml" {
                 contents = tuneSnolcEngineTomlForIOS(contents)
             } else if file.relativePath == "modules/socks5.toml" {
-                contents = contents.replacingOccurrences(of: "max_connections = 128", with: "max_connections = 64")
+                contents = contents.replacingOccurrences(of: "max_connections = 128", with: "max_connections = 96")
                 if let port = extractListenPort(from: contents) {
                     listenPort = port
                 }
@@ -654,23 +708,24 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
     private func tuneSnolcEngineTomlForIOS(_ toml: String) -> String {
         var out = toml
-        // Mirror SnolcFiles.kt lowMemory profile with generous socket headroom under iOS's 50 MiB
-        // PacketTunnel Jetsam budget (17 * 256 KiB = 4,456,448 B window per session; 2 sessions =
-        // ~8.9 MiB yamux windows + ~16 MiB headroom inside max_managed_bytes = 24 MiB).
+        // Single client session on iOS with 96 concurrent user streams (max_streams_per_session = 97)
+        // so iPhone background connections/DNS never hit "yamux user stream limit is exhausted",
+        // while keeping lazy socket buffers (32 KiB TCP / 64 KiB UDP) and 32 MiB ceiling inside Jetsam.
+        // Invariants: 97 * 262144 = 25,427,968 <= max_managed_bytes (33,554,432), max_flows (128) >= 1 * 96.
         let replacements: [(String, String)] = [
-            ("max_sessions = 4", "max_sessions = 2"),
-            ("max_flows = 512", "max_flows = 32"),
-            ("max_pending_sessions = 4", "max_pending_sessions = 2"),
-            ("max_pending_opens = 64", "max_pending_opens = 16"),
-            ("max_managed_bytes = 268435456", "max_managed_bytes = 25165824"),
-            ("max_commands = 64", "max_commands = 16"),
-            ("max_events = 256", "max_events = 64"),
+            ("max_sessions = 4", "max_sessions = 1"),
+            ("max_flows = 512", "max_flows = 128"),
+            ("max_pending_sessions = 4", "max_pending_sessions = 1"),
+            ("max_pending_opens = 64", "max_pending_opens = 32"),
+            ("max_managed_bytes = 268435456", "max_managed_bytes = 33554432"),
+            ("max_commands = 64", "max_commands = 32"),
+            ("max_events = 256", "max_events = 128"),
             ("tcp_socket_rx_bytes = 65536", "tcp_socket_rx_bytes = 32768"),
             ("tcp_socket_tx_bytes = 65536", "tcp_socket_tx_bytes = 32768"),
             ("udp_socket_rx_bytes = 131072", "udp_socket_rx_bytes = 65536"),
             ("udp_socket_tx_bytes = 131072", "udp_socket_tx_bytes = 65536"),
-            ("max_streams_per_session = 129", "max_streams_per_session = 17"),
-            ("receive_window_bytes = 33816576", "receive_window_bytes = 4456448"),
+            ("max_streams_per_session = 129", "max_streams_per_session = 97"),
+            ("receive_window_bytes = 33816576", "receive_window_bytes = 25427968"),
             ("limit = \"8mb\"", "limit = \"1mb\""),
         ]
         for (old, new) in replacements {
@@ -1090,6 +1145,18 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return running
+    }
+
+    private var isStopping: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopping
+    }
+
+    private func setStopping(_ value: Bool) {
+        lock.lock()
+        stopping = value
+        lock.unlock()
     }
 
     private var isCurrentlyRefreshing: Bool {
@@ -1623,13 +1690,15 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                         case 0: // disconnected
                             self.trustTunnelQueue.async { [weak self, weak provider] in
                                 guard let self else { return }
+                                // Ignore expected disconnect callback fired while stop() is already tearing down.
+                                guard !self.isStopping else { return }
                                 self.lock.lock()
                                 let alreadyHandled = self.trustTunnelStartHandled
                                 self.lock.unlock()
                                 if !alreadyHandled {
                                     finishStart(NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to connect"))
                                 } else if self.isRunning {
-                                    self.log("TrustTunnel disconnected")
+                                    self.log("TrustTunnel disconnected unexpectedly")
                                     self.stop()
                                     provider?.cancelTunnelWithError(nil)
                                     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {

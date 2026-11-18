@@ -18,6 +18,7 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -30,15 +31,23 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.olcbox.app.data.model.AppBehaviorSettings
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
@@ -311,7 +320,11 @@ class IosVpnManager(
                     ) {
                         connection.stopVPNTunnel()
                         awaitDisconnected(m)
+                        // Give PacketTunnelProvider's post-stopTunnel exit(0) (150ms) time to finish
+                        // so iOS neagent spawns a clean extension process instead of racing teardown.
+                        delay(350)
                         // Freshly reload manager after stopping to avoid NEVPNErrorDomain error 2
+                        manager = null
                         m = loadManager(createIfMissing = true) ?: m
                     }
                     if (requestedGeneration != connectGeneration) return@withLock
@@ -436,6 +449,52 @@ class IosVpnManager(
         return false
     }
 
+    private val xrayPingSemaphore = Semaphore(4)
+    private val pingPortMutex = Mutex()
+    private var pingPortCursor = 25_000
+
+    private suspend fun nextPingListenPort(): Int = pingPortMutex.withLock {
+        val port = pingPortCursor
+        pingPortCursor = if (pingPortCursor >= 55_000) 25_000 else pingPortCursor + 1
+        port
+    }
+
+    /**
+     * Resolves a hostname via PacketTunnelProvider when VPN is connected (bypassing FakeDNS 100.64.0.x),
+     * or via native POSIX getaddrinfo when disconnected (avoiding Go's /etc/resolv.conf 5s timeout on iOS).
+     */
+    private suspend fun resolveServerIpv4ForPing(host: String, connected: Boolean): String? {
+        val trimmed = host.trim().removeSurrounding("[", "]")
+        if (trimmed.isEmpty() || isLoopbackHost(trimmed)) return null
+        if (isIpv4Literal(trimmed)) return trimmed
+        if (connected) {
+            val currentManager = manager ?: loadManager(createIfMissing = false)
+            val session = currentManager?.connection as? NETunnelProviderSession
+            if (session != null && currentManager.connection.status == NEVPNStatusConnected) {
+                val ip = withTimeoutOrNull(2_500L) {
+                    askExtension(session, "resolve:$trimmed")
+                }?.trim().orEmpty()
+                if (isIpv4Literal(ip)) return ip
+            }
+        }
+        val localIps = core.resolveHostIpv4(trimmed)
+        return localIps.split(',').map { it.trim() }.firstOrNull { isIpv4Literal(it) && !isFakeDnsIp(it) }
+    }
+
+    private fun isIpv4Literal(host: String): Boolean {
+        val parts = host.split('.')
+        if (parts.size != 4) return false
+        return parts.all { p -> p.toIntOrNull()?.let { it in 0..255 } == true }
+    }
+
+    private fun isFakeDnsIp(ip: String): Boolean {
+        val parts = ip.split('.')
+        if (parts.size != 4) return false
+        val a = parts[0].toIntOrNull() ?: return false
+        val b = parts[1].toIntOrNull() ?: return false
+        return (a == 100 && b in 64..127) || (a == 198 && b in 18..19)
+    }
+
     /**
      * Direct TCP ping executed inside PacketTunnelProvider when VPN is connected, so iOS bypasses
      * utun and FakeDNS (100.64.0.x) and measures real direct server latency with zero double-hop.
@@ -451,7 +510,28 @@ class IosVpnManager(
         return reply?.trim()?.toLongOrNull()?.takeIf { it > 0 }
     }
 
-    private suspend fun pingOnce(locationConfig: LocationConfig): Long? = withContext(Dispatchers.Default) {
+    /**
+     * Real end-to-end proxy URL test executed inside PacketTunnelProvider when VPN is connected,
+     * so the probe bypasses utun and measures true server->exit->target latency (e.g. Brazil vs Poland
+     * even when both enter via the same RU relay!). Returns -2 if extension memory is too tight.
+     */
+    private suspend fun directXrayPingViaExtension(
+        configJson: String,
+        url: String,
+        method: String,
+        timeoutMs: Int
+    ): Long? {
+        val currentManager = manager ?: loadManager(createIfMissing = false)
+        val session = currentManager?.connection as? NETunnelProviderSession ?: return null
+        if (currentManager.connection.status != NEVPNStatusConnected) return null
+        val payload = "xrayping:$timeoutMs|$method|$url|$configJson"
+        val reply = withTimeoutOrNull((timeoutMs + 2_000).toLong()) {
+            askExtension(session, payload)
+        }
+        return reply?.trim()?.toLongOrNull()
+    }
+
+    private suspend fun pingOnce(locationConfig: LocationConfig): Long? = withContext(Dispatchers.IO) {
         val config = locationConfig.normalized()
         val behavior = IosSharedStore.loadAppBehavior()
         val timeoutMs = pingTimeoutMs.toInt()
@@ -494,29 +574,29 @@ class IosVpnManager(
                     }
                 }
             }
-            connected -> {
-                // While VPN is active on iOS, main-app sockets route through utun (double-hopping
-                // through the active server + hitting FakeDNS 100.64.0.x). Probing via PacketTunnelProvider
-                // bypasses utun and measures true direct latency over Wi-Fi/LTE.
-                if (isLoopbackHost(profile.server)) null
-                else {
-                    val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
-                    directTcpPingViaExtension(profile.server, port, timeoutMs)
-                }
-            }
             behavior.pingMode == AppBehaviorSettings.PING_TCP ||
                 profile.type == ProxyProfile.TYPE_MIERU ||
                 profile.type == ProxyProfile.TYPE_HYSTERIA2 -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
                     val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
-                    core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+                    if (connected) {
+                        directTcpPingViaExtension(profile.server, port, timeoutMs)
+                    } else {
+                        core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+                    }
                 }
             }
             else -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
-                    proxyUrlTest(profile, behavior.effectivePingUrl(), method, timeoutMs)?.takeIf { it > 0 }
+                    proxyUrlTest(
+                        profile = profile,
+                        url = behavior.effectivePingUrl(),
+                        method = method,
+                        timeoutMs = timeoutMs,
+                        connected = connected,
+                    )?.takeIf { it > 0 }
                 }
             }
         }
@@ -573,7 +653,7 @@ class IosVpnManager(
         )
     }
 
-    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.Default) {
+    private suspend fun tunnelPing(): Long? = withContext(Dispatchers.IO) {
         if (status.value != VpnStatus.Connected) return@withContext null
         val behavior = IosSharedStore.loadAppBehavior()
         val urlString = behavior.effectivePingUrl()
@@ -620,14 +700,27 @@ class IosVpnManager(
     }
 
     /**
-     * Per-server URL test (à la v2rayNG / Happ) through a throwaway xray instance in this process —
-     * works while disconnected. A verbatim config is probed through its own proxy outbound.
+     * Per-server URL test (à la v2rayNG / Happ) through a throwaway xray instance.
+     * Pre-resolves the proxy server hostname to IPv4 via native iOS DNS (avoiding Go's /etc/resolv.conf
+     * 5-second timeout on iOS!) and runs inside PacketTunnelProvider when VPN is connected so the probe
+     * bypasses utun and measures true end-to-end exit latency without double-hopping.
      */
-    private fun proxyUrlTest(profile: ProxyProfile, url: String, method: String, timeoutMs: Int = PING_TIMEOUT_MS): Long? {
-        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_MIERU || profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) return null
-        val listenPort = (20_000..60_000).random()
+    private suspend fun proxyUrlTest(
+        profile: ProxyProfile,
+        url: String,
+        method: String,
+        timeoutMs: Int = PING_TIMEOUT_MS,
+        connected: Boolean = false
+    ): Long? {
+        if (profile.server.isBlank() ||
+            profile.type == ProxyProfile.TYPE_HYSTERIA2 ||
+            profile.type == ProxyProfile.TYPE_MIERU ||
+            profile.type == ProxyProfile.TYPE_TRUSTTUNNEL
+        ) return null
+
+        val listenPort = nextPingListenPort()
         val raw = profile.rawXrayConfig
-        val configJson = if (!raw.isNullOrBlank()) {
+        val baseConfigJson = if (!raw.isNullOrBlank()) {
             XrayConfig.buildRawProxyPingConfig(rawConfigJson = raw, listenPort = listenPort, listenHost = "127.0.0.1")
         } else {
             runCatching {
@@ -640,7 +733,149 @@ class IosVpnManager(
                 )
             }.getOrNull()
         } ?: return null
-        return core.xrayMeasureDelay(configJson, url, method, timeoutMs).takeIf { it >= 0 }
+
+        val resolvedIp = resolveServerIpv4ForPing(profile.server, connected = connected)
+        val configJson = patchPingXrayConfigForIos(baseConfigJson, resolvedIp)
+
+        if (connected) {
+            val ms = directXrayPingViaExtension(configJson, url, method, timeoutMs)
+            if (ms != null && ms > 0) return ms
+            if (ms == -2L) {
+                // PacketTunnel memory is tight: fall back to lightweight direct TCP ping.
+                val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
+                return directTcpPingViaExtension(profile.server, port, timeoutMs)
+            }
+            return null
+        }
+
+        return xrayPingSemaphore.withPermit {
+            core.xrayMeasureDelay(configJson, url, method, timeoutMs).takeIf { it >= 0 }
+        }
+    }
+
+    /**
+     * Rewrites the proxy outbound's hostname to its pre-resolved IPv4 (while preserving TLS/Reality
+     * SNI = original hostname) and injects compact iOS memory policy + explicit IPv4 DNS so Go's
+     * xray-core never stalls for 5s on missing /etc/resolv.conf on iOS.
+     */
+    private fun patchPingXrayConfigForIos(configJson: String, resolvedIp: String?): String {
+        val root = runCatching { Json.parseToJsonElement(configJson).jsonObject }.getOrNull() ?: return configJson
+        val outbounds = root["outbounds"] as? JsonArray ?: return configJson
+        val patchedOutbounds = buildJsonArray {
+            outbounds.forEachIndexed { index, el ->
+                val obj = el as? JsonObject
+                if (index == 0 && obj != null && !resolvedIp.isNullOrBlank()) {
+                    add(rewriteOutboundAddressPreservingSni(obj, resolvedIp))
+                } else {
+                    add(el)
+                }
+            }
+        }
+        val patched = buildJsonObject {
+            root.forEach { (k, v) ->
+                when (k) {
+                    "outbounds" -> put("outbounds", patchedOutbounds)
+                    "dns", "policy" -> Unit
+                    else -> put(k, v)
+                }
+            }
+            putJsonObject("dns") {
+                putJsonArray("servers") {
+                    add(JsonPrimitive("1.1.1.1"))
+                    add(JsonPrimitive("8.8.8.8"))
+                }
+                put("queryStrategy", "UseIPv4")
+            }
+            putJsonObject("policy") {
+                putJsonObject("levels") {
+                    putJsonObject("0") {
+                        put("bufferSize", 8)
+                        put("connIdle", 15)
+                        put("handshake", 6)
+                    }
+                }
+            }
+        }
+        return patched.toString()
+    }
+
+    private fun rewriteOutboundAddressPreservingSni(outbound: JsonObject, ip: String): JsonObject {
+        val settings = outbound["settings"] as? JsonObject ?: return outbound
+        var originalHost: String? = null
+        val newSettings = buildJsonObject {
+            settings.forEach { (k, v) ->
+                if ((k == "vnext" || k == "servers") && v is JsonArray) {
+                    put(k, buildJsonArray {
+                        v.forEachIndexed { i, item ->
+                            val entry = item as? JsonObject
+                            if (i == 0 && entry != null) {
+                                val addr = entry["address"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                                if (addr.isNotEmpty() && !isIpv4Literal(addr)) {
+                                    originalHost = addr
+                                    putEntryAddress(entry, ip)
+                                } else {
+                                    add(item)
+                                }
+                            } else {
+                                add(item)
+                            }
+                        }
+                    })
+                } else {
+                    put(k, v)
+                }
+            }
+        }
+        val hostForSni = originalHost ?: return outbound
+        val stream = outbound["streamSettings"] as? JsonObject
+        val newStream = if (stream != null) {
+            val sec = stream["security"]?.jsonPrimitive?.contentOrNull?.lowercase()
+            buildJsonObject {
+                stream.forEach { (k, v) ->
+                    if (k == "tlsSettings" && sec == "tls" && v is JsonObject) {
+                        val existingSni = v["serverName"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (existingSni.isEmpty()) {
+                            put(k, buildJsonObject {
+                                v.forEach { (tk, tv) -> put(tk, tv) }
+                                put("serverName", hostForSni)
+                            })
+                        } else {
+                            put(k, v)
+                        }
+                    } else if (k == "realitySettings" && sec == "reality" && v is JsonObject) {
+                        val existingSni = v["serverName"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                        if (existingSni.isEmpty()) {
+                            put(k, buildJsonObject {
+                                v.forEach { (rk, rv) -> put(rk, rv) }
+                                put("serverName", hostForSni)
+                            })
+                        } else {
+                            put(k, v)
+                        }
+                    } else {
+                        put(k, v)
+                    }
+                }
+            }
+        } else null
+
+        return buildJsonObject {
+            outbound.forEach { (k, v) ->
+                when {
+                    k == "settings" -> put("settings", newSettings)
+                    k == "streamSettings" && newStream != null -> put("streamSettings", newStream)
+                    else -> put(k, v)
+                }
+            }
+        }
+    }
+
+    private fun kotlinx.serialization.json.JsonArrayBuilder.putEntryAddress(entry: JsonObject, ip: String) {
+        add(buildJsonObject {
+            entry.forEach { (k, v) ->
+                if (k == "address") put("address", ip) else put(k, v)
+            }
+        })
     }
 
     /**
@@ -850,18 +1085,16 @@ class IosVpnManager(
                     addLog("Tunnel connected")
                     triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                     NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.vpn.connected", null)
-                }
-                // Now that traffic goes through the tunnel, retry the geo databases if they are still
-                // missing: without them a verbatim Xray config loses every geosite:/geoip: rule, and the
-                // one moment they are needed (the connect path, inside the extension) is the one moment
-                // the device has no working route to fetch them. No-op once they are on disk.
-                settingsController?.ensureGeoAssets()
-                scope.launch {
-                    delay(1500)
-                    val ms = tunnelPing()
-                    if (ms != null && ms > 0) {
-                        addLog("Tunnel ping: ${ms}ms")
-                        updateWidgetPing(ms)
+                    // Now that traffic goes through the tunnel, retry the geo databases if they are still
+                    // missing: without them a verbatim Xray config loses every geosite:/geoip: rule.
+                    settingsController?.ensureGeoAssets()
+                    scope.launch {
+                        delay(1500)
+                        val ms = tunnelPing()
+                        if (ms != null && ms > 0) {
+                            addLog("Tunnel ping: ${ms}ms")
+                            updateWidgetPing(ms)
+                        }
                     }
                 }
             }
@@ -886,10 +1119,12 @@ class IosVpnManager(
     }
 
     private suspend fun awaitDisconnected(m: NETunnelProviderManager) {
-        repeat(50) {
+        // TrustTunnel teardown (stopping DNS proxies + event loop + vpn_close) can take 2–4s;
+        // wait up to 6s so startVPNTunnel never collides with a dying extension process.
+        repeat(60) {
             val s = m.connection.status
             if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
-            delay(50)
+            delay(100)
         }
     }
 
