@@ -41,23 +41,26 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 cacheFilePath: cacheURL.path
             )
 
+            log("Starting tunnel: \(plan.displayName)")
             startMemoryPressureMonitoring()
             startLogPump()
-            try startEngines(
+            let extraExcludedIPv4 = try startEngines(
                 plan,
                 request: request,
                 logFilePath: logURL.path,
                 cacheFilePath: cacheURL.path
             )
-            provider.setTunnelNetworkSettings(networkSettings(from: plan.tunnel)) { [weak self] error in
+            let settings = networkSettings(from: plan.tunnel, extraExcludedIPv4: extraExcludedIPv4)
+            let bridgeYaml = plan.bridge.yaml
+            provider.setTunnelNetworkSettings(settings) { [weak self] error in
                 guard error == nil else {
-                    self?.stop()
                     self?.record(error: error!)
+                    self?.stop()
                     completion(error)
                     return
                 }
                 do {
-                    try self?.startBridge(yaml: plan.bridge.yaml)
+                    try self?.startBridge(yaml: bridgeYaml)
                     self?.setRunning(true)
                     try? AppleTunnelStore.writeText(
                         VPNConnectionState.connected.rawValue,
@@ -67,18 +70,19 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                         String(Date().timeIntervalSince1970),
                         to: AppleTunnelStore.connectedAtFileName
                     )
+                    self?.log("Tunnel connected: \(plan.displayName)")
                     self?.startWatchdog(plan)
                     CoreapiFreeOSMemory()
                     completion(nil)
                 } catch {
-                    self?.stop()
                     self?.record(error: error)
+                    self?.stop()
                     completion(error)
                 }
             }
         } catch {
-            stop()
             record(error: error)
+            stop()
             completion(error)
         }
     }
@@ -96,8 +100,16 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         CoreapiTurnableStop()
         CoreapiMieruStop()
         CoreapiAppleEngineStopAll()
-        snolc_ffi_stop()
-        csqtt_ffi_stop()
+        // Run Rust FFI stops off-thread with a hard timeout so a blocked thread.join()
+        // in snolc/csqtt can never wedge PacketTunnelProvider.stopTunnel().
+        let stopGroup = DispatchGroup()
+        stopGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            snolc_ffi_stop()
+            csqtt_ffi_stop()
+            stopGroup.leave()
+        }
+        _ = stopGroup.wait(timeout: .now() + 1.5)
         CoreapiCsqttBridgeStop()
         CoreapiRtcStopPool()
         var ignored: NSError?
@@ -115,7 +127,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     func handle(message: String) -> String {
         switch message {
         case "status":
-            return isRunning ? "connected" : "disconnected"
+            // IosVpnManager.watchCaptcha polls "status" expecting "" or an http:// captcha URL.
+            return ""
+        case "reload":
+            return "error:restart-required"
         default:
             return ""
         }
@@ -126,7 +141,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         request: AppleTunnelRequest,
         logFilePath: String,
         cacheFilePath: String
-    ) throws {
+    ) throws -> [String] {
+        var extraExcludedIPv4: [String] = []
+
         if let olcrtc = plan.olcrtc {
             try startOlcRtc(olcrtc)
         }
@@ -134,7 +151,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             try startAmneziaWg(plan.amneziaWg)
         }
         if let snolc = plan.snolc {
-            try startSnolc(snolc)
+            let ips = try startSnolc(snolc)
+            extraExcludedIPv4.append(contentsOf: ips)
         }
         if let csqtt = plan.csqtt {
             try startCsqtt(csqtt)
@@ -194,6 +212,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         if plan.startAmneziaWgAfterProxy {
             try startAmneziaWg(plan.amneziaWg)
         }
+        return extraExcludedIPv4
     }
 
     private func startAmneziaWg(_ plan: AppleAmneziaWgRuntimePlan?) throws {
@@ -262,22 +281,224 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         }
     }
 
-    private func startSnolc(_ plan: AppleSnolcRuntimePlan) throws {
+    private func startSnolc(_ plan: AppleSnolcRuntimePlan) throws -> [String] {
         let directory = URL(fileURLWithPath: plan.directory, isDirectory: true)
+        let stateDir = directory.appendingPathComponent("state", isDirectory: true)
+        let modulesDir = directory.appendingPathComponent("modules", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: modulesDir, withIntermediateDirectories: true)
+
+        // Clear previous snolc log so any error we read belongs to this attempt.
+        let snolcLogURL = stateDir.appendingPathComponent("snolc.log")
+        try? FileManager.default.removeItem(at: snolcLogURL)
+
+        var listenPort: UInt16 = 10_808
+        var excludedIPv4: [String] = []
+
         for file in plan.files {
+            var contents = file.contents
+            if file.relativePath == "snolc.toml" {
+                contents = tuneSnolcEngineTomlForIOS(contents)
+            } else if file.relativePath == "modules/socks5.toml" {
+                contents = contents.replacingOccurrences(of: "max_connections = 128", with: "max_connections = 64")
+                if let port = extractListenPort(from: contents) {
+                    listenPort = port
+                }
+            } else if file.relativePath == "modules/tcp.toml" {
+                let (updated, resolvedIPv4) = resolveSnolcTcpEndpoint(contents)
+                contents = updated
+                if let ip = resolvedIPv4 {
+                    excludedIPv4.append(ip)
+                }
+            }
             let url = directory.appendingPathComponent(file.relativePath)
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try Data(file.contents.utf8).write(to: url, options: .atomic)
+            try Data(contents.utf8).write(to: url, options: .atomic)
         }
+
+        log("Starting snolc on 127.0.0.1:\(listenPort) (excluded=\(excludedIPv4.joined(separator: ",")))")
         if let pointer = snolc_ffi_start(plan.configPath) {
             let message = String(cString: pointer)
             snolc_ffi_free_string(pointer)
-            throw NativeTunnelRuntimeError.specializedCore(message)
+            throw NativeTunnelRuntimeError.specializedCore("snolc start failed: \(message)")
         }
+
+        // Wait for snolc SOCKS5 listener to actually come up (up to 10s), failing fast if snolc exits.
+        let deadline = Date().addingTimeInterval(10.0)
+        while Date() < deadline {
+            if !snolc_ffi_is_running() {
+                let tail = readSnolcLogTail(at: snolcLogURL)
+                let detail = tail.isEmpty ? "snolc worker exited during startup" : "snolc exited: \(tail)"
+                throw NativeTunnelRuntimeError.specializedCore(detail)
+            }
+            if isLocalPortOpen(port: listenPort) {
+                log("snolc SOCKS5 ready on 127.0.0.1:\(listenPort)")
+                return excludedIPv4
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        let tail = readSnolcLogTail(at: snolcLogURL)
+        let detail = tail.isEmpty
+            ? "snolc SOCKS5 port \(listenPort) did not open within 10s"
+            : "snolc timeout (\(listenPort)): \(tail)"
+        throw NativeTunnelRuntimeError.specializedCore(detail)
+    }
+
+    /// Lowers snolc's desktop memory limits (256 MiB / 33.8 MiB yamux window) to fit inside
+    /// iOS PacketTunnel's strict 50 MiB Jetsam budget while satisfying all snolc config invariants:
+    ///   receive_window_bytes >= max_streams_per_session * 256 KiB (33 * 262144 = 8650752)
+    ///   max_managed_bytes    >= receive_window_bytes * max_sessions (2 * 8650752 = 17301504)
+    ///   max_flows            >= max_sessions * (max_streams_per_session - 1) (2 * 32 = 64)
+    private func tuneSnolcEngineTomlForIOS(_ toml: String) -> String {
+        var out = toml
+        let replacements: [(String, String)] = [
+            ("max_sessions = 4", "max_sessions = 2"),
+            ("max_flows = 512", "max_flows = 64"),
+            ("max_pending_sessions = 4", "max_pending_sessions = 2"),
+            ("max_pending_opens = 64", "max_pending_opens = 32"),
+            ("max_managed_bytes = 268435456", "max_managed_bytes = 17301504"),
+            ("max_streams_per_session = 129", "max_streams_per_session = 33"),
+            ("receive_window_bytes = 33816576", "receive_window_bytes = 8650752"),
+            ("limit = \"8mb\"", "limit = \"1mb\""),
+        ]
+        for (old, new) in replacements {
+            out = out.replacingOccurrences(of: old, with: new)
+        }
+        return out
+    }
+
+    private func extractListenPort(from toml: String) -> UInt16? {
+        for line in toml.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("listen =") else { continue }
+            guard let firstQuote = trimmed.firstIndex(of: "\""),
+                  let lastQuote = trimmed.lastIndex(of: "\""),
+                  firstQuote < lastQuote else { continue }
+            let value = String(trimmed[trimmed.index(after: firstQuote)..<lastQuote])
+            if let colon = value.lastIndex(of: ":"),
+               let port = UInt16(value[value.index(after: colon)...]) {
+                return port
+            }
+        }
+        return nil
+    }
+
+    /// snolc-carrier-tcp requires `endpoint_ip` to be an IP SocketAddr (rejects hostnames).
+    /// Resolves any domain name to an IP address and returns the IPv4 address for route exclusion.
+    private func resolveSnolcTcpEndpoint(_ toml: String) -> (String, String?) {
+        var lines = toml.components(separatedBy: "\n")
+        var resolvedIPv4: String?
+        for i in lines.indices {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("endpoint_ip =") else { continue }
+            guard let firstQuote = trimmed.firstIndex(of: "\""),
+                  let lastQuote = trimmed.lastIndex(of: "\""),
+                  firstQuote < lastQuote else { continue }
+            let endpoint = String(trimmed[trimmed.index(after: firstQuote)..<lastQuote])
+            let (host, portStr) = splitHostPort(endpoint)
+            guard !host.isEmpty, !portStr.isEmpty else { continue }
+            if isIPv4(host) {
+                resolvedIPv4 = host
+                continue
+            }
+            if isIPv6(host) {
+                continue
+            }
+            if let ip = resolveHostname(host) {
+                let formatted = ip.contains(":") ? "[\(ip)]:\(portStr)" : "\(ip):\(portStr)"
+                lines[i] = "endpoint_ip = \"\(formatted)\""
+                if isIPv4(ip) {
+                    resolvedIPv4 = ip
+                }
+                log("Resolved snolc host \(host) -> \(ip)")
+            }
+        }
+        return (lines.joined(separator: "\n"), resolvedIPv4)
+    }
+
+    private func splitHostPort(_ endpoint: String) -> (String, String) {
+        if endpoint.hasPrefix("["), let close = endpoint.firstIndex(of: "]") {
+            let host = String(endpoint[endpoint.index(after: endpoint.startIndex)..<close])
+            let rest = endpoint[endpoint.index(after: close)...]
+            let port = rest.hasPrefix(":") ? String(rest.dropFirst()) : ""
+            return (host, port)
+        }
+        guard let colon = endpoint.lastIndex(of: ":") else { return (endpoint, "") }
+        let host = String(endpoint[..<colon])
+        let port = String(endpoint[endpoint.index(after: colon)...])
+        return (host, port)
+    }
+
+    private func isIPv4(_ host: String) -> Bool {
+        var addr = in_addr()
+        return host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
+    }
+
+    private func isIPv6(_ host: String) -> Bool {
+        var addr = in6_addr()
+        return host.withCString { inet_pton(AF_INET6, $0, &addr) == 1 }
+    }
+
+    private func resolveHostname(_ host: String) -> String? {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else {
+            return nil
+        }
+        defer { freeaddrinfo(first) }
+        var ipv6Fallback: String?
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let current = cursor {
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(
+                current.pointee.ai_addr,
+                current.pointee.ai_addrlen,
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 {
+                let ip = String(cString: buffer)
+                if current.pointee.ai_family == AF_INET {
+                    return ip
+                } else if ipv6Fallback == nil {
+                    ipv6Fallback = ip
+                }
+            }
+            cursor = current.pointee.ai_next
+        }
+        return ipv6Fallback
+    }
+
+    private func isLocalPortOpen(port: UInt16) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let result = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result == 0
+    }
+
+    private func readSnolcLogTail(at url: URL) -> String {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        let lines = text.split(separator: "\n").suffix(4).map(String.init)
+        return lines.joined(separator: " | ")
     }
 
     private func startCsqtt(_ plan: AppleCsqttRuntimePlan) throws {
@@ -313,15 +534,17 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         try Data(yaml.utf8).write(to: configURL, options: .atomic)
         Socks5Tunnel.run(withConfig: .file(path: configURL)) { code in
             if code != 0 {
-                try? AppleTunnelStore.writeText(
-                    "hev-socks5-tunnel exited with code \(code)",
-                    to: AppleTunnelStore.errorFileName
-                )
+                let msg = "hev-socks5-tunnel exited with code \(code)"
+                try? AppleTunnelStore.appendLog(msg)
+                try? AppleTunnelStore.writeText(msg, to: AppleTunnelStore.errorFileName)
             }
         }
     }
 
-    private func networkSettings(from plan: AppleTunnelPlan) -> NEPacketTunnelNetworkSettings {
+    private func networkSettings(
+        from plan: AppleTunnelPlan,
+        extraExcludedIPv4: [String] = []
+    ) -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(
             tunnelRemoteAddress: plan.tunnelRemoteAddress
         )
@@ -334,9 +557,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         if plan.includeDefaultIpv4Route {
             ipv4.includedRoutes = [.default()]
         }
-        ipv4.excludedRoutes = plan.excludedIpv4Routes.map {
+        var excluded = plan.excludedIpv4Routes.map {
             NEIPv4Route(destinationAddress: $0.address, subnetMask: $0.subnetMask)
         }
+        for ip in Set(extraExcludedIPv4) where isIPv4(ip) {
+            excluded.append(NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255"))
+        }
+        ipv4.excludedRoutes = excluded
         settings.ipv4Settings = ipv4
 
         let ipv6 = NEIPv6Settings(
@@ -360,8 +587,15 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         if let error { throw error }
     }
 
+    private func log(_ line: String) {
+        NSLog("YPtunTunnel: %@", line)
+        try? AppleTunnelStore.appendLog(line)
+    }
+
     private func record(error: Error) {
-        try? AppleTunnelStore.writeText(error.localizedDescription, to: AppleTunnelStore.errorFileName)
+        let message = error.localizedDescription
+        log("Tunnel error: \(message)")
+        try? AppleTunnelStore.writeText(message, to: AppleTunnelStore.errorFileName)
         try? AppleTunnelStore.writeText(
             VPNConnectionState.disconnected.rawValue,
             to: AppleTunnelStore.statusFileName
@@ -418,6 +652,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             self.record(error: error)
             self.stop()
             provider?.cancelTunnelWithError(error)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {
+                exit(0)
+            }
         }
         watchdog = timer
         timer.resume()

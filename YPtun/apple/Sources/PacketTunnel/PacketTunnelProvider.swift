@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 @preconcurrency import NetworkExtension
 
@@ -8,7 +9,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         options: [String: NSObject]?,
         completionHandler: @escaping (Error?) -> Void
     ) {
-        runtime.start(provider: self, completion: completionHandler)
+        runtime.start(provider: self) { error in
+            completionHandler(error)
+            if error != nil {
+                // Exit cleanly after reporting start failure so iOS spawns a fresh
+                // extension process on the next connect with zero lingering sockets
+                // or dirty C/Rust/Go global state.
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {
+                    exit(0)
+                }
+            }
+        }
     }
 
     override func stopTunnel(
@@ -17,6 +28,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     ) {
         runtime.stop()
         completionHandler()
+        // Always terminate the extension process after stopping so Tun2SocksKit
+        // (hev-socks5-tunnel), Go Coreapi, and Rust snolc/csqtt start clean next time.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {
+            exit(0)
+        }
     }
 
     override func handleAppMessage(
