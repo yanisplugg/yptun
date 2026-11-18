@@ -45,20 +45,20 @@ fun RefreshButton(
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
     if (isRefreshing && controls != null) {
         if (!controls.paused) {
-            IconButton(onClick = controls.onPause, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Outlined.Pause, contentDescription = s.pingPause, tint = tint, modifier = Modifier.size(22.dp))
+            IconButton(onClick = controls.onPause, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Outlined.Pause, contentDescription = s.pingPause, tint = tint, modifier = Modifier.size(20.dp))
             }
         } else {
             // Paused: carry on, or start the group's pass over.
             Row {
-                IconButton(onClick = controls.onResume, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Outlined.PlayArrow, contentDescription = s.pingResume, tint = tint, modifier = Modifier.size(24.dp))
+                IconButton(onClick = controls.onResume, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Outlined.PlayArrow, contentDescription = s.pingResume, tint = tint, modifier = Modifier.size(22.dp))
                 }
                 IconButton(
                     onClick = { controls.onCancel(); onClick() },
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(36.dp)
                 ) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = s.pingRestart, tint = tint, modifier = Modifier.size(22.dp))
+                    Icon(Icons.Outlined.Refresh, contentDescription = s.pingRestart, tint = tint, modifier = Modifier.size(20.dp))
                 }
             }
         }
@@ -66,13 +66,13 @@ fun RefreshButton(
     }
     IconButton(
         onClick = onClick,
-        modifier = Modifier.size(48.dp)
+        modifier = Modifier.size(36.dp)
     ) {
         Icon(
             imageVector = Icons.Outlined.Speed,
             contentDescription = "Ping",
             tint = tint,
-            modifier = Modifier.size(22.dp)
+            modifier = Modifier.size(20.dp)
         )
     }
 }
@@ -87,16 +87,16 @@ fun AutoPickButton(
     IconButton(
         onClick = onClick,
         enabled = !isRunning,
-        modifier = Modifier.size(48.dp)
+        modifier = Modifier.size(36.dp)
     ) {
         if (isRunning) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = tint, strokeWidth = 2.dp)
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = tint, strokeWidth = 2.dp)
         } else {
             Icon(
                 imageVector = Icons.Outlined.Bolt,
                 contentDescription = "Auto",
                 tint = tint,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
     }

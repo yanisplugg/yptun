@@ -1808,14 +1808,20 @@ private fun ApplicationLogsSettingsContent(
             .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 24.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SettingsDetailHeader(
-                title = LocalStrings.current.applicationLogsTitle,
-                subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
-                onBack = onBack,
-                modifier = Modifier.weight(1f)
-            )
+        SettingsDetailHeader(
+            title = LocalStrings.current.applicationLogsTitle,
+            subtitle = if (logs.isEmpty()) LocalStrings.current.noLogEntries else LocalStrings.current.logEntriesCount(logs.size),
+            onBack = onBack,
+            modifier = Modifier.fillMaxWidth()
+        )
 
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             IconButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onClearClick
@@ -1826,21 +1832,22 @@ private fun ApplicationLogsSettingsContent(
                     tint = if (logs.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                 )
             }
+            Spacer(Modifier.weight(1f))
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onSaveClick
             ) {
-                Text(LocalStrings.current.save)
+                Text(LocalStrings.current.save, maxLines = 1)
             }
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onShareClick
             ) {
-                Text(LocalStrings.current.share)
+                Text(LocalStrings.current.share, maxLines = 1)
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(10.dp))
 
         Surface(
             modifier = Modifier

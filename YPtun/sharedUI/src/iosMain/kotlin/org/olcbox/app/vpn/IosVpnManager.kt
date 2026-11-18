@@ -552,7 +552,7 @@ class IosVpnManager(
      * works while disconnected. A verbatim config is probed through its own proxy outbound.
      */
     private fun proxyUrlTest(profile: ProxyProfile, url: String, method: String, timeoutMs: Int = PING_TIMEOUT_MS): Long? {
-        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_MIERU) return null
+        if (profile.server.isBlank() || profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_MIERU || profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) return null
         val listenPort = (20_000..60_000).random()
         val raw = profile.rawXrayConfig
         val configJson = if (!raw.isNullOrBlank()) {
@@ -586,6 +586,13 @@ class IosVpnManager(
         if (warpConfig.isNotBlank() && !warpConfig.contains("PrivateKey", ignoreCase = true)) {
             warpConfig = ""
         }
+        if (warpConfig.isNotBlank()) {
+            val upgraded = org.olcbox.app.vpn.warp.WarpConfigGenerator.upgradeIfNeeded(warpConfig)
+            if (upgraded != warpConfig) {
+                runCatching { org.olcbox.app.vpn.warp.WarpConfigStore.saveConfig(upgraded) }
+                warpConfig = upgraded
+            }
+        }
         if (location.warpEnabled && warpConfig.isBlank()) {
             addLog("WARP: generating Cloudflare WARP config...")
             val generated = withContext(Dispatchers.Default) {
@@ -598,6 +605,21 @@ class IosVpnManager(
             if (!generated.isNullOrBlank()) {
                 runCatching { org.olcbox.app.vpn.warp.WarpConfigStore.saveConfig(generated) }
                 warpConfig = generated
+            }
+        }
+        val rawXray = location.proxy?.rawXrayConfig.orEmpty()
+        val needsGeoAssets = rawXray.contains("geosite:", ignoreCase = true) ||
+            rawXray.contains("geoip:", ignoreCase = true) ||
+            location.routingProfileId.isNotBlank()
+        if (needsGeoAssets && !org.olcbox.app.vpn.ios.IosGeoAssets.hasAssets()) {
+            addLog("Geo assets missing — downloading geoip.dat / geosite.dat...")
+            val profilesState = runCatching { IosSharedStore.loadRoutingProfiles() }.getOrNull()
+            val geoipUrl = profilesState?.geoipUrl.orEmpty()
+            val geositeUrl = profilesState?.geositeUrl.orEmpty()
+            withContext(Dispatchers.Default) {
+                runCatching {
+                    org.olcbox.app.vpn.ios.IosGeoAssets.ensureAssets(geoipUrl, geositeUrl)
+                }
             }
         }
 

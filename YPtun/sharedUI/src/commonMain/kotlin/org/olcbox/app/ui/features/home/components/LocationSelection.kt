@@ -1808,35 +1808,41 @@ private fun SubscriptionGroupHeader(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
-                // Takes only what the (unweighted, measured first) counter/badge leave: a long title
-                // wraps onto more lines instead of being cut, and the "12/30" counter stays whole.
-                modifier = Modifier.weight(1f, fill = false)
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            // Red "!" badge when the subscription expires within 2 days; tap reveals the exact date.
-            if (info?.expiryUrgent == true && info.expiryDateTime != null) {
-                Spacer(modifier = Modifier.width(6.dp))
-                ExpiryWarningBadge(
-                    dateTime = info.expiryDateTime,
-                    daysLeft = info.daysLeft ?: 0L
-                )
-            }
-            // Optional "live/total" badge: servers that answered the last ping pass, gated on the toggle.
-            if (org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount.current &&
-                locations.isNotEmpty()
+        }
+
+        val showUrgentExpiry = info?.expiryUrgent == true && info.expiryDateTime != null
+        val showAliveCount = org.olcbox.app.ui.features.locations.components.LocalShowSubscriptionAliveCount.current &&
+            locations.isNotEmpty()
+        if (showUrgentExpiry || showAliveCount) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(top = 2.dp)
             ) {
-                val alive = locations.count { pingsState.pingFor(it.storageId) != null }
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "$alive/${locations.size}",
-                    maxLines = 1,
-                    softWrap = false,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (alive > 0) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                )
+                if (showAliveCount) {
+                    val alive = locations.count { pingsState.pingFor(it.storageId) != null }
+                    Text(
+                        text = "$alive/${locations.size}",
+                        maxLines = 1,
+                        softWrap = false,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (alive > 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+                if (showUrgentExpiry) {
+                    ExpiryWarningBadge(
+                        dateTime = info!!.expiryDateTime!!,
+                        daysLeft = info.daysLeft ?: 0L
+                    )
+                }
             }
         }
 

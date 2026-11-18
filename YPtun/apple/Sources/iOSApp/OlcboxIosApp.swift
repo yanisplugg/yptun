@@ -94,7 +94,7 @@ struct OlcboxIosApp: App {
 
     private static let importSchemes: Set<String> = [
         "qwdtt", "openflux", "masterdns", "snolc", "csqtt", "freeturn", "olcrtc", "amneziawg",
-        "mieru", "mierus", "turnable",
+        "mieru", "mierus", "turnable", "tt",
     ]
 
     private func handleUrl(_ url: URL, session: IosAppSession) {

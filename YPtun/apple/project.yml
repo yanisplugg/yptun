@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "4.0.0"
-    CURRENT_PROJECT_VERSION: "524"
+    CURRENT_PROJECT_VERSION: "525"
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
@@ -61,6 +61,9 @@ targets:
     dependencies:
       - framework: ../sharedUI/build/generated/cores/ios/Coreapi.xcframework
         embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/VpnClientFramework.xcframework
+        embed: true
+        link: false
       - target: YPtunPacketTunnelIOS
         embed: true
       - target: YPtunWidget
@@ -128,6 +131,8 @@ targets:
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
         embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/VpnClientFramework.xcframework
+        embed: false
 
   YPtunWidget:
     type: app-extension
@@ -178,6 +183,9 @@ targets:
         product: YPtunAppUI
       - package: YPtunRustBridge
         product: YPtunRustBridge
+      - framework: ../sharedUI/build/generated/cores/ios/VpnClientFramework.xcframework
+        embed: true
+        link: false
       - target: YPtunPacketTunnelMac
         embed: true
 
@@ -212,6 +220,8 @@ targets:
       - framework: ../sharedUI/build/generated/cores/ios/SnolcCore.xcframework
         embed: false
       - framework: ../sharedUI/build/generated/cores/ios/CsqttCore.xcframework
+        embed: false
+      - framework: ../sharedUI/build/generated/cores/ios/VpnClientFramework.xcframework
         embed: false
 
 schemes:

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -94,42 +95,50 @@ fun LogsContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 16.dp),
+                .padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = s.applicationLogsTitle,
                 style = MaterialTheme.typography.headlineSmall,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
             )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(
-                    enabled = logs.isNotEmpty(),
-                    onClick = onClearClick
-                ) {
-                    Text(s.clearLogs)
-                }
-                TextButton(
-                    enabled = logs.isNotEmpty(),
-                    onClick = onSaveClick
-                ) {
-                    Text(s.save)
-                }
-                TextButton(
-                    enabled = logs.isNotEmpty(),
-                    onClick = onShareClick
-                ) {
-                    Text(s.share)
-                }
+            IconButton(onClick = onCloseClick) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Close logs",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
-                IconButton(onClick = onCloseClick) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close logs",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onClearClick
+            ) {
+                Text(s.clearLogs, maxLines = 1)
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onSaveClick
+            ) {
+                Text(s.save, maxLines = 1)
+            }
+            TextButton(
+                enabled = logs.isNotEmpty(),
+                onClick = onShareClick
+            ) {
+                Text(s.share, maxLines = 1)
             }
         }
 

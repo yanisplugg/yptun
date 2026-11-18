@@ -6,6 +6,7 @@ import CsqttCore
 import Darwin
 import SnolcCore
 import Tun2SocksKit
+@preconcurrency import VpnClientFramework
 import YPtunRustBridge
 import YPtunShared
 
@@ -15,6 +16,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private var pumpingLogs = false
     private var watchdogFailures = 0
     private var activePlan: AppleNativeRuntimePlan?
+    private var runtimeDirectoryPath: String = ""
+    private var trustTunnelClient: VpnClient?
+    private var trustTunnelStartHandled = false
     private var lastSleepAt: Date?
     private var lastRefreshAt: Date?
     private var isRefreshing = false
@@ -37,6 +41,17 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             let logURL = try AppleTunnelStore.url(for: AppleTunnelStore.logFileName)
             let cacheURL = try AppleTunnelStore.url(for: AppleTunnelStore.cacheFileName)
             let runtimeDirectory = try AppleTunnelStore.directory()
+            setRuntimeDirectoryPath(runtimeDirectory.path)
+
+            if let ttSpec = extractTrustTunnelSpec(from: request) {
+                startTrustTunnel(
+                    provider: provider,
+                    spec: ttSpec,
+                    completion: completion
+                )
+                return
+            }
+
             let plan = try appleNativeRuntimePlan(
                 locationJson: request.locationJSON,
                 trafficJson: request.trafficJSON,
@@ -108,6 +123,14 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         pathMonitor = nil
         setActivePlan(nil)
         setPumpingLogs(false)
+        lock.lock()
+        let ttClient = trustTunnelClient
+        trustTunnelClient = nil
+        lock.unlock()
+        if let ttClient {
+            _ = ttClient.stop()
+            NativeLogger.setCallback(nil)
+        }
         Socks5Tunnel.quit()
         CoreapiSbStop()
         CoreapiXrayStop()
@@ -142,7 +165,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     func handleSleep() {
         lock.lock()
         lastSleepAt = Date()
+        let ttClient = trustTunnelClient
         lock.unlock()
+        if let ttClient {
+            log("Device entering sleep; notifying TrustTunnel")
+            ttClient.notify_sleep()
+            return
+        }
         log("Device entering sleep; freeing Go memory")
         CoreapiFreeOSMemory()
     }
@@ -151,7 +180,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.lock()
         let sleepDate = lastSleepAt
         lastSleepAt = nil
+        let ttClient = trustTunnelClient
         lock.unlock()
+        if let ttClient {
+            log("Device woke up; notifying TrustTunnel")
+            ttClient.notify_wake()
+            return
+        }
         CoreapiFreeOSMemory()
         guard let sleepDate else {
             log("Device woke up")
@@ -257,7 +292,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                     try self.callCore { CoreapiSbStart(proxyToRefresh.config, $0) }
                 case .xray:
                     CoreapiXrayStop()
-                    try self.callCore { CoreapiXrayStart(proxyToRefresh.config, $0) }
+                    try self.startXrayWithIOSLimits(config: proxyToRefresh.config)
                 case .mieru:
                     CoreapiMieruStop()
                     try self.callCore {
@@ -307,8 +342,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             case .masterDns: "masterdns"
             case .openFlux: "openflux"
             }
+            let tunedOptions = tuneAuxiliaryOptionsForIOS(kind: kind, optionsJson: auxiliary.optionsJson)
             try callCore {
-                CoreapiAppleEngineStart(kind, auxiliary.optionsJson, $0)
+                CoreapiAppleEngineStart(kind, tunedOptions, $0)
             }
         }
         if plan.deferredWireguardProxy {
@@ -336,7 +372,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             case .singBox:
                 try callCore { CoreapiSbStart(proxy.config, $0) }
             case .xray:
-                try callCore { CoreapiXrayStart(proxy.config, $0) }
+                try startXrayWithIOSLimits(config: proxy.config)
             case .mieru:
                 try callCore {
                     CoreapiMieruStart(
@@ -358,16 +394,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         var excluded: [String] = []
         if let host = extractWgEndpointHost(from: plan.iniConfig),
            host != "127.0.0.1", host != "::1", host.lowercased() != "localhost" {
-            if isIPv4(host) {
-                excluded.append(host)
-            } else if !isIPv6(host), let ip = resolveHostname(host), isIPv4(ip) {
-                excluded.append(ip)
-            }
+            excluded.append(contentsOf: resolveAllIPv4(host))
         }
         try callCore {
             CoreapiAwgStart(plan.iniConfig, plan.listenAddress, $0)
         }
-        return excluded
+        return Array(Set(excluded))
     }
 
     private func extractWgEndpointHost(from ini: String) -> String? {
@@ -412,9 +444,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
         }
         if !plan.roomsJson.isEmpty {
+            let cappedRooms = capOlcRtcRoomsForIOS(plan.roomsJson)
             try callCore {
                 CoreapiRtcStartPool(
-                    plan.roomsJson,
+                    cappedRooms,
                     plan.clientId,
                     "127.0.0.1:\(plan.listenPort)",
                     "",
@@ -836,7 +869,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            if os_proc_available_memory() < 12 * 1024 * 1024 {
+            if os_proc_available_memory() < 16 * 1024 * 1024 {
                 CoreapiFreeOSMemory()
             }
             if self.isCurrentlyRefreshing {
@@ -945,6 +978,481 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         let value = watchdogFailures
         lock.unlock()
         return value
+    }
+
+    private func setRuntimeDirectoryPath(_ path: String) {
+        lock.lock()
+        runtimeDirectoryPath = path
+        lock.unlock()
+    }
+
+    private func getRuntimeDirectoryPath() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return runtimeDirectoryPath
+    }
+
+    // MARK: - Xray Geo Assets & iOS Memory Limits
+
+    private func startXrayWithIOSLimits(config: String) throws {
+        let dir = getRuntimeDirectoryPath()
+        let geoDir = URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("geo", isDirectory: true)
+        let geoipPath = geoDir.appendingPathComponent("geoip.dat").path
+        let geositePath = geoDir.appendingPathComponent("geosite.dat").path
+        let fm = FileManager.default
+        let geoipSize = (try? fm.attributesOfItem(atPath: geoipPath)[.size] as? NSNumber)?.intValue ?? 0
+        let geositeSize = (try? fm.attributesOfItem(atPath: geositePath)[.size] as? NSNumber)?.intValue ?? 0
+        let hasGeoAssets = geoipSize >= 65_536 && geositeSize >= 65_536
+        if hasGeoAssets {
+            CoreapiXraySetAssetPath(geoDir.path)
+            log("Xray geo assets active: \(geoDir.path)")
+        } else {
+            CoreapiXraySetAssetPath("")
+            log("Xray geo assets missing (geoip=\(geoipSize)B, geosite=\(geositeSize)B); stripping geosite/geoip selectors")
+        }
+
+        let tuned = tuneXrayConfigForIOS(config, stripGeoSelectors: !hasGeoAssets, stripOnlyTag: nil)
+        do {
+            try callCore { CoreapiXrayStart(tuned, $0) }
+        } catch {
+            let msg = error.localizedDescription.lowercased()
+            if hasGeoAssets && (msg.contains("geosite") || msg.contains("geoip") || msg.contains("list not found") || msg.contains("failed to load")) {
+                log("Xray geo selector error (\(error.localizedDescription)); retrying with missing geo selectors stripped")
+                let fallback = tuneXrayConfigForIOS(config, stripGeoSelectors: true, stripOnlyTag: nil)
+                try callCore { CoreapiXrayStart(fallback, $0) }
+            } else {
+                throw error
+            }
+        }
+    }
+
+    /// Injects iOS-safe per-connection buffer/timeout policy into Xray JSON (8 KiB bufferSize
+    /// instead of Xray's 512 KiB desktop default) and optionally strips geosite:/geoip: selectors
+    /// while preserving all domain:/regexp:/ip rules.
+    private func tuneXrayConfigForIOS(
+        _ configJson: String,
+        stripGeoSelectors: Bool,
+        stripOnlyTag: String?
+    ) -> String {
+        guard let data = configJson.data(using: .utf8),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return configJson
+        }
+
+        // Enforce iOS memory-safe Xray policy (prevents 50 MiB Jetsam OOM under parallel connections).
+        var policy = (root["policy"] as? [String: Any]) ?? [:]
+        var levels = (policy["levels"] as? [String: Any]) ?? [:]
+        var level0 = (levels["0"] as? [String: Any]) ?? [:]
+        let currentBuf = (level0["bufferSize"] as? Int) ?? 512
+        if currentBuf <= 0 || currentBuf > 8 {
+            level0["bufferSize"] = 8
+        }
+        let currentIdle = (level0["connIdle"] as? Int) ?? 300
+        if currentIdle <= 0 || currentIdle > 120 {
+            level0["connIdle"] = 120
+        }
+        level0["uplinkOnly"] = 2
+        level0["downlinkOnly"] = 5
+        levels["0"] = level0
+        policy["levels"] = levels
+        root["policy"] = policy
+
+        if stripGeoSelectors || stripOnlyTag != nil {
+            let shouldDrop: (String) -> Bool = { entry in
+                let lower = entry.lowercased()
+                if let tag = stripOnlyTag?.lowercased() {
+                    return lower == tag
+                }
+                return lower.hasPrefix("geosite:") || lower.hasPrefix("geoip:")
+            }
+
+            if var routing = root["routing"] as? [String: Any],
+               let rules = routing["rules"] as? [[String: Any]] {
+                var filteredRules: [[String: Any]] = []
+                for var rule in rules {
+                    var droppedDomain = false
+                    var droppedIp = false
+                    if let domains = rule["domain"] as? [String] {
+                        let kept = domains.filter { !shouldDrop($0) }
+                        if kept.isEmpty {
+                            rule.removeValue(forKey: "domain")
+                            droppedDomain = true
+                        } else {
+                            rule["domain"] = kept
+                        }
+                    }
+                    if let ips = rule["ip"] as? [String] {
+                        let kept = ips.filter { !shouldDrop($0) }
+                        if kept.isEmpty {
+                            rule.removeValue(forKey: "ip")
+                            droppedIp = true
+                        } else {
+                            rule["ip"] = kept
+                        }
+                    }
+                    let hasOtherMatcher = rule["domain"] != nil || rule["ip"] != nil ||
+                        rule["protocol"] != nil || rule["port"] != nil ||
+                        rule["network"] != nil || rule["inboundTag"] != nil ||
+                        rule["source"] != nil
+                    if (droppedDomain || droppedIp) && !hasOtherMatcher {
+                        continue
+                    }
+                    filteredRules.append(rule)
+                }
+                routing["rules"] = filteredRules
+                root["routing"] = routing
+            }
+
+            if var dns = root["dns"] as? [String: Any],
+               let servers = dns["servers"] as? [Any] {
+                var filteredServers: [Any] = []
+                for item in servers {
+                    if var serverObj = item as? [String: Any],
+                       let domains = serverObj["domains"] as? [String] {
+                        let kept = domains.filter { !shouldDrop($0) }
+                        if kept.isEmpty {
+                            continue
+                        }
+                        serverObj["domains"] = kept
+                        filteredServers.append(serverObj)
+                    } else {
+                        filteredServers.append(item)
+                    }
+                }
+                dns["servers"] = filteredServers
+                root["dns"] = dns
+            }
+        }
+
+        guard let outData = try? JSONSerialization.data(withJSONObject: root),
+              let outString = String(data: outData, encoding: .utf8) else {
+            return configJson
+        }
+        return outString
+    }
+
+    // MARK: - iOS Memory Caps for Auxiliary Cores (qWDTT, MasterDNS, olcRTC)
+
+    private func tuneAuxiliaryOptionsForIOS(kind: String, optionsJson: String) -> String {
+        guard let data = optionsJson.data(using: .utf8),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return optionsJson
+        }
+        switch kind {
+        case "wdtt":
+            // qWDTT subscriptions often ship desktop worker counts (27–108); clamp to 1..18 on iOS
+            // so WebRTC/TURN buffers stay safely inside the 50 MiB PacketTunnel Jetsam budget.
+            if let innerStr = root["options_json"] as? String,
+               let innerData = innerStr.data(using: .utf8),
+               var inner = (try? JSONSerialization.jsonObject(with: innerData)) as? [String: Any] {
+                let rawWorkers = (inner["workers"] as? Int) ?? 0
+                let clamped = rawWorkers <= 0 ? 9 : min(max(rawWorkers, 1), 18)
+                if rawWorkers != clamped {
+                    log("qWDTT: clamping workers \(rawWorkers) -> \(clamped) for iOS memory limit")
+                    inner["workers"] = clamped
+                    if let patchedData = try? JSONSerialization.data(withJSONObject: inner),
+                       let patchedStr = String(data: patchedData, encoding: .utf8) {
+                        root["options_json"] = patchedStr
+                    }
+                }
+            }
+        case "masterdns":
+            let dup = (root["packet_duplication"] as? Int) ?? 1
+            if dup > 2 {
+                log("MasterDNS: clamping packet_duplication \(dup) -> 2 for iOS memory limit")
+                root["packet_duplication"] = 2
+            }
+            root["upload_compression"] = 0
+            root["download_compression"] = 0
+            if let resolvers = root["resolvers"] as? String {
+                let parts = resolvers
+                    .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " || $0 == "\t" })
+                    .map(String.init)
+                    .filter { !$0.isEmpty }
+                if parts.count > 16 {
+                    log("MasterDNS: capping resolvers \(parts.count) -> 16 for iOS memory limit")
+                    root["resolvers"] = parts.prefix(16).joined(separator: ",")
+                }
+            }
+        default:
+            return optionsJson
+        }
+        guard let outData = try? JSONSerialization.data(withJSONObject: root),
+              let outStr = String(data: outData, encoding: .utf8) else {
+            return optionsJson
+        }
+        return outStr
+    }
+
+    private func capOlcRtcRoomsForIOS(_ roomsJson: String) -> String {
+        guard let data = roomsJson.data(using: .utf8),
+              let rooms = (try? JSONSerialization.jsonObject(with: data)) as? [Any],
+              rooms.count > 4 else {
+            return roomsJson
+        }
+        log("olcRTC: capping room pool \(rooms.count) -> 4 for iOS memory limit")
+        let capped = Array(rooms.prefix(4))
+        guard let outData = try? JSONSerialization.data(withJSONObject: capped),
+              let outStr = String(data: outData, encoding: .utf8) else {
+            return roomsJson
+        }
+        return outStr
+    }
+
+    // MARK: - TrustTunnel (AdGuard VpnClientFramework)
+
+    private struct TrustTunnelSpec {
+        let displayName: String
+        let ttConfig: String
+        let mtu: Int
+        let bypassLan: Bool
+    }
+
+    private func extractTrustTunnelSpec(from request: AppleTunnelRequest) -> TrustTunnelSpec? {
+        guard let locData = request.locationJSON.data(using: .utf8),
+              let loc = (try? JSONSerialization.jsonObject(with: locData)) as? [String: Any] else {
+            return nil
+        }
+        let engine = (loc["engine"] as? String) ?? "Standard"
+        guard engine.caseInsensitiveCompare("Standard") == .orderedSame else { return nil }
+        guard let proxy = loc["proxy"] as? [String: Any],
+              let proxyType = proxy["type"] as? String,
+              proxyType.caseInsensitiveCompare("trusttunnel") == .orderedSame,
+              let ttConfig = proxy["tt_config"] as? String,
+              !ttConfig.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let name = (loc["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tag = (proxy["tag"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = (name?.isEmpty == false ? name : nil)
+            ?? (tag?.isEmpty == false ? tag : nil)
+            ?? "Trust Tunnel"
+
+        var mtu = 1280
+        if let tData = request.trafficJSON.data(using: .utf8),
+           let traffic = (try? JSONSerialization.jsonObject(with: tData)) as? [String: Any],
+           let parsedMtu = traffic["mtu"] as? Int, parsedMtu >= 1200 && parsedMtu <= 9000 {
+            mtu = parsedMtu
+        }
+
+        var bypassLan = true
+        if let rData = request.routingJSON.data(using: .utf8),
+           let routing = (try? JSONSerialization.jsonObject(with: rData)) as? [String: Any],
+           let parsedBypass = routing["bypass_lan"] as? Bool {
+            bypassLan = parsedBypass
+        }
+
+        return TrustTunnelSpec(
+            displayName: displayName,
+            ttConfig: ttConfig.trimmingCharacters(in: .whitespacesAndNewlines),
+            mtu: mtu,
+            bypassLan: bypassLan
+        )
+    }
+
+    private func startTrustTunnel(
+        provider: NEPacketTunnelProvider,
+        spec: TrustTunnelSpec,
+        completion: @escaping (Error?) -> Void
+    ) {
+        log("Starting TrustTunnel: \(spec.displayName)")
+        startMemoryPressureMonitoring()
+
+        NativeLogger.setLogLevel(.info)
+        NativeLogger.setCallback { _, message in
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                try? AppleTunnelStore.appendLog("trusttunnel: \(trimmed)")
+            }
+        }
+
+        let endpointToml: String
+        do {
+            if spec.ttConfig.lowercased().hasPrefix("tt://") {
+                endpointToml = try TrustTunnelDeepLink.decodeDeeplink(spec.ttConfig)
+            } else {
+                endpointToml = spec.ttConfig
+            }
+        } catch {
+            let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel invalid config: \(error.localizedDescription)")
+            record(error: err)
+            stop()
+            completion(err)
+            return
+        }
+
+        let excludedLanCidrs: [String] = spec.bypassLan
+            ? ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "255.255.255.255/32"]
+            : ["127.0.0.0/8", "224.0.0.0/4", "255.255.255.255/32"]
+        let excludedTomlList = excludedLanCidrs.map { "\"\($0)\"" }.joined(separator: ", ")
+
+        let fullToml = """
+        loglevel = "info"
+        killswitch_enabled = false
+
+        \(endpointToml.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        [listener.tun]
+        mtu_size = \(spec.mtu)
+        included_routes = ["0.0.0.0/0", "::/0"]
+        excluded_routes = [\(excludedTomlList)]
+        """
+
+        let endpointAddresses = extractTrustTunnelEndpointAddresses(from: endpointToml)
+        var remoteAddr = "127.0.0.1"
+        var excludedIPv4: [String] = []
+        for addr in endpointAddresses {
+            let (host, _) = splitHostPort(addr)
+            if isIPv4(host) {
+                if remoteAddr == "127.0.0.1" { remoteAddr = host }
+                excludedIPv4.append(host)
+            } else if isIPv6(host) {
+                if remoteAddr == "127.0.0.1" { remoteAddr = host }
+            } else if !host.isEmpty {
+                let resolved = resolveAllIPv4(host)
+                if remoteAddr == "127.0.0.1", let first = resolved.first { remoteAddr = first }
+                excludedIPv4.append(contentsOf: resolved)
+            }
+        }
+
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: remoteAddr)
+        settings.mtu = NSNumber(value: spec.mtu)
+
+        let ipv4 = NEIPv4Settings(addresses: ["172.16.209.2"], subnetMasks: ["255.255.255.252"])
+        ipv4.includedRoutes = [.default()]
+        var excludedRoutes: [NEIPv4Route] = []
+        if spec.bypassLan {
+            excludedRoutes.append(contentsOf: [
+                NEIPv4Route(destinationAddress: "10.0.0.0", subnetMask: "255.0.0.0"),
+                NEIPv4Route(destinationAddress: "172.16.0.0", subnetMask: "255.240.0.0"),
+                NEIPv4Route(destinationAddress: "192.168.0.0", subnetMask: "255.255.0.0"),
+                NEIPv4Route(destinationAddress: "169.254.0.0", subnetMask: "255.255.0.0"),
+            ])
+        }
+        for ip in Set(excludedIPv4) where isIPv4(ip) {
+            excludedRoutes.append(NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255"))
+        }
+        ipv4.excludedRoutes = excludedRoutes
+        settings.ipv4Settings = ipv4
+
+        let ipv6 = NEIPv6Settings(addresses: ["fd00::2"], networkPrefixLengths: [126])
+        ipv6.includedRoutes = [.default()]
+        settings.ipv6Settings = ipv6
+
+        let hasDnsUpstreams = endpointToml.contains("dns_upstreams")
+        let dns = NEDNSSettings(servers: hasDnsUpstreams ? ["198.18.53.53"] : ["1.1.1.1", "8.8.8.8"])
+        dns.matchDomains = [""]
+        settings.dnsSettings = dns
+
+        lock.lock()
+        trustTunnelStartHandled = false
+        lock.unlock()
+
+        provider.setTunnelNetworkSettings(settings) { [weak self, weak provider] error in
+            guard let self, let provider else { return }
+            if let error {
+                self.record(error: error)
+                self.stop()
+                completion(error)
+                return
+            }
+
+            let client: VpnClient? = VpnClient(
+                config: fullToml,
+                connectionInfoHandler: { _ in },
+                stateChangeHandler: { [weak self, weak provider] rawState in
+                    guard let self else { return }
+                    switch rawState {
+                    case 2: // connected
+                        self.lock.lock()
+                        let alreadyHandled = self.trustTunnelStartHandled
+                        self.trustTunnelStartHandled = true
+                        self.lock.unlock()
+                        provider?.reasserting = false
+                        if !alreadyHandled {
+                            self.setRunning(true)
+                            try? AppleTunnelStore.writeText(
+                                VPNConnectionState.connected.rawValue,
+                                to: AppleTunnelStore.statusFileName
+                            )
+                            try? AppleTunnelStore.writeText(
+                                String(Date().timeIntervalSince1970),
+                                to: AppleTunnelStore.connectedAtFileName
+                            )
+                            self.log("Tunnel connected: \(spec.displayName)")
+                            completion(nil)
+                        }
+                    case 3, 4, 5: // waiting_for_recovery, recovering, waiting_for_network
+                        provider?.reasserting = true
+                    case 0: // disconnected
+                        self.lock.lock()
+                        let alreadyHandled = self.trustTunnelStartHandled
+                        self.trustTunnelStartHandled = true
+                        self.lock.unlock()
+                        if !alreadyHandled {
+                            let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to connect")
+                            self.record(error: err)
+                            self.stop()
+                            completion(err)
+                        } else if self.isRunning {
+                            self.log("TrustTunnel disconnected")
+                            self.stop()
+                            provider?.cancelTunnelWithError(nil)
+                            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.15) {
+                                exit(0)
+                            }
+                        }
+                    default:
+                        break
+                    }
+                }
+            )
+
+            guard let client else {
+                let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel failed to initialize client")
+                self.record(error: err)
+                self.stop()
+                completion(err)
+                return
+            }
+
+            self.lock.lock()
+            self.trustTunnelClient = client
+            self.lock.unlock()
+
+            if !client.start(provider.packetFlow) {
+                self.lock.lock()
+                let alreadyHandled = self.trustTunnelStartHandled
+                self.trustTunnelStartHandled = true
+                self.lock.unlock()
+                if !alreadyHandled {
+                    let err = NativeTunnelRuntimeError.specializedCore("TrustTunnel client start returned false")
+                    self.record(error: err)
+                    self.stop()
+                    completion(err)
+                }
+            }
+        }
+    }
+
+    private func extractTrustTunnelEndpointAddresses(from toml: String) -> [String] {
+        var addresses: [String] = []
+        for rawLine in toml.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.lowercased().hasPrefix("addresses"),
+                  let startBracket = line.firstIndex(of: "["),
+                  let endBracket = line.lastIndex(of: "]"),
+                  startBracket < endBracket else { continue }
+            let inside = line[line.index(after: startBracket)..<endBracket]
+            for item in inside.split(separator: ",") {
+                let cleaned = item.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
+                if !cleaned.isEmpty {
+                    addresses.append(cleaned)
+                }
+            }
+        }
+        return addresses
     }
 }
 

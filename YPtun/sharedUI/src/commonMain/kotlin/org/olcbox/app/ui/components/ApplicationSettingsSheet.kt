@@ -647,35 +647,42 @@ private fun SharedLogsSettingsContent(
             .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 24.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SharedDetailHeader(
-                title = "Application Logs",
-                subtitle = if (logs.isEmpty()) "No entries" else "${logs.size} entries",
-                onBack = onBack,
-                modifier = Modifier.weight(1f)
-            )
+        SharedDetailHeader(
+            title = "Application Logs",
+            subtitle = if (logs.isEmpty()) "No entries" else "${logs.size} entries",
+            onBack = onBack,
+            modifier = Modifier.fillMaxWidth()
+        )
 
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onClearClick
             ) {
-                Text(LocalStrings.current.clearLogs)
+                Text(LocalStrings.current.clearLogs, maxLines = 1)
             }
+            Spacer(Modifier.weight(1f))
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onSaveClick
             ) {
-                Text(LocalStrings.current.save)
+                Text(LocalStrings.current.save, maxLines = 1)
             }
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onShareClick
             ) {
-                Text(LocalStrings.current.share)
+                Text(LocalStrings.current.share, maxLines = 1)
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(10.dp))
 
         Surface(
             modifier = Modifier

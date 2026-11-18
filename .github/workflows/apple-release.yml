@@ -8,7 +8,7 @@ on:
         description: TestFlight build number
         required: true
         type: string
-        default: "524"
+        default: "525"
       comment:
         description: Build comment
         required: false
@@ -38,6 +38,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: native-apple-release-${{ github.ref }}
@@ -168,6 +169,27 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('YPtun/gradle/libs.versions.toml', 'YPtun/gradle.properties', 'YPtun/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-${{ runner.os }}-
+
+      - name: Cache TrustTunnel Apple XCFramework
+        id: trusttunnel-cache
+        uses: actions/cache@v4
+        with:
+          path: YPtun/sharedUI/build/generated/cores/ios/VpnClientFramework.xcframework
+          key: trusttunnel-apple-xcframework-1.1.12
+
+      - name: Download TrustTunnel Apple XCFramework
+        if: steps.trusttunnel-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p YPtun/sharedUI/build/generated/cores/ios
+          curl -fSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://maven.pkg.github.com/TrustTunnel/TrustTunnelClient/com/adguard/trusttunnel/trusttunnel-client-apple/1.1.12/TrustTunnelClient-apple-1.1.12.zip" \
+            -o "$RUNNER_TEMP/tt-apple.zip"
+          unzip -q "$RUNNER_TEMP/tt-apple.zip" "VpnClientFramework.xcframework/*" -d YPtun/sharedUI/build/generated/cores/ios/
+          rm -f "$RUNNER_TEMP/tt-apple.zip"
+          test -d YPtun/sharedUI/build/generated/cores/ios/VpnClientFramework.xcframework/ios-arm64/VpnClientFramework.framework
 
       - name: Generate and validate native Xcode project
         working-directory: YPtun/apple

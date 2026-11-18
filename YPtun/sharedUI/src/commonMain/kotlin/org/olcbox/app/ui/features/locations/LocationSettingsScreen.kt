@@ -16,6 +16,7 @@ import org.olcbox.app.ui.i18n.stringsFor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -106,9 +107,12 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -1021,14 +1025,43 @@ private fun ProxyField(
     enabled: Boolean,
     onChange: (String) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        SectionTitle(
-            title = title,
-            subtitle = subtitle
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                SectionTitle(
+                    title = title,
+                    subtitle = subtitle
+                )
+            }
+            if (isFocused) {
+                TextButton(
+                    onClick = dismissKeyboard,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = LocalStrings.current.widgetDone,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(LocalStrings.current.widgetDone, maxLines = 1)
+                }
+            }
+        }
         OutlinedTextField(
             value = link,
             onValueChange = onChange,
@@ -1036,13 +1069,29 @@ private fun ProxyField(
             placeholder = { Text("vless://…  or  { \"type\": … }") },
             enabled = enabled,
             isError = error != null,
+            trailingIcon = if (isFocused) {
+                {
+                    IconButton(onClick = dismissKeyboard) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = LocalStrings.current.widgetDone
+                        )
+                    }
+                }
+            } else {
+                null
+            },
             supportingText = {
                 val text = error
                     ?: currentProxy?.let { "${engineProtocolLabel(it.type)} · ${it.displayName()}" }
                 if (text != null) Text(text)
             },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { dismissKeyboard() }),
             minLines = 2,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { isFocused = it.isFocused }
         )
     }
 }

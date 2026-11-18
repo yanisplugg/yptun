@@ -173,7 +173,16 @@ fun LocationRow(
         label = "locationRowBorder"
     )
     val borderWidth = if (isSelected) 1.5.dp else 1.dp
-    val textColor = MaterialTheme.colorScheme.onSurface
+    val textColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val secondaryTextColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     val metadata = location.metadata
     val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName
@@ -240,7 +249,7 @@ fun LocationRow(
             if (description == null || !LocalHideEndpointWhenDescription.current) {
                 Text(
                     text = locationSubtitle(location),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = secondaryTextColor,
                     fontSize = 12.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -370,7 +379,7 @@ fun LocationRow(
                 Icon(
                     imageVector = Icons.Default.MoreVert,
                     contentDescription = "Settings",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = secondaryTextColor
                 )
             }
         }
@@ -506,7 +515,16 @@ fun LocationGridCell(
         label = "gridCellBorder"
     )
     val borderWidth = if (isSelected) 1.5.dp else 1.dp
-    val textColor = MaterialTheme.colorScheme.onSurface
+    val textColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val secondaryTextColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     val metadata = location.metadata
     val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName

@@ -1281,27 +1281,57 @@ class LocationsRepositoryImpl(
                     if (infoResponse.status.value in 200..299) infoResponse.bodyAsText() else null
                 }.getOrNull()?.takeIf { it.isNotBlank() }
 
-                // FakeDNS enrichment: the server's fakeip pool + dns.hosts only ship in the rich Xray
-                // JSON returned under the "Happ/1.0" UA. The MAIN fetch above keeps the user's chosen UA
-                // (default YPtun → clean names/links), so do a SEPARATE Happ-UA fetch here purely to
-                // recover the FakeDNS config and attach it later. Skipped (reuse main) when the main UA
-                // already is Happ. Best-effort: any failure just means no FakeDNS.
-                val fakednsJson = if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT) {
-                    content
-                } else {
-                    runCatching {
-                        val happResponse = client.get(url) {
-                            headers {
-                                append(HttpHeaders.Accept, "application/json, text/plain, */*")
-                                append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
-                                if (requestMode == SubscriptionRequestMode.Identity) {
-                                    append("x-hwid", hwid.orEmpty())
-                                    if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
+                // FakeDNS & per-server routing enrichment: the server's fakeip pool, dns.hosts, and
+                // embedded routing.rules (e.g. RU-direct) ship in the rich Xray JSON returned either
+                // under the "Happ/1.0" UA or at the standard Remnawave `<url>/json` endpoint.
+                val fakednsJson = run {
+                    fun isJsonBody(body: String?): Boolean {
+                        val trimmed = body?.trimStart() ?: return false
+                        return trimmed.startsWith("[") || trimmed.startsWith("{")
+                    }
+                    if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT && isJsonBody(content)) {
+                        content
+                    } else {
+                        val fromHappUa = if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT) {
+                            null
+                        } else {
+                            runCatching {
+                                val happResponse = client.get(url) {
+                                    headers {
+                                        append(HttpHeaders.Accept, "application/json, text/plain, */*")
+                                        append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
+                                        if (requestMode == SubscriptionRequestMode.Identity) {
+                                            append("x-hwid", hwid.orEmpty())
+                                            if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
+                                        }
+                                    }
                                 }
+                                if (happResponse.status.value in 200..299) happResponse.bodyAsText() else null
+                            }.getOrNull()?.takeIf(::isJsonBody)
+                        }
+                        fromHappUa ?: run {
+                            val base = url.trim().substringBefore('#')
+                            val canTryJsonEndpoint = !base.contains('?') &&
+                                !base.trimEnd('/').endsWith("/json", ignoreCase = true)
+                            if (!canTryJsonEndpoint) {
+                                null
+                            } else {
+                                runCatching {
+                                    val jsonResp = client.get(base.trimEnd('/') + "/json") {
+                                        headers {
+                                            append(HttpHeaders.Accept, "application/json, text/plain, */*")
+                                            append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
+                                            if (requestMode == SubscriptionRequestMode.Identity) {
+                                                append("x-hwid", hwid.orEmpty())
+                                                if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
+                                            }
+                                        }
+                                    }
+                                    if (jsonResp.status.value in 200..299) jsonResp.bodyAsText() else null
+                                }.getOrNull()?.takeIf(::isJsonBody)
                             }
                         }
-                        if (happResponse.status.value in 200..299) happResponse.bodyAsText() else null
-                    }.getOrNull()?.takeIf { it.trimStart().startsWith("[") || it.trimStart().startsWith("{") }
+                    }
                 }
 
                 // No `profile-icon` header: Remnawave keeps the logo in the page's branding config.
