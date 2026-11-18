@@ -241,11 +241,15 @@ func (i *Instance) socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 	// control connection, else the 30s deadline kills the relay mid-session (e.g. Telegram VoIP over WARP).
 	_ = client.SetDeadline(time.Time{})
 
-	conns := make(map[string]net.Conn)
+	var connsMu sync.Mutex
+	conns := make(map[string]*udpTargetSession)
 	defer func() {
-		for _, c := range conns {
-			_ = c.Close()
+		connsMu.Lock()
+		for _, s := range conns {
+			_ = s.conn.Close()
 		}
+		conns = make(map[string]*udpTargetSession)
+		connsMu.Unlock()
 	}()
 	go func() { io.Copy(io.Discard, client); relay.Close() }()
 
@@ -260,8 +264,10 @@ func (i *Instance) socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 			continue
 		}
 		target := net.JoinHostPort(dstHost, strconv.Itoa(dstPort))
-		uc := conns[target]
-		if uc == nil {
+
+		connsMu.Lock()
+		sess := conns[target]
+		if sess == nil {
 			var rc net.Conn
 			var derr error
 			if i.viaWarp(dstHost) {
@@ -270,13 +276,26 @@ func (i *Instance) socksUDPAssociate(client net.Conn, tnet *netstack.Net) {
 				rc, derr = net.Dial("udp", target)
 			}
 			if derr != nil {
+				connsMu.Unlock()
 				continue
 			}
-			uc = rc
-			conns[target] = uc
-			go udpReturn(relay, uc, from, dstHost, dstPort)
+			sess = &udpTargetSession{conn: rc}
+			sess.lastClient.Store(from)
+			conns[target] = sess
+			go udpReturn(relay, sess, target, dstHost, dstPort, func() {
+				connsMu.Lock()
+				if conns[target] == sess {
+					delete(conns, target)
+				}
+				connsMu.Unlock()
+				_ = rc.Close()
+			})
+		} else {
+			sess.lastClient.Store(from)
 		}
-		_, _ = uc.Write(payload)
+		connsMu.Unlock()
+
+		_, _ = sess.conn.Write(payload)
 	}
 }
 
