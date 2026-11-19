@@ -1119,6 +1119,16 @@ fun HomeScreen(
         // Create / rename folder: a single text field dialog.
         folderDialog?.let { dialog ->
             var name by remember(dialog) { mutableStateOf(dialog.initialName) }
+            val onConfirm = {
+                val trimmed = name.trim()
+                if (trimmed.isNotBlank()) {
+                    when (dialog) {
+                        is FolderDialog.Rename -> onRenameFolder(dialog.id, trimmed)
+                        is FolderDialog.Create -> onCreateFolder(trimmed, dialog.memberKeys)
+                    }
+                    folderDialog = null
+                }
+            }
             AlertDialog(
                 onDismissRequest = { folderDialog = null },
                 title = { Text(if (dialog is FolderDialog.Rename) s.folderRename else s.newFolderTitle) },
@@ -1127,20 +1137,19 @@ fun HomeScreen(
                         value = name,
                         onValueChange = { name = it },
                         singleLine = true,
-                        label = { Text(s.folderNameHint) }
+                        label = { Text(s.folderNameHint) },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                        ),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onDone = { onConfirm() }
+                        )
                     )
                 },
                 confirmButton = {
                     TextButton(
                         enabled = name.isNotBlank(),
-                        onClick = {
-                            val trimmed = name.trim()
-                            when (dialog) {
-                                is FolderDialog.Rename -> onRenameFolder(dialog.id, trimmed)
-                                is FolderDialog.Create -> onCreateFolder(trimmed, dialog.memberKeys)
-                            }
-                            folderDialog = null
-                        }
+                        onClick = onConfirm
                     ) { Text(if (dialog is FolderDialog.Rename) s.folderSave else s.folderCreate) }
                 },
                 dismissButton = {

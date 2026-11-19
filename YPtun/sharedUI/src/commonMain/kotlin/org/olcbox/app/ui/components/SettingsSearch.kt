@@ -4,14 +4,18 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,8 +27,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import org.olcbox.app.ui.i18n.LocalStrings
@@ -224,17 +233,39 @@ object SettingsSearch {
 @Composable
 fun SettingsSearchBar(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
     val s = LocalStrings.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
         singleLine = true,
         shape = RoundedCornerShape(28.dp),
         placeholder = { Text(s.settingsSearchHint) },
         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { dismissKeyboard() }),
         trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Filled.Close, contentDescription = "Clear") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isFocused) {
+                    IconButton(onClick = dismissKeyboard) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = s.widgetDone,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Filled.Close, contentDescription = "Clear") }
+                }
             }
         },
     )

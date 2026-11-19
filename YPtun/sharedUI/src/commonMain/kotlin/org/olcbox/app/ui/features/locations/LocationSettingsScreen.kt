@@ -370,12 +370,21 @@ fun LocationSettingsScreen(
             }
         }
     ) { innerPadding ->
+        val focusManager = LocalFocusManager.current
+        val keyboardController = LocalSoftwareKeyboardController.current
         // A full screen, not a sheet: the gaps between card rows show the page background.
         CompositionLocalProvider(LocalSettingsGapColor provides MaterialTheme.colorScheme.background) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                ) {
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                },
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -390,7 +399,7 @@ fun LocationSettingsScreen(
                     supportingText = viewModel.nameError,
                     leadingIcon = Icons.Rounded.Public,
                     onClear = { viewModel.onNameChanged("") },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
                 )
             }
 
@@ -1119,14 +1128,13 @@ private fun LazyListScope.masterDnsSection(
                 title = "MasterDNS — туннель через DNS",
                 subtitle = "Домен и ключ шифрования от твоего MasterDNS-сервера; резолверы — любые UDP-DNS, которые его дотягивают"
             )
-            OutlinedTextField(
+            SettingsMultilineTextField(
                 value = config.domains,
                 onValueChange = { v -> onChange { it.copy(domains = v) } },
-                label = { Text("Домен(ы) туннеля") },
-                placeholder = { Text("v.example.com, v2.example.com") },
+                label = "Домен(ы) туннеля",
+                placeholder = "v.example.com, v2.example.com",
                 enabled = enabled,
-                minLines = 1,
-                modifier = Modifier.fillMaxWidth()
+                minLines = 1
             )
             VkTurnField(
                 value = config.encryptionKey,
@@ -1140,17 +1148,14 @@ private fun LazyListScope.masterDnsSection(
                 enabled = enabled,
                 onSelected = { v -> onChange { it.copy(encryptionMethod = v) } }
             )
-            OutlinedTextField(
+            SettingsMultilineTextField(
                 value = config.resolvers,
                 onValueChange = { v -> onChange { it.copy(resolvers = v) } },
-                label = { Text("DNS-резолверы (UDP)") },
-                placeholder = { Text("1.1.1.1, 8.8.8.8:53, 192.168.1.0/30") },
-                supportingText = {
-                    Text("Через запятую или с новой строки. Чем больше живых резолверов, тем стабильнее и быстрее туннель.")
-                },
+                label = "DNS-резолверы (UDP)",
+                placeholder = "1.1.1.1, 8.8.8.8:53, 192.168.1.0/30",
+                supportingText = "Через запятую или с новой строки. Чем больше живых резолверов, тем стабильнее и быстрее туннель.",
                 enabled = enabled,
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth()
+                minLines = 2
             )
             MasterDnsTuningRow(
                 config = config,
@@ -1554,15 +1559,14 @@ private fun LazyListScope.vkTurnSection(
                         val extraLines = draft.extraFreeturnUris.split('\n')
                             .map { it.trim() }.filter { it.startsWith("freeturn://", ignoreCase = true) }
                         val overCap = extraLines.size > 5
-                        OutlinedTextField(
+                        SettingsMultilineTextField(
                             value = draft.extraFreeturnUris,
                             onValueChange = { v -> onChange { it.copy(extraFreeturnUris = v) } },
-                            label = { Text("Доп. серверы freeturn (до 5, по одной ссылке в строке)") },
-                            placeholder = { Text("freeturn://…") },
+                            label = "Доп. серверы freeturn (до 5, по одной ссылке в строке)",
+                            placeholder = "freeturn://…",
                             enabled = enabled,
                             minLines = 2,
-                            maxLines = 6,
-                            modifier = Modifier.fillMaxWidth()
+                            maxLines = 6
                         )
                         Text(
                             if (overCap) "Слишком много серверов — будут использованы первые 5 доп. (всего 6)."
@@ -1712,14 +1716,13 @@ private fun LazyListScope.vkTurnSection(
                 title = LocalStrings.current.proxyOverVkturn,
                 subtitle = LocalStrings.current.proxyOverVkturnSubtitle
             )
-            OutlinedTextField(
+            SettingsMultilineTextField(
                 value = draft.outboundProxyLink,
                 onValueChange = { v -> onChange { it.copy(outboundProxyLink = v) } },
-                label = { Text(LocalStrings.current.proxyLink) },
-                placeholder = { Text("vless://… / trojan://… / ss://…") },
+                label = LocalStrings.current.proxyLink,
+                placeholder = "vless://… / trojan://… / ss://…",
                 enabled = enabled,
-                minLines = 2,
-                modifier = Modifier.fillMaxWidth()
+                minLines = 2
             )
             CoreSelector(
                 selected = draft.proxyCore,
@@ -1754,14 +1757,13 @@ private fun LazyListScope.vkTurnSection(
                 }
             )
             if (proxyEnabled) {
-                OutlinedTextField(
+                SettingsMultilineTextField(
                     value = draft.chainProxyLink,
                     onValueChange = { v -> onChange { it.copy(chainProxyLink = v) } },
-                    label = { Text(LocalStrings.current.proxyLink) },
-                    placeholder = { Text("vless://… / trojan://… / ss://…") },
+                    label = LocalStrings.current.proxyLink,
+                    placeholder = "vless://… / trojan://… / ss://…",
                     enabled = enabled,
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
+                    minLines = 2
                 )
                 CoreSelector(
                     selected = draft.proxyCore,
@@ -1896,51 +1898,39 @@ private fun LazyListScope.openFluxSection(
                         keyboardType = KeyboardType.Number
                     )
                 } else {
-                    OutlinedTextField(
+                    SettingsMultilineTextField(
                         value = config.docUrl,
                         onValueChange = { v -> onChange { it.copy(docUrl = v.trim()) } },
-                        label = {
-                            Text(
-                                when (config.transport) {
-                                    OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
-                                    OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
-                                    OpenFluxConfig.TRANSPORT_AVITO -> "Список комнат Avito Code"
-                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "Ссылка на конференцию Телемоста"
-                                    else -> "Ссылка на Яндекс Документ"
-                                }
-                            )
+                        label = when (config.transport) {
+                            OpenFluxConfig.TRANSPORT_MAILRU -> "Публичная ссылка на документ Mail.ru"
+                            OpenFluxConfig.TRANSPORT_CUPS -> "Ссылка на комнату cups.online"
+                            OpenFluxConfig.TRANSPORT_AVITO -> "Список комнат Avito Code"
+                            OpenFluxConfig.TRANSPORT_TELEMOST -> "Ссылка на конференцию Телемоста"
+                            else -> "Ссылка на Яндекс Документ"
                         },
-                        placeholder = {
-                            Text(
-                                when (config.transport) {
-                                    OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
-                                    OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
-                                    OpenFluxConfig.TRANSPORT_AVITO -> "строка, которую напечатала выходная нода"
-                                    OpenFluxConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/…"
-                                    else -> "https://docs.yandex.ru/…"
-                                }
-                            )
+                        placeholder = when (config.transport) {
+                            OpenFluxConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/…"
+                            OpenFluxConfig.TRANSPORT_CUPS -> "https://interview.cups.online/live-coding/…"
+                            OpenFluxConfig.TRANSPORT_AVITO -> "строка, которую напечатала выходная нода"
+                            OpenFluxConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/…"
+                            else -> "https://docs.yandex.ru/…"
                         },
-                        supportingText = {
-                            Text(
-                                if (config.transport == OpenFluxConfig.TRANSPORT_MAILRU) {
-                                    "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
-                                } else if (config.transport == OpenFluxConfig.TRANSPORT_CUPS) {
-                                    "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
-                                } else if (config.transport == OpenFluxConfig.TRANSPORT_AVITO) {
-                                    "Выходная нода сама создаёт комнаты на code.avito.ru и печатает их список — вставь его сюда. Нужны cookie аккаунта (поле ниже) на клиенте и на ноде; скорость складывается по комнатам."
-                                } else if (config.transport == OpenFluxConfig.TRANSPORT_TELEMOST) {
-                                    "Конференция Яндекс Телемоста: туннель идёт видео через SFU, пять линий (до ~1,5 МБ/с). Одна конференция — один клиент и одна нода; ссылку получает и нода (ей нужна версия с Телемостом — переустанови)."
-                                } else if (config.transport == OpenFluxConfig.TRANSPORT_VYANDEX) {
-                                    "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
-                                } else {
-                                    "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
-                                }
-                            )
+                        supportingText = when (config.transport) {
+                            OpenFluxConfig.TRANSPORT_MAILRU ->
+                                "Документ в Облаке Mail.ru, открытый по ссылке на редактирование. Ту же ссылку получает выходная нода."
+                            OpenFluxConfig.TRANSPORT_CUPS ->
+                                "Комната live-coding на interview.cups.online. Ту же ссылку получает выходная нода."
+                            OpenFluxConfig.TRANSPORT_AVITO ->
+                                "Выходная нода сама создаёт комнаты на code.avito.ru и печатает их список — вставь его сюда. Нужны cookie аккаунта (поле ниже) на клиенте и на ноде; скорость складывается по комнатам."
+                            OpenFluxConfig.TRANSPORT_TELEMOST ->
+                                "Конференция Яндекс Телемоста: туннель идёт видео через SFU, пять линий (до ~1,5 МБ/с). Одна конференция — один клиент и одна нода; ссылку получает и нода (ей нужна версия с Телемостом — переустанови)."
+                            OpenFluxConfig.TRANSPORT_VYANDEX ->
+                                "Документ в НОВОМ редакторе Яндекса. Ту же ссылку и тот же транспорт получает выходная нода."
+                            else ->
+                                "Документ в СТАРОМ редакторе Яндекса (переключается в настройках интерфейса). Ту же ссылку получает выходная нода."
                         },
                         enabled = enabled,
-                        minLines = 1,
-                        modifier = Modifier.fillMaxWidth()
+                        minLines = 1
                     )
                 }
             }
@@ -3604,6 +3594,13 @@ private fun VkTurnField(
     keyboardType: KeyboardType = KeyboardType.Text,
     modifier: Modifier = Modifier
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -3614,9 +3611,21 @@ private fun VkTurnField(
         singleLine = true,
         keyboardOptions = KeyboardOptions(
             keyboardType = keyboardType,
-            imeAction = ImeAction.Next
+            imeAction = ImeAction.Done
         ),
-        modifier = modifier.fillMaxWidth()
+        keyboardActions = KeyboardActions(onDone = { dismissKeyboard() }),
+        trailingIcon = if (isFocused) {
+            {
+                IconButton(onClick = dismissKeyboard) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = LocalStrings.current.widgetDone,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        } else null,
+        modifier = modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused }
     )
 }
 
@@ -4460,6 +4469,38 @@ private fun SettingsTextField(
     keyboardActions: KeyboardActions = KeyboardActions(),
     visualTransformation: VisualTransformation = VisualTransformation.None
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+    val effectiveActions = remember(keyboardActions, dismissKeyboard) {
+        KeyboardActions(
+            onDone = {
+                dismissKeyboard()
+                keyboardActions.onDone?.invoke(this)
+            },
+            onNext = {
+                dismissKeyboard()
+                keyboardActions.onNext?.invoke(this)
+            },
+            onGo = {
+                dismissKeyboard()
+                keyboardActions.onGo?.invoke(this)
+            },
+            onSearch = {
+                dismissKeyboard()
+                keyboardActions.onSearch?.invoke(this)
+            },
+            onSend = {
+                dismissKeyboard()
+                keyboardActions.onSend?.invoke(this)
+            }
+        )
+    }
+
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -4472,12 +4513,25 @@ private fun SettingsTextField(
         supportingText = supportingText?.let { { Text(it) } },
         visualTransformation = visualTransformation,
         keyboardOptions = keyboardOptions,
-        keyboardActions = keyboardActions,
-        modifier = Modifier.fillMaxWidth(),
+        keyboardActions = effectiveActions,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
         trailingIcon = {
-            if (value.isNotEmpty() && enabled) {
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isFocused) {
+                    IconButton(onClick = dismissKeyboard) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = LocalStrings.current.widgetDone,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                if (value.isNotEmpty() && enabled) {
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
                 }
             }
         }
@@ -4492,6 +4546,13 @@ private fun NumericTextField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     OutlinedTextField(
         value = value.takeIf { it > 0 }?.toString().orEmpty(),
         onValueChange = onValueChange,
@@ -4500,9 +4561,66 @@ private fun NumericTextField(
         singleLine = true,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Number,
-            imeAction = ImeAction.Next
+            imeAction = ImeAction.Done
         ),
+        keyboardActions = KeyboardActions(onDone = { dismissKeyboard() }),
+        trailingIcon = if (isFocused) {
+            {
+                IconButton(onClick = dismissKeyboard) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = LocalStrings.current.widgetDone,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        } else null,
+        modifier = modifier.onFocusChanged { isFocused = it.isFocused }
+    )
+}
+
+@Composable
+private fun SettingsMultilineTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String? = null,
+    enabled: Boolean = true,
+    minLines: Int = 2,
+    maxLines: Int = 6,
+    supportingText: String? = null,
+    modifier: Modifier = Modifier
+) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = placeholder?.let { { Text(it) } },
+        enabled = enabled,
+        minLines = minLines,
+        maxLines = maxLines,
+        supportingText = supportingText?.let { { Text(it) } },
+        trailingIcon = if (isFocused) {
+            {
+                IconButton(onClick = dismissKeyboard) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = LocalStrings.current.widgetDone,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        } else null,
         modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused }
     )
 }
 

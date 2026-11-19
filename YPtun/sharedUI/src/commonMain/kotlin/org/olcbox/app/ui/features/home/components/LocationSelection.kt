@@ -1163,6 +1163,12 @@ private fun SubscriptionGroupMenu(
                     value = draft,
                     onValueChange = { draft = it },
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onDone = { onRename(draft); renaming = false }
+                    ),
                     supportingText = { Text(s.renameSubscriptionHint) }
                 )
             },
@@ -1387,6 +1393,8 @@ private fun SubscriptionSheet(
     val first = groupLocations.firstOrNull()
     val info = first?.subscriptionInfo()
     val host = Regex("^https?://([^/?#:]+)", RegexOption.IGNORE_CASE).find(subscriptionUrl.trim())?.groupValues?.get(1)
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     var editingUrl by remember { mutableStateOf(false) }
     var urlDraft by remember(subscriptionUrl) { mutableStateOf(subscriptionUrl) }
     var cascadeDraft by remember(cascadeLink) { mutableStateOf(cascadeLink.orEmpty()) }
@@ -1400,6 +1408,13 @@ private fun SubscriptionSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                ) {
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                }
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)

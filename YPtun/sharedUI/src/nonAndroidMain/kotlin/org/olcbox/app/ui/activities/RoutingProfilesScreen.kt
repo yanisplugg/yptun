@@ -2,6 +2,7 @@ package org.olcbox.app.ui.activities
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -43,6 +46,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -140,10 +147,20 @@ internal fun RoutingProfilesContent(
         return
     }
 
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) {
+                focusManager.clearFocus()
+                keyboardController?.hide()
+            }
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -391,10 +408,20 @@ private fun RoutingProfileEditor(
         singboxResolve = singboxResolve,
     )
 
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) {
+                focusManager.clearFocus()
+                keyboardController?.hide()
+            }
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -411,12 +438,32 @@ private fun RoutingProfileEditor(
             )
         }
 
+        var isNameFocused by remember { mutableStateOf(false) }
+        val dismissNameKeyboard: () -> Unit = {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+        }
         OutlinedTextField(
             value = name,
             onValueChange = { name = it },
             label = { Text(s.routingProfileName) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { dismissNameKeyboard() }),
+            trailingIcon = if (isNameFocused) {
+                {
+                    IconButton(onClick = dismissNameKeyboard) {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = s.widgetDone,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            } else null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { isNameFocused = it.isFocused },
         )
 
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -536,13 +583,34 @@ private fun RoutingProfileEditor(
 
 @Composable
 private fun BucketField(label: String, hint: String, value: String, onChange: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val s = LocalStrings.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
         placeholder = { Text(hint) },
         minLines = 2,
-        modifier = Modifier.fillMaxWidth(),
+        trailingIcon = if (isFocused) {
+            {
+                IconButton(onClick = dismissKeyboard) {
+                    Icon(
+                        imageVector = Icons.Outlined.Check,
+                        contentDescription = s.widgetDone,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        } else null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
     )
 }
 

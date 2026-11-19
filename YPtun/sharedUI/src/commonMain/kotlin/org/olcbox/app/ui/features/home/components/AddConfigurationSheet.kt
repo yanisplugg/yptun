@@ -1,6 +1,8 @@
 package org.olcbox.app.ui.features.home.components
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -46,9 +50,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -88,6 +96,9 @@ fun AddConfigurationSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var page by remember { mutableStateOf(AddPage.Main) }
 
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -98,6 +109,13 @@ fun AddConfigurationSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                    }
                     .padding(horizontal = 24.dp)
                     .padding(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -144,8 +162,15 @@ private fun AddMainPage(
 ) {
     val s = LocalStrings.current
     val clipboard = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf("") }
     val detected = remember(text) { describeImportText(text, s) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
 
     Text(
         text = s.addTitle,
@@ -163,13 +188,28 @@ private fun AddMainPage(
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
         minLines = 2,
         maxLines = 6,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { dismissKeyboard() }),
         trailingIcon = {
-            IconButton(onClick = { clipboard.getText()?.text?.let { text = it } }) {
-                Icon(Icons.Outlined.ContentPaste, contentDescription = s.addPaste)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isFocused) {
+                    IconButton(onClick = dismissKeyboard) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = s.widgetDone,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                IconButton(onClick = { clipboard.getText()?.text?.let { text = it } }) {
+                    Icon(Icons.Outlined.ContentPaste, contentDescription = s.addPaste)
+                }
             }
         },
         shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused }
     )
     if (detected != null) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {

@@ -701,7 +701,9 @@ class IosVpnManager(
     }
 
     private suspend fun directUdpPingViaExtension(host: String, port: Int, timeoutMs: Int): Long? {
-        val session = activeSession() ?: return null
+        val currentManager = manager ?: loadManager(createIfMissing = false)
+        val session = currentManager?.connection as? NETunnelProviderSession ?: return null
+        if (currentManager.connection.status != NEVPNStatusConnected) return null
         return runCatching {
             val response = withTimeoutOrNull(timeoutMs.toLong() + 1_000L) {
                 askExtension(session, "udpping:$host|$port|$timeoutMs")

@@ -80,6 +80,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import org.olcbox.app.ui.features.locations.components.SshAuthFields
 import org.olcbox.app.ui.features.locations.components.SshKeyLoadButton
@@ -319,10 +322,19 @@ fun LocationSettingsScreen(
             }
         }
     ) { innerPadding ->
+        val focusManager = LocalFocusManager.current
+        val keyboardController = LocalSoftwareKeyboardController.current
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                ) {
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                },
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -337,7 +349,7 @@ fun LocationSettingsScreen(
                     supportingText = viewModel.nameError,
                     leadingIcon = Icons.Rounded.Public,
                     onClear = { viewModel.onNameChanged("") },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
                 )
             }
 
@@ -4246,6 +4258,38 @@ private fun SettingsTextField(
     keyboardActions: KeyboardActions = KeyboardActions(),
     visualTransformation: VisualTransformation = VisualTransformation.None
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+    val effectiveActions = remember(keyboardActions, dismissKeyboard) {
+        KeyboardActions(
+            onDone = {
+                dismissKeyboard()
+                keyboardActions.onDone?.invoke(this)
+            },
+            onNext = {
+                dismissKeyboard()
+                keyboardActions.onNext?.invoke(this)
+            },
+            onGo = {
+                dismissKeyboard()
+                keyboardActions.onGo?.invoke(this)
+            },
+            onSearch = {
+                dismissKeyboard()
+                keyboardActions.onSearch?.invoke(this)
+            },
+            onSend = {
+                dismissKeyboard()
+                keyboardActions.onSend?.invoke(this)
+            }
+        )
+    }
+
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -4258,12 +4302,25 @@ private fun SettingsTextField(
         supportingText = supportingText?.let { { Text(it) } },
         visualTransformation = visualTransformation,
         keyboardOptions = keyboardOptions,
-        keyboardActions = keyboardActions,
-        modifier = Modifier.fillMaxWidth(),
+        keyboardActions = effectiveActions,
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { isFocused = it.isFocused },
         trailingIcon = {
-            if (value.isNotEmpty() && enabled) {
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isFocused) {
+                    IconButton(onClick = dismissKeyboard) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = LocalStrings.current.widgetDone,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                if (value.isNotEmpty() && enabled) {
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
                 }
             }
         }
@@ -4278,6 +4335,13 @@ private fun NumericTextField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isFocused by remember { mutableStateOf(false) }
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     OutlinedTextField(
         value = value.takeIf { it > 0 }?.toString().orEmpty(),
         onValueChange = onValueChange,
@@ -4286,9 +4350,21 @@ private fun NumericTextField(
         singleLine = true,
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Number,
-            imeAction = ImeAction.Next
+            imeAction = ImeAction.Done
         ),
-        modifier = modifier
+        keyboardActions = KeyboardActions(onDone = { dismissKeyboard() }),
+        trailingIcon = if (isFocused) {
+            {
+                IconButton(onClick = dismissKeyboard) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = LocalStrings.current.widgetDone,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        } else null,
+        modifier = modifier.onFocusChanged { isFocused = it.isFocused }
     )
 }
 
