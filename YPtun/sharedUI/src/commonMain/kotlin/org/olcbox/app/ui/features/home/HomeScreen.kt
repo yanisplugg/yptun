@@ -683,20 +683,14 @@ fun HomeScreen(
                 pingsState = pingsState,
                 onLocationSelected = { id ->
                     val isAlreadySelected = locationViewModel.selectedLocationId == id
-                    val isBusy = state.isVpnLoading ||
-                        vpnManager.status.value is org.olcbox.app.vpn.VpnStatus.Connecting ||
-                        vpnManager.status.value is org.olcbox.app.vpn.VpnStatus.Reconnecting
-                    val isConnected = state.isVpnConnected ||
-                        vpnManager.status.value is org.olcbox.app.vpn.VpnStatus.Connected
+                    val isBusyOrConnected = state.isVpnLoading || state.isVpnConnected
 
-                    if (isAlreadySelected && (isBusy || isConnected)) {
-                        return@onLocationSelected
-                    }
-
-                    locationViewModel.selectLocation(id) {
-                        viewModel.loadCurrentConfig {
-                            if (!isAlreadySelected) {
-                                viewModel.restartVpnIfRunning()
+                    if (!isAlreadySelected || !isBusyOrConnected) {
+                        locationViewModel.selectLocation(id) {
+                            viewModel.loadCurrentConfig {
+                                if (!isAlreadySelected) {
+                                    viewModel.restartVpnIfRunning()
+                                }
                             }
                         }
                     }
