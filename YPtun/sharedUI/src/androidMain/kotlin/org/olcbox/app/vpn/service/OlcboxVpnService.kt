@@ -3672,12 +3672,19 @@ class OlcboxVpnService : VpnService() {
         val ds = LocationsDataSourceImpl(applicationContext)
         var ini = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+        // Accounts with Reserved bytes cannot connect in awgproxy (Cloudflare discards handshakes/packets).
+        // If AWG is requested (!officialFirst), discard cached official account so a working generator account is created.
+        if (!officialFirst && ini != null && ini.contains("Reserved", ignoreCase = true)) {
+            ini = null
+        }
         if (ini.isNullOrBlank()) {
             addLog("WARP: генерирую конфиг Cloudflare WARP…")
             ini = runCatching { WarpConfigGenerator.generate(officialFirst) }
                 .onFailure { addLog("WARP: генерация не удалась: ${it.message}") }
                 .getOrNull()
-            if (ini != null) runCatching { ds.saveTelegramWarpConfig(ini) }
+            if (ini != null && (officialFirst || !ini.contains("Reserved", ignoreCase = true))) {
+                runCatching { ds.saveTelegramWarpConfig(ini) }
+            }
         }
         return ini?.takeIf { it.isNotBlank() }
     }
@@ -3826,9 +3833,9 @@ class OlcboxVpnService : VpnService() {
     private suspend fun loadRoutingProfilesState(): RoutingProfilesState {
         val raw = runCatching {
             applicationContext.vpnPrefDataStore.data.first()[KEY_ANDROID_ROUTING_PROFILES]
-        }.getOrNull() ?: return RoutingProfilesState()
+        }.getOrNull() ?: return RoutingProfilesState().withPresets()
         return runCatching { Json.decodeFromString(RoutingProfilesState.serializer(), raw) }
-            .getOrDefault(RoutingProfilesState())
+            .getOrDefault(RoutingProfilesState()).withPresets()
     }
 
     /** The Happ-style routing profile in effect for [config]: per-location override → global default. */

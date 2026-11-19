@@ -19,7 +19,7 @@ fn engine_ini_drops_reserved_pins_endpoint_and_only_awg_keeps_obfuscation() {
     let ini = "[Interface]\nPrivateKey = a=\nReserved = 1, 2, 3\nJc = 4\nS1 = 0\nI1 = <b 0xce>\n[Peer]\nPublicKey = b=\nEndpoint = engage.cloudflareclient.com:2408";
     let awg = engine_ini(ini, true, true);
     assert!(!awg.contains("Reserved"));
-    assert!(!awg.contains("I1") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"));
+    assert!(awg.contains("I1 = <b 0xce>") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"));
     let server = engine_ini(ini, true, false);
     assert!(!server.contains("I1") && server.contains("Jc = 4"));
     let wg = engine_ini(ini, false, true);

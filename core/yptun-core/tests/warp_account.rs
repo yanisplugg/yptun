@@ -165,7 +165,10 @@ fn tos_timestamp_format() {
 #[test]
 fn ini_matches_the_kotlin_generator() {
     let account = parse_service_account(ACCOUNT, |_| 0).unwrap();
-    let expected = "[Interface]\nPrivateKey = cHJpdg==\nAddress = 172.16.0.2/32, 2606:4700:110:8a1e::1/128\nDNS = 1.1.1.1\nMTU = 1280\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 0\nS2 = 0\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\n\n[Peer]\nPublicKey = cGVlcg==\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = engage.cloudflareclient.com:2408\nPersistentKeepalive = 25\n";
+    let expected = format!(
+        "[Interface]\nPrivateKey = cHJpdg==\nAddress = 172.16.0.2/32, 2606:4700:110:8a1e::1/128\nDNS = 1.1.1.1\nMTU = 1280\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 0\nS2 = 0\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\nI1 = {}\n\n[Peer]\nPublicKey = cGVlcg==\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = engage.cloudflareclient.com:2408\nPersistentKeepalive = 25\n",
+        WARP_I1
+    );
     assert_eq!(build_ini(&account), expected);
 
     let registered = parse_registration(REGISTRATION, "bXlwcml2").unwrap();

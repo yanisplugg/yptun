@@ -43,33 +43,181 @@ data class SessionInfo(
  * One look at the exit through [proxy] (the live tunnel; null = the default route). Runs only when the
  * user opens the «Сессия» sheet — nothing is requested in the background.
  */
-suspend fun fetchSessionInfo(proxy: SubscriptionFetchProxy?): SessionInfo = withProxyAuthentication(proxy) {
-    val client = createProxyHttpClient(proxy, 6_000, 10_000, 10_000)
-    try {
-        coroutineScope {
-            val v6 = async { withTimeoutOrNull(5_000) { client.plainText("https://api6.ipify.org") }?.takeIf { ":" in it } }
-            val v4 = client.plainText("https://api.ipify.org")?.takeIf { IPV4.matches(it) }
-            // Without an IPv4 the lookup falls back to whatever address the request arrives from.
-            val root = Json.parseToJsonElement(client.get("https://ipwho.is/${v4.orEmpty()}").bodyAsText()).jsonObject
-            check(root["success"]?.jsonPrimitive?.boolean != false) { root["message"]?.jsonPrimitive?.contentOrNull ?: "lookup failed" }
-            val conn = root["connection"] as? JsonObject
-            fun JsonObject.text(key: String) = this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            val country = root.text("country")
-            val code = root.text("country_code")
-            SessionInfo(
-                ipv4 = v4 ?: root.text("ip")?.takeIf { ":" !in it },
-                ipv6 = v6.await() ?: root.text("ip")?.takeIf { ":" in it },
-                asn = conn?.text("asn"),
-                provider = conn?.text("isp") ?: conn?.text("org"),
-                country = if (country != null && code != null) "$country ($code)" else country ?: code,
-                city = root.text("city"),
-                region = root.text("region"),
-                latitude = root.text("latitude"),
-                longitude = root.text("longitude")
-            )
+suspend fun fetchSessionInfo(proxy: SubscriptionFetchProxy?): SessionInfo {
+    if (proxy != null) {
+        val result = runCatching {
+            withProxyAuthentication(proxy) {
+                val client = createProxyHttpClient(proxy, 6_000, 10_000, 10_000)
+                try {
+                    fetchSessionInfoInternal(client)
+                } finally {
+                    client.close()
+                }
+            }
         }
+        if (result.isSuccess) {
+            return result.getOrThrow()
+        }
+        val ex = result.exceptionOrNull()
+        if (ex is CancellationException) throw ex
+    }
+
+    // Direct fallback (routes through the active VPN TUN interface if connected)
+    val directClient = createProxyHttpClient(null, 6_000, 10_000, 10_000)
+    try {
+        return fetchSessionInfoInternal(directClient)
     } finally {
-        client.close()
+        directClient.close()
+    }
+}
+
+private suspend fun fetchSessionInfoInternal(client: HttpClient): SessionInfo = coroutineScope {
+    val v6Deferred = async {
+        withTimeoutOrNull(4_000) {
+            client.plainText("https://api6.ipify.org")?.takeIf { ":" in it }
+        }
+    }
+
+    // 1. Discover IPv4 through multiple fast providers
+    var v4: String? = withTimeoutOrNull(4_000) {
+        client.plainText("https://api.ipify.org")?.takeIf { IPV4.matches(it) }
+    }
+    if (v4 == null) {
+        v4 = withTimeoutOrNull(4_000) {
+            client.plainText("https://icanhazip.com")?.takeIf { IPV4.matches(it) }
+        }
+    }
+    if (v4 == null) {
+        v4 = withTimeoutOrNull(4_000) {
+            client.plainText("https://1.1.1.1/cdn-cgi/trace")?.let { trace ->
+                trace.lineSequence()
+                    .firstOrNull { it.startsWith("ip=") }
+                    ?.removePrefix("ip=")
+                    ?.trim()
+                    ?.takeIf { IPV4.matches(it) }
+            }
+        }
+    }
+
+    // 2. Query geo / ASN / provider info
+    var info: SessionInfo? = null
+
+    // Provider A: ipwho.is
+    try {
+        val url = if (v4 != null) "https://ipwho.is/$v4" else "https://ipwho.is/"
+        val resp = withTimeoutOrNull(5_000) { client.get(url).bodyAsText() }
+        if (resp != null && resp.trimStart().startsWith("{")) {
+            val root = Json.parseToJsonElement(resp).jsonObject
+            if (root["success"]?.jsonPrimitive?.boolean != false) {
+                val conn = root["connection"] as? JsonObject
+                fun JsonObject.text(key: String) = this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val country = root.text("country")
+                val code = root.text("country_code")
+                val ip = root.text("ip")
+                info = SessionInfo(
+                    ipv4 = v4 ?: ip?.takeIf { ":" !in it },
+                    ipv6 = v6Deferred.await() ?: ip?.takeIf { ":" in it },
+                    asn = conn?.text("asn"),
+                    provider = conn?.text("isp") ?: conn?.text("org"),
+                    country = if (country != null && code != null) "$country ($code)" else country ?: code,
+                    city = root.text("city"),
+                    region = root.text("region"),
+                    latitude = root.text("latitude"),
+                    longitude = root.text("longitude")
+                )
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // Fall through to next provider
+    }
+
+    // Provider B: ip-api.com (handles rate-limits, censored domains, or unauthenticated IPs)
+    if (info == null || (info.provider == null && info.country == null)) {
+        try {
+            val url = if (v4 != null) "http://ip-api.com/json/$v4" else "http://ip-api.com/json/"
+            val resp = withTimeoutOrNull(5_000) { client.get(url).bodyAsText() }
+            if (resp != null && resp.trimStart().startsWith("{")) {
+                val root = Json.parseToJsonElement(resp).jsonObject
+                if (root["status"]?.jsonPrimitive?.contentOrNull == "success") {
+                    fun JsonObject.text(key: String) = this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val country = root.text("country")
+                    val code = root.text("countryCode")
+                    val query = root.text("query")
+                    val asString = root.text("as")
+                    val asn = asString?.substringBefore(' ')?.takeIf { it.startsWith("AS", ignoreCase = true) }
+                    val isp = root.text("isp")
+                    val org = root.text("org")
+                    val lat = root["lat"]?.jsonPrimitive?.contentOrNull
+                    val lon = root["lon"]?.jsonPrimitive?.contentOrNull
+                    info = SessionInfo(
+                        ipv4 = v4 ?: query?.takeIf { ":" !in it },
+                        ipv6 = v6Deferred.await() ?: query?.takeIf { ":" in it },
+                        asn = asn,
+                        provider = isp ?: org,
+                        country = if (country != null && code != null) "$country ($code)" else country ?: code,
+                        city = root.text("city"),
+                        region = root.text("regionName"),
+                        latitude = lat,
+                        longitude = lon
+                    )
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Fall through to minimal info
+        }
+    }
+
+    // Provider C: Cloudflare trace fallback
+    if (info == null) {
+        try {
+            val trace = withTimeoutOrNull(4_000) { client.plainText("https://1.1.1.1/cdn-cgi/trace") }
+            if (trace != null) {
+                val map = trace.lineSequence()
+                    .mapNotNull {
+                        val eq = it.indexOf('=')
+                        if (eq > 0) it.substring(0, eq) to it.substring(eq + 1) else null
+                    }.toMap()
+                val traceIp = map["ip"]
+                val loc = map["loc"]
+                if (traceIp != null) {
+                    info = SessionInfo(
+                        ipv4 = v4 ?: traceIp.takeIf { ":" !in it },
+                        ipv6 = v6Deferred.await() ?: traceIp.takeIf { ":" in it },
+                        asn = null,
+                        provider = if (map["warp"] == "on") "Cloudflare WARP" else null,
+                        country = loc,
+                        city = null,
+                        region = null,
+                        latitude = null,
+                        longitude = null
+                    )
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+    }
+
+    val finalV6 = v6Deferred.await()
+    info ?: if (v4 != null || finalV6 != null) {
+        SessionInfo(
+            ipv4 = v4,
+            ipv6 = finalV6,
+            asn = null,
+            provider = null,
+            country = null,
+            city = null,
+            region = null,
+            latitude = null,
+            longitude = null
+        )
+    } else {
+        throw IllegalStateException("Failed to determine session IP info")
     }
 }
 
@@ -100,47 +248,74 @@ suspend fun runSpeedTest(proxy: SubscriptionFetchProxy?, onUpdate: (SpeedProgres
     var p = SpeedProgress(SpeedPhase.Ping)
     fun push(next: SpeedProgress) { p = next; onUpdate(next) }
     push(p)
-    withProxyAuthentication(proxy) {
-        val client = createProxyHttpClient(proxy, 8_000, 30_000, 30_000)
-        try {
-            val rtts = (1..4).map {
-                val t = TimeSource.Monotonic.markNow()
-                client.get("$SPEED_HOST/__down?bytes=0").bodyAsText()
-                t.elapsedNow().inWholeMilliseconds.toInt()
-            }
-            push(p.copy(phase = SpeedPhase.Download, pingMs = rtts.min()))
-
-            // Several streams, like the web speed tests: one TCP stream through a tunnel never fills the link.
-            // Cloudflare refuses a single download above ~25 MB (403), so each stream asks for 25 MB again and again.
-            val down = measureRate({ push(p.copy(downMbps = it)) }) { add, over ->
-                val buf = ByteArray(64 * 1024)
-                client.prepareGet("$SPEED_HOST/__down?bytes=25000000").execute { resp ->
-                    check(resp.status.value in 200..299) { "speed test: HTTP ${resp.status.value}" }
-                    val ch = resp.bodyAsChannel()
-                    while (!over()) {
-                        val n = ch.readAvailable(buf)
-                        if (n < 0) break
-                        add(n)
-                    }
+    if (proxy != null) {
+        val result = runCatching {
+            withProxyAuthentication(proxy) {
+                val client = createProxyHttpClient(proxy, 8_000, 30_000, 30_000)
+                try {
+                    executeSpeedTest(client, p, ::push)
+                } finally {
+                    client.close()
                 }
             }
-            push(p.copy(phase = SpeedPhase.Upload, downMbps = down))
-
-            val chunk = ByteArray(UP_CHUNK)
-            val up = measureRate({ push(p.copy(upMbps = it)) }) { add, _ ->
-                check(client.post("$SPEED_HOST/__up") { setBody(chunk) }.status.value in 200..299) { "speed test: upload rejected" }
-                add(chunk.size)
-            }
-            push(p.copy(upMbps = up))
-            push(p.copy(phase = SpeedPhase.Done))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            push(p.copy(phase = SpeedPhase.Failed))
+        }
+        if (result.isSuccess) return
+        val ex = result.exceptionOrNull()
+        if (ex is CancellationException) throw ex
+    }
+    // Direct fallback (via TUN interface)
+    try {
+        val directClient = createProxyHttpClient(null, 8_000, 30_000, 30_000)
+        try {
+            executeSpeedTest(directClient, p, ::push)
         } finally {
-            client.close()
+            directClient.close()
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        push(p.copy(phase = SpeedPhase.Failed))
+    }
+}
+
+private suspend fun executeSpeedTest(
+    client: HttpClient,
+    initial: SpeedProgress,
+    push: (SpeedProgress) -> Unit
+) {
+    var p = initial
+    val rtts = (1..4).map {
+        val t = TimeSource.Monotonic.markNow()
+        client.get("$SPEED_HOST/__down?bytes=0").bodyAsText()
+        t.elapsedNow().inWholeMilliseconds.toInt()
+    }
+    p = p.copy(phase = SpeedPhase.Download, pingMs = rtts.min())
+    push(p)
+
+    // Several streams, like the web speed tests: one TCP stream through a tunnel never fills the link.
+    // Cloudflare refuses a single download above ~25 MB (403), so each stream asks for 25 MB again and again.
+    val down = measureRate({ p = p.copy(downMbps = it); push(p) }) { add, over ->
+        val buf = ByteArray(64 * 1024)
+        client.prepareGet("$SPEED_HOST/__down?bytes=25000000").execute { resp ->
+            check(resp.status.value in 200..299) { "speed test: HTTP ${resp.status.value}" }
+            val ch = resp.bodyAsChannel()
+            while (!over()) {
+                val n = ch.readAvailable(buf)
+                if (n < 0) break
+                add(n)
+            }
         }
     }
+    p = p.copy(phase = SpeedPhase.Upload, downMbps = down)
+    push(p)
+
+    val chunk = ByteArray(UP_CHUNK)
+    val up = measureRate({ p = p.copy(upMbps = it); push(p) }) { add, _ ->
+        check(client.post("$SPEED_HOST/__up") { setBody(chunk) }.status.value in 200..299) { "speed test: upload rejected" }
+        add(chunk.size)
+    }
+    p = p.copy(phase = SpeedPhase.Done, upMbps = up)
+    push(p)
 }
 
 /**

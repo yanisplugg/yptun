@@ -217,6 +217,7 @@ pub fn build_ini(account: &WarpAccount) -> String {
     for knob in ["Jc = 4", "Jmin = 40", "Jmax = 70", "S1 = 0", "S2 = 0", "H1 = 1", "H2 = 2", "H3 = 3", "H4 = 4"] {
         lines.push(knob.to_string());
     }
+    lines.push(format!("I1 = {}", WARP_I1));
     lines.push(String::new());
     lines.push("[Peer]".to_string());
     lines.push(format!("PublicKey = {}", account.peer_public_key));

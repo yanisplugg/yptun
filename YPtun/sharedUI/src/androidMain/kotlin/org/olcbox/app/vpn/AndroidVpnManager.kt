@@ -1196,6 +1196,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             return null
         }
 
+        val sock = OlcboxVpnState.activeSocks
+        if (sock != null) {
+            return SubscriptionFetchProxy(
+                host = AndroidSocksProxySettings.connectHost(sock.host),
+                port = sock.port,
+                username = sock.username,
+                password = sock.password
+            )
+        }
+
         val proxy = _proxySettings.value
         return SubscriptionFetchProxy(
             host = AndroidSocksProxySettings.connectHost(proxy.host),

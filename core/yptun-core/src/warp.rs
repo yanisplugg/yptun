@@ -4,6 +4,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::model::ProxyProfile;
+use crate::warp_account::WARP_I1;
 
 pub use crate::singbox::config::WarpRelay;
 
@@ -64,12 +65,30 @@ pub fn plain_wireguard(ini: &str) -> String {
     drop_keys(ini, &keys)
 }
 
+fn inject_i1(ini: &str) -> String {
+    let mut lines: Vec<String> = ini.lines().map(|s| s.to_string()).collect();
+    let iface_idx = lines.iter().position(|l| l.trim().eq_ignore_ascii_case("[Interface]"));
+    let insert_idx = iface_idx.map(|i| i + 1).unwrap_or(0);
+    lines.insert(insert_idx, format!("I1 = {WARP_I1}"));
+    lines.join("\n")
+}
+
 /// The INI awgproxy should run: `Reserved` always dropped (Cloudflare discards those handshakes);
 /// AmneziaWG keeps its knobs, I1..I5 only when `init_packets` (server side: inside the proxy, no
 /// DPI, I1 only delays the handshake); the endpoint pinned to an IP.
-pub fn engine_ini(ini: &str, awg: bool, _init_packets: bool) -> String {
+pub fn engine_ini(ini: &str, awg: bool, init_packets: bool) -> String {
     let base = if !awg {
         plain_wireguard(ini)
+    } else if init_packets {
+        let stripped = drop_keys(ini, &["reserved"]);
+        if !stripped.lines().any(|l| {
+            let t = l.trim();
+            t.to_lowercase().starts_with("i1") && t.contains('=')
+        }) {
+            inject_i1(&stripped)
+        } else {
+            stripped
+        }
     } else {
         drop_keys(ini, &["reserved", "i1", "i2", "i3", "i4", "i5"])
     };

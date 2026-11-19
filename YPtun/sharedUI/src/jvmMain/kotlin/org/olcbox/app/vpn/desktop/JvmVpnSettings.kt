@@ -58,7 +58,7 @@ internal object JvmVpnSettings {
                 profiles = listOf(RoutingProfile.russiaDirect(), RoutingProfile.chinaDirect()),
                 globalProfileId = RoutingProfile.DEFAULT_RU_DIRECT_ID,
             )
-        }
+        }.withPresets()
 
     fun saveRoutingProfiles(value: RoutingProfilesState) =
         save("routing_profiles.json", RoutingProfilesState.serializer(), value)

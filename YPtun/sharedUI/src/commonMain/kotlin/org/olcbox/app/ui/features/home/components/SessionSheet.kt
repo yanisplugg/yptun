@@ -55,9 +55,12 @@ fun SessionSheet(proxy: () -> SubscriptionFetchProxy?, onDismiss: () -> Unit) {
     var info by remember { mutableStateOf<SessionInfo?>(null) }
     var loading by remember { mutableStateOf(true) }
     var failed by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    var refreshTrigger by remember { mutableStateOf(0) }
+    LaunchedEffect(refreshTrigger) {
+        loading = true
+        failed = false
         runCatching { fetchSessionInfo(proxy()) }
-            .onSuccess { info = it }
+            .onSuccess { info = it; failed = false }
             .onFailure { if (it is CancellationException) throw it; failed = true }
         loading = false
     }
@@ -86,6 +89,20 @@ fun SessionSheet(proxy: () -> SubscriptionFetchProxy?, onDismiss: () -> Unit) {
             text = if (failed) s.sessionFailed else s.sessionNote,
             color = if (failed) MaterialTheme.colorScheme.error else Color.Unspecified
         )
+        if (failed && !loading) {
+            Spacer(Modifier.height(4.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                androidx.compose.material3.TextButton(
+                    onClick = { refreshTrigger++ },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(s.refresh, fontSize = 13.sp)
+                }
+            }
+        }
 
         SettingsCaption(s.speedTestTitle)
         SettingsCard {

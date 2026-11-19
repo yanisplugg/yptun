@@ -419,11 +419,16 @@ internal class DesktopEngineController(
             } else {
                 var ini = TelegramProxyStore.loadConfig()
                 if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+                if (awg && ini != null && ini.contains("Reserved", ignoreCase = true)) {
+                    ini = null
+                }
                 if (ini.isNullOrBlank()) {
                     log("WARP: generating Cloudflare WARP config...")
                     ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = !awg) }
                         .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
-                    if (ini != null) runCatching { TelegramProxyStore.saveConfig(ini) }
+                    if (ini != null && (!awg || !ini.contains("Reserved", ignoreCase = true))) {
+                        runCatching { TelegramProxyStore.saveConfig(ini) }
+                    }
                 }
                 if (ini == null) {
                     log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
