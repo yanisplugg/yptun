@@ -154,9 +154,7 @@ public struct SubscriptionCardView: View {
                         }
 
                         Button {
-                            #if canImport(UIKit)
-                            UIPasteboard.general.string = subURL
-                            #endif
+                            YPtunPasteboard.setString(subURL)
                         } label: {
                             Label("Скопировать ссылку", systemImage: "doc.on.doc")
                         }

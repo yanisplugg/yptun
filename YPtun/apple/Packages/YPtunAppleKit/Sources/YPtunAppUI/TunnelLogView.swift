@@ -55,7 +55,7 @@ struct TunnelLogView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    UIPasteboard.general.string = text
+                    YPtunPasteboard.setString(text)
                     isCopied = true
                 } label: {
                     Label("Копировать", systemImage: "doc.on.doc")

@@ -37,7 +37,7 @@ public struct SupportProjectView: View {
                 SettingsCaption("Криптовалюта (TON / USDT / GRAM)")
                 SettingsCard {
                     Button {
-                        UIPasteboard.general.string = tonAddress
+                        YPtunPasteboard.setString(tonAddress)
                         copiedNotice = true
                     } label: {
                         HStack(spacing: 14) {

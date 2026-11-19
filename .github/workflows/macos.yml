@@ -1,0 +1,34 @@
+name: macOS
+run-name: "macOS 4.0.0 (${{ inputs.build_number }})${{ inputs.comment != '' && format(' — {0}', inputs.comment) || '' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: TestFlight build number
+        required: true
+        type: string
+        default: "533"
+      comment:
+        description: Build comment
+        required: false
+        type: string
+        default: ""
+      upload_to_testflight:
+        description: Upload the signed PKG to TestFlight
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  native-release:
+    uses: ./.github/workflows/macos-release.yml
+    with:
+      build_number: ${{ inputs.build_number }}
+      comment: ${{ inputs.comment }}
+      upload_to_testflight: ${{ inputs.upload_to_testflight }}
+    secrets: inherit

@@ -72,7 +72,7 @@ public struct SubscriptionsSettingsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
                                 Button {
-                                    UIPasteboard.general.string = sub.id
+                                    YPtunPasteboard.setString(sub.id)
                                     model.presentedNotice = YPtunNotice(
                                         title: "Скопировано",
                                         message: "Ссылка на подписку скопирована в буфер обмена."

@@ -2,6 +2,8 @@ import SwiftUI
 import YPtunMigrationSupport
 #if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
 #endif
 
 public struct AppearanceSettingsView: View {
@@ -245,6 +247,17 @@ public struct AppearanceSettingsView: View {
             let ib = UInt(b * 255.0) & 0xFF
             return (ir << 16) | (ig << 8) | ib
         }
+        #elseif canImport(AppKit)
+        let nsColor = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        nsColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let ir = UInt(r * 255.0) & 0xFF
+        let ig = UInt(g * 255.0) & 0xFF
+        let ib = UInt(b * 255.0) & 0xFF
+        return (ir << 16) | (ig << 8) | ib
         #endif
         return nil
     }

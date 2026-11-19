@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - feat/testflight-deploy
+      - feat/macos-testflight-deploy
     paths:
       - "core/**"
       - "YPtun/apple/**"
@@ -23,6 +24,7 @@ on:
       - "csqtt/**"
       - ".github/workflows/apple-core.yml"
       - ".github/workflows/apple-release.yml"
+      - ".github/workflows/macos-release.yml"
   pull_request:
     paths:
       - "core/**"

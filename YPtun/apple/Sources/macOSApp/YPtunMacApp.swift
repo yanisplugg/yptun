@@ -8,6 +8,7 @@ struct YPtunMacApp: App {
     var body: some Scene {
         WindowGroup("YPtun", id: "main") {
             YPtunMacRootView(model: model)
+                .frame(minWidth: 800, minHeight: 560)
         }
         .defaultSize(width: 920, height: 680)
 

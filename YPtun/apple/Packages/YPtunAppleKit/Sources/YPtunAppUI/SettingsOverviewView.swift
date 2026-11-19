@@ -222,7 +222,9 @@ public struct SettingsOverviewView: View {
             .padding(.horizontal, 16)
         }
         .background(YPtunColor.canvas.ignoresSafeArea())
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .tint(YPtunColor.accent)
         .preferredColorScheme(.dark)
     }

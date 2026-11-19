@@ -74,6 +74,7 @@ public struct YPtunMenuBarView: View {
         Divider()
         Button("Открыть YPtun") {
             openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
         }
         Button(model.primaryActionTitle, action: model.requestPrimaryAction)
             .disabled(model.isBootstrapping || model.connectionState == .disconnecting)
@@ -84,6 +85,10 @@ public struct YPtunMenuBarView: View {
             Text(notice.message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        Divider()
+        Button("Выйти из YPtun") {
+            NSApplication.shared.terminate(nil)
         }
     }
 }

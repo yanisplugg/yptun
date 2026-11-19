@@ -179,16 +179,25 @@ public struct ConnectionHomeView: View {
                     }
                 }
                 .padding(.horizontal, 16)
+                #if os(iOS)
                 .padding(.bottom, 96) // Space so floating nav bar does not cover items
+                #else
+                .padding(.bottom, 24)
+                #endif
             }
 
+            #if os(iOS)
             // Floating Navigation Bar matching Screenshot 7 & Android Compose
             floatingNavigationBar
                 .padding(.bottom, 12)
+            #endif
         }
         .background(YPtunColor.canvas.ignoresSafeArea())
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
+            #if os(iOS)
             ToolbarItem(placement: .navigation) {
                 Button {
                     isSettingsPresented = true
@@ -198,6 +207,7 @@ public struct ConnectionHomeView: View {
                         .foregroundStyle(YPtunColor.textPrimary)
                 }
             }
+            #endif
             ToolbarItem(placement: .principal) {
                 Text("YPtun")
                     .font(.system(size: 19, weight: .bold))
