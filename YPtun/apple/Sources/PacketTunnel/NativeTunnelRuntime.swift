@@ -259,6 +259,18 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
             return
         }
+        if message.hasPrefix("udpping:") {
+            let payload = String(message.dropFirst("udpping:".count))
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else {
+                    completion("-1")
+                    return
+                }
+                let ms = self.directUdpPing(payload: payload)
+                completion(String(ms))
+            }
+            return
+        }
         if message.hasPrefix("resolve:") {
             let host = String(message.dropFirst("resolve:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -372,6 +384,72 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             var errVal: Int32 = 0
             var len = socklen_t(MemoryLayout<Int32>.size)
             if getsockopt(fd, SOL_SOCKET, SO_ERROR, &errVal, &len) == 0 && errVal == 0 {
+                let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+                return max(1, Int64(elapsed / 1_000_000))
+            }
+        }
+        return -1
+    }
+
+    private func directUdpPing(payload: String) -> Int64 {
+        let parts = payload.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2 else { return -1 }
+        let host = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty,
+              let port = Int(parts[1]), port > 0, port <= 65535 else { return -1 }
+        let lower = host.lowercased()
+        if lower == "127.0.0.1" || lower == "localhost" || lower == "::1" || lower == "0.0.0.0" {
+            return -1
+        }
+        let timeoutMs = min(max((parts.count >= 3 ? Int(parts[2]) : nil) ?? 4_000, 500), 10_000)
+
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_DGRAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &res) == 0, let first = res else {
+            return -1
+        }
+        defer { freeaddrinfo(first) }
+
+        var chosen: UnsafeMutablePointer<addrinfo> = first
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let cur = cursor {
+            if cur.pointee.ai_family == AF_INET {
+                chosen = cur
+                break
+            }
+            cursor = cur.pointee.ai_next
+        }
+
+        let fd = socket(chosen.pointee.ai_family, chosen.pointee.ai_socktype, chosen.pointee.ai_protocol)
+        guard fd >= 0 else { return -1 }
+        defer { close(fd) }
+
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        var packet = [UInt8](repeating: 0, count: 1200)
+        packet[0] = 0xC3
+        packet[1] = 0x5A
+        packet[2] = 0x5A
+        packet[3] = 0x5A
+        packet[4] = 0x5A
+        packet[5] = 0x08
+        for i in 6..<14 { packet[i] = UInt8(truncatingIfNeeded: i * 37) }
+        packet[14] = 0x08
+        for i in 15..<23 { packet[i] = UInt8(truncatingIfNeeded: i * 53) }
+
+        let start = DispatchTime.now()
+        let sent = sendto(fd, packet, packet.count, 0, chosen.pointee.ai_addr, chosen.pointee.ai_addrlen)
+        guard sent > 0 else { return -1 }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let pollRet = poll(&pfd, 1, Int32(timeoutMs))
+        if pollRet > 0 && (pfd.revents & Int16(POLLIN)) != 0 {
+            var buf = [UInt8](repeating: 0, count: 1500)
+            let recvd = recv(fd, &buf, buf.count, 0)
+            if recvd > 0 {
                 let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
                 return max(1, Int64(elapsed / 1_000_000))
             }

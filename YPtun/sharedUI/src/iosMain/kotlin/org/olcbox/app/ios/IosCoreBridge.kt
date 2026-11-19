@@ -23,6 +23,7 @@ interface IosCoreBridge {
     fun xrayRunning(): Boolean
     fun xrayMeasureDelay(configJson: String, url: String, method: String, timeoutMs: Int): Long
     fun tcpPing(host: String, port: Int, timeoutMs: Int): Long
+    fun udpPing(host: String, port: Int, timeoutMs: Int): Long
 
     fun awgVersion(): String
     fun awgStart(iniConfig: String, listenAddr: String): String

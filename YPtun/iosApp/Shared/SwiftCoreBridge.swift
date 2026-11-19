@@ -91,6 +91,79 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         return -1
     }
 
+    func udpPing(host: String, port: Int32, timeoutMs: Int32) -> Int64 {
+        guard !host.isEmpty, port > 0, port <= 65535 else { return -1 }
+        let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "0.0.0.0" {
+            return -1
+        }
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_DGRAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &hints, &res) == 0, let first = res else {
+            return -1
+        }
+        defer { freeaddrinfo(first) }
+
+        var chosen: UnsafeMutablePointer<addrinfo> = first
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let cur = cursor {
+            if cur.pointee.ai_family == AF_INET {
+                chosen = cur
+                break
+            }
+            cursor = cur.pointee.ai_next
+        }
+
+        let fd = socket(chosen.pointee.ai_family, chosen.pointee.ai_socktype, chosen.pointee.ai_protocol)
+        guard fd >= 0 else { return -1 }
+        defer { close(fd) }
+
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+
+        let IP_BOUND_IF: Int32 = 25
+        let IPV6_BOUND_IF: Int32 = 125
+        if let physical = SwiftCoreBridge.getPhysicalInterface(for: chosen.pointee.ai_family) {
+            var idx = physical.index
+            if chosen.pointee.ai_family == AF_INET {
+                _ = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            } else if chosen.pointee.ai_family == AF_INET6 {
+                _ = setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &idx, socklen_t(MemoryLayout<UInt32>.size))
+            }
+        }
+
+        // Build a 1200-byte QUIC Initial probe packet with reserved version 0x5a5a5a5a.
+        // RFC 9000 mandates that any QUIC server must reply with Version Negotiation.
+        var packet = [UInt8](repeating: 0, count: 1200)
+        packet[0] = 0xC3
+        packet[1] = 0x5A
+        packet[2] = 0x5A
+        packet[3] = 0x5A
+        packet[4] = 0x5A
+        packet[5] = 0x08
+        for i in 6..<14 { packet[i] = UInt8(truncatingIfNeeded: i * 37) }
+        packet[14] = 0x08
+        for i in 15..<23 { packet[i] = UInt8(truncatingIfNeeded: i * 53) }
+
+        let start = DispatchTime.now()
+        let sent = sendto(fd, packet, packet.count, 0, chosen.pointee.ai_addr, chosen.pointee.ai_addrlen)
+        guard sent > 0 else { return -1 }
+
+        var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let pollRet = poll(&pfd, 1, Int32(timeoutMs))
+        if pollRet > 0 && (pfd.revents & Int16(POLLIN)) != 0 {
+            var buf = [UInt8](repeating: 0, count: 1500)
+            let recvd = recv(fd, &buf, buf.count, 0)
+            if recvd > 0 {
+                let elapsed = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+                return max(1, Int64(elapsed / 1_000_000))
+            }
+        }
+        return -1
+    }
+
     func awgVersion() -> String { CoreapiAwgVersion() }
     func awgStart(iniConfig: String, listenAddr: String) -> String { err { CoreapiAwgStart(iniConfig, listenAddr, $0) } }
     func awgStop() { CoreapiAwgStop() }

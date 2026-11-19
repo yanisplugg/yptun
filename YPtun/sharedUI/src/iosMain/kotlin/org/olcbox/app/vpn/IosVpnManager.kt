@@ -616,9 +616,11 @@ class IosVpnManager(
                     }
                 }
             }
+            profile.type == ProxyProfile.TYPE_HYSTERIA2 -> {
+                hysteria2ProbePing(profile, timeoutMs, connected)
+            }
             behavior.pingMode == AppBehaviorSettings.PING_TCP ||
-                profile.type == ProxyProfile.TYPE_MIERU ||
-                profile.type == ProxyProfile.TYPE_HYSTERIA2 -> {
+                profile.type == ProxyProfile.TYPE_MIERU -> {
                 if (isLoopbackHost(profile.server)) null
                 else {
                     val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
@@ -694,6 +696,60 @@ class IosVpnManager(
             if (ms443 > 0) return@withContext ms443
             val ms80 = core.tcpPing(host, 80, PING_TIMEOUT_MS)
             if (ms80 > 0) return@withContext ms80
+        }
+        null
+    }
+
+    private suspend fun directUdpPingViaExtension(host: String, port: Int, timeoutMs: Int): Long? {
+        val session = activeSession() ?: return null
+        return runCatching {
+            val response = withTimeoutOrNull(timeoutMs.toLong() + 1_000L) {
+                askExtension(session, "udpping:$host|$port|$timeoutMs")
+            } ?: return null
+            response.trim().toLongOrNull()?.takeIf { it > 0 }
+        }.getOrNull()
+    }
+
+    private suspend fun hysteria2ProbePing(
+        profile: ProxyProfile,
+        timeoutMs: Int,
+        connected: Boolean
+    ): Long? = withContext(Dispatchers.Default) {
+        if (isLoopbackHost(profile.server)) return@withContext null
+        val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
+
+        // 1. Try UDP QUIC probe (direct or via extension)
+        val udpMs = if (connected) {
+            directUdpPingViaExtension(profile.server, port, timeoutMs)
+        } else {
+            core.udpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+        }
+        if (udpMs != null && udpMs > 0) return@withContext udpMs
+
+        // 2. Direct TCP ping to specified port (in case port forwarding / reverse proxy answers)
+        val tcpPortMs = if (connected) {
+            directTcpPingViaExtension(profile.server, port, timeoutMs)
+        } else {
+            core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+        }
+        if (tcpPortMs != null && tcpPortMs > 0) return@withContext tcpPortMs
+
+        // 3. Fallback to host TCP 443 and 80 (measure latency to host when Hysteria port is filtered/closed)
+        if (port != 443) {
+            val ms443 = if (connected) {
+                directTcpPingViaExtension(profile.server, 443, timeoutMs)
+            } else {
+                core.tcpPing(profile.server, 443, timeoutMs).takeIf { it > 0 }
+            }
+            if (ms443 != null && ms443 > 0) return@withContext ms443
+        }
+        if (port != 80) {
+            val ms80 = if (connected) {
+                directTcpPingViaExtension(profile.server, 80, timeoutMs)
+            } else {
+                core.tcpPing(profile.server, 80, timeoutMs).takeIf { it > 0 }
+            }
+            if (ms80 != null && ms80 > 0) return@withContext ms80
         }
         null
     }
