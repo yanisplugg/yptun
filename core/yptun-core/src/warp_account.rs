@@ -19,15 +19,15 @@ use crate::repository::{HttpRequest, HttpResponse};
 pub const ENDPOINT: &str = "engage.cloudflareclient.com:2408";
 
 /// Server-side WARP generators that register with Cloudflare for us and return a ready account.
-/// Tried in order until one answers. The last one (GitHub Pages) answers with a JSON ARRAY of
-/// accounts, one is picked at random.
+/// Tried in order until one answers. The git-hosted mirror (GitHub Pages) is first because third-party
+/// workers endpoints are frequently blocked/rate-limited; it answers with a JSON ARRAY of accounts.
 pub const SERVICE_ENDPOINTS: [&str; 6] = [
+    "https://breead1337.github.io/ws-cache-9e41/w.json",
     "https://www.warp-generator.workers.dev",
     "https://warp.sub-aggregator.workers.dev",
     "https://warp-vercel-chi.vercel.app/api/warp-data",
     "https://warp-vercel-murex.vercel.app/api/warp-data",
     "https://warp-gen.netlify.app/",
-    "https://breead1337.github.io/ws-cache-9e41/w.json",
 ];
 
 /// Direct Cloudflare registration (fallback only — blocked in some regions).
@@ -217,7 +217,6 @@ pub fn build_ini(account: &WarpAccount) -> String {
     for knob in ["Jc = 4", "Jmin = 40", "Jmax = 70", "S1 = 0", "S2 = 0", "H1 = 1", "H2 = 2", "H3 = 3", "H4 = 4"] {
         lines.push(knob.to_string());
     }
-    lines.push(format!("I1 = {}", WARP_I1));
     lines.push(String::new());
     lines.push("[Peer]".to_string());
     lines.push(format!("PublicKey = {}", account.peer_public_key));

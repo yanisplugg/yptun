@@ -74,37 +74,18 @@ object WarpHelper {
     /** The INI as PLAIN WireGuard: every AmneziaWG obfuscation knob (and `Reserved`) dropped. */
     fun plainWireGuard(ini: String): String = dropKeys(ini, OBFUSCATION_KEYS + "reserved")
 
-    /** Injects the standard WARP I1 DPI evasion packet into the [Interface] section if absent. */
-    fun injectI1(ini: String): String {
-        val lines = ini.lines().toMutableList()
-        val ifaceIdx = lines.indexOfFirst { it.trim().equals("[Interface]", ignoreCase = true) }
-        val insertIdx = if (ifaceIdx >= 0) ifaceIdx + 1 else 0
-        lines.add(insertIdx, "I1 = $WARP_I1")
-        return lines.joinToString("\n")
-    }
-
     /**
      * The INI as the awgproxy engine should run it (measured live against Cloudflare):
      *  - `Reserved` is always dropped: awgproxy stamps those bytes AFTER the handshake MAC, so Cloudflare
      *    discards every handshake of an officially-registered account (never connects). Free WARP needs none.
-     *  - AmneziaWG keeps every obfuscation knob INCLUDING the I1..I5 init packets. Do not drop them: on a DPI
-     *    network (mobile/home RU operators) the handshake completes and then ALL data is cut after ~10 s —
-     *    seen live on the phone ("nothing opens", rx frozen, handshake retries unanswered). A clean PC
-     *    network measured I1 slower (~60 s to first data) than Jc-only, but that network has no DPI to beat.
-     *  - [initPackets] = false drops I1..I5. Pass it on the SERVER side: there the WireGuard UDP rides inside the main
-     *    proxy, so no DPI ever sees it, and I1 only delays the handshake (first data after ~60 s, 12/30 failures vs
-     *    0.4 s and 64/64 without it, measured live) - the "AWG on the server is unstable" report.
+     *  - AmneziaWG keeps the obfuscation knobs (Jc/Jmin/Jmax, S1/S2, H1..H4) but drops I1..I5: Cloudflare
+     *    WARP is a standard WireGuard endpoint; sending I1 fake init packets causes Cloudflare to drop the handshake.
      *  - the endpoint is pinned to WARP's anycast IP: a domain is resolved at start-up by Go's resolver,
      *    which on Android has no resolv.conf (and, with the VPN already up, would loop into our own tunnel).
      */
-    fun engineIni(ini: String, awg: Boolean, initPackets: Boolean = true): String {
+    fun engineIni(ini: String, awg: Boolean, initPackets: Boolean = false): String {
         val base = if (awg) {
-            val stripped = dropKeys(ini, if (initPackets) setOf("reserved") else setOf("reserved", "i1", "i2", "i3", "i4", "i5"))
-            if (initPackets && !stripped.lineSequence().any { it.trim().startsWith("i1", ignoreCase = true) && it.contains('=') }) {
-                injectI1(stripped)
-            } else {
-                stripped
-            }
+            dropKeys(ini, setOf("reserved", "i1", "i2", "i3", "i4", "i5"))
         } else {
             plainWireGuard(ini)
         }

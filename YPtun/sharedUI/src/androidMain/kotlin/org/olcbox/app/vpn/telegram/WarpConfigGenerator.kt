@@ -68,13 +68,13 @@ object WarpConfigGenerator {
      * means the feature survives any single generator being down or blocked.
      */
     private val SERVICE_ENDPOINTS = listOf(
+        // Git-hosted mirror (GitHub Pages, rebuilt hourly by a workflow): a JSON ARRAY of accounts, one is picked at random.
+        "https://breead1337.github.io/ws-cache-9e41/w.json",
         "https://www.warp-generator.workers.dev",
         "https://warp.sub-aggregator.workers.dev",
         "https://warp-vercel-chi.vercel.app/api/warp-data",
         "https://warp-vercel-murex.vercel.app/api/warp-data",
         "https://warp-gen.netlify.app/",
-        // Git-hosted mirror (GitHub Pages, rebuilt hourly by a workflow): a JSON ARRAY of accounts, one is picked at random.
-        "https://breead1337.github.io/ws-cache-9e41/w.json",
     )
 
     /** Full tunnel: every connection the local SOCKS client (Telegram) makes rides WARP. */
@@ -288,8 +288,6 @@ object WarpConfigGenerator {
             appendLine("H2 = 2")
             appendLine("H3 = 3")
             appendLine("H4 = 4")
-            // DPI-evasion init packet — see WARP_I1. Without it DPI networks drop all post-handshake data.
-            appendLine("I1 = $WARP_I1")
             appendLine()
             appendLine("[Peer]")
             appendLine("PublicKey = $peerPublic")

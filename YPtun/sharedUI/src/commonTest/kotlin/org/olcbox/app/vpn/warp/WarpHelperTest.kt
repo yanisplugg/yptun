@@ -66,9 +66,8 @@ class WarpHelperTest {
         """.trimIndent()
         val awg = WarpHelper.engineIni(ini, awg = true, initPackets = true)
         assertEquals(false, awg.contains("Reserved"))
-        // Client side: AmneziaWG keeps I1 for DPI evasion on Russian ISP networks
-        assertEquals(true, awg.contains("I1 = <b 0xce>") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"))
-        // Server side: the UDP is inside the proxy, no DPI to beat, and I1 only delays the handshake.
+        // AmneziaWG keeps Jc/S1 obfuscation and pins IP endpoint, but drops I1 so Cloudflare accepts handshake
+        assertEquals(true, !awg.contains("I1") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:2408"))
         val server = WarpHelper.engineIni(ini, awg = true, initPackets = false)
         assertEquals(true, !server.contains("I1") && server.contains("Jc = 4"))
         val wg = WarpHelper.engineIni(ini, awg = false)

@@ -530,12 +530,13 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             if (!config.isNullOrBlank() && !config.contains("PrivateKey", ignoreCase = true)) {
                 config = null
             }
-            // Pre-I1 caches handshake but carry no data on DPI networks (no DPI-evasion I1 packet — see
-            // WarpConfigGenerator.WARP_I1). Drop them so a fresh config WITH I1 is regenerated.
-            if (!config.isNullOrBlank() &&
-                config.lineSequence().none { it.trimStart().startsWith("I1", ignoreCase = true) }
-            ) {
-                OlcboxVpnState.addLog("Telegram proxy: cached config has no DPI-evasion packet — regenerating")
+            // Cached configs with I1 or Reserved cause Cloudflare WARP to drop handshakes.
+            // Drop them so a fresh compatible generator config without I1/Reserved is generated.
+            if (!config.isNullOrBlank() && (
+                config.lineSequence().any { it.trimStart().startsWith("I1", ignoreCase = true) } ||
+                config.lineSequence().any { it.trimStart().startsWith("Reserved", ignoreCase = true) }
+            )) {
+                OlcboxVpnState.addLog("Telegram proxy: cached config has incompatible I1/Reserved — regenerating")
                 config = null
             }
             if (config.isNullOrBlank()) {
