@@ -3703,7 +3703,9 @@ private fun AboutContent(
             "Trust Tunnel" to org.olcbox.app.vpn.CoreVersions.TRUSTTUNNEL_DESKTOP,
             "Snolc" to org.olcbox.app.vpn.CoreVersions.SNOLC,
             "csqtt" to org.olcbox.app.vpn.CoreVersions.CSQTT,
-        ).filterNot { (name, _) -> isIosPlatform() && name == "Trust Tunnel" } // no Trust Tunnel engine on iOS
+            "Mieru" to org.olcbox.app.vpn.CoreVersions.MIERU,
+            "Turnable" to org.olcbox.app.vpn.CoreVersions.TURNABLE,
+        )
         SettingsCard {
             cores.forEachIndexed { index, (name, version) ->
                 if (index > 0) SettingsCardDivider()

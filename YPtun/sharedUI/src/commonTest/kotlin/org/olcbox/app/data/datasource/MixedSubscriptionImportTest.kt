@@ -129,4 +129,29 @@ class MixedSubscriptionImportTest {
         assertEquals(2, imported.locations.size)
         assertEquals(imported.locations.first().storageId, imported.activeLocationId)
     }
+
+    @Test
+    fun importsTurnableAndMieruFromMixedSubscription() = runTest {
+        val source = FakeLocationsDataSource()
+        val turnableLink = "turnable://user:call@vk.com/wireguard?type=relay&gateway=1.2.3.4:56000#TurnableNode"
+        val mieruLink = "mierus://user:pass@mieru.example.com:443/?profile=fast#MieruNode"
+
+        LocationsRepositoryImpl(source).importText("$turnableLink\n$mieruLink\n$vlessLink")
+
+        val imported = source.stored
+        assertNotNull(imported)
+        assertEquals(3, imported.locations.size)
+        val names = imported.locations.map { it.location.displayName() }
+        assertTrue("TurnableNode" in names, names.toString())
+        assertTrue("MieruNode" in names, names.toString())
+        assertTrue("Amsterdam" in names, names.toString())
+
+        val turnableLoc = imported.locations.first { it.location.displayName() == "TurnableNode" }
+        assertEquals(EngineType.VkTurn, turnableLoc.location.engine)
+        assertTrue(turnableLoc.location.vkturn?.usesTurnable() == true)
+
+        val mieruLoc = imported.locations.first { it.location.displayName() == "MieruNode" }
+        assertEquals(EngineType.Standard, mieruLoc.location.engine)
+        assertEquals("mieru", mieruLoc.location.proxy?.type)
+    }
 }

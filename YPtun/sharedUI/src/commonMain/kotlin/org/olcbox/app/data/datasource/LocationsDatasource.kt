@@ -1495,6 +1495,9 @@ class LocationsRepositoryImpl(
         // VK-TURN csqtt connection links (csqtt://connect?v=2&...):
         parseCsqttText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
+        // VK-TURN Turnable connection links (turnable://...) or Turnable JSON:
+        parseTurnableText(linkText, text, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
+
         // MasterDNS links (masterdns://v1?…) from the panel's personal subscription:
         parseMasterDnsText(linkText, subscriptionUrl, subscriptionMetadata)?.let { linkBundles += it }
 
@@ -2452,7 +2455,175 @@ class LocationsRepositoryImpl(
         return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
-    private fun parseOpenFluxText(
+    private data class ParsedTurnable(
+        val name: String,
+        val config: String,
+        val host: String,
+        val port: Int,
+        val listenPort: Int = LocationConfig.DEFAULT_FREETURN_PORT,
+        val wgPrivateKey: String = "",
+        val wgPeerPublicKey: String = "",
+        val wgAddress: String = "10.9.1.2/32",
+        val wgMtu: Int = 1200
+    )
+
+    private fun parseTurnableUri(rawLine: String): ParsedTurnable? {
+        val line = rawLine.trim()
+        if (!line.startsWith("turnable://", ignoreCase = true)) return null
+        val fragment = line.substringAfter('#', "").takeIf { it.isNotBlank() }?.let { UriCodec.percentDecode(it) }
+        val withoutFragment = line.substringBefore('#')
+        val body = withoutFragment.substring("turnable://".length)
+        val query = body.substringAfter('?', "")
+        val beforeQuery = body.substringBefore('?')
+        val authority = beforeQuery.substringBefore('/')
+        val path = beforeQuery.substringAfter('/', "")
+        val at = authority.lastIndexOf('@')
+        val hostPort = if (at >= 0) authority.substring(at + 1) else authority
+        val host = if (hostPort.contains(":")) hostPort.substringBefore(':') else hostPort
+        val port = if (hostPort.contains(":")) hostPort.substringAfter(':').toIntOrNull()?.takeIf { it in 1..65535 } ?: LocationConfig.DEFAULT_FREETURN_PORT else LocationConfig.DEFAULT_FREETURN_PORT
+
+        val queryPairs = if (query.isNotBlank()) {
+            query.split('&').mapNotNull {
+                if (it.isBlank()) null else {
+                    val k = UriCodec.percentDecode(it.substringBefore('='))
+                    val v = UriCodec.percentDecode(it.substringAfter('=', ""))
+                    k.lowercase() to v
+                }
+            }.toMap()
+        } else emptyMap()
+
+        val name = fragment?.takeIf { it.isNotBlank() }
+            ?: queryPairs["name"]?.takeIf { it.isNotBlank() }
+            ?: "Turnable ${host.ifBlank { path }}".trim()
+
+        val gw = queryPairs["gateway"].orEmpty()
+        val gwHost = if (gw.contains(":")) gw.substringBefore(':') else gw
+        val gwPort = if (gw.contains(":")) gw.substringAfter(':').toIntOrNull()?.takeIf { it in 1..65535 } ?: port else port
+
+        val wgPriv = queryPairs["priv"] ?: queryPairs["private_key"] ?: queryPairs["wg_priv"].orEmpty()
+        val wgPub = queryPairs["pub"] ?: queryPairs["public_key"] ?: queryPairs["peer_public_key"] ?: queryPairs["pub_key"].orEmpty()
+        val wgIp = queryPairs["ip"] ?: queryPairs["address"] ?: queryPairs["wg_address"] ?: "10.9.1.2/32"
+        val mtu = queryPairs["mtu"]?.toIntOrNull()?.takeIf { it in 576..1500 } ?: 1200
+
+        return ParsedTurnable(
+            name = name,
+            config = line,
+            host = gwHost.ifBlank { host.ifBlank { "127.0.0.1" } },
+            port = gwPort,
+            wgPrivateKey = wgPriv,
+            wgPeerPublicKey = wgPub,
+            wgAddress = wgIp,
+            wgMtu = mtu
+        )
+    }
+
+    private fun parseTurnableJson(text: String): List<ParsedTurnable> {
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return emptyList()
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return emptyList()
+        val items = when (element) {
+            is JsonArray -> element.mapNotNull { it as? JsonObject }
+            is JsonObject -> {
+                val nested = (element["turnable"] as? JsonArray)?.mapNotNull { it as? JsonObject }
+                    ?: (element["configs"] as? JsonArray)?.mapNotNull { it as? JsonObject }
+                nested ?: listOf(element)
+            }
+            else -> emptyList()
+        }
+        return items.mapNotNull { obj ->
+            val platformId = obj.string("platform_id")
+            val type = obj.string("type")
+            val hasTurnableFields = platformId != null ||
+                (type in listOf("relay", "direct") && (obj["call_id"] != null || obj["user_uuid"] != null || obj["routes"] != null || obj["gateway"] != null)) ||
+                obj["routes"] != null
+            if (!hasTurnableFields) return@mapNotNull null
+
+            val name = obj.string("name")
+                ?: obj.string("tag")
+                ?: "Turnable ${platformId.orEmpty()}".trim()
+            val gw = obj.string("gateway").orEmpty()
+            val gwHost = if (gw.contains(":")) gw.substringBefore(':') else gw
+            val gwPort = if (gw.contains(":")) gw.substringAfter(':').toIntOrNull()?.takeIf { it in 1..65535 } ?: LocationConfig.DEFAULT_FREETURN_PORT else LocationConfig.DEFAULT_FREETURN_PORT
+
+            ParsedTurnable(
+                name = name.ifBlank { "Turnable" },
+                config = obj.toString(),
+                host = gwHost.ifBlank { "127.0.0.1" },
+                port = gwPort
+            )
+        }
+    }
+
+    private fun parseTurnableText(
+        linkText: String,
+        rawText: String,
+        subscriptionUrl: String? = null,
+        subscriptionMetadata: SubscriptionMetadata? = null
+    ): LocationBundleV4? {
+        val usedStorageIds = mutableSetOf<String>()
+        val locationMetadata = subscriptionMetadata?.let { LocationMetadata(subscription = it) }
+
+        val lineProfiles = linkText.lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("turnable://", ignoreCase = true) }
+            .mapNotNull { parseTurnableUri(it) }
+            .toList()
+
+        val profiles = if (lineProfiles.isNotEmpty()) {
+            lineProfiles
+        } else {
+            val fromLink = parseTurnableJson(linkText)
+            if (fromLink.isNotEmpty()) fromLink else parseTurnableJson(rawText)
+        }
+
+        if (profiles.isEmpty()) return null
+
+        val entries = profiles.map { item ->
+            val locName = item.name.ifBlank { "Turnable" }
+            val rawOutbound = buildJsonObject {
+                put("type", "wireguard")
+                put("server", "127.0.0.1")
+                put("server_port", item.listenPort)
+                put("local_address", buildJsonArray {
+                    add(JsonPrimitive(item.wgAddress.ifBlank { "10.9.1.2/32" }))
+                })
+                put("private_key", item.wgPrivateKey.ifBlank { "aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEE=" })
+                put("peer_public_key", item.wgPeerPublicKey.ifBlank { "bAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEE=" })
+                put("mtu", item.wgMtu)
+            }.toString()
+
+            val location = LocationConfig(
+                name = locName,
+                engine = EngineType.VkTurn,
+                vkturn = VkTurnConfig(
+                    core = VkTurnConfig.CORE_TURNABLE,
+                    turnableConfig = item.config,
+                    outbound = VkTurnConfig.OUTBOUND_WIREGUARD,
+                    listenPort = item.listenPort,
+                ),
+                proxy = ProxyProfile(
+                    tag = locName,
+                    type = "wireguard",
+                    server = item.host,
+                    serverPort = item.port,
+                    rawOutbound = rawOutbound
+                ),
+                proxyEnabled = true
+            ).normalized()
+
+            val base = "${item.host}_${item.port}_$locName".storageSlug()
+            val storageId = uniqueStorageId("imported_turnable_$base", usedStorageIds)
+            LocationEntry.from(
+                storageId = storageId,
+                location = location,
+                subscriptionUrl = subscriptionUrl,
+                metadata = locationMetadata
+            )
+        }
+
+        if (entries.isEmpty()) return null
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
         linkText: String,
         rawText: String,
         subscriptionUrl: String?,
@@ -2537,7 +2708,8 @@ class LocationsRepositoryImpl(
             .filter { line ->
                 !line.startsWith(YptunInboundCodec.PREFIX, ignoreCase = true) &&
                 !line.startsWith(OLCRTC_URI_PREFIX, ignoreCase = true) &&
-                !line.startsWith("freeturn://", ignoreCase = true)
+                !line.startsWith("freeturn://", ignoreCase = true) &&
+                !line.startsWith("turnable://", ignoreCase = true)
             }
             .joinToString("\n")
         if (nonCustomLines.isBlank()) return null

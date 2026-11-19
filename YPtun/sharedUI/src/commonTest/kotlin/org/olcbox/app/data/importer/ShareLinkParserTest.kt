@@ -123,4 +123,33 @@ class ShareLinkParserTest {
         assertEquals(ProxyProfile.TYPE_VLESS, profiles[0].type)
         assertEquals("93.88.203.199", profiles[0].server)
     }
+
+    @Test
+    fun parsesMieruSimpleAndProtobufLinks() {
+        val simple = "mierus://user:pass@example.com:443/?profile=fast&mtu=1400#Tokyo"
+        val p1 = ShareLinkParser.parse(simple)!!
+        assertEquals(ProxyProfile.TYPE_MIERU, p1.type)
+        assertEquals("example.com", p1.server)
+        assertEquals(443, p1.serverPort)
+        assertEquals("user", p1.username)
+        assertEquals("pass", p1.password)
+        assertEquals("Tokyo", p1.tag)
+        assertTrue(p1.isComplete())
+
+        val simpleMieruScheme = "mieru://user:pass@example.com:443/?profile=fast#Tokyo2"
+        val p2 = ShareLinkParser.parse(simpleMieruScheme)!!
+        assertEquals(ProxyProfile.TYPE_MIERU, p2.type)
+        assertEquals("example.com", p2.server)
+        assertEquals(443, p2.serverPort)
+        assertEquals("user", p2.username)
+        assertEquals("pass", p2.password)
+        assertEquals("Tokyo2", p2.tag)
+        assertTrue(p2.isComplete())
+
+        val proto = "mieru://CpsBCgdkZWZhdWx0ElgKBWJhb3pp#Opaque"
+        val p3 = ShareLinkParser.parse(proto)!!
+        assertEquals(ProxyProfile.TYPE_MIERU, p3.type)
+        assertEquals("Opaque", p3.tag)
+        assertTrue(p3.isComplete())
+    }
 }

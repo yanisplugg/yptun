@@ -1064,6 +1064,7 @@ data class LocationConfig(
         // server at runtime (GETCONF/OnConfig), so no stored exit artifact is required here.
         vkturn?.usesWdtt() == true -> true
         vkturn?.usesCsqtt() == true -> true
+        vkturn?.usesTurnable() == true -> true
         else -> vkTurnExitPresentFreeturn()
     }
 

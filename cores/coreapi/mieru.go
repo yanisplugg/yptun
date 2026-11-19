@@ -28,6 +28,10 @@ func mieruProfile(link string) (*appctlpb.ClientProfile, error) {
 		return appctl.URLToClientProfile(trimmed)
 	}
 	if strings.HasPrefix(strings.ToLower(trimmed), "mieru://") {
+		if strings.Contains(trimmed, "@") {
+			simpleURL := "mierus://" + trimmed[len("mieru://"):]
+			return appctl.URLToClientProfile(simpleURL)
+		}
 		// A display fragment is not part of the upstream base64 protobuf payload.
 		config, err := appctl.URLToClientConfig(strings.SplitN(trimmed, "#", 2)[0])
 		if err != nil {

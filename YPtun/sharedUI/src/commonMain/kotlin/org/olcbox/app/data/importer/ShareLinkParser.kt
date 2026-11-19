@@ -48,20 +48,25 @@ object ShareLinkParser {
 
     // --- mieru://<full-config-protobuf> / mierus://user:pass@host?... ---
     private fun parseMieru(uri: String): ProxyProfile? {
-        if (uri.startsWith("mieru://", ignoreCase = true)) {
-            val payload = uri.substring("mieru://".length).substringBefore('#')
+        val trimmed = uri.trim()
+        val isSimple = trimmed.startsWith("mierus://", ignoreCase = true) ||
+            (trimmed.startsWith("mieru://", ignoreCase = true) && trimmed.contains("@"))
+
+        if (!isSimple && trimmed.startsWith("mieru://", ignoreCase = true)) {
+            val payload = trimmed.substring("mieru://".length).substringBefore('#')
             if (payload.isBlank()) return null
-            val remark = UriCodec.percentDecode(uri.substringAfter('#', "")).ifBlank { "Mieru" }
+            val remark = UriCodec.percentDecode(trimmed.substringAfter('#', "")).ifBlank { "Mieru" }
             return ProxyProfile(
                 tag = remark,
                 type = ProxyProfile.TYPE_MIERU,
                 server = "mieru-config",
                 serverPort = 1,
-                mieruConfig = uri,
+                mieruConfig = trimmed,
             )
         }
 
-        val body = uri.substring("mierus://".length)
+        val prefixLen = if (trimmed.startsWith("mierus://", ignoreCase = true)) "mierus://".length else "mieru://".length
+        val body = trimmed.substring(prefixLen)
         val remark = UriCodec.percentDecode(body.substringAfter('#', ""))
         val beforeFragment = body.substringBefore('#')
         val query = beforeFragment.substringAfter('?', "")
@@ -73,14 +78,27 @@ object ShareLinkParser {
         if (colon <= 0) return null
         val user = UriCodec.percentDecode(credentials.substring(0, colon))
         val password = UriCodec.percentDecode(credentials.substring(colon + 1))
-        val server = UriCodec.percentDecode(authority.substring(at + 1)).trim().removePrefix("[").removeSuffix("]")
+        val rawHostPort = UriCodec.percentDecode(authority.substring(at + 1)).trim()
+        val server = if (rawHostPort.startsWith("[")) {
+            rawHostPort.substringAfter("[").substringBefore("]")
+        } else {
+            rawHostPort.substringBefore(':')
+        }.trim()
         if (user.isBlank() || password.isBlank() || server.isBlank()) return null
-        val pairs = query.split('&').mapNotNull { part ->
+
+        val pairs = if (query.isNotBlank()) query.split('&').mapNotNull { part ->
             if (part.isBlank()) null else UriCodec.percentDecode(part.substringBefore('=')) to
                 UriCodec.percentDecode(part.substringAfter('=', ""))
-        }
-        val port = pairs.firstOrNull { it.first.equals("port", ignoreCase = true) }
-            ?.second?.substringBefore('-')?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 1
+        } else emptyList()
+
+        val hostPort = if (rawHostPort.contains(":") && !rawHostPort.endsWith("]")) {
+            rawHostPort.substringAfterLast(':').toIntOrNull()?.takeIf { it in 1..65535 }
+        } else null
+
+        val queryPort = pairs.firstOrNull { it.first.equals("port", ignoreCase = true) }
+            ?.second?.substringBefore('-')?.toIntOrNull()?.takeIf { it in 1..65535 }
+
+        val port = hostPort ?: queryPort ?: 1
         val profileName = pairs.firstOrNull { it.first.equals("profile", ignoreCase = true) }?.second.orEmpty()
         return ProxyProfile(
             tag = remark.ifBlank { profileName.ifBlank { "Mieru" } },
@@ -89,7 +107,7 @@ object ShareLinkParser {
             serverPort = port,
             username = user,
             password = password,
-            mieruConfig = uri,
+            mieruConfig = trimmed,
         )
     }
 
