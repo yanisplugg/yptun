@@ -2870,14 +2870,25 @@ private fun RoutingContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 SettingsSectionLabel(s.presets)
+                val globalId = routingProfilesState.globalProfileId.orEmpty()
+                val isRuDirect = bypassRu && !bypassCn && !blockAds && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID
+                val isCnDirect = (bypassCn || globalId == org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID) && !bypassRu && !blockAds
+                val isIrDirect = globalId == org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID && !bypassRu && !bypassCn && !blockAds
+                val isAdsBlock = blockAds && !bypassRu && !bypassCn && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID
+                val isRuAds = bypassRu && blockAds && !bypassCn && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID
+                val isAllVpn = !bypassRu && !bypassCn && !blockAds && globalId.isEmpty()
+
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
-                        selected = false,
-                        onClick = { bypassLan = true; bypassRu = true; bypassCn = false; blockAds = false },
+                        selected = isRuDirect,
+                        onClick = {
+                            bypassLan = true; bypassRu = true; bypassCn = false; blockAds = false
+                            if (globalId.isNotEmpty()) onSetGlobal("")
+                        },
                         label = { Text(s.presetRuDirect) }
                     )
                     FilterChip(
-                        selected = false,
+                        selected = isCnDirect,
                         onClick = {
                             bypassLan = true; bypassRu = false; bypassCn = true; blockAds = false
                             val cnProfile = org.olcbox.app.data.model.RoutingProfile.chinaDirect(s.presetCnDirect)
@@ -2891,7 +2902,7 @@ private fun RoutingContent(
                         label = { Text(s.presetCnDirect) }
                     )
                     FilterChip(
-                        selected = false,
+                        selected = isIrDirect,
                         onClick = {
                             bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false
                             val irProfile = org.olcbox.app.data.model.RoutingProfile.iranDirect(s.presetIrDirect)
@@ -2906,18 +2917,27 @@ private fun RoutingContent(
                     )
 
                     FilterChip(
-                        selected = false,
-                        onClick = { bypassLan = true; blockAds = true; bypassRu = false },
+                        selected = isAdsBlock,
+                        onClick = {
+                            bypassLan = true; blockAds = true; bypassRu = false; bypassCn = false
+                            if (globalId.isNotEmpty()) onSetGlobal("")
+                        },
                         label = { Text(s.presetAdsBlock) }
                     )
                     FilterChip(
-                        selected = false,
-                        onClick = { bypassLan = true; bypassRu = true; blockAds = true },
+                        selected = isRuAds,
+                        onClick = {
+                            bypassLan = true; bypassRu = true; bypassCn = false; blockAds = true
+                            if (globalId.isNotEmpty()) onSetGlobal("")
+                        },
                         label = { Text(s.presetRuAds) }
                     )
                     FilterChip(
-                        selected = false,
-                        onClick = { bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false },
+                        selected = isAllVpn,
+                        onClick = {
+                            bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false
+                            if (globalId.isNotEmpty()) onSetGlobal("")
+                        },
                         label = { Text(s.presetAllVpn) }
                     )
                     FilterChip(
@@ -2925,6 +2945,7 @@ private fun RoutingContent(
                         onClick = {
                             bypassLan = true; bypassRu = false; bypassCn = false; blockAds = false
                             directText = ""; blockText = ""
+                            if (globalId.isNotEmpty()) onSetGlobal("")
                         },
                         label = { Text(s.presetReset) }
                     )

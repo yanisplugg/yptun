@@ -556,9 +556,13 @@ object SingBoxConfig {
                         addJsonObject { put("action", "sniff") }
                     }
                     if (tunMode || hijackDns) {
-                        // System DNS queries arriving via the TUN are answered by sing-box itself.
+                        // System DNS queries arriving via the TUN or TPROXY are answered by sing-box itself.
                         addJsonObject {
                             putJsonArray("protocol") { add("dns") }
+                            put("action", "hijack-dns")
+                        }
+                        addJsonObject {
+                            putJsonArray("port") { add(53) }
                             put("action", "hijack-dns")
                         }
                     }

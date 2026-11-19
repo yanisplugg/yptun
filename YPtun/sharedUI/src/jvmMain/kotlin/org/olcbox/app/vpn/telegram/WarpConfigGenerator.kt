@@ -277,8 +277,6 @@ internal object WarpConfigGenerator {
             appendLine("H2 = 2")
             appendLine("H3 = 3")
             appendLine("H4 = 4")
-            // DPI-evasion init packet — see WARP_I1.
-            appendLine("I1 = $WARP_I1")
             appendLine()
             appendLine("[Peer]")
             appendLine("PublicKey = $peerPublic")

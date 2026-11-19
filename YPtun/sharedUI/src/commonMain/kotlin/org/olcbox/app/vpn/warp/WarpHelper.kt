@@ -62,8 +62,8 @@ object WarpHelper {
      *  - the endpoint is pinned to WARP's anycast IP: a domain is resolved at start-up by Go's resolver,
      *    which on Android has no resolv.conf (and, with the VPN already up, would loop into our own tunnel).
      */
-    fun engineIni(ini: String, awg: Boolean, initPackets: Boolean = true): String {
-        val base = if (awg) dropKeys(ini, if (initPackets) setOf("reserved") else setOf("reserved", "i1", "i2", "i3", "i4", "i5"))
+    fun engineIni(ini: String, awg: Boolean, initPackets: Boolean = false): String {
+        val base = if (awg) dropKeys(ini, setOf("reserved", "i1", "i2", "i3", "i4", "i5"))
         else plainWireGuard(ini)
         val (host, port) = endpointOf(ini)
         return withEndpoint(base, "${pinnedHost(host)}:$port")

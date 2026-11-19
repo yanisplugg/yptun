@@ -553,7 +553,7 @@ pub const TPROXY_PREF: i32 = 90;
 
 pub fn tproxy_teardown_lines() -> Vec<String> {
     vec![
-        "export PATH=/system/bin:/system/xbin:/vendor/bin:$PATH".to_string(),
+        "export PATH=/apex/com.android.tethering/bin:/apex/com.android.ipsec/bin:/system/bin:/system/xbin:/vendor/bin:/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:$PATH".to_string(),
         "while iptables -t mangle -D OUTPUT -j YPT_OUT 2>/dev/null; do :; done".to_string(),
         "while iptables -t mangle -D PREROUTING -j YPT_PRE 2>/dev/null; do :; done".to_string(),
         "while ip6tables -D OUTPUT -j YPT_OUT6 2>/dev/null; do :; done".to_string(),
@@ -581,10 +581,10 @@ pub fn tproxy_apply_script(uid: u32, tproxy_port: i32) -> String {
     lines.extend([
         format!("ip rule add fwmark {TPROXY_MARK} lookup {TPROXY_TABLE} pref {TPROXY_PREF}"),
         format!("ip route add local 0.0.0.0/0 dev lo table {TPROXY_TABLE}"),
-        "iptables -t mangle -N YPT_OUT; iptables -t mangle -N YPT_PRE".to_string(),
+        "iptables -t mangle -N YPT_OUT 2>/dev/null || true; iptables -t mangle -N YPT_PRE 2>/dev/null || true".to_string(),
         format!("{out} -m owner --uid-owner {uid} -j RETURN"),
         format!("{out} -o lo -j RETURN"),
-        format!("{out} -m addrtype --dst-type LOCAL -j RETURN"),
+        format!("{out} -m addrtype --dst-type LOCAL -j RETURN 2>/dev/null || true"),
         format!("{out} -p udp --dport 53 -j MARK --set-mark {TPROXY_MARK}"),
         format!("{out} -p tcp --dport 53 -j MARK --set-mark {TPROXY_MARK}"),
     ]);
@@ -597,16 +597,16 @@ pub fn tproxy_apply_script(uid: u32, tproxy_port: i32) -> String {
         format!("{out} -p udp -j MARK --set-mark {TPROXY_MARK}"),
         "iptables -t mangle -I OUTPUT -j YPT_OUT".to_string(),
         format!("iptables -t mangle -A YPT_PRE -m mark ! --mark {TPROXY_MARK} -j RETURN"),
-        format!("iptables -t mangle -A YPT_PRE -p tcp -j TPROXY --on-port {tproxy_port} --tproxy-mark {TPROXY_MARK}"),
-        format!("iptables -t mangle -A YPT_PRE -p udp -j TPROXY --on-port {tproxy_port} --tproxy-mark {TPROXY_MARK}"),
+        format!("iptables -t mangle -A YPT_PRE -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port {tproxy_port} --tproxy-mark {TPROXY_MARK}"),
+        format!("iptables -t mangle -A YPT_PRE -p udp -j TPROXY --on-ip 127.0.0.1 --on-port {tproxy_port} --tproxy-mark {TPROXY_MARK}"),
         "iptables -t mangle -I PREROUTING -j YPT_PRE".to_string(),
-        "ip6tables -N YPT_OUT6".to_string(),
+        "ip6tables -N YPT_OUT6 2>/dev/null || true".to_string(),
         format!("ip6tables -A YPT_OUT6 -m owner --uid-owner {uid} -j RETURN"),
         "ip6tables -A YPT_OUT6 -o lo -j RETURN".to_string(),
         "ip6tables -A YPT_OUT6 -d fe80::/10 -j RETURN".to_string(),
         "ip6tables -A YPT_OUT6 -d fc00::/7 -j RETURN".to_string(),
         "ip6tables -A YPT_OUT6 -d ff00::/8 -j RETURN".to_string(),
-        "ip6tables -A YPT_OUT6 -j REJECT".to_string(),
+        "ip6tables -A YPT_OUT6 -j DROP".to_string(),
         "ip6tables -I OUTPUT -j YPT_OUT6".to_string(),
         format!(
             "if iptables -t mangle -S YPT_PRE | grep -q TPROXY && ip rule | grep -q ' {TPROXY_TABLE}'; then echo YPT_OK; else echo YPT_FAIL; fi"

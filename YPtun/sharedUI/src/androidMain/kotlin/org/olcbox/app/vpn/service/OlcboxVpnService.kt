@@ -1086,7 +1086,8 @@ class OlcboxVpnService : VpnService() {
         val profileWantsXray = routingProfile != null &&
             (routingProfile.needsGeoFiles() || routingProfile.dnsHosts.isNotEmpty()) &&
             proxy.type in XRAY_SUPPORTED_TYPES
-        val useXray = resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray
+        val isTproxy = connectionMode == AndroidConnectionMode.Tproxy
+        val useXray = !isTproxy && (resolveCore(proxy, globalCore) == ProxyCore.Xray || profileWantsXray)
         addLog("$label chaining proxy ${proxy.displayName()} over the tunnel (${if (useXray) "Xray" else "sing-box"})")
         if (useXray) {
             val assetPath = ensureGeoAssetPath(routingProfile)
@@ -1823,9 +1824,10 @@ class OlcboxVpnService : VpnService() {
 
             // App-wide engine default (Auto/sing-box/Xray); applied only when the location core is Auto
             // and the transport doesn't force a core — a per-location choice still wins (see resolvedCore).
+            val isTproxy = connectionMode == AndroidConnectionMode.Tproxy
             val globalCore = loadAppBehavior().globalProxyCore
             activeProxyCore =
-                if (isLocalUdpTunnel || isHy2 || isNaive || hasOpenVpn) ProxyCore.SingBox else config.resolvedCore(globalCore)
+                if (isTproxy || isLocalUdpTunnel || isHy2 || isNaive || hasOpenVpn) ProxyCore.SingBox else config.resolvedCore(globalCore)
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1843,11 +1845,11 @@ class OlcboxVpnService : VpnService() {
             // A user-supplied full Xray JSON (dns / routing / balancers / custom fields) can ONLY run
             // verbatim on xray-core. Force Xray so the whole template is honored instead of falling to
             // sing-box, which would rebuild from the parsed profile and drop everything but the outbound.
-            if (!effectiveProfile.rawXrayConfig.isNullOrBlank()) {
+            if (!isTproxy && !effectiveProfile.rawXrayConfig.isNullOrBlank()) {
                 if (activeProxyCore != ProxyCore.Xray) addLog("Raw Xray config present → forcing Xray core")
                 activeProxyCore = ProxyCore.Xray
             }
-            if (activeProxyCore == ProxyCore.SingBox &&
+            if (!isTproxy && activeProxyCore == ProxyCore.SingBox &&
                 (loadTrafficSettings().blockRuDomains || profileWantsXray) &&
                 effectiveProfile.rawOutbound.isNullOrBlank() &&
                 effectiveProfile.type in XRAY_SUPPORTED_TYPES
@@ -1876,7 +1878,7 @@ class OlcboxVpnService : VpnService() {
             }
             // The cascade runs both hops in one core. An xhttp second proxy can only run on Xray, so
             // force it (overriding the geo fallback above) — sing-box can't carry xhttp.
-            if (secondProfile?.requiresXray() == true && activeProxyCore != ProxyCore.Xray) {
+            if (!isTproxy && secondProfile?.requiresXray() == true && activeProxyCore != ProxyCore.Xray) {
                 activeProxyCore = ProxyCore.Xray
                 addLog("Second (cascade) proxy uses xhttp → forcing Xray core")
             }
@@ -2508,7 +2510,8 @@ class OlcboxVpnService : VpnService() {
             // Xray alone can serve — an xhttp/splithttp link, a raw Xray config, or simply the user's
             // "Xray" core choice — because the chain was force-built on sing-box, which cannot speak
             // those transports. With the AWG SOCKS as the chain's base detour both cores work.
-            val useXray = proxyForCore != null &&
+            val isTproxy = connectionMode == AndroidConnectionMode.Tproxy
+            val useXray = !isTproxy && proxyForCore != null &&
                 (vk.resolvedProxyCore(proxyForCore, globalCore) == ProxyCore.Xray || profileWantsXray)
 
             if (useXray) {

@@ -115,12 +115,8 @@ val LocalConnectedSpeed = staticCompositionLocalOf<SpeedSample?> { null }
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
 
-/** Latency colour: green for fast (<150ms), amber for moderate (150-350ms), red for slow (>350ms). */
-private fun pingLatencyColor(ms: Int): Color = when {
-    ms < 150 -> PingOkGreen
-    ms < 350 -> Color(0xFFF59E0B)
-    else -> Color(0xFFEF4444)
-}
+/** Latency colour: uniform green for all successful pings. */
+private fun pingLatencyColor(ms: Int): Color = PingOkGreen
 
 /** Download / upload accent colours for the Home speed line (match the notification's green/blue). */
 private val SpeedDownGreen = Color(0xFF22C55E)

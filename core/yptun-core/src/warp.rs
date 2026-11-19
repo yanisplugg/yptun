@@ -67,11 +67,9 @@ pub fn plain_wireguard(ini: &str) -> String {
 /// The INI awgproxy should run: `Reserved` always dropped (Cloudflare discards those handshakes);
 /// AmneziaWG keeps its knobs, I1..I5 only when `init_packets` (server side: inside the proxy, no
 /// DPI, I1 only delays the handshake); the endpoint pinned to an IP.
-pub fn engine_ini(ini: &str, awg: bool, init_packets: bool) -> String {
+pub fn engine_ini(ini: &str, awg: bool, _init_packets: bool) -> String {
     let base = if !awg {
         plain_wireguard(ini)
-    } else if init_packets {
-        drop_keys(ini, &["reserved"])
     } else {
         drop_keys(ini, &["reserved", "i1", "i2", "i3", "i4", "i5"])
     };
