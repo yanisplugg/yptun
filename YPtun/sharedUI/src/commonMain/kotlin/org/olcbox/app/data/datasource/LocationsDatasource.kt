@@ -2624,6 +2624,8 @@ class LocationsRepositoryImpl(
         if (entries.isEmpty()) return null
         return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
+
+    private fun parseOpenFluxText(
         linkText: String,
         rawText: String,
         subscriptionUrl: String?,
