@@ -148,6 +148,9 @@ class IosVpnManager(
     private var connectJob: Job? = null
     private var connectWatchdogJob: Job? = null
     private var connectGeneration = 0L
+    private var inFlightLocationId: String? = null
+    private var connectedLocationId: String? = null
+    private var lastStartEpochMs: Long = 0L
 
     init {
         scope.launch {
@@ -263,6 +266,12 @@ class IosVpnManager(
     }
 
     override fun startVpn() {
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        if (now - lastStartEpochMs < 400L) {
+            return
+        }
+        lastStartEpochMs = now
+
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         val requestedGeneration = ++connectGeneration
         connectJob?.cancel()
@@ -278,10 +287,20 @@ class IosVpnManager(
                     return@withLock
                 }
 
-                // If tunnel is already running, attempt hot reload without tearing down the iOS VPN tunnel
+                val targetId = active.id.ifBlank { active.displayName() }
                 val currentManager = manager ?: loadManager(createIfMissing = false)
+                val isActuallyConnected = currentManager?.connection?.status == NEVPNStatusConnected
+
+                // Redundant start: already connected to this exact location
+                if (isActuallyConnected && connectedLocationId == targetId && _status.value == VpnStatus.Connected) {
+                    return@withLock
+                }
+
+                inFlightLocationId = targetId
+
+                // If tunnel is already running, attempt hot reload without tearing down the iOS VPN tunnel
                 val currentSession = currentManager?.connection as? NETunnelProviderSession
-                if (currentSession != null && currentManager.connection.status == NEVPNStatusConnected) {
+                if (currentSession != null && isActuallyConnected) {
                     setStatus(VpnStatus.Reconnecting)
                     publishRequest(active)
                     IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
@@ -293,6 +312,8 @@ class IosVpnManager(
                     if (reply == "ok") {
                         addLog("Connected to ${active.displayName()}")
                         setStatus(VpnStatus.Connected)
+                        connectedLocationId = targetId
+                        inFlightLocationId = null
                         triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                         return@withLock
                     } else {
@@ -372,6 +393,7 @@ class IosVpnManager(
                     }
                 }
                 result.onFailure {
+                    inFlightLocationId = null
                     if (requestedGeneration != connectGeneration) return@withLock
                     if (it is kotlinx.coroutines.CancellationException || it.message?.contains("cancelled", ignoreCase = true) == true) {
                         return@launch
@@ -387,6 +409,8 @@ class IosVpnManager(
 
     override fun stopVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
+        inFlightLocationId = null
+        connectedLocationId = null
         connectGeneration++
         connectJob?.cancel()
         connectWatchdogJob?.cancel()
@@ -1086,6 +1110,8 @@ class IosVpnManager(
                     ?.let { (it.timeIntervalSince1970 * 1000).toLong() } ?: 0L
                 val wasNotConnected = _status.value != VpnStatus.Connected
                 setStatus(VpnStatus.Connected)
+                connectedLocationId = inFlightLocationId ?: connectedLocationId
+                inFlightLocationId = null
                 if (wasNotConnected) {
                     addLog("Tunnel connected")
                     triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
@@ -1109,6 +1135,8 @@ class IosVpnManager(
                 connectWatchdogJob?.cancel()
                 val wasConnected = _status.value == VpnStatus.Connected
                 _connectedSince.value = 0L
+                inFlightLocationId = null
+                connectedLocationId = null
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                 if (wasConnecting && failure.isNotEmpty()) {
                     setStatus(VpnStatus.Error(failure))

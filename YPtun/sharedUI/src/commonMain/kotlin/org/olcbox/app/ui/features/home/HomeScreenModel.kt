@@ -168,7 +168,15 @@ class HomeScreenViewModel(
         _state.update { it.copy(isVpnLoading = true) }
     }
 
+    private var lastToggleEpochMs: Long = 0L
+
     fun ToggleVpn() {
+        val now = nowMs()
+        if (now - lastToggleEpochMs < 600L) {
+            return
+        }
+        lastToggleEpochMs = now
+
         val status = vpnManager.status.value
         if (_state.value.isVpnLoading ||
             status is VpnStatus.Connecting ||
