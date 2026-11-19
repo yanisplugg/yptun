@@ -3157,11 +3157,15 @@ private fun RoutingContent(
             ) {
                 SettingsSectionLabel(s.presets)
                 val globalId = routingProfilesState.globalProfileId.orEmpty()
-                val isRuDirect = bypassRu && !bypassCn && !blockAds && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID
-                val isCnDirect = (bypassCn || globalId == org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID) && !bypassRu && !blockAds
-                val isIrDirect = globalId == org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID && !bypassRu && !bypassCn && !blockAds
-                val isAdsBlock = blockAds && !bypassRu && !bypassCn && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID
-                val isRuAds = bypassRu && blockAds && !bypassCn && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID && globalId != org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID
+                val isRuDirect = (globalId == org.olcbox.app.data.model.RoutingProfile.DEFAULT_RU_DIRECT_ID || (bypassRu && globalId.isEmpty())) &&
+                    !bypassCn && !blockAds
+                val isCnDirect = (globalId == org.olcbox.app.data.model.RoutingProfile.PRESET_CN_DIRECT_ID || (bypassCn && globalId.isEmpty())) &&
+                    !bypassRu && !blockAds
+                val isIrDirect = globalId == org.olcbox.app.data.model.RoutingProfile.PRESET_IR_DIRECT_ID &&
+                    !bypassRu && !bypassCn && !blockAds
+                val isAdsBlock = blockAds && !bypassRu && !bypassCn && globalId.isEmpty()
+                val isRuAds = (globalId == org.olcbox.app.data.model.RoutingProfile.DEFAULT_RU_DIRECT_ID || (bypassRu && globalId.isEmpty())) &&
+                    blockAds && !bypassCn
                 val isAllVpn = !bypassRu && !bypassCn && !blockAds && globalId.isEmpty()
 
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3169,7 +3173,14 @@ private fun RoutingContent(
                         selected = isRuDirect,
                         onClick = {
                             bypassLan = true; bypassRu = true; bypassCn = false; blockAds = false
-                            if (globalId.isNotEmpty()) onSetGlobal("")
+                            val ruProfile = routingProfilesState.profileById(org.olcbox.app.data.model.RoutingProfile.DEFAULT_RU_DIRECT_ID)
+                                ?: org.olcbox.app.data.model.RoutingProfile.russiaDirect(s.presetRuDirect)
+                            onSaveProfile(ruProfile)
+                            onSetGlobal(ruProfile.id)
+                            if (ruProfile.geoipUrl.isNotBlank() && ruProfile.geositeUrl.isNotBlank()) {
+                                onSetGeoSources(ruProfile.geoipUrl, ruProfile.geositeUrl)
+                            }
+                            onUpdateGeo()
                         },
                         label = { Text(s.presetRuDirect) }
                     )
@@ -3214,7 +3225,14 @@ private fun RoutingContent(
                         selected = isRuAds,
                         onClick = {
                             bypassLan = true; bypassRu = true; bypassCn = false; blockAds = true
-                            if (globalId.isNotEmpty()) onSetGlobal("")
+                            val ruProfile = routingProfilesState.profileById(org.olcbox.app.data.model.RoutingProfile.DEFAULT_RU_DIRECT_ID)
+                                ?: org.olcbox.app.data.model.RoutingProfile.russiaDirect(s.presetRuDirect)
+                            onSaveProfile(ruProfile)
+                            onSetGlobal(ruProfile.id)
+                            if (ruProfile.geoipUrl.isNotBlank() && ruProfile.geositeUrl.isNotBlank()) {
+                                onSetGeoSources(ruProfile.geoipUrl, ruProfile.geositeUrl)
+                            }
+                            onUpdateGeo()
                         },
                         label = { Text(s.presetRuAds) }
                     )

@@ -48,4 +48,20 @@ class RoutingProfileLinkTest {
         // NONE sentinel → no profile despite a global being set.
         assertEquals(null, state.resolve(RoutingProfile.NONE_ID))
     }
+
+    @Test
+    fun russiaDirectPresetProperties() {
+        val defaultRu = RoutingProfile.russiaDirect()
+        assertEquals(RoutingProfile.DEFAULT_RU_DIRECT_ID, defaultRu.id)
+        assertEquals("Россия напрямую", defaultRu.name)
+        assertTrue(defaultRu.needsGeoFiles())
+
+        val localizedRu = RoutingProfile.russiaDirect("Russia direct")
+        assertEquals(RoutingProfile.DEFAULT_RU_DIRECT_ID, localizedRu.id)
+        assertEquals("Russia direct", localizedRu.name)
+
+        val state = RoutingProfilesState().withPresets()
+        assertEquals(RoutingProfile.DEFAULT_RU_DIRECT_ID, state.profiles.first().id)
+        assertEquals(defaultRu.id, state.profileById(RoutingProfile.DEFAULT_RU_DIRECT_ID)?.id)
+    }
 }

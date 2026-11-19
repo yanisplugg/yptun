@@ -180,8 +180,8 @@ data class RoutingProfile(
             }
         }
 
-        fun russiaDirect(): RoutingProfile = RoutingProfile(
-            name = "Россия напрямую",
+        fun russiaDirect(name: String = "Россия напрямую"): RoutingProfile = RoutingProfile(
+            name = name,
             directSites = listOf(
                 "geosite:ru", "domain:ru", "domain:su", "domain:xn--p1ai",
                 "domain:vk.com", "domain:vk.ru", "domain:vkvideo.ru", "domain:ok.ru",
