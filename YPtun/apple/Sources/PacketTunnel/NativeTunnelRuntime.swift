@@ -1555,7 +1555,28 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         var effectiveEndpointToml = endpointToml.trimmingCharacters(in: .whitespacesAndNewlines)
         var dnsUpstreams = extractTomlStringArray(key: "dns_upstreams", from: effectiveEndpointToml)
         if dnsUpstreams.isEmpty {
-            // Inject fallback dns_upstreams into endpoint table so TrustTunnel internal DNS_HANDLER has servers to query
+            // Remove any existing empty dns_upstreams lines (single or multiline) to avoid duplicate key errors in TOML
+            var cleanedLines: [String] = []
+            var skippingDnsUpstreams = false
+            for rawLine in effectiveEndpointToml.components(separatedBy: "\n") {
+                let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+                if !skippingDnsUpstreams {
+                    if trimmed.lowercased().hasPrefix("dns_upstreams") {
+                        if !trimmed.contains("]") {
+                            skippingDnsUpstreams = true
+                        }
+                        continue
+                    }
+                    cleanedLines.append(rawLine)
+                } else {
+                    if trimmed.contains("]") {
+                        skippingDnsUpstreams = false
+                    }
+                }
+            }
+            effectiveEndpointToml = cleanedLines.joined(separator: "\n")
+
+            // Now inject our clean dns_upstreams array once under [endpoint]
             if effectiveEndpointToml.contains("[endpoint]") {
                 effectiveEndpointToml = effectiveEndpointToml.replacingOccurrences(
                     of: "[endpoint]",
@@ -1646,9 +1667,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         ipv6.includedRoutes = v6Included.isEmpty ? [.default()] : v6Included
         settings.ipv6Settings = ipv6
 
-        // TrustTunnel proxies DNS via 198.18.53.53 when dns_upstreams is configured.
-        // Include fallback public DNS servers as well.
-        let dns = NEDNSSettings(servers: ["198.18.53.53", "1.1.1.1", "8.8.8.8"])
+        // Official TrustTunnelClient proxies DNS queries via virtual DNS proxy 198.18.53.53
+        let dns = NEDNSSettings(servers: ["198.18.53.53"])
         dns.matchDomains = [""]
         settings.dnsSettings = dns
 
