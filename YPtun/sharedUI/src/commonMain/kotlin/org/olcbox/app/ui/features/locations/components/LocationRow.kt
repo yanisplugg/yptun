@@ -56,6 +56,7 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ProxyProfile
 import org.olcbox.app.ui.features.locations.LocationItem
+import org.olcbox.app.ui.theme.ThemeState
 import org.olcbox.app.util.parseEmojiAndName
 
 /**
@@ -114,9 +115,18 @@ val LocalConnectedSpeed = staticCompositionLocalOf<SpeedSample?> { null }
 
 /** Fixed "success green" for the ping tick — theme-independent so it's always clearly green. */
 private val PingOkGreen = Color(0xFF22C55E)
+private val PingWarnYellow = Color(0xFFEAB308)
+private val PingBadOrange = Color(0xFFF97316)
 
-/** Latency colour: uniform green for all successful pings. */
-private fun pingLatencyColor(ms: Int): Color = PingOkGreen
+/** Latency colour: uniform green by default, or color-coded if coloredPingByLatency is enabled. */
+private fun pingLatencyColor(ms: Int): Color {
+    if (!ThemeState.coloredPingByLatency) return PingOkGreen
+    return when {
+        ms < 150 -> PingOkGreen
+        ms < 300 -> PingWarnYellow
+        else -> PingBadOrange
+    }
+}
 
 /** Download / upload accent colours for the Home speed line (match the notification's green/blue). */
 private val SpeedDownGreen = Color(0xFF22C55E)

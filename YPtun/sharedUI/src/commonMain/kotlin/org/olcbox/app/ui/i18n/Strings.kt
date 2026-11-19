@@ -177,6 +177,12 @@ interface Strings {
     val lightTheme: String
     val lightThemeOn: String
     val lightThemeOff: String
+    val coloredPingTitle: String
+    val coloredPingOn: String
+    val coloredPingOff: String
+    val animatedGlowTitle: String
+    val animatedGlowOn: String
+    val animatedGlowOff: String
     val routing: String
     val routingSubtitle: String
     val trafficSettings: String
@@ -1094,6 +1100,12 @@ object RuStrings : Strings {
     override val lightTheme = "Светлая тема"
     override val lightThemeOn = "Белый фон, тёмная тема системы игнорируется"
     override val lightThemeOff = "Тёмный фон"
+    override val coloredPingTitle = "Цветной пинг"
+    override val coloredPingOn = "Зелёный (<150мс), жёлтый (<300мс), оранжевый (≥300мс)"
+    override val coloredPingOff = "Всегда зелёный"
+    override val animatedGlowTitle = "Анимация волн у кнопки"
+    override val animatedGlowOn = "Эффект расходящихся волн при подключении"
+    override val animatedGlowOff = "Статичное свечение"
     override val routing = "Маршрутизация"
     override val routingSubtitle = "Обход LAN/России, блокировка рекламы, домены"
     override val trafficSettings = "Настройки трафика"
@@ -1969,6 +1981,12 @@ object EnStrings : Strings {
     override val lightTheme = "Light theme"
     override val lightThemeOn = "White canvas, system dark theme ignored"
     override val lightThemeOff = "Dark canvas"
+    override val coloredPingTitle = "Color-coded ping"
+    override val coloredPingOn = "Green (<150ms), yellow (<300ms), orange (≥300ms)"
+    override val coloredPingOff = "Always green"
+    override val animatedGlowTitle = "Wave button glow"
+    override val animatedGlowOn = "Rippling water wave effect when connected"
+    override val animatedGlowOff = "Static glow"
     override val routing = "Routing"
     override val routingSubtitle = "Bypass LAN/Russia, block ads, custom domains"
     override val trafficSettings = "Traffic settings"
@@ -2838,6 +2856,12 @@ object FaStrings : Strings {
     override val lightTheme = "پوستهٔ روشن"
     override val lightThemeOn = "زمینهٔ سفید، پوستهٔ تیرهٔ سیستم نادیده گرفته می‌شود"
     override val lightThemeOff = "زمینهٔ تیره"
+    override val coloredPingTitle = "پینگ رنگی"
+    override val coloredPingOn = "سبز (<150ms)، زرد (<300ms)، نارنجی (≥300ms)"
+    override val coloredPingOff = "همیشه سبز"
+    override val animatedGlowTitle = "پویانمایی موج دکمه"
+    override val animatedGlowOn = "اثر موج‌دار در زمان اتصال"
+    override val animatedGlowOff = "نور ثابت"
     override val routing = "مسیریابی"
     override val routingSubtitle = "دور زدن LAN/روسیه، مسدودسازی تبلیغات، دامنه‌ها"
     override val trafficSettings = "تنظیمات ترافیک"
@@ -3713,6 +3737,12 @@ object ZhStrings : Strings {
     override val lightTheme = "浅色主题"
     override val lightThemeOn = "白色背景，忽略系统深色主题"
     override val lightThemeOff = "深色背景"
+    override val coloredPingTitle = "彩色延迟"
+    override val coloredPingOn = "绿色 (<150ms)、黄色 (<300ms)、橙色 (≥300ms)"
+    override val coloredPingOff = "始终绿色"
+    override val animatedGlowTitle = "连接按钮波纹动画"
+    override val animatedGlowOn = "连接成功时扩散波纹动效"
+    override val animatedGlowOff = "静态发光"
     override val routing = "分流"
     override val routingSubtitle = "绕过局域网/俄罗斯、拦截广告、自定义域名"
     override val trafficSettings = "流量设置"

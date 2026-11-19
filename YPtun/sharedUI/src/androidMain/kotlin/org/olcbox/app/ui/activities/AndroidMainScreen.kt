@@ -792,6 +792,8 @@ fun AndroidMainScreen(
             onAccentColorSelected = vpnManager::setAccentColor,
             onTextColorSelected = vpnManager::setTextColor,
             onBackgroundColorSelected = vpnManager::setBackgroundColor,
+            onColoredPingChanged = vpnManager::setColoredPingByLatency,
+            onAnimatedGlowChanged = vpnManager::setAnimatedConnectGlow,
             onModeSelected = { mode ->
                 if (mode != connectionMode && homeState.isVpnConnected) {
                     val prepIntent = if (mode == AndroidConnectionMode.Tun) {

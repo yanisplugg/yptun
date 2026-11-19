@@ -37,6 +37,18 @@ object ThemeState {
      */
     var lightMode by mutableStateOf(false)
 
+    /**
+     * Color-code ping latency: green (<150ms), yellow (<300ms), orange (>=300ms).
+     * Off by default (uniform green).
+     */
+    var coloredPingByLatency by mutableStateOf(false)
+
+    /**
+     * Water/wave ripple animation on the connect button glow when active.
+     * Off by default.
+     */
+    var animatedConnectGlow by mutableStateOf(false)
+
     /** Theme (background) swatches; first = default (black). */
     val backgroundPresets: List<Color> = listOf(
         Color(0xFF000000), // black (default)

@@ -40,6 +40,8 @@ data class DesktopUiSettings(
     val accentArgb: Int? = null,
     val textArgb: Int? = null,
     val backgroundArgb: Int? = null,
+    val coloredPingByLatency: Boolean = false,
+    val animatedConnectGlow: Boolean = false,
 )
 
 /**
@@ -117,6 +119,8 @@ class DesktopSettingsController {
         ThemeState.accent = ui.accentArgb?.let { Color(it) }
         ThemeState.textColor = ui.textArgb?.let { Color(it) }
         ThemeState.background = ui.backgroundArgb?.let { Color(it) }
+        ThemeState.coloredPingByLatency = ui.coloredPingByLatency
+        ThemeState.animatedConnectGlow = ui.animatedConnectGlow
     }
 
     // --- per-process split tunneling (desktop analog of Android's per-app VPN) --------------
@@ -203,6 +207,16 @@ class DesktopSettingsController {
         _lightTheme.value = enabled
         ThemeState.lightMode = enabled
         saveUi { it.copy(lightTheme = enabled) }
+    }
+
+    fun setColoredPingByLatency(enabled: Boolean) {
+        ThemeState.coloredPingByLatency = enabled
+        saveUi { it.copy(coloredPingByLatency = enabled) }
+    }
+
+    fun setAnimatedConnectGlow(enabled: Boolean) {
+        ThemeState.animatedConnectGlow = enabled
+        saveUi { it.copy(animatedConnectGlow = enabled) }
     }
 
     private fun loadUi(): DesktopUiSettings {

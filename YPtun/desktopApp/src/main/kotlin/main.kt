@@ -1352,6 +1352,8 @@ private fun runApp(args: Array<String>) = application {
                         onAccentColorSelected = dependencies.settings::setAccentColor,
                         onTextColorSelected = dependencies.settings::setTextColor,
                         onBackgroundColorSelected = dependencies.settings::setBackgroundColor,
+                        onColoredPingChanged = dependencies.settings::setColoredPingByLatency,
+                        onAnimatedGlowChanged = dependencies.settings::setAnimatedConnectGlow,
                         onModeSelected = { mode ->
                             if (needsElevationFor(mode)) {
                                 tunElevationPrompt = true

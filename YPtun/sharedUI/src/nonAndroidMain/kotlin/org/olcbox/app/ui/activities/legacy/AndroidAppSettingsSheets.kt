@@ -206,7 +206,9 @@ fun AppSettingsSheet(
     onUnsecuredPortSaved: (Int) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
-    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
+    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
+    onColoredPingChanged: ((Boolean) -> Unit)? = null,
+    onAnimatedGlowChanged: ((Boolean) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -303,7 +305,9 @@ fun AppSettingsSheet(
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs },
                     onPrivacyClick = { route = AppSettingsRoute.Privacy },
                     experimentalUnlocked = appBehavior.experimentalUnlocked,
-                    onExperimentalClick = { route = AppSettingsRoute.Experimental }
+                    onExperimentalClick = { route = AppSettingsRoute.Experimental },
+                    onColoredPingChanged = onColoredPingChanged,
+                    onAnimatedGlowChanged = onAnimatedGlowChanged
                 )
 
                 AppSettingsRoute.Privacy -> PrivacyContent(
@@ -714,6 +718,8 @@ private fun AppSettingsHubContent(
     onPrivacyClick: () -> Unit = {},
     experimentalUnlocked: Boolean = false,
     onExperimentalClick: () -> Unit = {},
+    onColoredPingChanged: ((Boolean) -> Unit)? = null,
+    onAnimatedGlowChanged: ((Boolean) -> Unit)? = null,
     scrollState: androidx.compose.foundation.ScrollState
 ) {
     val s = LocalStrings.current
@@ -749,6 +755,30 @@ private fun AppSettingsHubContent(
             checked = lightThemeEnabled,
             enabled = true,
             onCheckedChange = onLightThemeChanged
+        )
+
+        SettingsSwitchRow(
+            title = s.coloredPingTitle,
+            value = if (ThemeState.coloredPingByLatency) s.coloredPingOn else s.coloredPingOff,
+            icon = Icons.Outlined.Bolt,
+            checked = ThemeState.coloredPingByLatency,
+            enabled = true,
+            onCheckedChange = {
+                ThemeState.coloredPingByLatency = it
+                onColoredPingChanged?.invoke(it)
+            }
+        )
+
+        SettingsSwitchRow(
+            title = s.animatedGlowTitle,
+            value = if (ThemeState.animatedConnectGlow) s.animatedGlowOn else s.animatedGlowOff,
+            icon = Icons.Outlined.Tune,
+            checked = ThemeState.animatedConnectGlow,
+            enabled = true,
+            onCheckedChange = {
+                ThemeState.animatedConnectGlow = it
+                onAnimatedGlowChanged?.invoke(it)
+            }
         )
 
         if (!dynamicThemeEnabled) {

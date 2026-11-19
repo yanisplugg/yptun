@@ -59,10 +59,22 @@ class SingBoxEngine(
 ) {
     private val running = AtomicBoolean(false)
     private var server: CommandServer? = null
+    @Volatile
+    private var defaultInterfaceListener: InterfaceUpdateListener? = null
     private val connectivity =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     val isRunning: Boolean get() = running.get()
+
+    /**
+     * Re-pushes the current upstream interface to sing-box when the underlying network or link
+     * properties change (e.g. mobile <-> Wi-Fi handover), so sing-box updates its auto-detect
+     * outbound socket binding immediately without deadlocking on the old interface.
+     */
+    fun notifyDefaultInterface() {
+        val listener = defaultInterfaceListener ?: return
+        pushDefaultInterface(listener)
+    }
 
     @Synchronized
     fun start(configJson: String) {
@@ -82,6 +94,7 @@ class SingBoxEngine(
 
     @Synchronized
     fun stop() {
+        defaultInterfaceListener = null
         val commandServer = server ?: run { running.set(false); return }
         runCatching { commandServer.closeService() }
             .onFailure { Log.w(TAG, "sing-box service close failed", it) }
@@ -168,11 +181,14 @@ class SingBoxEngine(
         ): ConnectionOwner = throw UnsupportedOperationException("connection owner lookup not supported")
 
         override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+            defaultInterfaceListener = listener
             pushDefaultInterface(listener)
         }
 
         override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-            // No continuous monitoring; the service restarts the engine on upstream changes.
+            if (defaultInterfaceListener == listener) {
+                defaultInterfaceListener = null
+            }
         }
 
         override fun getInterfaces(): NetworkInterfaceIterator =
@@ -242,14 +258,17 @@ class SingBoxEngine(
     /** Reports the current upstream interface so sing-box has a default to bind sockets to. */
     private fun pushDefaultInterface(listener: InterfaceUpdateListener) {
         val net = underlyingNetwork() ?: connectivity.activeNetwork
-        val name = net?.let { connectivity.getLinkProperties(it)?.interfaceName }
+        val linkProps = net?.let { connectivity.getLinkProperties(it) }
+        val name = linkProps?.interfaceName
         if (name == null) {
             log("sb: no default interface found")
             return
         }
         val index = runCatching { JavaNetworkInterface.getByName(name)?.index ?: 0 }.getOrDefault(0)
-        log("sb: default interface $name (#$index)")
-        runCatching { listener.updateDefaultInterface(name, index, false, false) }
+        val hasIpv4 = linkProps.linkAddresses.any { it.address is java.net.Inet4Address }
+        val hasIpv6 = linkProps.linkAddresses.any { it.address is java.net.Inet6Address }
+        log("sb: default interface $name (#$index, v4=$hasIpv4, v6=$hasIpv6)")
+        runCatching { listener.updateDefaultInterface(name, index, hasIpv4, hasIpv6) }
             .onFailure { log("sb: updateDefaultInterface failed: ${it.message}") }
     }
 

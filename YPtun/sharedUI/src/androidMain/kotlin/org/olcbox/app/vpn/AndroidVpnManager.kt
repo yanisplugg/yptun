@@ -52,6 +52,8 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_TEXT_COLOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_BG_COLOR
 import org.olcbox.app.vpn.data.KEY_ANDROID_DYNAMIC_THEME
 import org.olcbox.app.vpn.data.KEY_ANDROID_LIGHT_THEME
+import org.olcbox.app.vpn.data.KEY_ANDROID_COLORED_PING
+import org.olcbox.app.vpn.data.KEY_ANDROID_ANIMATED_GLOW
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS
@@ -208,6 +210,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 ThemeState.background = preferences[KEY_ANDROID_BG_COLOR]?.let { Color(it.toInt()) }
                 ThemeState.dynamicEnabled = preferences[KEY_ANDROID_DYNAMIC_THEME] == true
                 ThemeState.lightMode = preferences[KEY_ANDROID_LIGHT_THEME] == true
+                ThemeState.coloredPingByLatency = preferences[KEY_ANDROID_COLORED_PING] == true
+                ThemeState.animatedConnectGlow = preferences[KEY_ANDROID_ANIMATED_GLOW] == true
             }
         }
     }
@@ -617,6 +621,24 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         scope.launch {
             appContext.vpnPrefDataStore.edit { preferences ->
                 preferences[KEY_ANDROID_LIGHT_THEME] = enabled
+            }
+        }
+    }
+
+    fun setColoredPingByLatency(enabled: Boolean) {
+        ThemeState.coloredPingByLatency = enabled
+        scope.launch {
+            appContext.vpnPrefDataStore.edit { preferences ->
+                preferences[KEY_ANDROID_COLORED_PING] = enabled
+            }
+        }
+    }
+
+    fun setAnimatedConnectGlow(enabled: Boolean) {
+        ThemeState.animatedConnectGlow = enabled
+        scope.launch {
+            appContext.vpnPrefDataStore.edit { preferences ->
+                preferences[KEY_ANDROID_ANIMATED_GLOW] = enabled
             }
         }
     }

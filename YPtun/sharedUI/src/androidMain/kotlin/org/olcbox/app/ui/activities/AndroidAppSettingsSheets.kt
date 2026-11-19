@@ -242,7 +242,9 @@ internal fun AppSettingsSheet(
     onProxyPasswordRegenerated: () -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
-    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
+    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
+    onColoredPingChanged: ((Boolean) -> Unit)? = null,
+    onAnimatedGlowChanged: ((Boolean) -> Unit)? = null
 ) {
     if (appBehavior.legacyUi) {
         org.olcbox.app.ui.activities.legacy.AppSettingsSheet(
@@ -296,7 +298,9 @@ internal fun AppSettingsSheet(
             onProxyPasswordRegenerated = onProxyPasswordRegenerated,
             onSplitTunnelModeSelected = onSplitTunnelModeSelected,
             onSplitTunnelAppToggled = onSplitTunnelAppToggled,
-            onSplitTunnelAppsSelected = onSplitTunnelAppsSelected
+            onSplitTunnelAppsSelected = onSplitTunnelAppsSelected,
+            onColoredPingChanged = onColoredPingChanged,
+            onAnimatedGlowChanged = onAnimatedGlowChanged
         )
         return
     }
@@ -413,6 +417,8 @@ internal fun AppSettingsSheet(
                     onAccentColorSelected = onAccentColorSelected,
                     onTextColorSelected = onTextColorSelected,
                     onBackgroundColorSelected = onBackgroundColorSelected,
+                    onColoredPingChanged = onColoredPingChanged,
+                    onAnimatedGlowChanged = onAnimatedGlowChanged,
                     onBack = { route = AppSettingsRoute.Hub }
                 )
 
@@ -3632,6 +3638,8 @@ private fun AppearanceContent(
     onAccentColorSelected: (Color?) -> Unit,
     onTextColorSelected: (Color?) -> Unit,
     onBackgroundColorSelected: (Color?) -> Unit,
+    onColoredPingChanged: ((Boolean) -> Unit)? = null,
+    onAnimatedGlowChanged: ((Boolean) -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val s = LocalStrings.current
@@ -3654,6 +3662,28 @@ private fun AppearanceContent(
             checked = lightThemeEnabled,
             enabled = true,
             onCheckedChange = onLightThemeChanged
+        )
+        SettingsSwitchRow(
+            title = s.coloredPingTitle,
+            value = if (ThemeState.coloredPingByLatency) s.coloredPingOn else s.coloredPingOff,
+            icon = Icons.Outlined.Bolt,
+            checked = ThemeState.coloredPingByLatency,
+            enabled = true,
+            onCheckedChange = {
+                ThemeState.coloredPingByLatency = it
+                onColoredPingChanged?.invoke(it)
+            }
+        )
+        SettingsSwitchRow(
+            title = s.animatedGlowTitle,
+            value = if (ThemeState.animatedConnectGlow) s.animatedGlowOn else s.animatedGlowOff,
+            icon = Icons.Outlined.Tune,
+            checked = ThemeState.animatedConnectGlow,
+            enabled = true,
+            onCheckedChange = {
+                ThemeState.animatedConnectGlow = it
+                onAnimatedGlowChanged?.invoke(it)
+            }
         )
         if (!dynamicThemeEnabled) {
             ThemeColorSection(

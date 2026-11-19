@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -344,6 +345,12 @@ class OlcboxVpnService : VpnService() {
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
             if (network == currentNetwork || caps.isUsableUpstream()) {
                 handleNetworkChange(network, "Capabilities")
+            }
+        }
+
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            if (network == currentNetwork) {
+                singBox?.notifyDefaultInterface()
             }
         }
 
@@ -4444,16 +4451,13 @@ class OlcboxVpnService : VpnService() {
         if (connectionMode == AndroidConnectionMode.Tun || vpnInterface != null) {
             setUnderlyingNetworks(if (network != null) arrayOf(network) else null)
         }
-        // Proxy (SOCKS) mode has no TUN, so setUnderlyingNetworks above is a no-op and the
-        // process→network binding is the ONLY route out for the cores. Whenever the upstream handle
-        // changes (a benign Wi-Fi refresh swaps the Network object, a fallback to another network, …)
-        // the old binding goes STALE and traffic silently dies — and because currentNetwork now equals
-        // the new upstream, the watchdog's rebind check never fires. Re-pin here so every handle swap
-        // immediately re-routes the cores. null = lost network → unbinds (matches the wait-for-network
-        // path). Only while a core is live; the initial connect binds explicitly in startXxxCore.
-        if (connectionMode.isTunless && coreRunning()) {
+        // When a core is running, keep the process bound to the active upstream network.
+        // During network handovers (mobile <-> Wi-Fi), this ensures all outbound direct sockets,
+        // resolver queries, and upstream dials are immediately pinned to the new physical network.
+        if (coreRunning()) {
             bindProcessToNetwork(network)
         }
+        singBox?.notifyDefaultInterface()
     }
 
     private fun Network.transportOrNull(): UpstreamTransport? {
@@ -4492,7 +4496,7 @@ class OlcboxVpnService : VpnService() {
      * already stopped (coreRunning() == false), so the binding is released as before.
      */
     private fun releaseProcessBindingUnlessProxy() {
-        if (connectionMode.isTunless && coreRunning()) return
+        if (coreRunning()) return
         unbindProcessFromNetwork()
     }
 
