@@ -1552,8 +1552,28 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             return
         }
 
-        let endpointAddresses = extractTomlStringArray(key: "addresses", from: endpointToml)
-        let dnsUpstreams = extractTomlStringArray(key: "dns_upstreams", from: endpointToml)
+        var effectiveEndpointToml = endpointToml.trimmingCharacters(in: .whitespacesAndNewlines)
+        var dnsUpstreams = extractTomlStringArray(key: "dns_upstreams", from: effectiveEndpointToml)
+        if dnsUpstreams.isEmpty {
+            // Inject fallback dns_upstreams into endpoint table so TrustTunnel internal DNS_HANDLER has servers to query
+            if effectiveEndpointToml.contains("[endpoint]") {
+                effectiveEndpointToml = effectiveEndpointToml.replacingOccurrences(
+                    of: "[endpoint]",
+                    with: "[endpoint]\ndns_upstreams = [\"1.1.1.1\", \"8.8.8.8\"]"
+                )
+            } else if effectiveEndpointToml.contains("[[endpoint]]") {
+                effectiveEndpointToml = effectiveEndpointToml.replacingOccurrences(
+                    of: "[[endpoint]]",
+                    with: "[[endpoint]]\ndns_upstreams = [\"1.1.1.1\", \"8.8.8.8\"]"
+                )
+            } else {
+                effectiveEndpointToml += "\ndns_upstreams = [\"1.1.1.1\", \"8.8.8.8\"]\n"
+            }
+            dnsUpstreams = ["1.1.1.1", "8.8.8.8"]
+            log("Injected fallback dns_upstreams into TrustTunnel config: [1.1.1.1, 8.8.8.8]")
+        }
+
+        let endpointAddresses = extractTomlStringArray(key: "addresses", from: effectiveEndpointToml)
         log("TrustTunnel endpoint decoded (addresses=\(endpointAddresses.count), dns_upstreams=\(dnsUpstreams.count), mtu=\(spec.mtu))")
 
         var remoteAddr = "127.0.0.1"
@@ -1585,14 +1605,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         let excludedTomlList = excludedCidrs.map { "\"\($0)\"" }.joined(separator: ", ")
 
         // TrustTunnelConfig::build_config (v1.1.12) requires top-level `vpn_mode = "general"`.
-        let trimmedEndpoint = endpointToml.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullToml = """
         loglevel = "info"
         vpn_mode = "general"
         killswitch_enabled = false
         exclusions = []
 
-        \(trimmedEndpoint)
+        \(effectiveEndpointToml)
 
         [listener.tun]
         mtu_size = \(spec.mtu)
@@ -1627,9 +1646,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         ipv6.includedRoutes = v6Included.isEmpty ? [.default()] : v6Included
         settings.ipv6Settings = ipv6
 
-        // Official TrustTunnelClient uses 198.18.53.53 ONLY when endpoint.dns_upstreams is non-empty;
-        // when empty, real DNS servers must be configured directly so queries resolve through the tunnel.
-        let dns = NEDNSSettings(servers: dnsUpstreams.isEmpty ? ["1.1.1.1", "8.8.8.8"] : ["198.18.53.53"])
+        // TrustTunnel proxies DNS via 198.18.53.53 when dns_upstreams is configured.
+        // Include fallback public DNS servers as well.
+        let dns = NEDNSSettings(servers: ["198.18.53.53", "1.1.1.1", "8.8.8.8"])
         dns.matchDomains = [""]
         settings.dnsSettings = dns
 

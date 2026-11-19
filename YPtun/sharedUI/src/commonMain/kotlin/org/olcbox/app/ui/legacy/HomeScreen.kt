@@ -248,6 +248,14 @@ fun HomeScreen(
     var autoRunning by remember { mutableStateOf(false) }
     // The ids a per-group auto-pick is running for (null = idle, or the whole-list Auto button).
     var autoPickTarget by remember { mutableStateOf<List<String>?>(null) }
+    // Prevents multi-tap livelocks when rapidly clicking a location in the list
+    var pendingLocationId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingLocationId) {
+        if (pendingLocationId != null) {
+            kotlinx.coroutines.delay(3000)
+            pendingLocationId = null
+        }
+    }
     val pingsState = locationViewModel.pingsState
     // Pause / resume / drop of the running ping pass: the group's ping button turns into these while it runs.
     val pingPaused = (pingsState as? org.olcbox.app.ui.features.locations.PingsState.Loading)?.paused == true
@@ -640,9 +648,13 @@ fun HomeScreen(
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,
                 onLocationSelected = { id ->
-                    locationViewModel.selectLocation(id) {
-                        viewModel.loadCurrentConfig {
-                            viewModel.restartVpnIfRunning()
+                    if (id != locationViewModel.selectedLocationId && id != pendingLocationId) {
+                        pendingLocationId = id
+                        locationViewModel.selectLocation(id) {
+                            viewModel.loadCurrentConfig {
+                                viewModel.restartVpnIfRunning()
+                                pendingLocationId = null
+                            }
                         }
                     }
                 },

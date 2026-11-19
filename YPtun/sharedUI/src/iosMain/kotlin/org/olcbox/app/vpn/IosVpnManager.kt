@@ -151,6 +151,7 @@ class IosVpnManager(
     private var inFlightLocationId: String? = null
     private var connectedLocationId: String? = null
     private var lastStartEpochMs: Long = 0L
+    private var lastKnownActiveLocation: LocationConfig? = null
 
     init {
         scope.launch {
@@ -158,13 +159,15 @@ class IosVpnManager(
                 .onFailure { addLog("VPN profile load failed: ${it.message}") }
             // The widget / Control Center toggle starts the tunnel without the app, so the extension
             // must already find a request for the current location.
-            locationsRepository.getActiveLocation()?.location?.normalized()
-                ?.takeIf { it.isComplete() }
+            val initial = locationsRepository.getActiveLocation()?.location?.normalized()
+            lastKnownActiveLocation = initial
+            initial?.takeIf { it.isComplete() }
                 ?.let { runCatching { publishRequest(it) } }
             startLogTail()
             locationsRepository.changes.collect {
-                locationsRepository.getActiveLocation()?.location?.normalized()
-                    ?.takeIf { it.isComplete() }
+                val updated = locationsRepository.getActiveLocation()?.location?.normalized()
+                lastKnownActiveLocation = updated
+                updated?.takeIf { it.isComplete() }
                     ?.let { runCatching { publishRequest(it) } }
             }
         }
@@ -272,6 +275,18 @@ class IosVpnManager(
         }
         lastStartEpochMs = now
 
+        val targetId = lastKnownActiveLocation?.let { it.id.ifBlank { it.displayName() } }
+        if (connectJob?.isActive == true && inFlightLocationId != null && inFlightLocationId == targetId) {
+            return
+        }
+
+        val currentManager = manager
+        val isActuallyConnected = currentManager?.connection?.status == NEVPNStatusConnected
+        if (isActuallyConnected && connectedLocationId != null && connectedLocationId == targetId && _status.value == VpnStatus.Connected) {
+            return
+        }
+
+        inFlightLocationId = targetId
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         val requestedGeneration = ++connectGeneration
         connectJob?.cancel()
@@ -281,26 +296,27 @@ class IosVpnManager(
                 if (requestedGeneration != connectGeneration) return@withLock
 
                 val active = locationsRepository.getActiveLocation()?.location?.normalized()
+                lastKnownActiveLocation = active
                 if (active == null || !active.isComplete()) {
                     setStatus(VpnStatus.Error("No active location"))
                     addLog("Add a valid location before connecting")
                     return@withLock
                 }
 
-                val targetId = active.id.ifBlank { active.displayName() }
-                val currentManager = manager ?: loadManager(createIfMissing = false)
-                val isActuallyConnected = currentManager?.connection?.status == NEVPNStatusConnected
+                val currentTargetId = active.id.ifBlank { active.displayName() }
+                val mgr = manager ?: loadManager(createIfMissing = false)
+                val isConn = mgr?.connection?.status == NEVPNStatusConnected
 
                 // Redundant start: already connected to this exact location
-                if (isActuallyConnected && connectedLocationId == targetId && _status.value == VpnStatus.Connected) {
+                if (isConn && connectedLocationId == currentTargetId && _status.value == VpnStatus.Connected) {
                     return@withLock
                 }
 
-                inFlightLocationId = targetId
+                inFlightLocationId = currentTargetId
 
                 // If tunnel is already running, attempt hot reload without tearing down the iOS VPN tunnel
-                val currentSession = currentManager?.connection as? NETunnelProviderSession
-                if (currentSession != null && isActuallyConnected) {
+                val currentSession = mgr?.connection as? NETunnelProviderSession
+                if (currentSession != null && isConn) {
                     setStatus(VpnStatus.Reconnecting)
                     publishRequest(active)
                     IosSharedStore.writeText(IosTunnelSession.ERROR_FILE, "")
@@ -393,7 +409,9 @@ class IosVpnManager(
                     }
                 }
                 result.onFailure {
-                    inFlightLocationId = null
+                    if (requestedGeneration == connectGeneration) {
+                        inFlightLocationId = null
+                    }
                     if (requestedGeneration != connectGeneration) return@withLock
                     if (it is kotlinx.coroutines.CancellationException || it.message?.contains("cancelled", ignoreCase = true) == true) {
                         return@launch
