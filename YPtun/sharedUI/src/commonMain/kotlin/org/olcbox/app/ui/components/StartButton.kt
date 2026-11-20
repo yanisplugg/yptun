@@ -74,36 +74,45 @@ fun StartButton(
     val showWaveGlow = isActive && ThemeState.animatedConnectGlow
     val waveTransition = rememberInfiniteTransition(label = "waveGlow")
     val waveOffset1 by waveTransition.animateFloat(
-        initialValue = -3.5f,
-        targetValue = 3.5f,
+        initialValue = -6.5f,
+        targetValue = 6.5f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2200, easing = FastOutSlowInEasing),
+            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "waveOffset1"
     )
     val waveOffset2 by waveTransition.animateFloat(
-        initialValue = 2.5f,
-        targetValue = -2.5f,
+        initialValue = 5.0f,
+        targetValue = -5.0f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1700, easing = FastOutSlowInEasing),
+            animation = tween(durationMillis = 1300, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "waveOffset2"
     )
     val waveAlpha by waveTransition.animateFloat(
-        initialValue = 0.20f,
-        targetValue = 0.45f,
+        initialValue = 0.28f,
+        targetValue = 0.60f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2000, easing = FastOutSlowInEasing),
+            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "waveAlpha"
     )
+    val waveGlowSize by waveTransition.animateFloat(
+        initialValue = 140f,
+        targetValue = 148f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "waveGlowSize"
+    )
     val primaryColor = MaterialTheme.colorScheme.primary
 
     // A round ring with the round action button in its middle; the ring takes a tint of the accent
-    // while connected. When the wave effect is on, the glow gently bobs up and down like floating micro-waves.
+    // while connected. When the wave effect is on, the glow visibly undulates and floats up and down like living waves.
     Box(
         modifier = modifier
             .size(132.dp)
@@ -111,13 +120,22 @@ fun StartButton(
         contentAlignment = Alignment.Center
     ) {
         if (showWaveGlow) {
-            // Soft secondary halo floating with offset phase
+            // Outer luminous blue water glow / aura (expanding & floating like gentle waves)
             Box(
                 modifier = Modifier
-                    .size(136.dp)
+                    .size(waveGlowSize.dp)
                     .offset(y = waveOffset2.dp)
                     .clip(CircleShape)
-                    .background(primaryColor.copy(alpha = waveAlpha * 0.40f))
+                    .background(primaryColor.copy(alpha = waveAlpha * 0.45f))
+            )
+
+            // Inner vibrant wave halo
+            Box(
+                modifier = Modifier
+                    .size(138.dp)
+                    .offset(y = (waveOffset1 * 0.7f).dp)
+                    .clip(CircleShape)
+                    .background(primaryColor.copy(alpha = waveAlpha * 0.75f))
             )
         }
 
@@ -133,6 +151,7 @@ fun StartButton(
         Box(
             modifier = Modifier
                 .size(88.dp)
+                .offset(y = if (showWaveGlow) (waveOffset1 * 0.35f).dp else 0.dp)
                 .clip(CircleShape)
                 .background(mainButtonColor),
             contentAlignment = Alignment.Center
