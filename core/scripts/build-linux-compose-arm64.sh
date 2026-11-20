@@ -15,6 +15,10 @@ if [[ ! -f "$cache_dir/skiko-arm64.jar" ]]; then
     echo "Downloading Skiko ARM64..."
     curl -fsSL -o "$cache_dir/skiko-arm64.jar" "https://repo1.maven.org/maven2/org/jetbrains/skiko/skiko-awt-runtime-linux-arm64/0.148.1/skiko-awt-runtime-linux-arm64-0.148.1.jar"
 fi
+if [[ ! -f "$cache_dir/runtime-aarch64" ]]; then
+    echo "Downloading AppImage aarch64 runtime..."
+    curl -fsSL -o "$cache_dir/runtime-aarch64" "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-aarch64"
+fi
 
 work_dir="/tmp/work-arm64"
 appdir="$work_dir/AppDir-arm64"
@@ -77,9 +81,21 @@ exec "$APPDIR/lib/runtime/bin/java" \
 LAUNCHER
 chmod +x "$appdir/bin/YPtun"
 
+ln -sf ../lib/runtime/bin/java "$appdir/bin/java"
+
+echo "=== Writing AppRun ==="
+cat > "$appdir/AppRun" << 'APPRUN'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+export JAVA_HOME="$HERE/lib/runtime"
+export PATH="$HERE/bin:$HERE/lib/runtime/bin:$PATH"
+exec "$HERE/bin/YPtun" "$@"
+APPRUN
+chmod +x "$appdir/AppRun"
+
 echo "=== Building Slimmed ARM64 AppImage ==="
 rm -f "$out/YPtun-4.0.0-arm64.AppImage"
-ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 "$cache_dir/appimagetool.AppImage" "$appdir" "$out/YPtun-4.0.0-arm64.AppImage"
+ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 "$cache_dir/appimagetool.AppImage" --runtime-file "$cache_dir/runtime-aarch64" "$appdir" "$out/YPtun-4.0.0-arm64.AppImage"
 
 echo "=== Building Slimmed ARM64 DEB ==="
 mkdir -p "$debdir/DEBIAN"

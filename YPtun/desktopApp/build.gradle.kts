@@ -1068,9 +1068,15 @@ if (currentBuildOs.isLinux) {
             cat > "${'$'}target_dir/AppRun" <<'APPRUN'
             #!/bin/sh
             HERE="${'$'}(dirname "${'$'}(readlink -f "${'$'}0")")"
+            export JAVA_HOME="${'$'}HERE/lib/runtime"
+            export PATH="${'$'}HERE/bin:${'$'}HERE/lib/runtime/bin:${'$'}PATH"
             exec "${'$'}HERE/bin/$desktopPackageName" "${'$'}@"
             APPRUN
             chmod +x "${'$'}target_dir/AppRun"
+
+            if [ -f "${'$'}target_dir/lib/runtime/bin/java" ]; then
+                ln -sf ../lib/runtime/bin/java "${'$'}target_dir/bin/java"
+            fi
 
             cat > "${'$'}target_dir/org.olcbox.app.desktopApp.desktop" <<'DESKTOP'
             [Desktop Entry]
