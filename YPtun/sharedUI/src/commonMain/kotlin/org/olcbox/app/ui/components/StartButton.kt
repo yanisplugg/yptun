@@ -114,9 +114,7 @@ fun StartButton(
     // A round ring with the round action button in its middle; the ring takes a tint of the accent
     // while connected. When the wave effect is on, the glow visibly undulates and floats up and down like living waves.
     Box(
-        modifier = modifier
-            .size(132.dp)
-            .clickable(enabled = enabled) { onClick() },
+        modifier = modifier.size(132.dp),
         contentAlignment = Alignment.Center
     ) {
         if (showWaveGlow) {
@@ -139,40 +137,42 @@ fun StartButton(
             )
         }
 
-        // Primary outer ring (default clean ring, floating smoothly up and down when wave effect is on)
+        // Primary outer ring (default clean ring, floating smoothly up and down when wave effect is on).
+        // Bounded to CircleShape before clickable so touch ripple / hold indication is circular instead of a square box.
         Box(
             modifier = Modifier
                 .size(132.dp)
                 .offset(y = if (showWaveGlow) waveOffset1.dp else 0.dp)
                 .clip(CircleShape)
                 .background(ringColor)
-        )
-
-        Box(
-            modifier = Modifier
-                .size(88.dp)
-                .offset(y = if (showWaveGlow) (waveOffset1 * 0.35f).dp else 0.dp)
-                .clip(CircleShape)
-                .background(mainButtonColor),
+                .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(40.dp),
-                    color = contentColor,
-                    strokeWidth = 3.dp
-                )
-            } else {
-                Icon(
-                    imageVector = when {
-                        isActive -> Icons.Rounded.Pause
-                        requiresSetup -> Icons.Rounded.Add
-                        else -> Icons.Rounded.PowerSettingsNew
-                    },
-                    contentDescription = label ?: "Toggle",
-                    tint = contentColor.copy(alpha = if (!enabled) 0.5f else 1f),
-                    modifier = Modifier.size(44.dp)
-                )
+            Box(
+                modifier = Modifier
+                    .size(88.dp)
+                    .clip(CircleShape)
+                    .background(mainButtonColor),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(40.dp),
+                        color = contentColor,
+                        strokeWidth = 3.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = when {
+                            isActive -> Icons.Rounded.Pause
+                            requiresSetup -> Icons.Rounded.Add
+                            else -> Icons.Rounded.PowerSettingsNew
+                        },
+                        contentDescription = label ?: "Toggle",
+                        tint = contentColor.copy(alpha = if (!enabled) 0.5f else 1f),
+                        modifier = Modifier.size(44.dp)
+                    )
+                }
             }
         }
     }
