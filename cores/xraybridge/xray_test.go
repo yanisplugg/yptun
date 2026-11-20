@@ -50,3 +50,27 @@ func TestMeasureHTTPResponseDelayExcludesTunnelSetup(t *testing.T) {
 		t.Fatalf("tunnel setup leaked into ping: measured=%v wall=%v", measured, wall)
 	}
 }
+
+func TestIsLoopback(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:18080", true},
+		{"127.0.0.1", true},
+		{"127.0.0.2:8080", true},
+		{"[::1]:18080", true},
+		{"::1", true},
+		{"localhost:18080", true},
+		{"localhost", true},
+		{"1.1.1.1:443", false},
+		{"example.com:443", false},
+		{"192.168.1.1:1080", false},
+	}
+	for _, c := range cases {
+		got := isLoopback(c.addr)
+		if got != c.want {
+			t.Errorf("isLoopback(%q) = %v, want %v", c.addr, got, c.want)
+		}
+	}
+}

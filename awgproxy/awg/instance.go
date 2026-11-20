@@ -325,7 +325,10 @@ func (i *Instance) SetProtector(p Protector) {
 // IsRunning reports whether this instance's SOCKS proxy is active.
 func (i *Instance) IsRunning() bool { return i.running.Load() }
 
-func (i *Instance) protectBind(bind conn.Bind) {
+func (i *Instance) protectBind(bind conn.Bind, endpoint string) {
+	if isLoopbackHost(endpoint) {
+		return
+	}
 	i.protMu.Lock()
 	p := i.prot
 	i.protMu.Unlock()
@@ -393,7 +396,7 @@ func (i *Instance) Start(iniConfig, listenAddr string) error {
 		d.Close()
 		return fmt.Errorf("awg up: %w", err)
 	}
-	i.protectBind(bind)
+	i.protectBind(bind, cfg.endpoint)
 
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {

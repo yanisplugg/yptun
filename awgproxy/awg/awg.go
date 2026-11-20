@@ -79,10 +79,26 @@ func SetProtector(p Protector) {
 	}
 }
 
+func isLoopbackHost(hostPort string) bool {
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		host = hostPort
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // protectBind protects the UDP socket(s) the WireGuard bind has just opened (after device Up), so
 // outbound WG packets leave via the underlying network rather than the system VPN tun. No-op when
-// no protector is set or the bind doesn't expose its fd (non-Android builds).
-func protectBind(bind conn.Bind) {
+// no protector is set, the bind doesn't expose its fd (non-Android builds), or the endpoint is
+// loopback (e.g. server-side WARP relay on 127.0.0.1).
+func protectBind(bind conn.Bind, endpoint string) {
+	if isLoopbackHost(endpoint) {
+		return
+	}
 	protectorMu.Lock()
 	p := protector
 	protectorMu.Unlock()
@@ -169,7 +185,7 @@ func Start(iniConfig, listenAddr string) error {
 		d.Close()
 		return fmt.Errorf("awg up: %w", err)
 	}
-	protectBind(bind)
+	protectBind(bind, cfg.endpoint)
 
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -271,7 +287,7 @@ func Probe(iniConfig string) int64 {
 	if err := d.Up(); err != nil {
 		return -1
 	}
-	protectBind(bind)
+	protectBind(bind, cfg.endpoint)
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -309,7 +325,7 @@ func MeasureDelay(iniConfig, url, method string, timeoutMs int) int64 {
 	if err := d.Up(); err != nil {
 		return -1
 	}
-	protectBind(bind)
+	protectBind(bind, cfg.endpoint)
 
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	if timeout <= 0 {

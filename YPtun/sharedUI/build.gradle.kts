@@ -123,28 +123,38 @@ val buildCoresAndroidAar by tasks.registering(Exec::class) {
     inputs.property("singboxVersion", singboxVersion)
     outputs.file(coresAndroidAar)
 
-    workingDir = coresRepoDir
-    commandLine(
-        "gomobile",
-        "bind",
-        "-target=android/arm,android/arm64,android/amd64",
-        "-androidapi",
-        "21",
-        "-tags",
-        libboxBuildTags,
-        "-trimpath",
-        "-ldflags",
-        "-X github.com/sagernet/sing-box/constant.Version=$singboxVersion -s -w -checklinkname=0",
-        "-o",
-        coresAndroidAarFile.absolutePath,
-        "github.com/openlibrecommunity/olcrtc/mobile",
-        "github.com/sagernet/sing-box/experimental/libbox",
-        "github.com/samosvalishe/free-turn-proxy/freeturn",
-        "wg-turn-client/wdttmobile",
-        "masterdnsvpn-go/mdnsmobile",
-        "github.com/olc/awgproxy/awg",
-        "kazcores/xraybridge"
-    )
+    val isWindows = System.getProperty("os.name").lowercase().contains("windows")
+    val wslScript = coresRepoDir.resolve("build_cores_aar.sh")
+    if (isWindows && wslScript.exists()) {
+        val wslScriptPath = wslScript.absolutePath.replace("\\", "/").let { p ->
+            val drive = p.substring(0, 1).lowercase()
+            "/mnt/$drive" + p.substring(2)
+        }
+        commandLine("wsl", "-e", "bash", wslScriptPath)
+    } else {
+        workingDir = coresRepoDir
+        commandLine(
+            "gomobile",
+            "bind",
+            "-target=android/arm,android/arm64,android/amd64",
+            "-androidapi",
+            "21",
+            "-tags",
+            libboxBuildTags,
+            "-trimpath",
+            "-ldflags",
+            "-X github.com/sagernet/sing-box/constant.Version=$singboxVersion -s -w -checklinkname=0",
+            "-o",
+            coresAndroidAarFile.absolutePath,
+            "github.com/openlibrecommunity/olcrtc/mobile",
+            "github.com/sagernet/sing-box/experimental/libbox",
+            "github.com/samosvalishe/free-turn-proxy/freeturn",
+            "wg-turn-client/wdttmobile",
+            "masterdnsvpn-go/mdnsmobile",
+            "github.com/olc/awgproxy/awg",
+            "kazcores/xraybridge"
+        )
+    }
 }
 
 val coresAndroidAarDependency = files(coresAndroidAarFile).builtBy(buildCoresAndroidAar)

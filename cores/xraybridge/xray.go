@@ -33,7 +33,22 @@ var (
 	instance *core.Instance
 )
 
+func isLoopback(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // SetProtector installs a dialer controller that protects every outbound socket Xray opens.
+// Loopback connections (e.g. 127.0.0.1:18080 to awgproxy/WARP, or local cascade relays) are
+// exempted: calling VpnService.protect() on Android binds/marks the socket to the underlying
+// physical network, which breaks loopback routing (ENETUNREACH / ECONNREFUSED).
 // Must be called before Start. Passing nil clears it.
 func SetProtector(p Protector) {
 	if p == nil {
@@ -41,6 +56,9 @@ func SetProtector(p Protector) {
 		return
 	}
 	internet.RegisterDialerController(func(network, address string, conn syscall.RawConn) error {
+		if isLoopback(address) {
+			return nil
+		}
 		return conn.Control(func(fd uintptr) {
 			p.Protect(int(fd))
 		})
