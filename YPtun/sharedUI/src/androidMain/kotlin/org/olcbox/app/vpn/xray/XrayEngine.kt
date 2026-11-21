@@ -20,6 +20,9 @@ class XrayEngine(
     private val log: (String) -> Unit,
 ) {
     private val running = AtomicBoolean(false)
+    private val protectorInstance = object : Protector {
+        override fun protect(fd: Long): Boolean = this@XrayEngine.protect(fd.toInt())
+    }
 
     val isRunning: Boolean get() = running.get() && runCatching { Xraybridge.isRunning() }.getOrDefault(false)
 
@@ -32,9 +35,7 @@ class XrayEngine(
         if (running.get()) stop()
         runCatching { Xraybridge.setAssetPath(assetPath) }
             .onFailure { Log.w(TAG, "xray setAssetPath failed", it) }
-        Xraybridge.setProtector(object : Protector {
-            override fun protect(fd: Long): Boolean = this@XrayEngine.protect(fd.toInt())
-        })
+        Xraybridge.setProtector(protectorInstance)
         Xraybridge.start(configJson)
         running.set(true)
         log("xray: service started")
@@ -45,6 +46,7 @@ class XrayEngine(
     fun stop() {
         if (!running.getAndSet(false)) return
         runCatching { Xraybridge.stop() }.onFailure { Log.w(TAG, "xray stop failed", it) }
+        runCatching { Xraybridge.setProtector(null) }
         log("xray: service stopped")
         Log.i(TAG, "xray service stopped")
     }

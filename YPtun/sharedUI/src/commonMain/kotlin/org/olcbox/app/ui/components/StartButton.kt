@@ -28,6 +28,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,42 +75,58 @@ fun StartButton(
 
     val showWaveGlow = isActive && ThemeState.animatedConnectGlow
     val waveTransition = rememberInfiniteTransition(label = "waveGlow")
-    val waveOffset1 by waveTransition.animateFloat(
-        initialValue = -6.5f,
-        targetValue = 6.5f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "waveOffset1"
-    )
-    val waveOffset2 by waveTransition.animateFloat(
-        initialValue = 5.0f,
-        targetValue = -5.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1300, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "waveOffset2"
-    )
-    val waveAlpha by waveTransition.animateFloat(
-        initialValue = 0.28f,
-        targetValue = 0.60f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "waveAlpha"
-    )
-    val waveGlowSize by waveTransition.animateFloat(
-        initialValue = 140f,
-        targetValue = 148f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "waveGlowSize"
-    )
+    val waveOffset1 by if (showWaveGlow) {
+        waveTransition.animateFloat(
+            initialValue = -6.5f,
+            targetValue = 6.5f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "waveOffset1"
+        )
+    } else {
+        remember { mutableStateOf(0f) }
+    }
+    val waveOffset2 by if (showWaveGlow) {
+        waveTransition.animateFloat(
+            initialValue = 5.0f,
+            targetValue = -5.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1300, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "waveOffset2"
+        )
+    } else {
+        remember { mutableStateOf(0f) }
+    }
+    val waveAlpha by if (showWaveGlow) {
+        waveTransition.animateFloat(
+            initialValue = 0.28f,
+            targetValue = 0.60f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "waveAlpha"
+        )
+    } else {
+        remember { mutableStateOf(0f) }
+    }
+    val waveGlowSize by if (showWaveGlow) {
+        waveTransition.animateFloat(
+            initialValue = 140f,
+            targetValue = 148f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "waveGlowSize"
+        )
+    } else {
+        remember { mutableStateOf(132f) }
+    }
     val primaryColor = MaterialTheme.colorScheme.primary
 
     // A round ring with the round action button in its middle; the ring takes a tint of the accent

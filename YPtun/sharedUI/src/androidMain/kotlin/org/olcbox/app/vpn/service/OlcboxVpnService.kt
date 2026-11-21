@@ -265,6 +265,69 @@ class OlcboxVpnService : VpnService() {
     // package-level Mobile.start/stop/waitReady singleton upstream). Independent rooms (multi-room
     // path above) use their own package-level Mobile.startRoom/stopRoom handles, not this instance.
     private val mobileRuntime: OlcrtcRuntime = Mobile.new_()
+
+    private val mobileSocketProtector = object : SocketProtector {
+        override fun protect(fd: Long): Boolean {
+            if (connectionMode.isTunless) return true
+            return this@OlcboxVpnService.protect(fd.toInt())
+        }
+    }
+
+    private val xrayProtector = object : XrayProtector {
+        override fun protect(fd: Long): Boolean {
+            if (connectionMode.isTunless) return true
+            return this@OlcboxVpnService.protect(fd.toInt())
+        }
+    }
+
+    private val awgProtector = object : AwgProtector {
+        override fun protect(fd: Long): Boolean {
+            if (connectionMode.isTunless) return true
+            return this@OlcboxVpnService.protect(fd.toInt())
+        }
+    }
+
+    private val rtcLogWriter = object : LogWriter {
+        override fun writeLog(msg: String) {
+            val line = msg.trimEnd()
+            addLog("rtc: $line")
+            Log.v("olcrtc", line)
+            handleRtcLine(line)
+        }
+    }
+
+    private val awgLogWriter = object : AwgLogWriter {
+        override fun writeLog(line: String) {
+            val trimmed = line.trimEnd()
+            addLog("awg: $trimmed")
+            Log.v("awg", trimmed)
+        }
+    }
+
+    private val freeturnLogWriter = object : FreeturnLogWriter {
+        override fun writeLog(line: String) {
+            val trimmed = line.trimEnd()
+            addLog("vkturn: $trimmed")
+            Log.v("vkturn", trimmed)
+        }
+    }
+
+    private val freeturnCaptchaPresenter = object : FreeturnCaptchaPresenter {
+        override fun show(url: String) {
+            addLog("VK-TURN: manual captcha required — opening $url in-app")
+            OlcboxVpnState.setVkCaptchaUrl(url)
+            notifyVkCaptcha(url)
+        }
+
+        override fun hide() {
+            OlcboxVpnState.setVkCaptchaUrl(null)
+            cancelVkCaptchaNotification()
+        }
+    }
+
+    private val masterDnsSocketProtector = object : MasterDnsSocketProtector {
+        override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
+    }
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
     // Snapshotted from the (suspend) traffic settings in [startMobile] so the non-suspend
@@ -641,40 +704,18 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun installMobileCallbacks() {
-        mobileRuntime.setProtector(object : SocketProtector {
-            override fun protect(fd: Long): Boolean {
-                if (connectionMode.isTunless) return true
-                return this@OlcboxVpnService.protect(fd.toInt())
-            }
-        })
+        mobileRuntime.setProtector(mobileSocketProtector)
         // Register the xray/awg socket protectors process-wide (not just when those engines start),
         // so the per-server ping probes (xraybridge/awg MeasureDelay) always leave via the underlying
         // network and bypass the active TUN — otherwise, while connected through ANY engine, the probe
         // would ride the tunnel and report a bogus tunnel-inflated latency. See item: ping via main iface.
         runCatching {
-            Xraybridge.setProtector(object : XrayProtector {
-                override fun protect(fd: Long): Boolean {
-                    if (connectionMode.isTunless) return true
-                    return this@OlcboxVpnService.protect(fd.toInt())
-                }
-            })
+            Xraybridge.setProtector(xrayProtector)
         }.onFailure { Log.w(TAG, "xray setProtector failed", it) }
         runCatching {
-            Awg.setProtector(object : AwgProtector {
-                override fun protect(fd: Long): Boolean {
-                    if (connectionMode.isTunless) return true
-                    return this@OlcboxVpnService.protect(fd.toInt())
-                }
-            })
+            Awg.setProtector(awgProtector)
         }.onFailure { Log.w(TAG, "awg setProtector failed", it) }
-        Mobile.setLogWriter(object : LogWriter {
-            override fun writeLog(msg: String) {
-                val line = msg.trimEnd()
-                addLog("rtc: $line")
-                Log.v("olcrtc", line)
-                handleRtcLine(line)
-            }
-        })
+        Mobile.setLogWriter(rtcLogWriter)
     }
 
     private fun loadStartOptions(intent: Intent): StartOptions {
@@ -1602,9 +1643,7 @@ class OlcboxVpnService : VpnService() {
                 if (useProxy) "" else socksUsername,
                 if (useProxy) "" else socksPassword,
             )
-            client.setProtectSocket(object : MasterDnsSocketProtector {
-                override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
-            })
+            client.setProtectSocket(masterDnsSocketProtector)
             client.setResolverBalancingStrategy(masterDns.balancingStrategy.toLong())
             client.setPacketDuplication(masterDns.packetDuplication.toLong())
             client.start()
@@ -2285,29 +2324,12 @@ class OlcboxVpnService : VpnService() {
                 // freeturn client: local WireGuard entry listener tunnelling through VK.
                 Freeturn.setDebug(false)
                 Freeturn.setAutoCaptcha(vk.autoCaptcha)
-                Freeturn.setLogWriter(object : FreeturnLogWriter {
-                    override fun writeLog(line: String) {
-                        val trimmed = line.trimEnd()
-                        addLog("vkturn: $trimmed")
-                        Log.v("vkturn", trimmed)
-                    }
-                })
+                Freeturn.setLogWriter(freeturnLogWriter)
                 // VK auth may hit a Smart Captcha the auto-solver can't pass (status=BOT). Without a
                 // presenter freeturn falls back to "open localhost:8765 in a browser", which nothing on
                 // Android ever does — the relay then never allocates and the tunnel black-holes. Route
                 // the captcha page into the app instead: a WebView dialog + a heads-up notification.
-                Freeturn.setCaptchaPresenter(object : FreeturnCaptchaPresenter {
-                    override fun show(url: String) {
-                        addLog("VK-TURN: manual captcha required — opening $url in-app")
-                        OlcboxVpnState.setVkCaptchaUrl(url)
-                        notifyVkCaptcha(url)
-                    }
-
-                    override fun hide() {
-                        OlcboxVpnState.setVkCaptchaUrl(null)
-                        cancelVkCaptchaNotification()
-                    }
-                })
+                Freeturn.setCaptchaPresenter(freeturnCaptchaPresenter)
                 // bond=1 в старых ссылках ядро 3.2.0 просто игнорирует (раньше оно падало на нём в
                 // udp-режиме, поэтому поле вырезалось здесь), так что URI уходит как есть.
                 val freeturnUri = vk.uri
@@ -3709,13 +3731,7 @@ class OlcboxVpnService : VpnService() {
         // emits errors, so a stalled handshake (tunnel up, no data) logs nothing. AWG is a low-volume
         // control path (handshakes aren't per-packet), so this doesn't spam the journal during transfer.
         Awg.setDebug(true)
-        Awg.setLogWriter(object : AwgLogWriter {
-            override fun writeLog(line: String) {
-                val trimmed = line.trimEnd()
-                addLog("awg: $trimmed")
-                Log.v("awg", trimmed)
-            }
-        })
+        Awg.setLogWriter(awgLogWriter)
         val listen = "127.0.0.1:$awgLocalPort"
         addLog("Starting AmneziaWG SOCKS on $listen")
         Awg.start(profile.awgConfig, listen)

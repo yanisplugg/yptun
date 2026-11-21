@@ -29,8 +29,11 @@ type Protector interface {
 }
 
 var (
-	mu       sync.Mutex
-	instance *core.Instance
+	mu          sync.Mutex
+	instance    *core.Instance
+	protectorMu sync.Mutex
+	protector   Protector
+	dialerOnce  sync.Once
 )
 
 func isLoopback(address string) bool {
@@ -51,16 +54,25 @@ func isLoopback(address string) bool {
 // physical network, which breaks loopback routing (ENETUNREACH / ECONNREFUSED).
 // Must be called before Start. Passing nil clears it.
 func SetProtector(p Protector) {
-	if p == nil {
-		internet.RegisterDialerController(nil)
-		return
-	}
-	internet.RegisterDialerController(func(network, address string, conn syscall.RawConn) error {
-		if isLoopback(address) {
-			return nil
-		}
-		return conn.Control(func(fd uintptr) {
-			p.Protect(int(fd))
+	protectorMu.Lock()
+	protector = p
+	protectorMu.Unlock()
+
+	dialerOnce.Do(func() {
+		internet.RegisterDialerController(func(network, address string, conn syscall.RawConn) error {
+			if isLoopback(address) {
+				return nil
+			}
+			protectorMu.Lock()
+			prot := protector
+			protectorMu.Unlock()
+			if prot == nil {
+				return nil
+			}
+			return conn.Control(func(fd uintptr) {
+				defer func() { _ = recover() }()
+				prot.Protect(int(fd))
+			})
 		})
 	})
 }

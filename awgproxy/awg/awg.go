@@ -105,6 +105,7 @@ func protectBind(bind conn.Bind, endpoint string) {
 	if p == nil {
 		return
 	}
+	defer func() { _ = recover() }()
 	type fdPeeker interface {
 		PeekLookAtSocketFd4() (int, error)
 		PeekLookAtSocketFd6() (int, error)

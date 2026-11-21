@@ -69,6 +69,36 @@ class TelegramProxyService : Service() {
     private var connectivityManager: android.net.ConnectivityManager? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
 
+    private val awgLogWriter = object : AwgLogWriter {
+        override fun writeLog(line: String) {
+            val t = line.trimEnd()
+            Log.v(TAG, t)
+            if (t.isEmpty()) return
+            if (t.contains("operation not permitted")) {
+                // amneziawg spams EPERM dozens of times/sec — surface only the first, drop repeats.
+                val first = !degraded
+                degraded = true
+                if (first) OlcboxVpnState.addLog("Telegram: UDP send blocked (EPERM) — will rotate/restart")
+                return
+            }
+            if (t.contains("stopped hearing back") || t.contains("Handshake did not complete")) {
+                degraded = true
+                OlcboxVpnState.addLog("Telegram: $t")
+                return
+            }
+            // Drop amneziawg's internal per-routine churn — it floods the journal (1800+ lines).
+            // Keep only the meaningful lines (handshake result, endpoint, working/failed, errors).
+            if (TG_LOG_NOISE.any { t.contains(it) }) return
+            OlcboxVpnState.addLog("Telegram: $t")
+        }
+    }
+
+    private val awgProtector = object : AwgProtector {
+        override fun protect(fd: Long): Boolean {
+            return VpnSocketProtectBridge.protect?.invoke(fd.toInt()) ?: true
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -323,35 +353,9 @@ class TelegramProxyService : Service() {
             // Require auto-generated username/password (RFC 1929) so no other local app can quietly
             // use the WARP proxy. The user types these into Telegram's SOCKS5 settings (shown in UI).
             if (creds != null) setAuth(creds.user, creds.pass)
-            setLogWriter(object : AwgLogWriter {
-                override fun writeLog(line: String) {
-                    val t = line.trimEnd()
-                    Log.v(TAG, t)
-                    if (t.isEmpty()) return
-                    if (t.contains("operation not permitted")) {
-                        // amneziawg spams EPERM dozens of times/sec — surface only the first, drop repeats.
-                        val first = !degraded
-                        degraded = true
-                        if (first) OlcboxVpnState.addLog("Telegram: UDP send blocked (EPERM) — will rotate/restart")
-                        return
-                    }
-                    if (t.contains("stopped hearing back") || t.contains("Handshake did not complete")) {
-                        degraded = true
-                        OlcboxVpnState.addLog("Telegram: $t")
-                        return
-                    }
-                    // Drop amneziawg's internal per-routine churn — it floods the journal (1800+ lines).
-                    // Keep only the meaningful lines (handshake result, endpoint, working/failed, errors).
-                    if (TG_LOG_NOISE.any { t.contains(it) }) return
-                    OlcboxVpnState.addLog("Telegram: $t")
-                }
-            })
+            setLogWriter(awgLogWriter)
             // Protect the WARP UDP socket through the main VpnService if its TUN is up (else no-op).
-            setProtector(object : AwgProtector {
-                override fun protect(fd: Long): Boolean {
-                    return VpnSocketProtectBridge.protect?.invoke(fd.toInt()) ?: true
-                }
-            })
+            setProtector(awgProtector)
         }
 
     /**
