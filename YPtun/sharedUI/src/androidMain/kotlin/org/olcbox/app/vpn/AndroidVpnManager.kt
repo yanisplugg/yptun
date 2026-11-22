@@ -530,15 +530,6 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             if (!config.isNullOrBlank() && !config.contains("PrivateKey", ignoreCase = true)) {
                 config = null
             }
-            // Cached configs with I1 or Reserved cause Cloudflare WARP to drop handshakes.
-            // Drop them so a fresh compatible generator config without I1/Reserved is generated.
-            if (!config.isNullOrBlank() && (
-                config.lineSequence().any { it.trimStart().startsWith("I1", ignoreCase = true) } ||
-                config.lineSequence().any { it.trimStart().startsWith("Reserved", ignoreCase = true) }
-            )) {
-                OlcboxVpnState.addLog("Telegram proxy: cached config has incompatible I1/Reserved — regenerating")
-                config = null
-            }
             if (config.isNullOrBlank()) {
                 OlcboxVpnState.addLog("Telegram proxy: no cached config — generating WARP via generators…")
                 _telegramProxyState.value = TelegramProxyState.Generating
@@ -826,15 +817,17 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // Trust Tunnel's profile carries a placeholder server/port; the real endpoint lives inside the tt:// blob.
         val ttEndpoint = locationConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_TRUSTTUNNEL }
             ?.let { TrustTunnelParser.endpoints(it.ttConfig).firstOrNull() }
-        val server = ttEndpoint?.first ?: locationConfig.proxy?.server
-        val serverPort = ttEndpoint?.second ?: locationConfig.proxy?.serverPort
-        // Mieru is a standalone subprocess rather than an Xray/sing-box outbound. While connected,
-        // probe it end-to-end through its live SOCKS; before connecting, a simple mierus:// link can
-        // still use the displayed server/port (opaque mieru:// links intentionally return unknown).
-        if (locationConfig.proxy?.type == ProxyProfile.TYPE_MIERU) {
-            return if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
-            else if (server == "mieru-config") null else tcpPing(server, serverPort)
-        }
+        val rawServer = ttEndpoint?.first ?: locationConfig.proxy?.server
+        val rawServerPort = ttEndpoint?.second ?: locationConfig.proxy?.serverPort
+        val isMieru = locationConfig.proxy?.type == ProxyProfile.TYPE_MIERU
+        val mieruEndpoint = if (isMieru && (rawServer.isNullOrBlank() || rawServer == "mieru-config")) {
+            locationConfig.proxy?.mieruConfig?.takeIf { it.isNotBlank() }?.let {
+                org.olcbox.app.data.importer.MieruConfigParser.parse(it)
+            }
+        } else null
+        val server = mieruEndpoint?.server ?: rawServer
+        val serverPort = mieruEndpoint?.serverPort ?: rawServerPort
+
         // olcRTC/Stealth (and other provider engines) carry no vless/proxy profile, so the proxy
         // GET/HEAD probe can't build a throwaway outbound for them. When proxy mode is selected (it's
         // now the default) but this location has no proxy, fall through to the engine-default probe
@@ -851,8 +844,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             when (behavior.pingMode) {
                 AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
                 AppBehaviorSettings.PING_ICMP -> if (hasProxy) return icmpPing(server)
-                AppBehaviorSettings.PING_PROXY_GET -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET")
-                AppBehaviorSettings.PING_PROXY_HEAD -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD")
+                AppBehaviorSettings.PING_PROXY_GET -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "GET", isActive)
+                AppBehaviorSettings.PING_PROXY_HEAD -> if (hasProxy) return proxyUrlTest(locationConfig, behavior.effectivePingUrl(), "HEAD", isActive)
                 else -> { /* PING_AUTO → fall through to the engine-specific default below */ }
             }
         }
@@ -867,6 +860,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // OpenFlux: its "server" is a Yandex document / a MAX account — only the live tunnel measures.
             locationConfig.engine == EngineType.OpenFlux -> tunnelPing()
             locationConfig.engine == EngineType.Snolc -> tunnelPing()
+            proxyType == ProxyProfile.TYPE_MIERU ->
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
+                else (tcpPing(server, serverPort) ?: icmpPing(server))
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 // Connected → measure through the live tunnel; otherwise a standalone WG-handshake
                 // probe gives a real RTT even before connecting (the endpoint may be UDP/blocked).
@@ -928,6 +924,13 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             if (ms == null) lastError = r.exceptionOrNull()?.message ?: "no reply"
         }
         if (best == null) {
+            val r2 = runCatching {
+                socks5ConnectRtt(host, sock.port, sock.username, sock.password,
+                    "api.ipify.org", 443, pingTimeoutMs.toInt())
+            }
+            best = r2.getOrNull()
+        }
+        if (best == null) {
             OlcboxVpnState.addLog("Tunnel ping failed via $host:${sock.port} → $TUNNEL_PROBE_HOST:$TUNNEL_PROBE_PORT: $lastError")
         }
         best
@@ -982,12 +985,28 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                 else -> return null
             }
 
-            val ip = targetHost.split('.').map { it.toInt() }
-            val req = byteArrayOf(
-                0x05, 0x01, 0x00, 0x01,
-                ip[0].toByte(), ip[1].toByte(), ip[2].toByte(), ip[3].toByte(),
-                ((targetPort shr 8) and 0xFF).toByte(), (targetPort and 0xFF).toByte()
-            )
+            val ipParts = targetHost.split('.')
+            val isIpv4 = ipParts.size == 4 && ipParts.all { it.toIntOrNull() in 0..255 }
+            val req = if (isIpv4) {
+                val ip = ipParts.map { it.toInt() }
+                byteArrayOf(
+                    0x05, 0x01, 0x00, 0x01,
+                    ip[0].toByte(), ip[1].toByte(), ip[2].toByte(), ip[3].toByte(),
+                    ((targetPort shr 8) and 0xFF).toByte(), (targetPort and 0xFF).toByte()
+                )
+            } else {
+                val hostBytes = targetHost.encodeToByteArray()
+                val buf = ByteArray(4 + 1 + hostBytes.size + 2)
+                buf[0] = 0x05
+                buf[1] = 0x01 // CONNECT
+                buf[2] = 0x00 // RSV
+                buf[3] = 0x03 // DOMAINNAME
+                buf[4] = hostBytes.size.toByte()
+                hostBytes.copyInto(buf, 5)
+                buf[5 + hostBytes.size] = ((targetPort shr 8) and 0xFF).toByte()
+                buf[6 + hostBytes.size] = (targetPort and 0xFF).toByte()
+                buf
+            }
             out.write(req); out.flush()
 
             val head = readExactly(inp, 4)
@@ -1059,7 +1078,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
      * server list can be probed "via proxy". Returns null when the proxy type isn't xray-serviceable
      * (e.g. AmneziaWG / raw WireGuard) or the request fails.
      */
-    private suspend fun proxyUrlTest(location: LocationConfig, url: String, method: String): Long? =
+    private suspend fun proxyUrlTest(
+        location: LocationConfig,
+        url: String,
+        method: String,
+        isActiveLocation: Boolean = false,
+    ): Long? =
         withContext(Dispatchers.IO) {
             val profile = location.proxy
             if (profile == null) {
@@ -1088,6 +1112,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // fetch through it with xray's SOCKS outbound, so GET/HEAD measure the real tunnel.
             if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
                 return@withContext trustTunnelUrlTest(profile, url, method)
+            }
+            if (profile.type == ProxyProfile.TYPE_MIERU) {
+                return@withContext mieruUrlTest(profile, isActiveLocation, url, method)
             }
             // Hysteria2 and Naive are native sing-box protocols, not xray-serviceable; the via-proxy
             // URL test isn't available (use Auto/ICMP ping mode instead — Auto's TCP probe still
@@ -1186,6 +1213,77 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         } finally {
             TrustTunnelCore.stop(process)
             runCatching { java.io.File(appContext.filesDir, dirName).deleteRecursively() }
+        }
+    }
+
+    private suspend fun mieruUrlTest(
+        profile: ProxyProfile,
+        isActiveLocation: Boolean,
+        url: String,
+        method: String,
+    ): Long? {
+        val shareLink = profile.mieruConfig.trim()
+        if (shareLink.isBlank()) {
+            OlcboxVpnState.addLog("Proxy $method ping: Mieru config missing")
+            return null
+        }
+
+        val liveSock = OlcboxVpnState.activeSocks
+        val isConnected = status.value is VpnStatus.Connected
+        if (isActiveLocation && liveSock != null && isConnected) {
+            val configJson = org.olcbox.app.vpn.xray.XrayConfig.build(
+                profile = ProxyProfile(
+                    tag = "mieru-live-ping",
+                    type = "socks",
+                    server = AndroidSocksProxySettings.connectHost(liveSock.host),
+                    serverPort = liveSock.port,
+                    username = liveSock.username,
+                    password = liveSock.password,
+                ),
+                listenPort = (20_000..60_000).random(),
+                listenHost = "127.0.0.1",
+                logLevel = "none",
+                blockQuic = false,
+            )
+            val ms = runCatching { xraybridge.Xraybridge.measureDelay(configJson, url, method, pingTimeoutMs) }
+                .getOrElse {
+                    OlcboxVpnState.addLog("Proxy $method ping (live Mieru) error: ${it.message}")
+                    -1L
+                }
+            if (ms >= 0) return ms
+        }
+
+        val port = (20_000..60_000).random()
+        val proc = org.olcbox.app.vpn.mieru.MieruProcess { OlcboxVpnState.addLog(it) }
+        return try {
+            proc.start(appContext, shareLink, port)
+            val configJson = org.olcbox.app.vpn.xray.XrayConfig.build(
+                profile = ProxyProfile(
+                    tag = "mieru-ping",
+                    type = "socks",
+                    server = "127.0.0.1",
+                    serverPort = port,
+                ),
+                listenPort = (20_000..60_000).random(),
+                listenHost = "127.0.0.1",
+                logLevel = "none",
+                blockQuic = false,
+            )
+            val ms = runCatching { xraybridge.Xraybridge.measureDelay(configJson, url, method, pingTimeoutMs) }
+                .getOrElse {
+                    OlcboxVpnState.addLog("Proxy $method ping (Mieru) error: ${it.message}")
+                    -1L
+                }
+            if (ms < 0) OlcboxVpnState.addLog("Proxy $method ping: no response via Mieru for $url")
+            if (ms >= 0) ms else null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            OlcboxVpnState.addLog("Proxy $method ping (Mieru) failed: ${e.message}")
+            null
+        } finally {
+            proc.stop()
+            runCatching { java.io.File(appContext.filesDir, "mieru/client-$port.json").delete() }
         }
     }
 

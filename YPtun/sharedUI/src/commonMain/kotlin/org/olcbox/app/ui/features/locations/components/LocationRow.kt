@@ -285,14 +285,13 @@ fun LocationRow(
             }
         }
         
-        // VK-TURN has no meaningful latency probe (traffic is bonded over VK calls),
-        // so show a neutral question mark instead of a ms value or a false "Offline".
+        // VK-TURN, MasterDNS, and Mieru (when unprobed) show a neutral question mark instead of a false "Offline".
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
-        // MasterDNS (DNS tunnel) can't be probed directly either: a NULL ping = "not measurable", not
-        // "offline". Show "?" instead of a red fail when there's no ms; a live end-to-end RTT still shows.
         val isMasterDns = location.config?.engine == org.olcbox.app.data.model.EngineType.MasterDns ||
             location.config?.engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
             location.config?.engine == org.olcbox.app.data.model.EngineType.Snolc
+        val isMieru = location.config?.proxy?.type == org.olcbox.app.data.model.ProxyProfile.TYPE_MIERU
+        val isUnprobed = isVkTurn || isMasterDns || isMieru
         // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
         val iconResult = LocalPingResultDisplay.current != AppBehaviorSettings.PING_RESULT_TIME
 
@@ -321,7 +320,7 @@ fun LocationRow(
                 }
             }
 
-            isVkTurn || isMasterDns -> {
+            isUnprobed -> {
                 Text(
                     text = "?",
                     fontSize = 14.sp,
@@ -442,6 +441,7 @@ private fun protocolLabel(type: String?): String = when (type) {
     ProxyProfile.TYPE_VMESS -> "VMess"
     ProxyProfile.TYPE_TROJAN -> "Trojan"
     ProxyProfile.TYPE_SHADOWSOCKS -> "Shadowsocks"
+    ProxyProfile.TYPE_MIERU -> "Mieru"
     null, "" -> "Proxy"
     else -> type.uppercase()
 }
@@ -547,7 +547,7 @@ fun LocationGridCell(
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(verticalAlignment = Alignment.Top) {
                 if (emoji.isNotEmpty()) {
-                    Text(text = emoji, fontSize = 18.sp)
+                    Text(text = emoji, fontSize = 18.sp, fontFamily = org.olcbox.app.ui.theme.emojiFontFamily())
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
@@ -653,12 +653,12 @@ private fun CompactPingIndicator(
     isError: Boolean
 ) {
     val isVkTurn = location.config?.engine == EngineType.VkTurn
-    // MasterDNS is an obfuscated DNS tunnel: it has no directly-probeable endpoint, so a NULL ping means
-    // "not measurable" (disconnected), NOT "offline" — showing a red fail was wrong. Render "?" instead
-    // when there's no ping; a real end-to-end RTT (measured through the live tunnel) still shows as ms.
+    // MasterDNS and Mieru have no off-tunnel probe: a NULL ping means "not measurable", NOT "offline".
     val isMasterDns = location.config?.engine == EngineType.MasterDns ||
         location.config?.engine == EngineType.OpenFlux ||
         location.config?.engine == EngineType.Snolc
+    val isMieru = location.config?.proxy?.type == ProxyProfile.TYPE_MIERU
+    val isUnprobed = isVkTurn || isMasterDns || isMieru
     val iconResult = LocalPingResultDisplay.current != AppBehaviorSettings.PING_RESULT_TIME
     when {
         isLoading -> ShimmeringPingSkeleton()
@@ -681,7 +681,7 @@ private fun CompactPingIndicator(
             )
         }
 
-        isVkTurn || isMasterDns -> Text(
+        isUnprobed -> Text(
             text = "?",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,

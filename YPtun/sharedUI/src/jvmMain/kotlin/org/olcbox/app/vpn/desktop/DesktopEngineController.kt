@@ -419,14 +419,19 @@ internal class DesktopEngineController(
             } else {
                 var ini = TelegramProxyStore.loadConfig()
                 if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
-                if (awg && ini != null && ini.contains("Reserved", ignoreCase = true)) {
-                    ini = null
+
+                if (ini != null) {
+                    val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
+                    if (updated != ini) {
+                        ini = updated
+                        runCatching { TelegramProxyStore.saveConfig(updated) }
+                    }
                 }
                 if (ini.isNullOrBlank()) {
                     log("WARP: generating Cloudflare WARP config...")
-                    ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = !awg) }
+                    ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = true) }
                         .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
-                    if (ini != null && (!awg || !ini.contains("Reserved", ignoreCase = true))) {
+                    if (ini != null) {
                         runCatching { TelegramProxyStore.saveConfig(ini) }
                     }
                 }
@@ -443,7 +448,7 @@ internal class DesktopEngineController(
                         warpAwgIni = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfile = localSocksProfile("WARP", awgLocalPort(listenPort))
                     } else {
-                        warpAwgIni = engineIni
+                        warpAwgIni = WarpConfigGenerator.ensureWorkingConfig(engineIni)
                         warpChainPort = awgLocalPort(listenPort)
                     }
                 }

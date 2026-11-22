@@ -26,6 +26,20 @@ class App : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        val defaultUncaught = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                android.util.Log.e("YPtunCrash", "FATAL UNCAUGHT EXCEPTION in thread ${t.name}", e)
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                val stack = sw.toString()
+                val targetDir = getExternalFilesDir(null) ?: filesDir
+                java.io.File(targetDir, "crash.txt").writeText(stack)
+                java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "yptun_crash.txt").writeText(stack)
+            } catch (_: Throwable) {}
+            defaultUncaught?.uncaughtException(t, e)
+        }
+
         // The Go cores (xray/sing-box/awg/...) share one runtime that is loaded lazily AFTER this point and
         // reads these at start-up. Default GOGC=100 with no limit let its heap grow to several hundred MB
         // (ping/free-server searches spin up many core instances) and keep it. GOGC=50 collects sooner; the
@@ -43,9 +57,15 @@ class App : Application(), Configuration.Provider {
         runCatching { LegacyMigration.runIfNeeded(this) }
         // Use the bundled emoji font so country-flag emojis render everywhere
         // (Compose Text picks up EmojiCompat automatically once initialized).
-        EmojiCompat.init(BundledEmojiCompatConfig(this))
+        runCatching {
+            val config = BundledEmojiCompatConfig(this)
+                .setReplaceAll(true)
+            EmojiCompat.init(config)
+        }
         scheduleProviderReport()
-        org.olcbox.app.ui.activities.AppIcons.ensureLauncherEntry(this)
+        runCatching {
+            org.olcbox.app.ui.activities.AppIcons.ensureLauncherEntry(this)
+        }
     }
 
     /**

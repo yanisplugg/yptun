@@ -265,8 +265,16 @@ class DesktopVpnManager private constructor(
         // Trust Tunnel's profile carries a placeholder server/port; the real endpoint lives inside the tt:// blob.
         val ttEndpoint = profile?.takeIf { it.type == ProxyProfile.TYPE_TRUSTTUNNEL }
             ?.let { org.olcbox.app.data.importer.TrustTunnelParser.endpoints(it.ttConfig).firstOrNull() }
-        val server = ttEndpoint?.first ?: profile?.server
-        val serverPort = ttEndpoint?.second ?: profile?.serverPort
+        val rawServer = ttEndpoint?.first ?: profile?.server
+        val rawServerPort = ttEndpoint?.second ?: profile?.serverPort
+        val isMieru = profile?.type == ProxyProfile.TYPE_MIERU
+        val mieruEndpoint = if (isMieru && (rawServer.isNullOrBlank() || rawServer == "mieru-config")) {
+            profile?.mieruConfig?.takeIf { it.isNotBlank() }?.let {
+                org.olcbox.app.data.importer.MieruConfigParser.parse(it)
+            }
+        } else null
+        val server = mieruEndpoint?.server ?: rawServer
+        val serverPort = mieruEndpoint?.serverPort ?: rawServerPort
         when (behavior.pingMode) {
             org.olcbox.app.data.model.AppBehaviorSettings.PING_TCP ->
                 if (hasProxy) return tcpPing(server, serverPort)
@@ -283,6 +291,8 @@ class DesktopVpnManager private constructor(
             // Obfuscated transports whose real endpoint is blocked/hidden: probe through the live
             // tunnel when connected; otherwise the best standalone probe available.
             config.engine == EngineType.VkTurn -> tunnelPing()
+            proxyType == ProxyProfile.TYPE_MIERU ->
+                if (isActive && isConnected.value) tunnelPing() else (tcpPing(server, serverPort) ?: icmpPing(server))
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
                 if (isActive && isConnected.value) tunnelPing()
                 else awgProbePing(profile?.awgConfig.orEmpty())
@@ -467,6 +477,31 @@ class DesktopVpnManager private constructor(
             // Trust Tunnel isn't xray-serviceable either: raise a throwaway SOCKS-only client and fetch through it.
             if (profile.type == ProxyProfile.TYPE_TRUSTTUNNEL) {
                 return@withContext trustTunnelUrlTest(profile, url, method)
+            }
+            if (profile.type == ProxyProfile.TYPE_MIERU) {
+                if (isConnected.value && location == engineLocation) {
+                    val socks = liveSocks()
+                    val configJson = org.olcbox.app.vpn.xray.XrayConfig.build(
+                        profile = ProxyProfile(
+                            tag = "mieru-live-ping",
+                            type = "socks",
+                            server = socks.host,
+                            serverPort = socks.port,
+                            username = socks.username,
+                            password = socks.password,
+                        ),
+                        listenPort = (20_000..60_000).random(),
+                        listenHost = "127.0.0.1",
+                        logLevel = "none",
+                        blockQuic = false,
+                    )
+                    val ms = runCatching {
+                        org.olcbox.app.vpn.desktop.YpTunCore.xrayMeasureDelay(configJson, url, method, pingTimeoutMs.toInt())
+                    }.getOrDefault(-1L)
+                    if (ms >= 0) return@withContext ms
+                }
+                addLog("Proxy $method ping: Mieru is supported on Android or while connected")
+                return@withContext null
             }
             if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_OPENVPN) {
                 addLog("Proxy $method ping: ${profile.type} is not supported by the Xray probe (use Auto/ICMP)")

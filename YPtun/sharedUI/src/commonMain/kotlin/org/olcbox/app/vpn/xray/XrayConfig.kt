@@ -1046,11 +1046,6 @@ object XrayConfig {
             val relayRule = buildJsonObject {
                 put("type", "field")
                 putJsonArray("inboundTag") { add(WARP_RELAY_IN_TAG) }
-                // Pin the encapsulated WireGuard UDP flow to ONE concrete member of the config's
-                // catch-all balancer. Reusing a dynamic leastLoad/leastPing balancer here is unsafe:
-                // real subscriptions use `fallbackTag: block`, and before burstObservatory has its
-                // first result every WARP handshake packet is sent to that blackhole. A single WG
-                // flow cannot benefit from changing proxy nodes mid-session anyway.
                 val relayOutboundTag = proxyBalancerPlan.primaryTag
                     ?.let(proxyBalancerPlan.selections::get)
                     ?.firstOrNull()

@@ -1,5 +1,6 @@
 # --- App entry points referenced by the system / by name ---
--keep class org.olcbox.app.vpn.service.OlcboxVpnService { *; }
+-keep class org.olcbox.app.** { *; }
+-keep interface org.olcbox.app.** { *; }
 
 # --- gomobile-bound native cores (accessed via JNI by class/method name) ---
 # Renaming or stripping these breaks the Go<->Kotlin bridge at runtime.

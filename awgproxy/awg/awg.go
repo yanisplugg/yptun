@@ -38,14 +38,16 @@ func (b logBridge) Write(p []byte) (int, error) { b.w.WriteLog(string(p)); retur
 
 //nolint:gochecknoglobals // package singleton mirrors freeturn/olcrtc.
 var (
-	mu       sync.Mutex
-	running  atomic.Bool
-	dev      *device.Device
-	listener net.Listener
-	logSink  io.Writer = io.Discard
-	debug    atomic.Bool
+	mu             sync.Mutex
+	running        atomic.Bool
+	dev            *device.Device
+	listener       net.Listener
+	logSink        io.Writer = io.Discard
+	debug          atomic.Bool
 	// statsStop закрывается в Stop и глушит репортёр счётчиков (см. reportTransfer).
-	statsStop chan struct{}
+	statsStop      chan struct{}
+	activeBind     conn.Bind
+	activeEndpoint string
 )
 
 // Как часто докладывать rx/tx туннеля. Раз в 10 секунд: этого хватает, чтобы отличить "трафик до нас
@@ -96,13 +98,20 @@ func isLoopbackHost(hostPort string) bool {
 // no protector is set, the bind doesn't expose its fd (non-Android builds), or the endpoint is
 // loopback (e.g. server-side WARP relay on 127.0.0.1).
 func protectBind(bind conn.Bind, endpoint string) {
+	sink := logSink
 	if isLoopbackHost(endpoint) {
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("protectBind: endpoint %s is loopback -> skip protect", endpoint)
+		}
 		return
 	}
 	protectorMu.Lock()
 	p := protector
 	protectorMu.Unlock()
 	if p == nil {
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("protectBind: protector is nil")
+		}
 		return
 	}
 	defer func() { _ = recover() }()
@@ -112,13 +121,34 @@ func protectBind(bind conn.Bind, endpoint string) {
 	}
 	b, ok := bind.(fdPeeker)
 	if !ok {
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("protectBind: bind does not implement fdPeeker")
+		}
 		return
 	}
-	if fd, err := b.PeekLookAtSocketFd4(); err == nil && fd >= 0 {
-		p.Protect(fd)
+	if fd, err := b.PeekLookAtSocketFd4(); err == nil && fd > 0 && fd <= 65535 {
+		ok := p.Protect(fd)
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("protectBind: protect fd4=%d -> %v", fd, ok)
+		}
 	}
-	if fd, err := b.PeekLookAtSocketFd6(); err == nil && fd >= 0 {
-		p.Protect(fd)
+	if fd, err := b.PeekLookAtSocketFd6(); err == nil && fd > 0 && fd <= 65535 {
+		ok := p.Protect(fd)
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("protectBind: protect fd6=%d -> %v", fd, ok)
+		}
+	}
+}
+
+// ProtectSockets re-protects the active WireGuard UDP socket(s) through the protector.
+// Useful on Android when the VPN TUN comes up AFTER the awgproxy engine was started.
+func ProtectSockets() {
+	mu.Lock()
+	bind := activeBind
+	endpoint := activeEndpoint
+	mu.Unlock()
+	if bind != nil {
+		protectBind(bind, endpoint)
 	}
 }
 
@@ -196,6 +226,8 @@ func Start(iniConfig, listenAddr string) error {
 
 	dev = d
 	listener = ln
+	activeBind = bind
+	activeEndpoint = cfg.endpoint
 	running.Store(true)
 	statsStop = make(chan struct{})
 	go serveSocks(ln, tnet)
@@ -374,6 +406,8 @@ func Stop() {
 		dev.Close()
 		dev = nil
 	}
+	activeBind = nil
+	activeEndpoint = ""
 	running.Store(false)
 }
 

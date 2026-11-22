@@ -671,6 +671,8 @@ object BeStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "Звычайны WireGuard (афіцыйная рэгістрацыя Cloudflare). DPI некаторых правайдараў яго блакуе"
     override val warpProtocolAwgSubtitle = "AmneziaWG з абфускацыяй — працуе там, дзе WireGuard заблакаваны"
+    override val warpResetConfigButton = "Перастварыць профіль WARP"
+    override val warpResetConfigSuccess = "Канфіг WARP скінуты. Пры падключэнні створыцца чысты профіль (порт 894, I1)"
     override val freeturnTransportSection = "Транспарт freeturn"
     override val freeturnTransportSubtitle = "Канчатковая кропка рэле VK TURN і абфускацыя"
     override val wireguardSubtitle = "Тунэль, да якога sing-box падключаецца праз лакальны слухач freeturn"

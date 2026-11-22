@@ -796,6 +796,17 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(warpProtocol = protocol)
     }
 
+    var warpResetSuccess by mutableStateOf(false)
+        private set
+
+    /** Resets the cached WARP config so a fresh clean profile is generated on next connect. */
+    fun onResetWarpConfig() {
+        viewModelScope.launch {
+            locationsRepository.resetTelegramWarpConfig()
+            warpResetSuccess = true
+        }
+    }
+
     /** Sets this location's routing profile id ("" = global default, NONE_ID = no profile). */
     fun onRoutingProfileChanged(id: String) {
         editingConfig = editingConfig.copy(routingProfileId = id)

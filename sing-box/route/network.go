@@ -337,9 +337,24 @@ func (r *NetworkManager) AutoDetectInterface() bool {
 	return r.autoDetectInterface
 }
 
+func isLoopback(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (r *NetworkManager) AutoDetectInterfaceFunc() control.Func {
 	if r.platformInterface != nil && r.platformInterface.UsePlatformAutoDetectInterfaceControl() {
 		return func(network, address string, conn syscall.RawConn) error {
+			if isLoopback(address) {
+				return nil
+			}
 			return control.Raw(conn, func(fd uintptr) error {
 				return r.platformInterface.AutoDetectInterfaceControl(int(fd))
 			})
@@ -368,6 +383,9 @@ func (r *NetworkManager) AutoDetectInterfaceFunc() control.Func {
 func (r *NetworkManager) ProtectFunc() control.Func {
 	if r.platformInterface != nil && r.platformInterface.UsePlatformAutoDetectInterfaceControl() {
 		return func(network, address string, conn syscall.RawConn) error {
+			if isLoopback(address) {
+				return nil
+			}
 			return control.Raw(conn, func(fd uintptr) error {
 				return r.platformInterface.AutoDetectInterfaceControl(int(fd))
 			})

@@ -38,20 +38,11 @@ object ShareLinkParser {
     }
 
     // --- mieru://<full-config-protobuf> / mierus://user:pass@host?... ---
-    // The opaque standard link is decoded by the upstream executable at connect time. The simple form
-    // is decoded just far enough for display/dedup; its complete text remains the source of truth too.
+    // The standard link decodes protobuf ClientConfig to extract active profileName, host, and port,
+    // preserving emojis and full location names. The simple form is decoded for display/dedup.
     private fun parseMieru(uri: String): ProxyProfile? {
         if (uri.startsWith("mieru://", ignoreCase = true)) {
-            val payload = uri.substring("mieru://".length).substringBefore('#')
-            if (payload.isBlank()) return null
-            val remark = UriCodec.percentDecode(uri.substringAfter('#', "")).ifBlank { "Mieru" }
-            return ProxyProfile(
-                tag = remark,
-                type = ProxyProfile.TYPE_MIERU,
-                server = "mieru-config",
-                serverPort = 1,
-                mieruConfig = uri,
-            )
+            return MieruConfigParser.parse(uri)
         }
 
         val body = uri.substring("mierus://".length)

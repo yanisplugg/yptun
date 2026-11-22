@@ -284,15 +284,37 @@ func writeSocksReply(c net.Conn, rep byte) error {
 }
 
 func pipe(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-		done <- struct{}{}
+	var done atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	closeBoth := func() {
+		_ = a.Close()
+		_ = b.Close()
 	}
+
+	cp := func(dst, src net.Conn) {
+		defer wg.Done()
+		_, err := io.Copy(dst, src)
+		if err != nil {
+			closeBoth()
+			return
+		}
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			if err := cw.CloseWrite(); err != nil {
+				closeBoth()
+				return
+			}
+		} else {
+			closeBoth()
+			return
+		}
+		if done.Swap(true) {
+			closeBoth()
+		}
+	}
+
 	go cp(a, b)
 	go cp(b, a)
-	<-done
+	wg.Wait()
 }

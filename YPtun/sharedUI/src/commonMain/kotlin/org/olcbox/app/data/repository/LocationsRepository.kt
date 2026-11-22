@@ -84,6 +84,8 @@ interface LocationsRepository {
     suspend fun setActiveLocationId(storageId: String?)
     suspend fun getActiveLocation(): LocationEntry?
     suspend fun getDeviceIdentity(): String
+    /** Clears the cached WARP config so a fresh one is generated on next connect. */
+    suspend fun resetTelegramWarpConfig()
 }
 
 data class SubscriptionFetchProxy(

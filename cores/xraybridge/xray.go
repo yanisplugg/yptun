@@ -71,7 +71,9 @@ func SetProtector(p Protector) {
 			}
 			return conn.Control(func(fd uintptr) {
 				defer func() { _ = recover() }()
-				prot.Protect(int(fd))
+				if fd > 0 && fd <= 65535 {
+					prot.Protect(int(fd))
+				}
 			})
 		})
 	})

@@ -774,6 +774,8 @@ interface Strings {
     val warpProtocolAwg: String
     val warpProtocolWgSubtitle: String
     val warpProtocolAwgSubtitle: String
+    val warpResetConfigButton: String
+    val warpResetConfigSuccess: String
     val freeturnTransportSection: String
     val freeturnTransportSubtitle: String
     val wireguardSubtitle: String
@@ -1667,6 +1669,8 @@ object RuStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "Обычный WireGuard (официальная регистрация Cloudflare). Режется DPI у части провайдеров"
     override val warpProtocolAwgSubtitle = "AmneziaWG с обфускацией — проходит там, где WireGuard блокируют"
+    override val warpResetConfigButton = "Пересоздать профиль WARP"
+    override val warpResetConfigSuccess = "Конфиг WARP сброшен. При подключении создастся чистый профиль (порт 894, I1)"
     override val freeturnTransportSection = "Транспорт Freeturn"
     override val freeturnTransportSubtitle = "Адрес ретранслятора VK TURN и обфускация"
     override val wireguardSubtitle = "Туннель sing-box подключается через локальный слушатель freeturn"
@@ -2542,6 +2546,8 @@ object EnStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "Plain WireGuard (official Cloudflare registration). Some ISPs' DPI blocks it"
     override val warpProtocolAwgSubtitle = "AmneziaWG with obfuscation — works where WireGuard is blocked"
+    override val warpResetConfigButton = "Recreate WARP profile"
+    override val warpResetConfigSuccess = "WARP config reset. A fresh profile (port 894, I1) will be created on connect"
     override val freeturnTransportSection = "Freeturn transport"
     override val freeturnTransportSubtitle = "VK TURN relay endpoint and obfuscation"
     override val wireguardSubtitle = "The tunnel sing-box dials through the local freeturn listener"
@@ -3423,6 +3429,8 @@ object FaStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "WireGuard ساده (ثبت رسمی Cloudflare). ممکن است DPI آن را مسدود کند"
     override val warpProtocolAwgSubtitle = "AmneziaWG با مبهم‌سازی — در جاهایی که WireGuard مسدود است کار می‌کند"
+    override val warpResetConfigButton = "ایجاد مجدد پروفایل WARP"
+    override val warpResetConfigSuccess = "پیکربندی WARP بازنشانی شد"
     override val freeturnTransportSection = "حامل Freeturn"
     override val freeturnTransportSubtitle = "نقطهٔ پایانی بازپخش VK TURN و مبهم‌سازی"
     override val wireguardSubtitle = "تونل sing-box از طریق شنودگر محلی freeturn شماره‌گیری می‌کند"
@@ -4304,6 +4312,8 @@ object ZhStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "普通 WireGuard（Cloudflare 官方注册），部分运营商 DPI 会拦截"
     override val warpProtocolAwgSubtitle = "带混淆的 AmneziaWG，WireGuard 被封锁时仍可用"
+    override val warpResetConfigButton = "重新生成 WARP 配置"
+    override val warpResetConfigSuccess = "WARP 配置已重置，下次连接时将生成全新配置"
     override val freeturnTransportSection = "Freeturn 传输"
     override val freeturnTransportSubtitle = "VK TURN 中继端点与混淆"
     override val wireguardSubtitle = "sing-box 经本地 freeturn 监听器拨号的隧道"

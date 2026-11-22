@@ -4,16 +4,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.platform.Font
 
-// Bundled Twemoji Mozilla (COLRv0 — Skia renders it in color): Windows has no flag glyphs.
-private val twemojiFamily: FontFamily? by lazy {
+// Bundled Google Noto Color Emoji font (Android system emoji font) — renders the exact same Android
+// emoji glyphs and country flags on Linux and Windows.
+private val androidEmojiFamily: FontFamily? by lazy {
     runCatching {
         val bytes = object {}.javaClass.classLoader
-            ?.getResourceAsStream("fonts/TwemojiMozilla.ttf")
+            ?.getResourceAsStream("fonts/NotoColorEmoji.ttf")
             ?.use { it.readBytes() }
+            ?: object {}.javaClass.classLoader
+                ?.getResourceAsStream("fonts/TwemojiMozilla.ttf")
+                ?.use { it.readBytes() }
             ?: return@runCatching null
-        FontFamily(Font(identity = "TwemojiMozilla", data = bytes))
+        FontFamily(Font(identity = "NotoColorEmoji", data = bytes))
     }.getOrNull()
 }
 
 @Composable
-actual fun emojiFontFamily(): FontFamily? = twemojiFamily
+actual fun emojiFontFamily(): FontFamily? = androidEmojiFamily

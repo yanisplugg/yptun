@@ -265,26 +265,33 @@ class OlcboxVpnService : VpnService() {
     // package-level Mobile.start/stop/waitReady singleton upstream). Independent rooms (multi-room
     // path above) use their own package-level Mobile.startRoom/stopRoom handles, not this instance.
     private val mobileRuntime: OlcrtcRuntime = Mobile.new_()
+    @Volatile private var isDestroyed = false
+    private val pendingProtectFds = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+
+    private fun safeProtect(fd: Long): Boolean {
+        if (isDestroyed || fd <= 0 || fd > 65535) return false
+        if (connectionMode.isTunless) return true
+        val status = OlcboxVpnState.status.value
+        if (status is VpnStatus.Stopping || status is VpnStatus.Disconnected) return false
+        val intFd = fd.toInt()
+        val pfd = vpnInterface
+        if (pfd == null) {
+            pendingProtectFds.add(intFd)
+            return false
+        }
+        return runCatching { this@OlcboxVpnService.protect(intFd) }.getOrDefault(false)
+    }
 
     private val mobileSocketProtector = object : SocketProtector {
-        override fun protect(fd: Long): Boolean {
-            if (connectionMode.isTunless) return true
-            return this@OlcboxVpnService.protect(fd.toInt())
-        }
+        override fun protect(fd: Long): Boolean = safeProtect(fd)
     }
 
     private val xrayProtector = object : XrayProtector {
-        override fun protect(fd: Long): Boolean {
-            if (connectionMode.isTunless) return true
-            return this@OlcboxVpnService.protect(fd.toInt())
-        }
+        override fun protect(fd: Long): Boolean = safeProtect(fd)
     }
 
     private val awgProtector = object : AwgProtector {
-        override fun protect(fd: Long): Boolean {
-            if (connectionMode.isTunless) return true
-            return this@OlcboxVpnService.protect(fd.toInt())
-        }
+        override fun protect(fd: Long): Boolean = safeProtect(fd)
     }
 
     private val rtcLogWriter = object : LogWriter {
@@ -326,7 +333,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private val masterDnsSocketProtector = object : MasterDnsSocketProtector {
-        override fun protect(fd: Long): Boolean = this@OlcboxVpnService.protect(fd.toInt())
+        override fun protect(fd: Long): Boolean = safeProtect(fd)
     }
     private var engineType: EngineType = EngineType.Stealth
     private var activeMtu: Int = TUN_MTU
@@ -480,6 +487,7 @@ class OlcboxVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        isDestroyed = false
         activeService = this
         // Boot / QS tile / widget can start this service with no Activity ever created, and the
         // language then never leaves its default -> notifications in the wrong language.
@@ -688,12 +696,19 @@ class OlcboxVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        isDestroyed = true
         if (activeService === this) {
             activeService = null
         }
         VpnSocketProtectBridge.protect = null
+        runCatching { Xraybridge.setProtector(null) }
+        runCatching { Awg.setProtector(null) }
+        runCatching { Mobile.setLogWriter(null) }
+        runCatching { Freeturn.setCaptchaPresenter(null) }
+        runCatching { Freeturn.setLogWriter(null) }
+        runCatching { Awg.setLogWriter(null) }
         cleanup(stopService = false)
+        super.onDestroy()
     }
 
     override fun onRevoke() {
@@ -1054,9 +1069,17 @@ class OlcboxVpnService : VpnService() {
         }
 
         vpnInterface = pfd
+        val pending = pendingProtectFds.toList()
+        pendingProtectFds.clear()
+        for (f in pending) {
+            val ok = runCatching { this@OlcboxVpnService.protect(f) }.getOrDefault(false)
+            Log.d(TAG, "safeProtect drained fd=$f -> $ok")
+        }
+        runCatching { Awg.protectSockets() }
+
         // Publish protect() so the independent Telegram-over-WARP proxy can keep its WARP UDP socket
         // out of this tun while it's up (see VpnSocketProtectBridge). Cleared on teardown.
-        VpnSocketProtectBridge.protect = { fd -> protect(fd) }
+        VpnSocketProtectBridge.protect = { fd -> safeProtect(fd.toLong()) }
         if (!startTun2socks(pfd)) {
             stopTransportProcesses(closeTun = true)
             return
@@ -1769,7 +1792,7 @@ class OlcboxVpnService : VpnService() {
             if (skipReason != null) {
                 addLog("ВНИМАНИЕ: WARP пропущен: $skipReason")
             } else {
-                val ini = obtainWarpIni(officialFirst = !awg)
+                val ini = obtainWarpIni(officialFirst = true)
                 if (ini == null) {
                     addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю БЕЗ WARP")
                 } else {
@@ -1787,7 +1810,7 @@ class OlcboxVpnService : VpnService() {
                         warpAwgIniDraft = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfileDraft = localSocksProfile("WARP", awgLocalPort)
                     } else {
-                        warpAwgIniDraft = engineIni
+                        warpAwgIniDraft = WarpConfigGenerator.ensureWorkingConfig(engineIni)
                         warpChainPortDraft = awgLocalPort
                     }
                 }
@@ -2846,7 +2869,7 @@ class OlcboxVpnService : VpnService() {
             context = applicationContext,
             workDir = singBoxWorkDir(),
             tempDir = File(cacheDir, "singbox"),
-            protect = { fd -> protect(fd) },
+            protect = { fd -> safeProtect(fd.toLong()) },
             log = { addLog(it) },
             underlyingNetwork = { currentNetwork }
         ).also { singBox = it }
@@ -2854,7 +2877,7 @@ class OlcboxVpnService : VpnService() {
 
     private fun xrayEngine(): XrayEngine {
         return xray ?: XrayEngine(
-            protect = { fd -> protect(fd) },
+            protect = { fd -> safeProtect(fd.toLong()) },
             log = { addLog(it) }
         ).also { xray = it }
     }
@@ -3694,17 +3717,20 @@ class OlcboxVpnService : VpnService() {
         val ds = LocationsDataSourceImpl(applicationContext)
         var ini = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
-        // Accounts with Reserved bytes cannot connect in awgproxy (Cloudflare discards handshakes/packets).
-        // If AWG is requested (!officialFirst), discard cached official account so a working generator account is created.
-        if (!officialFirst && ini != null && ini.contains("Reserved", ignoreCase = true)) {
-            ini = null
+
+        if (ini != null) {
+            val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
+            if (updated != ini) {
+                ini = updated
+                runCatching { ds.saveTelegramWarpConfig(updated) }
+            }
         }
         if (ini.isNullOrBlank()) {
             addLog("WARP: генерирую конфиг Cloudflare WARP…")
             ini = runCatching { WarpConfigGenerator.generate(officialFirst) }
                 .onFailure { addLog("WARP: генерация не удалась: ${it.message}") }
                 .getOrNull()
-            if (ini != null && (officialFirst || !ini.contains("Reserved", ignoreCase = true))) {
+            if (ini != null) {
                 runCatching { ds.saveTelegramWarpConfig(ini) }
             }
         }
@@ -3713,7 +3739,7 @@ class OlcboxVpnService : VpnService() {
 
     /** Raises awgproxy for the WARP INI on [awgLocalPort] (the same engine as a standalone AmneziaWG). */
     private suspend fun startWarpAwg(ini: String) {
-        addLog("WARP: запускаю AmneziaWG на 127.0.0.1:$awgLocalPort")
+        addLog("WARP: запускаю AmneziaWG на 127.0.0.1:$awgLocalPort (I1=${ini.contains("I1 =")})")
         prepareAmneziaWgProxy(ProxyProfile(tag = "WARP", type = ProxyProfile.TYPE_AMNEZIAWG, awgConfig = ini))
     }
 
@@ -3737,6 +3763,9 @@ class OlcboxVpnService : VpnService() {
         Awg.start(profile.awgConfig, listen)
         if (!awaitSocksPortOpen(awgLocalPort, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("AmneziaWG SOCKS port $awgLocalPort did not open")
+        }
+        if (vpnInterface != null) {
+            runCatching { Awg.protectSockets() }
         }
         return localSocksProfile(profile.tag.ifBlank { "AmneziaWG" }, awgLocalPort)
     }
@@ -4398,6 +4427,7 @@ class OlcboxVpnService : VpnService() {
 
     private fun cleanupVpnInterface() {
         VpnSocketProtectBridge.protect = null
+        pendingProtectFds.clear()
         runCatching { vpnInterface?.close() }
         vpnInterface = null
     }
@@ -4480,6 +4510,7 @@ class OlcboxVpnService : VpnService() {
         if (coreRunning()) {
             bindProcessToNetwork(network)
         }
+        runCatching { Awg.protectSockets() }
         singBox?.notifyDefaultInterface()
     }
 
@@ -4913,7 +4944,7 @@ class OlcboxVpnService : VpnService() {
             dstPort: Int
         ): Boolean {
             val service = activeService ?: return true
-            return service.isConnectionAllowed(protocol, srcIp, srcPort, dstIp, dstPort)
+            return runCatching { service.isConnectionAllowed(protocol, srcIp, srcPort, dstIp, dstPort) }.getOrDefault(true)
         }
 
         @Volatile

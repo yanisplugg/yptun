@@ -1974,9 +1974,10 @@ private fun LocationSelectorRow(
     twoColumns: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val isMieru = location.config?.proxy?.type == org.olcbox.app.data.model.ProxyProfile.TYPE_MIERU
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
-    val isOffline = pingsState.isOffline(location.storageId)
+    val isOffline = if (isMieru) false else pingsState.isOffline(location.storageId)
 
     // Stable per-row callbacks. Keyed ONLY by storageId so their identity survives ping ticks: the
     // parent recomposes every ~150ms during a ping pass and reallocates onLocationSelected/Settings,
@@ -2050,7 +2051,8 @@ private fun pingComparator(pingsState: PingsState, descending: Boolean = false):
 }
 
 private fun rankFor(pingsState: PingsState, location: LocationItem): Long {
-    val offline = pingsState.isOffline(location.storageId)
+    val isMieru = location.config?.proxy?.type == org.olcbox.app.data.model.ProxyProfile.TYPE_MIERU
+    val offline = if (isMieru) false else pingsState.isOffline(location.storageId)
     if (offline) return Long.MAX_VALUE
     val ping = pingsState.pingFor(location.storageId)
     // Not measured yet sits just above offline but below any real ping.

@@ -34,6 +34,9 @@ type Instance struct {
 	logSink  io.Writer
 	debug    atomic.Bool
 
+	activeBind     conn.Bind
+	activeEndpoint string
+
 	protMu sync.Mutex
 	prot   Protector
 
@@ -326,13 +329,20 @@ func (i *Instance) SetProtector(p Protector) {
 func (i *Instance) IsRunning() bool { return i.running.Load() }
 
 func (i *Instance) protectBind(bind conn.Bind, endpoint string) {
+	sink := i.logSink
 	if isLoopbackHost(endpoint) {
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("instance protectBind: endpoint %s is loopback -> skip protect", endpoint)
+		}
 		return
 	}
 	i.protMu.Lock()
 	p := i.prot
 	i.protMu.Unlock()
 	if p == nil {
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("instance protectBind: protector is nil")
+		}
 		return
 	}
 	defer func() { _ = recover() }()
@@ -342,13 +352,33 @@ func (i *Instance) protectBind(bind conn.Bind, endpoint string) {
 	}
 	b, ok := bind.(fdPeeker)
 	if !ok {
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("instance protectBind: bind does not implement fdPeeker")
+		}
 		return
 	}
-	if fd, err := b.PeekLookAtSocketFd4(); err == nil && fd >= 0 {
-		p.Protect(fd)
+	if fd, err := b.PeekLookAtSocketFd4(); err == nil && fd > 0 && fd <= 65535 {
+		ok := p.Protect(fd)
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("instance protectBind: protect fd4=%d -> %v", fd, ok)
+		}
 	}
-	if fd, err := b.PeekLookAtSocketFd6(); err == nil && fd >= 0 {
-		p.Protect(fd)
+	if fd, err := b.PeekLookAtSocketFd6(); err == nil && fd > 0 && fd <= 65535 {
+		ok := p.Protect(fd)
+		if sink != nil && sink != io.Discard {
+			log.New(sink, "", 0).Printf("instance protectBind: protect fd6=%d -> %v", fd, ok)
+		}
+	}
+}
+
+// ProtectSockets re-protects the active WireGuard UDP socket(s) through the protector.
+func (i *Instance) ProtectSockets() {
+	i.mu.Lock()
+	bind := i.activeBind
+	endpoint := i.activeEndpoint
+	i.mu.Unlock()
+	if bind != nil {
+		i.protectBind(bind, endpoint)
 	}
 }
 
@@ -407,6 +437,8 @@ func (i *Instance) Start(iniConfig, listenAddr string) error {
 
 	i.dev = d
 	i.listener = ln
+	i.activeBind = bind
+	i.activeEndpoint = cfg.endpoint
 	i.running.Store(true)
 	go i.serveSocks(ln, tnet)
 
@@ -466,6 +498,8 @@ func (i *Instance) Stop() {
 		i.dev.Close()
 		i.dev = nil
 	}
+	i.activeBind = nil
+	i.activeEndpoint = ""
 	i.running.Store(false)
 }
 

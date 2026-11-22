@@ -76,6 +76,9 @@
             android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustPan"
             android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
             <!-- Deep links: yptun://import/{url|config}, yptun://control/{start|stop|restart} -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

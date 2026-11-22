@@ -150,10 +150,15 @@ class HomeScreenViewModel(
 
     suspend fun performPingFor(config: LocationConfig): Long? {
         // Tunnel-only engines are probed through the LIVE tunnel, so for any location other than the
-        // connected one that measures the wrong tunnel (a bogus 0–2 ms) — keep the neutral dash (null).
+        // connected one that measures the wrong tunnel — keep the neutral dash (null).
+        val isMieru = config.proxy?.type == ProxyProfile.TYPE_MIERU
         val tunnelOnly = config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns ||
             config.engine == EngineType.OpenFlux || config.engine == EngineType.Snolc
-        val isActive = config.normalized() == _state.value.configData
+        val isConnected = _state.value.isVpnConnected
+        val isActive = isConnected && (
+            config.normalized() == _state.value.configData ||
+            (isMieru && _state.value.configData.proxy?.type == ProxyProfile.TYPE_MIERU)
+        )
         if (tunnelOnly && !isActive) return null
         return vpnManager.ping(config, isActive)
     }

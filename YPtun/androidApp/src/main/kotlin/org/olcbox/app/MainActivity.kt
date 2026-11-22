@@ -82,8 +82,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        handleDeepLink(intent)
-        maybeWarnUnofficialBuild()
+        runCatching { handleDeepLink(intent) }
+        runCatching { maybeWarnUnofficialBuild() }
     }
 
     /**

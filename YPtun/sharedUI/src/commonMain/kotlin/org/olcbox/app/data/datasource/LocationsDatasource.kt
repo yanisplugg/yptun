@@ -902,6 +902,10 @@ class LocationsRepositoryImpl(
         return deviceIdentityProvider.hwid()
     }
 
+    override suspend fun resetTelegramWarpConfig() {
+        dataSource.saveTelegramWarpConfig("")
+    }
+
     private suspend fun resolveParsedImport(
         text: String,
         fallbackSubscriptionInterval: Int? = null,

@@ -140,7 +140,10 @@ func (c *UConn) VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x50
 }
 
 func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destination) (net.Conn, error) {
-	localAddr := c.LocalAddr().String()
+	var localAddr string
+	if c != nil && c.LocalAddr() != nil {
+		localAddr = c.LocalAddr().String()
+	}
 	uConn := &UConn{
 		Config: config,
 	}

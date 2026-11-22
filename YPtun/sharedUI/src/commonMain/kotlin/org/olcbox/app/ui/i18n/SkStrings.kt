@@ -678,6 +678,8 @@ object SkStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "Čistý WireGuard (oficiálna registrácia Cloudflare). DPI niektorých poskytovateľov ho blokuje"
     override val warpProtocolAwgSubtitle = "AmneziaWG s obfuskáciou — funguje tam, kde je WireGuard blokovaný"
+    override val warpResetConfigButton = "Znovu vytvoriť profil WARP"
+    override val warpResetConfigSuccess = "Konfigurácia WARP bola resetovaná"
     override val freeturnTransportSection = "Transport freeturn"
     override val freeturnTransportSubtitle = "Koncový bod relé VK TURN a obfuskácia"
     override val wireguardSubtitle = "Tunel, ku ktorému sa sing-box pripája cez lokálny listener freeturn"

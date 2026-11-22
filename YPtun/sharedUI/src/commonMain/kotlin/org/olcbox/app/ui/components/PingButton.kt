@@ -52,15 +52,18 @@ fun PingButton(
     var pingState by remember { mutableStateOf<PingState>(PingState.Idle) }
     val s = org.olcbox.app.ui.i18n.LocalStrings.current
 
-    // VK-TURN / MasterDNS have no meaningful off-tunnel latency probe — show a neutral dash.
+    // VK-TURN, MasterDNS, and Mieru have no off-tunnel latency probe — show a neutral status instead of false offline.
     val engine = configGetter()?.engine
-    val isVkTurn = engine == org.olcbox.app.data.model.EngineType.VkTurn ||
+    val isMieru = configGetter()?.proxy?.type == org.olcbox.app.data.model.ProxyProfile.TYPE_MIERU
+    val isUnprobedOffTunnel = engine == org.olcbox.app.data.model.EngineType.VkTurn ||
         engine == org.olcbox.app.data.model.EngineType.MasterDns ||
         engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
-        engine == org.olcbox.app.data.model.EngineType.Snolc
+        engine == org.olcbox.app.data.model.EngineType.Snolc ||
+        isMieru
 
     val descriptionText = when {
         pingState is PingState.Success -> "${s.notifConnected} ${(pingState as PingState.Success).latency}ms"
+        pingState is PingState.Error && isUnprobedOffTunnel -> "?"
         pingState is PingState.Error -> s.pingOffline
         pingState is PingState.Loading -> s.pingChecking
         else -> s.pingVerify
@@ -69,9 +72,9 @@ fun PingButton(
     val stateIcon: @Composable () -> Unit = {
         when (pingState) {
             is PingState.Error -> Icon(
-                imageVector = Icons.Rounded.PriorityHigh,
+                imageVector = if (isUnprobedOffTunnel) Icons.Outlined.Bolt else Icons.Rounded.PriorityHigh,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
+                tint = if (isUnprobedOffTunnel) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(24.dp)
             )
 
@@ -121,7 +124,7 @@ fun PingButton(
                 }
             },
         shape = RoundedCornerShape(24.dp),
-        color = if (pingState is PingState.Error) {
+        color = if (pingState is PingState.Error && !isUnprobedOffTunnel) {
             MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
         } else {
             MaterialTheme.colorScheme.surfaceContainer

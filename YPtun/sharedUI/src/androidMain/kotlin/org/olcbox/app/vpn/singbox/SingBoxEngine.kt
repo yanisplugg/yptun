@@ -165,7 +165,7 @@ class SingBoxEngine(
         override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
         override fun autoDetectInterfaceControl(fd: Int) {
-            protect(fd)
+            runCatching { protect(fd) }
         }
 
         override fun openTun(options: TunOptions): Int {

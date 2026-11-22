@@ -130,6 +130,7 @@ func redirect(ctx context.Context, dst net.Destination, obt string, h outbound.H
 	nc := cnc.NewConnection(
 		cnc.ConnectionInputMulti(uw),
 		readerOpt,
+		cnc.ConnectionRemoteAddr(dst.RawNetAddr()),
 		cnc.ConnectionOnClose(common.ChainedClosable{uw, dw}),
 	)
 	return nc

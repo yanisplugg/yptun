@@ -678,6 +678,8 @@ object CsStrings : Strings {
     override val warpProtocolAwg = "AmneziaWG"
     override val warpProtocolWgSubtitle = "Čistý WireGuard (oficiální registrace Cloudflare). DPI některých poskytovatelů jej blokuje"
     override val warpProtocolAwgSubtitle = "AmneziaWG s obfuskací — funguje tam, kde je WireGuard blokován"
+    override val warpResetConfigButton = "Znovu vytvořit profil WARP"
+    override val warpResetConfigSuccess = "Konfigurace WARP byla resetována"
     override val freeturnTransportSection = "Transport freeturn"
     override val freeturnTransportSubtitle = "Koncový bod relé VK TURN a obfuskace"
     override val wireguardSubtitle = "Tunel, ke kterému se sing-box připojuje přes lokální listener freeturn"

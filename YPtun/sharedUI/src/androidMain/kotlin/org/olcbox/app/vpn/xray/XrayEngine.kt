@@ -21,7 +21,7 @@ class XrayEngine(
 ) {
     private val running = AtomicBoolean(false)
     private val protectorInstance = object : Protector {
-        override fun protect(fd: Long): Boolean = this@XrayEngine.protect(fd.toInt())
+        override fun protect(fd: Long): Boolean = runCatching { this@XrayEngine.protect(fd.toInt()) }.getOrDefault(false)
     }
 
     val isRunning: Boolean get() = running.get() && runCatching { Xraybridge.isRunning() }.getOrDefault(false)
