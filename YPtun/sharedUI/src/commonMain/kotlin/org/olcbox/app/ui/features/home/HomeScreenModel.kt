@@ -197,8 +197,7 @@ class HomeScreenViewModel(
                 } else {
                     val active = locationsRepository.getActiveLocation()
                     if (active == null || !active.location.isComplete()) {
-                        val isVkTurnWithoutLink = active?.location?.engine == EngineType.VkTurn &&
-                            active.location.vkturn?.vkLink.isNullOrBlank()
+                        val isVkTurnWithoutLink = active?.location?.needsVkLink() == true
                         if (isVkTurnWithoutLink && active != null) {
                             _state.update {
                                 it.copy(
@@ -1037,8 +1036,7 @@ class HomeScreenViewModel(
     private suspend fun maybePromptForVkTurnLink() {
         val active = locationsRepository.getActiveLocation() ?: return
         val config = active.location
-        val needsLink = config.engine == EngineType.VkTurn &&
-            config.vkturn?.vkLink.isNullOrBlank()
+        val needsLink = config.needsVkLink()
         if (needsLink) {
             _state.update {
                 it.copy(

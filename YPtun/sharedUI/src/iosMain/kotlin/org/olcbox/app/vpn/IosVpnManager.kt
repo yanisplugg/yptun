@@ -589,7 +589,15 @@ class IosVpnManager(
                 config.engine == EngineType.MasterDns ||
                 config.engine == EngineType.OpenFlux ||
                 config.engine == EngineType.Snolc -> {
-                if (isActiveLocation) tunnelPing() else null
+                if (isActiveLocation) tunnelPing()
+                else if (config.engine == EngineType.VkTurn && config.vkturn?.usesTurnable() == true && profile != null && !isLoopbackHost(profile.server)) {
+                    val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
+                    if (connected) {
+                        directTcpPingViaExtension(profile.server, port, timeoutMs)
+                    } else {
+                        core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+                    }
+                } else null
             }
             profile == null -> null
             isActiveLocation -> {

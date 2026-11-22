@@ -323,7 +323,8 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 return -2 // Caller may fall back to direct TCP ping
             }
         }
-        return CoreapiXrayMeasureDelay(configJson, url, method, timeoutMs)
+        let tunedConfig = tuneXrayConfigForIOS(configJson, stripGeoSelectors: false, stripOnlyTag: nil)
+        return CoreapiXrayMeasureDelay(tunedConfig, url, method, timeoutMs)
     }
 
     /// Direct non-blocking TCP ping executed inside PacketTunnelProvider, where iOS guarantees
@@ -574,6 +575,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             extraExcludedIPv4.append(contentsOf: csqttIPs)
         }
         if let turnable = plan.turnable {
+            let endpointsStr = CoreapiTurnableEndpoints(turnable.config)
+            for ep in endpointsStr.split(separator: ",").map(String.init) where !ep.isEmpty {
+                extraExcludedIPv4.append(contentsOf: resolveAllIPv4(ep))
+            }
             try callCore {
                 CoreapiTurnableStart(turnable.config, turnable.listenAddress, $0)
             }
@@ -617,6 +622,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             case .xray:
                 try startXrayWithIOSLimits(config: proxy.config)
             case .mieru:
+                let endpointsStr = CoreapiMieruEndpoints(proxy.config)
+                for ep in endpointsStr.split(separator: ",").map(String.init) where !ep.isEmpty {
+                    extraExcludedIPv4.append(contentsOf: resolveAllIPv4(ep))
+                }
                 try callCore {
                     CoreapiMieruStart(
                         proxy.config,
@@ -1469,11 +1478,168 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
         }
 
+        // Enforce iOS memory caps on outbounds (xhttp/splithttp chunk sizes, buffers, and xmux connections).
+        if var outbounds = root["outbounds"] as? [[String: Any]] {
+            for i in 0..<outbounds.count {
+                outbounds[i] = sanitizeOutboundForIOS(outbounds[i])
+            }
+            root["outbounds"] = outbounds
+        }
+        if var singleOutbound = root["outbound"] as? [String: Any] {
+            root["outbound"] = sanitizeOutboundForIOS(singleOutbound)
+        }
+
         guard let outData = try? JSONSerialization.data(withJSONObject: root),
               let outString = String(data: outData, encoding: .utf8) else {
             return configJson
         }
         return outString
+    }
+
+    // MARK: - XHTTP & XMUX Tuning for iOS Jetsam limits
+
+    private func clampRangeOrInt(_ value: Any?, minVal: Int, maxVal: Int, defaultVal: String) -> Any {
+        guard let value else {
+            return defaultVal
+        }
+        if let num = value as? NSNumber {
+            let intVal = num.intValue
+            if intVal < minVal { return minVal }
+            if intVal > maxVal { return maxVal }
+            return intVal
+        }
+        if let str = value as? String {
+            let trimmed = str.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return defaultVal }
+            if let singleInt = Int(trimmed) {
+                if singleInt < minVal { return minVal }
+                if singleInt > maxVal { return maxVal }
+                return singleInt
+            }
+            let parts = trimmed.split(separator: "-").map { Int($0.trimmingCharacters(in: .whitespaces)) }
+            if parts.count == 2, let low = parts[0], let high = parts[1] {
+                let clampedLow = min(max(minVal, low), maxVal)
+                let clampedHigh = max(clampedLow, min(maxVal, high))
+                if clampedLow == clampedHigh && minVal < maxVal {
+                    return "\(minVal)-\(maxVal)"
+                }
+                return "\(clampedLow)-\(clampedHigh)"
+            }
+            return defaultVal
+        }
+        if var dict = value as? [String: Any] {
+            let fromVal = (dict["from"] as? NSNumber)?.intValue ?? minVal
+            let toVal = (dict["to"] as? NSNumber)?.intValue ?? maxVal
+            let clampedFrom = min(max(minVal, fromVal), maxVal)
+            let clampedTo = max(clampedFrom, min(maxVal, toVal))
+            dict["from"] = clampedFrom
+            dict["to"] = clampedTo
+            return dict
+        }
+        return defaultVal
+    }
+
+    private func sanitizeXhttpSettingsForIOS(_ original: [String: Any]) -> [String: Any] {
+        var s = original
+
+        // 1. scMaxBufferedPosts: default in Xray is 30! Clamp to 2 for iOS to prevent buffering tens of MBs.
+        let bufPosts = (s["scMaxBufferedPosts"] as? NSNumber)?.intValue ?? 0
+        if bufPosts <= 0 || bufPosts > 2 {
+            s["scMaxBufferedPosts"] = 2
+        }
+
+        // 2. scMaxEachPostBytes: clamp to 250 KB max ("150000-250000" or int 250000).
+        // Xray default is 1,000,000 (1 MB) if omitted!
+        s["scMaxEachPostBytes"] = clampRangeOrInt(
+            s["scMaxEachPostBytes"],
+            minVal: 100_000,
+            maxVal: 250_000,
+            defaultVal: "150000-250000"
+        )
+
+        // 3. xmux settings
+        var xmux = (s["xmux"] as? [String: Any]) ?? [:]
+        // maxConnections: on iOS 15MB Jetsam ceiling, clamp to max 2 parallel connections
+        xmux["maxConnections"] = clampRangeOrInt(
+            xmux["maxConnections"],
+            minVal: 1,
+            maxVal: 2,
+            defaultVal: "1-2"
+        )
+        // maxConcurrency: clamp to 4
+        if xmux["maxConcurrency"] != nil {
+            xmux["maxConcurrency"] = clampRangeOrInt(
+                xmux["maxConcurrency"],
+                minVal: 1,
+                maxVal: 4,
+                defaultVal: "1-4"
+            )
+        }
+        // hMaxReusableSecs: retire idle H2 connections after 180-300s (3-5 min) so Go can collect memory
+        // Instead of desktop 1800-3000s (30-50 min)
+        xmux["hMaxReusableSecs"] = clampRangeOrInt(
+            xmux["hMaxReusableSecs"],
+            minVal: 60,
+            maxVal: 300,
+            defaultVal: "180-300"
+        )
+        s["xmux"] = xmux
+
+        // 4. Handle nested extra if present
+        if let extraStr = s["extra"] as? String,
+           let extraData = extraStr.data(using: .utf8),
+           var extraDict = (try? JSONSerialization.jsonObject(with: extraData)) as? [String: Any] {
+            extraDict = sanitizeXhttpSettingsForIOS(extraDict)
+            if let newExtraData = try? JSONSerialization.data(withJSONObject: extraDict),
+               let newExtraStr = String(data: newExtraData, encoding: .utf8) {
+                s["extra"] = newExtraStr
+            }
+        } else if let extraDict = s["extra"] as? [String: Any] {
+            s["extra"] = sanitizeXhttpSettingsForIOS(extraDict)
+        }
+
+        // 5. Handle downloadSettings if present
+        if var dl = s["downloadSettings"] as? [String: Any] {
+            if let dlXhttp = dl["xhttpSettings"] as? [String: Any] {
+                dl["xhttpSettings"] = sanitizeXhttpSettingsForIOS(dlXhttp)
+            }
+            if let dlSplit = dl["splithttpSettings"] as? [String: Any] {
+                dl["splithttpSettings"] = sanitizeXhttpSettingsForIOS(dlSplit)
+            }
+            s["downloadSettings"] = dl
+        }
+
+        return s
+    }
+
+    private func sanitizeOutboundForIOS(_ outbound: [String: Any]) -> [String: Any] {
+        var out = outbound
+        if var mux = out["mux"] as? [String: Any], (mux["enabled"] as? Bool) == true {
+            let concurrency = (mux["concurrency"] as? NSNumber)?.intValue ?? 0
+            if concurrency <= 0 || concurrency > 4 {
+                mux["concurrency"] = 4
+            }
+            out["mux"] = mux
+        }
+
+        if var stream = out["streamSettings"] as? [String: Any] {
+            let net = (stream["network"] as? String)?.lowercased() ?? ""
+            var modified = false
+            if let xhttp = stream["xhttpSettings"] as? [String: Any] {
+                stream["xhttpSettings"] = sanitizeXhttpSettingsForIOS(xhttp)
+                modified = true
+            }
+            if let split = stream["splithttpSettings"] as? [String: Any] {
+                stream["splithttpSettings"] = sanitizeXhttpSettingsForIOS(split)
+                modified = true
+            }
+            if !modified && (net == "xhttp" || net == "splithttp") {
+                let key = (net == "splithttp") ? "splithttpSettings" : "xhttpSettings"
+                stream[key] = sanitizeXhttpSettingsForIOS([:])
+            }
+            out["streamSettings"] = stream
+        }
+        return out
     }
 
     // MARK: - iOS Memory Caps for Auxiliary Cores (qWDTT, MasterDNS, olcRTC)

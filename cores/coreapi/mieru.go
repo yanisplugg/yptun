@@ -42,6 +42,24 @@ func mieruProfile(link string) (*appctlpb.ClientProfile, error) {
 	return nil, fmt.Errorf("expected mieru:// or mierus:// link")
 }
 
+// MieruEndpoints parses the given mieru:// or mierus:// link and returns comma-separated hostnames or IPs.
+func MieruEndpoints(link string) string {
+	profile, err := mieruProfile(link)
+	if err != nil {
+		return ""
+	}
+	var hosts []string
+	for _, s := range profile.GetServers() {
+		if ip := s.GetIpAddress(); ip != "" {
+			hosts = append(hosts, ip)
+		}
+		if d := s.GetDomainName(); d != "" {
+			hosts = append(hosts, d)
+		}
+	}
+	return strings.Join(hosts, ",")
+}
+
 // MieruStart exposes an imported Mieru profile as a loopback SOCKS5 listener without launching a
 // subprocess (which is prohibited in an Apple packet-tunnel extension).
 func MieruStart(link, listenAddr string) error {

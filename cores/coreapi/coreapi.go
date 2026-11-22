@@ -72,10 +72,10 @@ func init() {
 		PushLog("masterdns", line)
 	})
 	if runtime.GOOS == "ios" {
-		// Limit threads and Go memory strictly to stay under iOS NetworkExtension memory ceiling.
+		// Limit threads and Go memory strictly to stay under iOS NetworkExtension memory ceiling (15MB Jetsam limit).
 		runtime.GOMAXPROCS(1)
-		debug.SetGCPercent(20)
-		debug.SetMemoryLimit(24 << 20)
+		debug.SetGCPercent(10)
+		debug.SetMemoryLimit(12 << 20)
 	}
 }
 
