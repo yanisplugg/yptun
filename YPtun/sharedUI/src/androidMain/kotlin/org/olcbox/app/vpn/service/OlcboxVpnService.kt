@@ -274,12 +274,11 @@ class OlcboxVpnService : VpnService() {
         val status = OlcboxVpnState.status.value
         if (status is VpnStatus.Stopping || status is VpnStatus.Disconnected) return false
         val intFd = fd.toInt()
-        val pfd = vpnInterface
-        if (pfd == null) {
+        val ok = runCatching { this@OlcboxVpnService.protect(intFd) }.getOrDefault(false)
+        if (!ok && vpnInterface == null) {
             pendingProtectFds.add(intFd)
-            return false
         }
-        return runCatching { this@OlcboxVpnService.protect(intFd) }.getOrDefault(false)
+        return ok
     }
 
     private val mobileSocketProtector = object : SocketProtector {

@@ -22,32 +22,6 @@ func newReservedBind(inner conn.Bind, reserved [3]byte) conn.Bind {
 	return &reservedBind{Bind: inner, reserved: reserved}
 }
 
-func (b *reservedBind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err error) {
-	innerFns, actualPort, err := b.Bind.Open(port)
-	if err != nil {
-		return nil, 0, err
-	}
-	fns = make([]conn.ReceiveFunc, len(innerFns))
-	for idx, fn := range innerFns {
-		origFn := fn
-		fns[idx] = func(packets [][]byte, sizes []int, eps []conn.Endpoint) (n int, err error) {
-			n, err = origFn(packets, sizes, eps)
-			if err != nil {
-				return n, err
-			}
-			for i := 0; i < n; i++ {
-				if sizes[i] >= 4 {
-					packets[i][1] = 0
-					packets[i][2] = 0
-					packets[i][3] = 0
-				}
-			}
-			return n, nil
-		}
-	}
-	return fns, actualPort, nil
-}
-
 func (b *reservedBind) Send(bufs [][]byte, ep conn.Endpoint) error {
 	for _, buf := range bufs {
 		if len(buf) >= 4 {

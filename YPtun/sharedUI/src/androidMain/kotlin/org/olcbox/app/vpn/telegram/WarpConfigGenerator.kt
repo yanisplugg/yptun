@@ -44,7 +44,7 @@ import kotlinx.serialization.json.put
 object WarpConfigGenerator {
 
     /** Standard WARP data-plane endpoint. */
-    const val ENDPOINT = "162.159.192.1:2408"
+    const val ENDPOINT = "162.159.192.1:894"
 
     /** A generator answers with one account; the git-hosted mirror with a pool of them. */
     private fun parseAccount(text: String): WarpServiceAccount =
@@ -331,7 +331,7 @@ private const val TAG = "WarpConfigGen"
     fun ensureWorkingConfig(ini: String): String {
         if (ini.isBlank()) return ini
         var result = ini
-        if (result.contains("engage.cloudflareclient.com") || result.contains(":894")) {
+        if (result.contains("engage.cloudflareclient.com") || result.contains(":2408")) {
             result = result.replace(Regex("(?m)^Endpoint\\s*=\\s*.*$"), "Endpoint = $ENDPOINT")
         }
         if (result.contains("PersistentKeepalive", ignoreCase = true)) {
