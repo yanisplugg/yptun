@@ -2170,7 +2170,13 @@ class OlcboxVpnService : VpnService() {
             check(!isLocalSocksPortOpen(socksListenPort)) { "SOCKS port $socksListenPort is still in use" }
             activeProxyCore = ProxyCore.Auto
             addLog("Starting Mieru on 127.0.0.1:$socksListenPort")
-            mieruProcess.start(applicationContext, profile.mieruConfig, socksListenPort)
+            mieruProcess.start(
+                context = applicationContext,
+                shareLink = profile.mieruConfig,
+                listenPort = socksListenPort,
+                username = socksUsername,
+                password = socksPassword,
+            )
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) {
                 mieruProcess.stop()

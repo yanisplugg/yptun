@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -21,7 +22,13 @@ internal class MieruProcess(private val log: (String) -> Unit) {
 
     fun isRunning(): Boolean = process?.isAlive == true
 
-    suspend fun start(context: Context, shareLink: String, listenPort: Int) = withContext(Dispatchers.IO) {
+    suspend fun start(
+        context: Context,
+        shareLink: String,
+        listenPort: Int,
+        username: String? = null,
+        password: String? = null,
+    ) = withContext(Dispatchers.IO) {
         val link = shareLink.trim()
         require(link.startsWith("mieru://", true) || link.startsWith("mierus://", true)) {
             "Mieru: expected a mieru:// or mierus:// link"
@@ -65,9 +72,18 @@ internal class MieruProcess(private val log: (String) -> Unit) {
             put("socks5Port", listenPort)
             put("socks5ListenLAN", false)
             put("loggingLevel", "INFO")
-            // The app's internal bridge may offer credentials even though this loopback listener is
-            // private. No ingress auth avoids inheriting credentials embedded by a full share link.
-            putJsonArray("socks5Authentication") {}
+            // Ingress credentials: if the app/bridge generated or configured SOCKS5 authentication,
+            // register it with Mieru so hev-socks5-tunnel and local probes authenticate successfully.
+            if (!username.isNullOrBlank() && !password.isNullOrBlank()) {
+                putJsonArray("socks5Authentication") {
+                    addJsonObject {
+                        put("user", username)
+                        put("password", password)
+                    }
+                }
+            } else {
+                putJsonArray("socks5Authentication") {}
+            }
         }
         configFile.writeText(runtimeConfig.toString())
 
