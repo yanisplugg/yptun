@@ -1829,9 +1829,6 @@ class OlcboxVpnService : VpnService() {
         val warpChainPort = if (isClientWarp) null else warpChainPortDraft
         val warpRelay = warpRelayDraft
         return try {
-            require(!isClientWarp || !profile.requiresXray()) {
-                "Клиентский WARP требует VLESS-транспорт, поддерживаемый sing-box"
-            }
             if (connectionMode.isTunless) {
                 bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             }
@@ -1908,8 +1905,12 @@ class OlcboxVpnService : VpnService() {
             // and the transport doesn't force a core — a per-location choice still wins (see resolvedCore).
             val isTproxy = connectionMode == AndroidConnectionMode.Tproxy
             val globalCore = loadAppBehavior().globalProxyCore
-            activeProxyCore =
-                if (isTproxy || isLocalUdpTunnel || isHy2 || isNaive || hasOpenVpn) ProxyCore.SingBox else config.resolvedCore(globalCore)
+            activeProxyCore = when {
+                isTproxy || isAwg || isTrustTunnel || isHy2 || isNaive || hasOpenVpn -> ProxyCore.SingBox
+                isClientWarp && profile.requiresXray() -> ProxyCore.Xray
+                isClientWarp -> config.copy(proxy = profile, proxy2 = null).resolvedCore(globalCore)
+                else -> config.resolvedCore(globalCore)
+            }
             // Only the RU-domain blocklist (regexp DNS hosts) and a profile's dns.hosts are Xray-only;
             // geo selectors work on BOTH cores (sing-box resolves geoip:/geosite: via remote .srs it
             // downloads itself), so geo must NOT force Xray — otherwise a missing geoip.dat would drop
@@ -1948,7 +1949,7 @@ class OlcboxVpnService : VpnService() {
             // downloads its own .srs rule-sets through the tunnel, so it keeps working — which is exactly
             // why routing "only works on sing-box/AmneziaWG, not xray". Fall back to sing-box when the
             // transport allows it (plain vless/ws/reality; not xhttp or a raw Xray template).
-            if (activeProxyCore == ProxyCore.Xray &&
+            if (!isClientWarp && activeProxyCore == ProxyCore.Xray &&
                 routingProfile?.needsGeoFiles() == true &&
                 effectiveProfile.rawXrayConfig.isNullOrBlank() &&
                 !effectiveProfile.requiresXray() &&

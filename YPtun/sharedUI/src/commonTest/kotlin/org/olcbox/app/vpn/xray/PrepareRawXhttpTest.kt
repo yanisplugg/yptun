@@ -354,6 +354,34 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun buildClientWarpCascadePreservesXhttpAndVision() {
+        val warp = ProxyProfile(tag = "WARP", type = "socks", server = "127.0.0.1", serverPort = 18080)
+        val exit = ProxyProfile(
+            type = ProxyProfile.TYPE_VLESS, server = "exit.example.com", serverPort = 443,
+            uuid = "uuid-exit", network = ProxyProfile.NETWORK_TCP, security = ProxyProfile.SECURITY_REALITY,
+            flow = "xtls-rprx-vision",
+        )
+        for (profile in listOf(exit, exit.copy(network = ProxyProfile.NETWORK_XHTTP, flow = ""))) {
+            val json = XrayConfig.build(profile = warp, listenPort = 10808, secondProfile = profile)
+            val outbounds = Json.parseToJsonElement(json).jsonObject.getValue("outbounds").jsonArray
+                .map { it.jsonObject }
+            val proxy = outbounds.first()
+            assertEquals("proxy", proxy.getValue("tag").jsonPrimitive.content)
+            val stream = proxy.getValue("streamSettings").jsonObject
+            assertEquals(profile.network, stream.getValue("network").jsonPrimitive.content)
+            assertEquals("proxy-base", stream.getValue("sockopt").jsonObject.getValue("dialerProxy").jsonPrimitive.content)
+            val server = proxy.getValue("settings").jsonObject.getValue("vnext").jsonArray.first().jsonObject
+            val user = server.getValue("users").jsonArray.first().jsonObject
+            assertEquals(profile.flow.ifEmpty { null }, user["flow"]?.jsonPrimitive?.content)
+            val base = outbounds.first { it.getValue("tag").jsonPrimitive.content == "proxy-base" }
+            assertEquals("socks", base.getValue("protocol").jsonPrimitive.content)
+            val socks = base.getValue("settings").jsonObject.getValue("servers").jsonArray.first().jsonObject
+            assertEquals("127.0.0.1", socks.getValue("address").jsonPrimitive.content)
+            assertEquals("18080", socks.getValue("port").jsonPrimitive.content)
+        }
+    }
+
+    @Test
     fun buildCascadeOverXhttpMainUsesSocksLoopback() {
         // The user's real setup (Finland-xhttp MAIN + Nürnberg-tcp 2nd proxy) runs through build(), NOT
         // prepareRaw(). An xhttp main can't be a dialerProxy sub-dialer, so the exit dialing "through"

@@ -460,10 +460,10 @@ internal class DesktopEngineController(
         }
 
         val isClientWarp = warpAwgIni != null && warpRelay == null && profile.rawXrayConfig.isNullOrBlank()
-        require(!isClientWarp || !profile.requiresXray()) {
-            "Client-side WARP requires a VLESS transport supported by sing-box"
+        if (isClientWarp) {
+            secondProfile = profile
+            warpChainPort = null
         }
-        if (isClientWarp) secondProfile = profile
 
         requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
 
@@ -516,7 +516,12 @@ internal class DesktopEngineController(
         // The app-wide engine choice applies only when this server's own core is "Auto"; an explicit
         // per-server choice still wins (resolvedCore decides).
         val globalCore = JvmVpnSettings.loadAppBehavior().globalProxyCore
-        activeProxyCore = if (isLocalUdpTunnel) ProxyCore.SingBox else config.resolvedCore(globalCore)
+        activeProxyCore = when {
+            isAwg || isHy2 || isTrustTunnel || hasOpenVpn -> ProxyCore.SingBox
+            isClientWarp && profile.requiresXray() -> ProxyCore.Xray
+            isClientWarp -> config.copy(proxy = profile, proxy2 = null).resolvedCore(globalCore)
+            else -> config.resolvedCore(globalCore)
+        }
         val profileWantsXray = routingProfile != null && routingProfile.dnsHosts.isNotEmpty()
         if (!effectiveProfile.rawXrayConfig.isNullOrBlank()) {
             if (activeProxyCore != ProxyCore.Xray) log("Raw Xray config present → forcing Xray core")
@@ -533,7 +538,7 @@ internal class DesktopEngineController(
                 else "Switching to Xray core for RU-domain blocklist"
             )
         }
-        if (activeProxyCore == ProxyCore.Xray &&
+        if (!isClientWarp && activeProxyCore == ProxyCore.Xray &&
             routingProfile?.needsGeoFiles() == true &&
             effectiveProfile.rawXrayConfig.isNullOrBlank() &&
             !effectiveProfile.requiresXray() &&
@@ -680,7 +685,7 @@ internal class DesktopEngineController(
                 listenHost = listenHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = if (chained) chainPort else (if (isClientWarp) null else warpChainPort),
+                olcrtcChainPort = if (chained) chainPort else warpChainPort,
                 olcrtcChainUser = if (chained) socksUsername else "",
                 olcrtcChainPass = if (chained) socksPassword else "",
                 warpRelay = warpRelay,

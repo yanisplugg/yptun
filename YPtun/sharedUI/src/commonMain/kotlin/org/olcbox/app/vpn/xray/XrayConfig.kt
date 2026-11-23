@@ -488,10 +488,8 @@ object XrayConfig {
                                 tag = PROXY_TAG,
                                 // Force dialerProxy over the loopback so the exit's OWN transport is preserved.
                                 chainViaDialerProxy = cascadeLoopActive,
-                                // Over the clean loopback tunnel, KEEP the exit's XTLS Vision flow — the 2nd
-                                // server requires it (a vless-reality-vision tcp 2nd proxy reset with it dropped
-                                // while an xhttp 2nd, which has no Vision flow, worked).
-                                preserveFlow = cascadeLoopActive,
+                                // The exit server still expects Vision when the base is a SOCKS tunnel.
+                                preserveFlow = cascadeLoopActive || profile.type == "socks",
                             )
                         )
                     }
