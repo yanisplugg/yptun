@@ -1304,13 +1304,12 @@ impl LocationViewIndex {
 }
 
 pub(crate) fn sanitize_name_and_description(raw_name: &str, raw_desc: &str) -> (String, String) {
-    let mut clean_name = raw_name.trim().to_string();
+    let raw_name_trimmed = raw_name.trim();
     let mut desc = raw_desc.trim().to_string();
 
-    if let Some(q_idx) = clean_name.find('?') {
-        let query_part = &clean_name[q_idx + 1..];
-        let name_part = clean_name[..q_idx].trim().to_string();
-        clean_name = name_part;
+    let clean_name = if let Some(q_idx) = raw_name_trimmed.find('?') {
+        let query_part = &raw_name_trimmed[q_idx + 1..];
+        let name_part = raw_name_trimmed[..q_idx].trim().to_string();
 
         if desc.is_empty() {
             for part in query_part.split('&') {
@@ -1334,7 +1333,10 @@ pub(crate) fn sanitize_name_and_description(raw_name: &str, raw_desc: &str) -> (
                 }
             }
         }
-    }
+        name_part
+    } else {
+        raw_name_trimmed.to_string()
+    };
 
     (clean_name, desc)
 }

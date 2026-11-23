@@ -321,6 +321,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             completion("error:restart-required")
             return
         }
+        // Guard against Jetsam OOM: require at least 14 MiB available memory before swapping cores in memory
+        if os_proc_available_memory() < 14 * 1024 * 1024 {
+            lock.unlock()
+            completion("error:restart-required")
+            return
+        }
         isRefreshing = true
         lock.unlock()
 
@@ -366,7 +372,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
             log("Fast-reloading proxy core: \(currentPlan.displayName) -> \(newPlan.displayName)")
 
-            // Stop existing proxy
+            // Stop existing proxy and immediately free OS memory
             switch currentProxy.kind {
             case .singBox:
                 CoreapiSbStop()
@@ -375,6 +381,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             case .mieru:
                 CoreapiMieruStop()
             }
+            CoreapiFreeOSMemory()
 
             // Start new proxy
             switch newProxy.kind {
