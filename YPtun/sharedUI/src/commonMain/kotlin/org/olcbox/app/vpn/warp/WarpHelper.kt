@@ -6,6 +6,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import org.olcbox.app.data.model.ProxyProfile
+import kotlin.io.encoding.Base64
 
 /**
  * AmneziaWG-on-the-server relay. awgproxy (a userspace engine outside the proxy core) dials UDP
@@ -72,15 +73,30 @@ object WarpHelper {
             eq > 0 && line.substring(0, eq).trim().lowercase() in keys
         }.joinToString("\n")
 
-    /** The INI as PLAIN WireGuard: every AmneziaWG obfuscation knob (and `Reserved`) dropped. */
-    fun plainWireGuard(ini: String): String = dropKeys(ini, OBFUSCATION_KEYS + "reserved")
+    /** Plain WireGuard keeps the account's Reserved bytes and drops AmneziaWG options. */
+    fun plainWireGuard(ini: String): String = dropKeys(ini, OBFUSCATION_KEYS)
+
+    fun isUsableCachedAccount(ini: String, requireI1: Boolean): Boolean {
+        val fields = ini.lineSequence().filter { '=' in it }.map {
+            it.substringBefore('=').trim().lowercase() to it.substringAfter('=').trim()
+        }.toList()
+        val hasReserved = fields.any { (key, value) ->
+            if (key !in setOf("reserved", "client_id", "clientid")) return@any false
+            val parts = value.split(',')
+            if (parts.size == 3) {
+                val bytes = parts.map { it.trim().toIntOrNull() }
+                bytes.all { it != null && it in 0..255 } && bytes.any { it != 0 }
+            } else {
+                val bytes = runCatching { Base64.decode(value) }.getOrNull()
+                bytes != null && bytes.size >= 3 && bytes.take(3).any { it.toInt() != 0 }
+            }
+        }
+        return hasReserved && (!requireI1 || fields.any { (key, value) -> key == "i1" && value.isNotEmpty() })
+    }
 
     /**
-     * The INI as the awgproxy engine should run it (measured live against Cloudflare):
-     *  - `Reserved` is always dropped: awgproxy stamps those bytes AFTER the handshake MAC, so Cloudflare
-     *    discards every handshake of an officially-registered account (never connects). Free WARP needs none.
-     *  - AmneziaWG keeps the obfuscation knobs (Jc/Jmin/Jmax, S1/S2, H1..H4) but drops I1..I5: Cloudflare
-     *    WARP is a standard WireGuard endpoint; sending I1 fake init packets causes Cloudflare to drop the handshake.
+     * Prepare the INI for awgproxy. Keep account-specific Reserved bytes in both protocols.
+     * AmneziaWG uses the WARP I1 preset when init packets are enabled.
      *  - the endpoint is pinned to WARP's anycast IP: a domain is resolved at start-up by Go's resolver,
      *    which on Android has no resolv.conf (and, with the VPN already up, would loop into our own tunnel).
      */

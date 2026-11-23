@@ -419,8 +419,8 @@ internal class DesktopEngineController(
             } else {
                 var ini = TelegramProxyStore.loadConfig()
                 if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
-                if (!ini.isNullOrBlank() && (!ini.contains("Reserved", ignoreCase = true) && !ini.contains("client_id", ignoreCase = true))) {
-                    log("WARP: cached config is outdated (missing Reserved), regenerating...")
+                if (!ini.isNullOrBlank() && !WarpHelper.isUsableCachedAccount(ini, requireI1 = awg && !serverSide)) {
+                    log("WARP: cached config is missing valid Reserved or required I1, regenerating...")
                     ini = null
                 }
 
@@ -452,12 +452,18 @@ internal class DesktopEngineController(
                         warpAwgIni = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfile = localSocksProfile("WARP", awgLocalPort(listenPort))
                     } else {
-                        warpAwgIni = WarpConfigGenerator.ensureWorkingConfig(engineIni)
+                        warpAwgIni = engineIni
                         warpChainPort = awgLocalPort(listenPort)
                     }
                 }
             }
         }
+
+        val isClientWarp = warpAwgIni != null && warpRelay == null && profile.rawXrayConfig.isNullOrBlank()
+        require(!isClientWarp || !profile.requiresXray()) {
+            "Client-side WARP requires a VLESS transport supported by sing-box"
+        }
+        if (isClientWarp) secondProfile = profile
 
         requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
 
@@ -476,7 +482,6 @@ internal class DesktopEngineController(
         // modeled as a socks outbound. Hysteria2 is a NATIVE sing-box outbound since the 1.13 upgrade
         // (the old hysteria2proxy bridge and its YpHy2* exports are gone), so it is passed straight
         // through; like AWG it carries UDP/QUIC itself, so QUIC stays unblocked.
-        val isClientWarp = warpAwgIni != null && warpRelay == null && profile.rawXrayConfig.isNullOrBlank()
         val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
         val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
         // Trust Tunnel (AdGuard) — like AmneziaWG, raises a local SOCKS5 (its own client, SOCKS-only)
@@ -495,10 +500,6 @@ internal class DesktopEngineController(
             // <server>: context deadline exceeded" killed every connection while only IP-based apps
             // (Telegram) survived. The host OS resolver does this once, reliably.
             else -> dialByServerIp(profile)
-        }
-        val effectiveSecondProfile = when {
-            isClientWarp -> dialByServerIp(profile)
-            else -> secondProfile
         }
         val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel || hasOpenVpn || isClientWarp
 
@@ -693,7 +694,7 @@ internal class DesktopEngineController(
                 singboxGeoipBase = profilesState.singboxGeoipBase,
                 blockQuic = !isLocalUdpTunnel,
                 sniffOverrideDestination = isLocalUdpTunnel,
-                secondProfile = effectiveSecondProfile,
+                secondProfile = secondProfile,
                 fakeDnsSpec = config.fakeDns,
                 tunMode = requestedTun,
                 splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,

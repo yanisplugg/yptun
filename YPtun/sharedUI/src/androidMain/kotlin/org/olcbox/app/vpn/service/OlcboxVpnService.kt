@@ -1795,7 +1795,7 @@ class OlcboxVpnService : VpnService() {
             if (skipReason != null) {
                 addLog("ВНИМАНИЕ: WARP пропущен: $skipReason")
             } else {
-                val ini = obtainWarpIni(officialFirst = true)
+                val ini = obtainWarpIni(requireI1 = awg && !serverSide)
                 if (ini == null) {
                     addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю БЕЗ WARP")
                 } else {
@@ -1813,7 +1813,7 @@ class OlcboxVpnService : VpnService() {
                         warpAwgIniDraft = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfileDraft = localSocksProfile("WARP", awgLocalPort)
                     } else {
-                        warpAwgIniDraft = WarpConfigGenerator.ensureWorkingConfig(engineIni)
+                        warpAwgIniDraft = engineIni
                         warpChainPortDraft = awgLocalPort
                     }
                 }
@@ -1829,6 +1829,9 @@ class OlcboxVpnService : VpnService() {
         val warpChainPort = if (isClientWarp) null else warpChainPortDraft
         val warpRelay = warpRelayDraft
         return try {
+            require(!isClientWarp || !profile.requiresXray()) {
+                "Клиентский WARP требует VLESS-транспорт, поддерживаемый sing-box"
+            }
             if (connectionMode.isTunless) {
                 bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
             }
@@ -3730,15 +3733,15 @@ class OlcboxVpnService : VpnService() {
 
     /**
      * The cached WARP account (shared with the Telegram-over-WARP proxy) as an AmneziaWG-style INI, or a
-     * fresh one: [officialFirst] registers straight with Cloudflare (plain WireGuard, "the official way")
+     * fresh one: registers straight with Cloudflare
      * before the third-party generators. Null — and a log line saying why — when nothing could be obtained.
      */
-    private suspend fun obtainWarpIni(officialFirst: Boolean): String? {
+    private suspend fun obtainWarpIni(requireI1: Boolean): String? {
         val ds = LocationsDataSourceImpl(applicationContext)
         var ini = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
-        if (!ini.isNullOrBlank() && (!ini.contains("Reserved", ignoreCase = true) && !ini.contains("client_id", ignoreCase = true))) {
-            addLog("WARP: сохранённый конфиг устарел (нет Reserved), выполняю перегенерацию…")
+        if (!ini.isNullOrBlank() && !WarpHelper.isUsableCachedAccount(ini, requireI1)) {
+            addLog("WARP: сохранённый конфиг не содержит корректные Reserved или требуемый I1, выполняю перегенерацию…")
             ini = null
         }
 
@@ -3751,7 +3754,7 @@ class OlcboxVpnService : VpnService() {
         }
         if (ini.isNullOrBlank()) {
             addLog("WARP: генерирую конфиг Cloudflare WARP…")
-            ini = runCatching { WarpConfigGenerator.generate(officialFirst) }
+            ini = runCatching { WarpConfigGenerator.generate(officialFirst = true) }
                 .onFailure { addLog("WARP: генерация не удалась: ${it.message}") }
                 .getOrNull()
             if (ini != null) {

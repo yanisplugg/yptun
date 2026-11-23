@@ -52,7 +52,16 @@ class WarpHelperTest {
     }
 
     @Test
-    fun engineIniDropsReservedPinsEndpointAndOnlyAwgKeepsObfuscation() {
+    fun cachedAccountRequiresUsableReservedAndOptionalI1() {
+        assertEquals(false, WarpHelper.isUsableCachedAccount("Reserved = 0, 0, 0", requireI1 = false))
+        assertEquals(false, WarpHelper.isUsableCachedAccount("Reserved = 1, 2, 256", requireI1 = false))
+        assertEquals(false, WarpHelper.isUsableCachedAccount("client_id = AQID", requireI1 = true))
+        assertEquals(true, WarpHelper.isUsableCachedAccount("client_id = AQID", requireI1 = false))
+        assertEquals(true, WarpHelper.isUsableCachedAccount("Reserved = 1, 2, 3\nI1 = <b 0xce>", requireI1 = true))
+    }
+
+    @Test
+    fun engineIniKeepsReservedPinsEndpointAndOnlyAwgKeepsObfuscation() {
         val ini = """
             [Interface]
             PrivateKey = a=
@@ -71,7 +80,8 @@ class WarpHelperTest {
         val server = WarpHelper.engineIni(ini, awg = true, initPackets = false)
         assertEquals(true, !server.contains("I1") && server.contains("Jc = 4"))
         val wg = WarpHelper.engineIni(ini, awg = false)
-        assertEquals(false, wg.contains("Jc") || wg.contains("S1") || wg.contains("Reserved"))
+        assertEquals(false, wg.contains("Jc") || wg.contains("S1") || wg.contains("I1"))
+        assertEquals(true, wg.contains("Reserved = 1, 2, 3"))
         assertEquals("1.2.3.4", WarpHelper.pinnedHost("1.2.3.4"))
     }
 }
