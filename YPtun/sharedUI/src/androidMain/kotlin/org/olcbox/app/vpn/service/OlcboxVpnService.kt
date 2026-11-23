@@ -1546,7 +1546,9 @@ class OlcboxVpnService : VpnService() {
                 throw IllegalStateException("SOCKS port $targetSocksPort is still in use")
             }
             waitForJitsiRoomCleanup(config.bypassProvider)
-            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            if (connectionMode.isTunless) {
+                bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            }
             configureMobileTransport(config)
             applyTelemostCookies(config)
             lastMobileProvider = config.bypassProvider
@@ -1634,7 +1636,9 @@ class OlcboxVpnService : VpnService() {
         // With a proxy, MasterDNS listens on the internal chain port and the proxy dials through it.
         val masterDnsPort = if (useProxy) chainOlcrtcPort else socksListenPort
         return try {
-            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            if (connectionMode.isTunless) {
+                bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            }
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             if (isLocalSocksPortOpen(socksListenPort)) {
                 throw IllegalStateException("SOCKS port $socksListenPort is still in use")
@@ -1798,7 +1802,9 @@ class OlcboxVpnService : VpnService() {
                     // Both protocols run in the awgproxy engine ("WireGuard" = the same INI without the
                     // obfuscation knobs): xray's built-in WireGuard needs ~30 s before its first byte through a
                     // proxy hop and resolves its endpoint through a DNS that is itself routed via this tunnel.
-                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide)
+                    val isWifi = currentNetworkTransport == UpstreamTransport.Wifi
+                    val targetPort = if (isWifi) 2408 else 894
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = targetPort)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.
@@ -1809,7 +1815,7 @@ class OlcboxVpnService : VpnService() {
                         warpAwgIniDraft = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfileDraft = localSocksProfile("WARP", awgLocalPort)
                     } else {
-                        warpAwgIniDraft = WarpConfigGenerator.ensureWorkingConfig(engineIni)
+                        warpAwgIniDraft = WarpConfigGenerator.ensureWorkingConfig(engineIni, isWifi = isWifi)
                         warpChainPortDraft = awgLocalPort
                     }
                 }
@@ -1821,7 +1827,9 @@ class OlcboxVpnService : VpnService() {
         val warpChainPort = warpChainPortDraft
         val warpRelay = warpRelayDraft
         return try {
-            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            if (connectionMode.isTunless) {
+                bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            }
 
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             if (isLocalSocksPortOpen(socksListenPort)) {
@@ -2165,7 +2173,9 @@ class OlcboxVpnService : VpnService() {
         return try {
             check(config.engine == EngineType.Standard) { "Mieru supports Standard mode only (not olcRTC Chain)" }
             check(!config.warpEnabled) { "WARP chaining is not supported for the standalone Mieru core" }
-            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            if (connectionMode.isTunless) {
+                bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            }
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             check(!isLocalSocksPortOpen(socksListenPort)) { "SOCKS port $socksListenPort is still in use" }
             activeProxyCore = ProxyCore.Auto
@@ -2252,7 +2262,9 @@ class OlcboxVpnService : VpnService() {
             return false
         }
         return try {
-            bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            if (connectionMode.isTunless) {
+                bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            }
 
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             if (isLocalSocksPortOpen(socksListenPort)) {
@@ -3724,7 +3736,8 @@ class OlcboxVpnService : VpnService() {
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
 
         if (ini != null) {
-            val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
+            val isWifi = currentNetworkTransport == UpstreamTransport.Wifi
+            val updated = WarpConfigGenerator.ensureWorkingConfig(ini, isWifi = isWifi)
             if (updated != ini) {
                 ini = updated
                 runCatching { ds.saveTelegramWarpConfig(updated) }
@@ -3744,7 +3757,8 @@ class OlcboxVpnService : VpnService() {
 
     /** Raises awgproxy for the WARP INI on [awgLocalPort] (the same engine as a standalone AmneziaWG). */
     private suspend fun startWarpAwg(ini: String) {
-        addLog("WARP: запускаю AmneziaWG на 127.0.0.1:$awgLocalPort (I1=${ini.contains("I1 =")})")
+        val (host, port) = WarpHelper.endpointOf(ini)
+        addLog("WARP: запускаю AmneziaWG на 127.0.0.1:$awgLocalPort via $host:$port (I1=${ini.contains("I1 =")})")
         prepareAmneziaWgProxy(ProxyProfile(tag = "WARP", type = ProxyProfile.TYPE_AMNEZIAWG, awgConfig = ini))
     }
 
@@ -4509,10 +4523,10 @@ class OlcboxVpnService : VpnService() {
         if (connectionMode == AndroidConnectionMode.Tun || vpnInterface != null) {
             setUnderlyingNetworks(if (network != null) arrayOf(network) else null)
         }
-        // When a core is running, keep the process bound to the active upstream network.
-        // During network handovers (mobile <-> Wi-Fi), this ensures all outbound direct sockets,
-        // resolver queries, and upstream dials are immediately pinned to the new physical network.
-        if (coreRunning()) {
+        // Proxy (SOCKS) mode has no TUN, so setUnderlyingNetworks above is a no-op and the
+        // process→network binding is the ONLY route out for the cores. In TUN mode, binding the
+        // process to wlan0 breaks loopback (127.0.0.1) routing, so it is strictly kept unbound.
+        if (connectionMode.isTunless && coreRunning()) {
             bindProcessToNetwork(network)
         }
         runCatching { Awg.protectSockets() }
@@ -4555,7 +4569,7 @@ class OlcboxVpnService : VpnService() {
      * already stopped (coreRunning() == false), so the binding is released as before.
      */
     private fun releaseProcessBindingUnlessProxy() {
-        if (coreRunning()) return
+        if (connectionMode.isTunless && coreRunning()) return
         unbindProcessFromNetwork()
     }
 

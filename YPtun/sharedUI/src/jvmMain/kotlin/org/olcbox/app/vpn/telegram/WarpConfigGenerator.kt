@@ -40,7 +40,7 @@ import org.olcbox.app.vpn.desktop.YpTunCore
 internal object WarpConfigGenerator {
 
     /** Standard WARP data-plane endpoint. */
-    const val ENDPOINT = "162.159.192.1:894"
+    const val ENDPOINT = "162.159.192.1:2408"
 
     /** A generator answers with one account; the git-hosted mirror with a pool of them. */
     private fun parseAccount(text: String): WarpServiceAccount =
@@ -318,11 +318,17 @@ private const val BROWSER_USER_AGENT =
      * Upgrades an existing or cached AmneziaWG WARP INI so it uses an unthrottled endpoint (port 894),
      * includes the I1 DPI evasion parameter, and sets PersistentKeepalive to 15s.
      */
-    fun ensureWorkingConfig(ini: String): String {
+    fun ensureWorkingConfig(ini: String, isWifi: Boolean = true): String {
         if (ini.isBlank()) return ini
         var result = ini
-        if (result.contains("engage.cloudflareclient.com") || result.contains(":2408")) {
-            result = result.replace(Regex("(?m)^Endpoint\\s*=\\s*.*$"), "Endpoint = $ENDPOINT")
+        val targetPort = if (isWifi) 2408 else 894
+        val targetEndpoint = "162.159.192.1:$targetPort"
+        if (result.contains("engage.cloudflareclient.com")) {
+            result = result.replace(Regex("(?m)^Endpoint\\s*=\\s*.*$"), "Endpoint = $targetEndpoint")
+        } else if (isWifi && result.contains(":894")) {
+            result = result.replace(":894", ":2408")
+        } else if (!isWifi && result.contains(":2408")) {
+            result = result.replace(":2408", ":894")
         }
         if (result.contains("PersistentKeepalive", ignoreCase = true)) {
             result = result.replace(Regex("(?m)^PersistentKeepalive\\s*=\\s*\\d+\\s*$"), "PersistentKeepalive = 15")
