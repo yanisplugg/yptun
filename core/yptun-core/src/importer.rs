@@ -379,6 +379,7 @@ fn parse_import_plain(text: &str, sub_url: Option<&str>, interval: Option<i32>, 
     bundles.extend(parse_freeturn_text(&link_text, sub_url));
     bundles.extend(parse_qwdtt_text(&link_text, sub_url));
     bundles.extend(parse_csqtt_text(&link_text, sub_url));
+    bundles.extend(parse_turnable_text(&link_text, text, sub_url));
     bundles.extend(parse_openflux_text(&link_text, sub_url));
     bundles.extend(parse_masterdns_text(&link_text, sub_url));
     bundles.extend(parse_snolc_text(&link_text, sub_url));
@@ -690,6 +691,75 @@ fn parse_csqtt_text(text: &str, sub_url: Option<&str>) -> Option<LocationBundleV
     bundle_of(entries)
 }
 
+fn parse_turnable_text(link_text: &str, raw_text: &str, sub_url: Option<&str>) -> Option<LocationBundleV4> {
+    let mut used = HashSet::new();
+    let line_profiles: Vec<panel::ParsedTurnable> = link_text
+        .lines()
+        .map(str::trim)
+        .filter(|l| starts_ci(l, panel::TURNABLE_SCHEME))
+        .filter_map(panel::parse_turnable_uri)
+        .collect();
+    let profiles = if !line_profiles.is_empty() {
+        line_profiles
+    } else {
+        let from_link = panel::parse_turnable_json(link_text);
+        if !from_link.is_empty() {
+            from_link
+        } else {
+            panel::parse_turnable_json(raw_text)
+        }
+    };
+    if profiles.is_empty() {
+        return None;
+    }
+    let entries: Vec<LocationEntry> = profiles
+        .into_iter()
+        .map(|item| {
+            let loc_name = if item.name.trim().is_empty() { "Turnable".to_string() } else { item.name.clone() };
+            let priv_key = if item.wg_private_key.trim().is_empty() { "aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEE=" } else { &item.wg_private_key };
+            let pub_key = if item.wg_peer_public_key.trim().is_empty() { "bAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEE=" } else { &item.wg_peer_public_key };
+            let addr = if item.wg_address.trim().is_empty() { "10.9.1.2/32" } else { &item.wg_address };
+            let raw_outbound = json!({
+                "type": "wireguard",
+                "server": "127.0.0.1",
+                "server_port": item.listen_port,
+                "local_address": [addr],
+                "private_key": priv_key,
+                "peer_public_key": pub_key,
+                "mtu": item.wg_mtu,
+                "persistent_keepalive": 15
+            }).to_string();
+
+            let loc = LocationConfig {
+                name: loc_name.clone(),
+                engine: EngineType::VkTurn,
+                vkturn: Some(VkTurnConfig {
+                    core: CORE_TURNABLE.into(),
+                    turnable_config: item.config.clone(),
+                    outbound: OUTBOUND_WIREGUARD.into(),
+                    listen_port: item.listen_port,
+                    ..Default::default()
+                }),
+                proxy: Some(ProxyProfile {
+                    tag: loc_name.clone(),
+                    kind: "wireguard".into(),
+                    server: item.host.clone(),
+                    server_port: item.port,
+                    raw_outbound: Some(raw_outbound),
+                    ..Default::default()
+                }),
+                proxy_enabled: true,
+                ..Default::default()
+            }.normalized();
+
+            let base = storage_slug(&format!("{}_{}_{}", item.host, item.port, loc_name));
+            let id = unique_storage_id(&format!("imported_turnable_{base}"), &mut used);
+            entry(&id, &loc, sub_url, None)
+        })
+        .collect();
+    bundle_of(entries)
+}
+
 fn parse_openflux_text(text: &str, sub_url: Option<&str>) -> Option<LocationBundleV4> {
     let mut used = HashSet::new();
     let entries = scheme_lines(text, panel::OPENFLUX_SCHEME)
@@ -763,7 +833,21 @@ fn parse_amneziawg_text(text: &str, sub_url: Option<&str>) -> Option<LocationBun
 }
 
 fn parse_proxy_text(text: &str, sub_url: Option<&str>, metadata: Option<&SubscriptionMetadata>) -> Option<LocationBundleV4> {
-    let profiles = share_link::parse_subscription(text);
+    let non_custom_lines: String = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !starts_ci(l, panel::YPTUN_INBOUND_PREFIX)
+                && !starts_ci(l, panel::OLCRTC_SCHEME)
+                && !starts_ci(l, panel::FREETURN_SCHEME)
+                && !starts_ci(l, panel::TURNABLE_SCHEME)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if non_custom_lines.trim().is_empty() {
+        return None;
+    }
+    let profiles = share_link::parse_subscription(&non_custom_lines);
     if profiles.is_empty() {
         return None;
     }

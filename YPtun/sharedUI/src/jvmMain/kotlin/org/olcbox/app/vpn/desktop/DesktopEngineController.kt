@@ -1350,7 +1350,8 @@ internal class DesktopEngineController(
             append("\"local_address\":[$localAddr],")
             append("\"private_key\":\"$priv\",")
             append("\"peer_public_key\":\"$pub\",")
-            append("\"mtu\":$effMtu")
+            append("\"mtu\":$effMtu,")
+            append("\"persistent_keepalive\":15")
             append("}")
         }
         return ProxyProfile(

@@ -1448,7 +1448,7 @@ pub fn apple_bridge_plan(
         )
     };
     let yaml = format!(
-        "tunnel:\n  mtu: {mtu}\n  ipv4: {ipv4}\n  {ipv6}\n\nsocks5:\n  address: 127.0.0.1\n  port: {socks_port}\n  udp: '{udp}'\n  pipeline: false\n  {authentication}\n\nmapdns:\n  address: {mapdns}\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 512\n\nmisc:\n  task-stack-size: 8192\n  tcp-buffer-size: 4096\n  max-session-count: 128\n  connect-timeout: {connect_timeout}\n  tcp-read-write-timeout: 300000\n  udp-read-write-timeout: 60000\n  log-level: warn\n",
+        "tunnel:\n  mtu: {mtu}\n  ipv4: {ipv4}\n  {ipv6}\n\nsocks5:\n  address: 127.0.0.1\n  port: {socks_port}\n  udp: '{udp}'\n  pipeline: false\n  {authentication}\n\nmapdns:\n  address: {mapdns}\n  port: 53\n  network: 100.64.0.0\n  netmask: 255.192.0.0\n  cache-size: 512\n\nmisc:\n  task-stack-size: 8192\n  tcp-buffer-size: 4096\n  max-session-count: 128\n  connect-timeout: {connect_timeout}\n  tcp-read-write-timeout: 300000\n  udp-read-write-timeout: 300000\n  log-level: warn\n",
         mtu = traffic.mtu,
         ipv4 = TUN_IPV4_ADDRESS,
         udp = if tcp_only_udp { "tcp" } else { "udp" },

@@ -437,6 +437,39 @@ fn apple_import_adds_mieru_without_dropping_existing_locations() {
 }
 
 #[test]
+fn apple_import_locations_parses_turnable_links() {
+    let current = serde_json::json!({
+        "version": 5,
+        "active_location_id": "existing",
+        "locations": [{
+            "storage_id": "existing",
+            "name": "Existing",
+            "engine": "stealth",
+            "id": "room",
+            "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }]
+    });
+    let imported = apple_import_locations(
+        current.to_string(),
+        "turnable://user:call@vk.com/wireguard?type=relay&gateway=1.2.3.4:56000#TurnableNode".into(),
+        Some("https://example.com/sub".into()),
+    )
+    .unwrap();
+    let bundle: serde_json::Value = serde_json::from_str(&imported.normalized_bundle_json).unwrap();
+    assert_eq!(imported.imported_locations, 1);
+    assert_eq!(bundle["locations"].as_array().unwrap().len(), 2);
+    let turnable_entry = bundle["locations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|loc| loc["name"] == "TurnableNode")
+        .expect("TurnableNode present");
+    assert_eq!(turnable_entry["engine"], "vkturn");
+    assert_eq!(turnable_entry["vkturn"]["core"], "turnable");
+    assert!(turnable_entry["proxy"]["raw_outbound"].as_str().unwrap().contains("\"persistent_keepalive\":15"));
+}
+
+#[test]
 fn apple_save_location_preserves_subscription_metadata_when_editing() {
     let current = serde_json::json!({
         "version": 5,

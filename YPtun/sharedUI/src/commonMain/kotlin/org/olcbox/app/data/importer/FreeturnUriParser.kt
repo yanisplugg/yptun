@@ -175,6 +175,7 @@ object FreeturnUriParser {
             put("private_key", privateKey)
             put("peer_public_key", publicKey)
             if (mtu > 0) put("mtu", mtu)
+            put("persistent_keepalive", 15)
         }
         return WgConf(endpointPort = epPort, outboundJson = json.toString())
     }

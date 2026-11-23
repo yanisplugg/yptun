@@ -599,6 +599,20 @@ fn proxy_outbound(
                     m.insert("multiplex".into(), mux);
                 }
             }
+            if obj.get("type").and_then(Value::as_str) == Some("wireguard") {
+                if !m.contains_key("persistent_keepalive_interval") && !m.contains_key("persistent_keepalive") {
+                    m.insert("persistent_keepalive_interval".into(), json!(15));
+                }
+                if let Some(Value::Array(peers)) = m.get_mut("peers") {
+                    for peer in peers {
+                        if let Value::Object(peer_obj) = peer {
+                            if !peer_obj.contains_key("persistent_keepalive_interval") && !peer_obj.contains_key("persistent_keepalive") {
+                                peer_obj.insert("persistent_keepalive_interval".into(), json!(15));
+                            }
+                        }
+                    }
+                }
+            }
             return Ok(Value::Object(m));
         }
     }
@@ -742,9 +756,20 @@ fn wireguard_endpoint(p: &ProxyProfile, tag: &str, auto_detect_interface: bool, 
     if let Some(mtu) = mtu.filter(|m| *m > 0) {
         m.insert("mtu".into(), json!(mtu));
     }
+    let keepalive = obj
+        .get("persistent_keepalive")
+        .or_else(|| obj.get("persistent_keepalive_interval"))
+        .and_then(Value::as_i64)
+        .unwrap_or(15);
     m.insert("address".into(), Value::Array(addrs));
     m.insert("private_key".into(), json!(private_key));
-    m.insert("peers".into(), json!([{ "address": server, "port": port, "public_key": peer_public_key, "allowed_ips": ["0.0.0.0/0"] }]));
+    m.insert("peers".into(), json!([{
+        "address": server,
+        "port": port,
+        "public_key": peer_public_key,
+        "allowed_ips": ["0.0.0.0/0"],
+        "persistent_keepalive_interval": keepalive
+    }]));
     Some(Value::Object(m))
 }
 

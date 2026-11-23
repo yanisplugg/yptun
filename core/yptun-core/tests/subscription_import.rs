@@ -260,3 +260,23 @@ fn a_server_is_never_cascaded_through_itself() {
     assert_eq!(exit_of(&by_name("A")), Some("exit.test"));
     assert_eq!(exit_of(&by_name("Same")), None);
 }
+
+#[test]
+fn imports_turnable_from_subscription() {
+    let turnable = "turnable://user:call@vk.com/wireguard?type=relay&gateway=1.2.3.4:56000#TurnableNode";
+    let imported = import(&format!("{turnable}\n{VLESS}"));
+    assert_eq!(imported.locations.len(), 2);
+    let names = names(&imported);
+    assert!(names.contains(&"TurnableNode".to_string()), "{names:?}");
+    assert!(names.contains(&"Amsterdam".to_string()), "{names:?}");
+    let turnable_loc = imported
+        .locations
+        .iter()
+        .find(|e| e.name == "TurnableNode")
+        .unwrap();
+    assert_eq!(turnable_loc.location().engine, EngineType::VkTurn);
+    let vk = turnable_loc.location().vkturn.unwrap();
+    assert!(vk.uses_turnable());
+    let proxy = turnable_loc.location().proxy.unwrap();
+    assert!(proxy.raw_outbound.as_ref().unwrap().contains("\"persistent_keepalive\":15"));
+}

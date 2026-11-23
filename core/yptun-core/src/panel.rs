@@ -289,6 +289,7 @@ pub fn parse_wg_conf(conf: &str) -> Option<(i32, String)> {
         "local_address": [address],
         "private_key": private_key,
         "peer_public_key": public_key,
+        "persistent_keepalive": 15,
     });
     if mtu > 0 {
         out["mtu"] = json!(mtu);
@@ -358,6 +359,182 @@ pub fn compose_qwdtt(name: &str, vk: &VkTurnConfig) -> String {
     params.push(("port".into(), port.to_string()));
     params.push(("pass".into(), vk.wdtt_password.trim().into()));
     format!("{QWDTT_SCHEME}config?{}", params.iter().map(|(k, v)| format!("{k}={}", percent_encode(v))).collect::<Vec<_>>().join("&"))
+}
+
+// ---------------- Turnable ----------------
+
+pub const TURNABLE_SCHEME: &str = "turnable://";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedTurnable {
+    pub name: String,
+    pub config: String,
+    pub host: String,
+    pub port: i32,
+    pub listen_port: i32,
+    pub wg_private_key: String,
+    pub wg_peer_public_key: String,
+    pub wg_address: String,
+    pub wg_mtu: i32,
+}
+
+pub fn parse_turnable_uri(raw_line: &str) -> Option<ParsedTurnable> {
+    let line = raw_line.trim();
+    if !starts_ci(line, TURNABLE_SCHEME) {
+        return None;
+    }
+    let fragment = if line.contains('#') {
+        let f = percent_decode(after(line, '#'));
+        let trimmed = f.trim();
+        if !trimmed.is_empty() {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let without_fragment = before(line, '#');
+    let body = &without_fragment[TURNABLE_SCHEME.len()..];
+    let query = if body.contains('?') { after(body, '?') } else { "" };
+    let before_query = before(body, '?');
+    let authority = before(before_query, '/');
+    let path = if before_query.contains('/') { after(before_query, '/') } else { "" };
+    let host_port = match authority.rfind('@') {
+        Some(idx) => &authority[idx + 1..],
+        None => authority,
+    };
+    let host = if host_port.starts_with('[') {
+        host_port.trim_start_matches('[').split(']').next().unwrap_or(host_port)
+    } else if host_port.contains(':') {
+        before(host_port, ':')
+    } else {
+        host_port
+    };
+    let port = if host_port.contains(':') && !host_port.ends_with(']') {
+        after(host_port, ':').parse::<i32>().ok().filter(|p| (1..=65535).contains(p)).unwrap_or(DEFAULT_FREETURN_PORT)
+    } else {
+        DEFAULT_FREETURN_PORT
+    };
+
+    let query_pairs = parse_query(query);
+    let name = fragment
+        .or_else(|| query_pairs.get("name").filter(|s| !s.trim().is_empty()).cloned())
+        .unwrap_or_else(|| {
+            let h = if !host.trim().is_empty() { host.trim() } else { path.trim() };
+            format!("Turnable {h}").trim().to_string()
+        });
+
+    let gw = query_pairs.get("gateway").map(String::as_str).unwrap_or("");
+    let gw_host = if gw.starts_with('[') {
+        gw.trim_start_matches('[').split(']').next().unwrap_or(gw)
+    } else if gw.contains(':') {
+        before(gw, ':')
+    } else {
+        gw
+    };
+    let gw_port = if gw.contains(':') && !gw.ends_with(']') {
+        after(gw, ':').parse::<i32>().ok().filter(|p| (1..=65535).contains(p)).unwrap_or(port)
+    } else {
+        port
+    };
+
+    let wg_priv = query_pairs.get("priv")
+        .or_else(|| query_pairs.get("private_key"))
+        .or_else(|| query_pairs.get("wg_priv"))
+        .cloned()
+        .unwrap_or_default();
+    let wg_pub = query_pairs.get("pub")
+        .or_else(|| query_pairs.get("public_key"))
+        .or_else(|| query_pairs.get("peer_public_key"))
+        .or_else(|| query_pairs.get("pub_key"))
+        .cloned()
+        .unwrap_or_default();
+    let wg_ip = query_pairs.get("ip")
+        .or_else(|| query_pairs.get("address"))
+        .or_else(|| query_pairs.get("wg_address"))
+        .cloned()
+        .unwrap_or_else(|| "10.9.1.2/32".into());
+    let mtu = query_pairs.get("mtu")
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|m| (576..=1500).contains(m))
+        .unwrap_or(1200);
+
+    Some(ParsedTurnable {
+        name: if name.trim().is_empty() { "Turnable".into() } else { name },
+        config: line.to_string(),
+        host: if !gw_host.trim().is_empty() { gw_host.to_string() } else if !host.trim().is_empty() { host.to_string() } else { "127.0.0.1".into() },
+        port: gw_port,
+        listen_port: DEFAULT_FREETURN_PORT,
+        wg_private_key: wg_priv,
+        wg_peer_public_key: wg_pub,
+        wg_address: wg_ip,
+        wg_mtu: mtu,
+    })
+}
+
+pub fn parse_turnable_json(text: &str) -> Vec<ParsedTurnable> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+        return Vec::new();
+    }
+    let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
+        return Vec::new();
+    };
+    let items: Vec<&Map<String, Value>> = match &val {
+        Value::Array(arr) => arr.iter().filter_map(Value::as_object).collect(),
+        Value::Object(obj) => {
+            if let Some(Value::Array(arr)) = obj.get("turnable").or_else(|| obj.get("configs")) {
+                arr.iter().filter_map(Value::as_object).collect()
+            } else {
+                vec![obj]
+            }
+        }
+        _ => Vec::new(),
+    };
+    items.into_iter().filter_map(|obj| {
+        let platform_id = jstr(obj, "platform_id");
+        let t = jstr(obj, "type");
+        let has_fields = !platform_id.is_empty()
+            || ((t == "relay" || t == "direct") && (obj.contains_key("call_id") || obj.contains_key("user_uuid") || obj.contains_key("routes") || obj.contains_key("gateway")))
+            || obj.contains_key("routes");
+        if !has_fields {
+            return None;
+        }
+        let tag = jstr(obj, "name");
+        let tag = if tag.is_empty() { jstr(obj, "tag") } else { tag };
+        let name = if !tag.is_empty() {
+            tag
+        } else if !platform_id.is_empty() {
+            format!("Turnable {platform_id}")
+        } else {
+            "Turnable".into()
+        };
+        let gw = jstr(obj, "gateway");
+        let gw_host = if gw.starts_with('[') {
+            gw.trim_start_matches('[').split(']').next().unwrap_or(&gw)
+        } else if gw.contains(':') {
+            before(&gw, ':')
+        } else {
+            &gw
+        };
+        let gw_port = if gw.contains(':') && !gw.ends_with(']') {
+            after(&gw, ':').parse::<i32>().ok().filter(|p| (1..=65535).contains(p)).unwrap_or(DEFAULT_FREETURN_PORT)
+        } else {
+            DEFAULT_FREETURN_PORT
+        };
+        Some(ParsedTurnable {
+            name: if name.trim().is_empty() { "Turnable".into() } else { name },
+            config: Value::Object(obj.clone()).to_string(),
+            host: if !gw_host.trim().is_empty() { gw_host.to_string() } else { "127.0.0.1".into() },
+            port: gw_port,
+            listen_port: DEFAULT_FREETURN_PORT,
+            wg_private_key: String::new(),
+            wg_peer_public_key: String::new(),
+            wg_address: "10.9.1.2/32".into(),
+            wg_mtu: 1200,
+        })
+    }).collect()
 }
 
 // ---------------- OpenFlux ----------------

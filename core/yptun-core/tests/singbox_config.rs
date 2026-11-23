@@ -118,6 +118,7 @@ fn wireguard_loopback_bind() {
     let android = endpoint("127.0.0.1", false);
     assert!(android.get("inet4_bind_address").is_none());
     assert_eq!((android["tag"].as_str(), android["mtu"].as_i64(), android["peers"][0]["port"].as_i64()), (Some("proxy"), Some(1200), Some(9000)));
+    assert_eq!(android["peers"][0]["persistent_keepalive_interval"].as_i64(), Some(15));
 }
 
 #[test]

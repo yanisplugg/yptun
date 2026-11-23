@@ -180,6 +180,7 @@ object VkTurnComposer {
                     put("private_key", draft.wgPrivateKey.trim())
                     put("peer_public_key", draft.wgPeerPublicKey.trim())
                     if (mtu > 0) put("mtu", mtu)
+                    put("persistent_keepalive", 15)
                 }.toString()
                 ProxyProfile(
                     tag = name.ifBlank { "VK-TURN" },

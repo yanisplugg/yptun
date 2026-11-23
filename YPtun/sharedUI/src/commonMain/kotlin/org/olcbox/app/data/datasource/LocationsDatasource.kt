@@ -2590,6 +2590,7 @@ class LocationsRepositoryImpl(
                 put("private_key", item.wgPrivateKey.ifBlank { "aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEE=" })
                 put("peer_public_key", item.wgPeerPublicKey.ifBlank { "bAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEE=" })
                 put("mtu", item.wgMtu)
+                put("persistent_keepalive", 15)
             }.toString()
 
             val location = LocationConfig(

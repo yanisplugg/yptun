@@ -1209,7 +1209,7 @@ internal class IosEngineController(
         }
         val localAddr = if (addr.isNotEmpty()) "\"$addr\"" else ""
         val effMtu = (if (mtu > 0) mtu else 1200).coerceAtMost(1200)
-        val json = "{\"type\":\"wireguard\",\"server\":\"127.0.0.1\",\"server_port\":$listenPort," +
+        val json = "{\"type\":\"wireguard\",\"server\":\"127.0.0.1\",\"server_port\":$listenPort,\"persistent_keepalive\":15," +
             "\"local_address\":[$localAddr],\"private_key\":\"$priv\",\"peer_public_key\":\"$pub\",\"mtu\":$effMtu}"
         return ProxyProfile(tag = "WDTT", type = "wireguard", server = "127.0.0.1", serverPort = listenPort, rawOutbound = json)
     }
