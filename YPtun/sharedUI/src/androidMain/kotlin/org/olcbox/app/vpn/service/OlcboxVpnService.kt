@@ -1878,9 +1878,11 @@ class OlcboxVpnService : VpnService() {
                         val (host, port) = WarpHelper.endpointOf(candidate)
                         val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
                         addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
-                        val delayMs = withContext(Dispatchers.IO) { Awg.probe(candidate) }
-                        addLog(if (delayMs >= 0) "WARP: туннель передаёт данные (${delayMs} мс)" else "WARP: проверка туннеля не прошла")
-                        delayMs >= 0
+                        startWarpAwg(candidate)
+                        val ready = checkWarpSocks(profile)
+                        addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
+                        if (!ready) Awg.stop()
+                        ready
                     }
                     addLog("WARP: ядро AmneziaWG ${Awg.version()}")
                     probe(warpAwgIni) ?: run {
@@ -1890,8 +1892,7 @@ class OlcboxVpnService : VpnService() {
                         LocationsDataSourceImpl(applicationContext).saveTelegramWarpConfig(fresh)
                         ready
                     }
-                } else warpAwgIni
-                startWarpAwg(ini)
+                } else warpAwgIni.also { startWarpAwg(it) }
                 OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
             }
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
@@ -3789,6 +3790,22 @@ class OlcboxVpnService : VpnService() {
             }
         }
         return ini?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun checkWarpSocks(profile: ProxyProfile): Boolean = withContext(Dispatchers.IO) {
+        val target = if (profile.rawXrayConfig.isNullOrBlank() &&
+            profile.server.isNotBlank() && profile.serverPort in 1..65535
+        ) InetSocketAddress.createUnresolved(profile.server, profile.serverPort)
+        else InetSocketAddress.createUnresolved("1.1.1.1", 443)
+        val socks = java.net.Proxy(java.net.Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", awgLocalPort))
+        try {
+            // Leave name resolution to awgproxy so the check also covers DNS inside WARP.
+            Socket(socks).use { it.connect(target, 8_000) }
+            true
+        } catch (e: java.io.IOException) {
+            addLog("WARP: SOCKS CONNECT к ${target.hostString}:${target.port}: ${e.message}")
+            false
+        }
     }
 
     /** Raises awgproxy for the WARP INI on [awgLocalPort] (the same engine as a standalone AmneziaWG). */
