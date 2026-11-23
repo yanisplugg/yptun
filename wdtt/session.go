@@ -833,8 +833,6 @@ func RunPing(
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	defer sessCancel()
-	registerActiveSession(sessionID, sessCancel)
-	defer unregisterActiveSession(sessionID)
 
 	var relayWg sync.WaitGroup
 	relayWg.Add(2)
