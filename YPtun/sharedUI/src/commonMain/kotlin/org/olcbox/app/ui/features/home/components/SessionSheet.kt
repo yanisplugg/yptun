@@ -71,6 +71,7 @@ import kotlin.math.roundToInt
 fun SessionSheet(
     proxy: () -> SubscriptionFetchProxy?,
     activeLocation: () -> LocationConfig? = { null },
+    warpIngress: Pair<String, Int>? = null,
     onDismiss: () -> Unit
 ) {
     val s = LocalStrings.current
@@ -94,16 +95,17 @@ fun SessionSheet(
 
     var showIngress by remember { mutableStateOf(false) }
     val locationConfig = remember(activeLocation) { activeLocation() }
-    var ingressGeo by remember { mutableStateOf<SessionInfo?>(null) }
-    var ingressGeoLoading by remember { mutableStateOf(false) }
-
-    val (ingressHost, ingressPort) = remember(locationConfig) { extractIngressHostAndPort(locationConfig) }
+    val (ingressHost, ingressPort) = warpIngress?.let { (host, port) -> host to port.toString() }
+        ?: extractIngressHostAndPort(locationConfig)
+    var ingressGeo by remember(ingressHost) { mutableStateOf<SessionInfo?>(null) }
+    var ingressGeoLoading by remember(ingressHost) { mutableStateOf(false) }
 
     LaunchedEffect(showIngress, ingressHost) {
         if (showIngress && ingressGeo == null && !ingressHost.isNullOrBlank()) {
             ingressGeoLoading = true
             runCatching { fetchHostGeoInfo(ingressHost, proxy()) }
                 .onSuccess { ingressGeo = it }
+                .onFailure { if (it is CancellationException) throw it }
             ingressGeoLoading = false
         }
     }
@@ -177,7 +179,7 @@ fun SessionSheet(
             }
             SettingsCard {
                 val ingressProtocol = resolveIngressProtocol(locationConfig)
-                val ingressTransport = resolveIngressTransport(locationConfig)
+                val ingressTransport = if (warpIngress != null) "UDP" else resolveIngressTransport(locationConfig)
                 val warpModeStr = resolveWarpModeString(locationConfig, s)
 
                 val ingressRows = mutableListOf<Pair<String, String?>>()

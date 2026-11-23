@@ -445,6 +445,8 @@ class OlcboxVpnService : VpnService() {
 
             val previousTransport = currentNetworkTransport
             val nextTransport = upstream.transportOrNull()
+            val rebuildWarp = OlcboxVpnState.warpIngress.value != null &&
+                (previousTransport == UpstreamTransport.Cellular) != (nextTransport == UpstreamTransport.Cellular)
             updateUnderlyingNetwork(upstream)
             addLog("Network $reason: ${getNetName(upstream)}")
 
@@ -455,7 +457,7 @@ class OlcboxVpnService : VpnService() {
                     } else {
                         requestTransportRecovery(
                             reason = "Upstream network changed",
-                            fullRestart = false,
+                            fullRestart = rebuildWarp,
                             delayMs = NETWORK_STABILITY_GRACE_MS,
                             setReconnectingImmediately = false
                         )
@@ -473,7 +475,7 @@ class OlcboxVpnService : VpnService() {
                     } else {
                         requestTransportRecovery(
                             reason = "Upstream network changed",
-                            fullRestart = false,
+                            fullRestart = rebuildWarp,
                             delayMs = NETWORK_STABILITY_GRACE_MS
                         )
                     }
@@ -1830,6 +1832,9 @@ class OlcboxVpnService : VpnService() {
         val warpAwgIni = warpAwgIniDraft
         val warpChainPort = warpChainPortDraft
         val warpRelay = warpRelayDraft
+        val blockCellularWarpQuic = warpAwgIni != null && warpRelay == null &&
+            upstream.transportOrNull() == UpstreamTransport.Cellular
+        if (blockCellularWarpQuic) addLog("WARP: мобильная сеть, блокирую UDP/443 для перехода на HTTPS по TCP")
         return try {
             if (connectionMode.isTunless) {
                 bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
@@ -1887,6 +1892,7 @@ class OlcboxVpnService : VpnService() {
                     }
                 } else warpAwgIni
                 startWarpAwg(ini)
+                OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
             }
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
@@ -2061,6 +2067,7 @@ class OlcboxVpnService : VpnService() {
                         warpChainPort = warpChainPort,
                         warpExitPort = if (warpRelay != null) awgLocalPort else null,
                         warpRelay = warpRelay,
+                        blockClientQuic = blockCellularWarpQuic,
                     )
                 } else {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
@@ -2068,6 +2075,7 @@ class OlcboxVpnService : VpnService() {
                     XrayConfig.build(
                         profile = xrayProfile,
                         listenPort = socksListenPort,
+                        blockClientQuic = blockCellularWarpQuic,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
                         socksPassword = socksPassword,
@@ -2134,7 +2142,7 @@ class OlcboxVpnService : VpnService() {
                     singboxGeositeBase = profilesState.singboxGeositeBase,
                     singboxGeoipBase = profilesState.singboxGeoipBase,
                     // A naive+quic server needs its own QUIC uplink unblocked too.
-                    blockQuic = !(isLocalUdpTunnel || isHy2 || hasOpenVpn || (isNaive && effectiveProfile.naiveQuic)),
+                    blockQuic = blockCellularWarpQuic || !(isLocalUdpTunnel || isHy2 || hasOpenVpn || (isNaive && effectiveProfile.naiveQuic)),
                     sniffOverrideDestination = isLocalUdpTunnel,
                     // STRICT "IPv4 only": forceFamilyResolve (default true) keeps the `::/0 reject` so a real
                     // IPv6 destination never leaves. This stays on EVEN with fakeip — but fakeip now also
@@ -3621,6 +3629,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private suspend fun stopVisibleVpnProcesses() {
+        OlcboxVpnState.setWarpIngress(null)
         val tunThread = tun2socksThread
         stopAuthenticatedSocksProxy()
         stopTun2socks()
@@ -3698,6 +3707,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun stopMobile() {
+        OlcboxVpnState.setWarpIngress(null)
         OlcboxVpnState.activeSocks = null
         runCatching { singBox?.stop() }
         runCatching { xray?.stop() }

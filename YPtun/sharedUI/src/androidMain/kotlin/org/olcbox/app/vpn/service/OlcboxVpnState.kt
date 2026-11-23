@@ -19,6 +19,13 @@ object OlcboxVpnState {
     private val _status = MutableStateFlow<VpnStatus>(VpnStatus.Disconnected)
     val status = _status.asStateFlow()
 
+    private val _warpIngress = MutableStateFlow<Pair<String, Int>?>(null)
+    val warpIngress = _warpIngress.asStateFlow()
+
+    fun setWarpIngress(endpoint: Pair<String, Int>?) {
+        _warpIngress.value = endpoint
+    }
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 

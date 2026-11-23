@@ -337,6 +337,8 @@ class HomeScreenViewModel(
     }
 
     /** The live tunnel's SOCKS endpoint (null when not connected); «Сессия» goes out through it. */
+    val warpIngress = vpnManager.warpIngress
+
     fun tunnelProxy() = vpnManager.subscriptionFetchProxy()
 
     fun onPasteFromClipboard(

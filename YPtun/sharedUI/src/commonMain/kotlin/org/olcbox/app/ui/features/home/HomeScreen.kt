@@ -848,7 +848,9 @@ fun HomeScreen(
         }
 
         if (isSessionSheetOpen) {
+            val warpIngress by viewModel.warpIngress.collectAsState()
             SessionSheet(
+                warpIngress = warpIngress,
                 proxy = { viewModel.tunnelProxy() },
                 activeLocation = { state.selectedLocation?.config ?: state.configData },
                 onDismiss = { isSessionSheetOpen = false }

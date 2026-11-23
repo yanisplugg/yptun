@@ -354,6 +354,24 @@ class PrepareRawXhttpTest {
     }
 
     @Test
+    fun mobileWarpRejectsSocksQuicBeforeRawProxyRoutes() {
+        val json = XrayConfig.prepareRaw(
+            rawConfigJson = xhttpConfig, listenPort = 10808, warpChainPort = 18080,
+            blockClientQuic = true,
+        )
+        val root = Json.parseToJsonElement(json).jsonObject
+        val firstRule = root.getValue("routing").jsonObject.getValue("rules").jsonArray.first().jsonObject
+        assertEquals("socks-in", firstRule.getValue("inboundTag").jsonArray.single().jsonPrimitive.content)
+        assertEquals("udp", firstRule.getValue("network").jsonPrimitive.content)
+        assertEquals("443", firstRule.getValue("port").jsonPrimitive.content)
+        val tag = firstRule.getValue("outboundTag").jsonPrimitive.content
+        val outbound = root.getValue("outbounds").jsonArray.map { it.jsonObject }.first {
+            it.getValue("tag").jsonPrimitive.content == tag
+        }
+        assertEquals("blackhole", outbound.getValue("protocol").jsonPrimitive.content)
+    }
+
+    @Test
     fun buildClientWarpCascadePreservesXhttpAndVision() {
         val warpPort = 18080
         val exit = ProxyProfile(
@@ -364,9 +382,14 @@ class PrepareRawXhttpTest {
         for (profile in listOf(exit, exit.copy(network = ProxyProfile.NETWORK_XHTTP, flow = ""))) {
             val json = XrayConfig.build(
                 profile = profile, listenPort = 10808, olcrtcChainPort = warpPort,
-                chainViaDialerProxy = true, keepFlowOnChain = true,
+                chainViaDialerProxy = true, keepFlowOnChain = true, blockClientQuic = true,
             )
-            val outbounds = Json.parseToJsonElement(json).jsonObject.getValue("outbounds").jsonArray
+            val root = Json.parseToJsonElement(json).jsonObject
+            val firstRule = root.getValue("routing").jsonObject.getValue("rules").jsonArray.first().jsonObject
+            assertEquals("udp", firstRule.getValue("network").jsonPrimitive.content)
+            assertEquals("443", firstRule.getValue("port").jsonPrimitive.content)
+            assertEquals("block", firstRule.getValue("outboundTag").jsonPrimitive.content)
+            val outbounds = root.getValue("outbounds").jsonArray
                 .map { it.jsonObject }
             val proxy = outbounds.first()
             assertEquals("proxy", proxy.getValue("tag").jsonPrimitive.content)

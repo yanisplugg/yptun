@@ -7,6 +7,8 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.RoutingProfile
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 
+private val NO_WARP_INGRESS = MutableStateFlow<Pair<String, Int>?>(null).asStateFlow()
+
 private val ZERO_CONNECTED_SINCE: StateFlow<Long> = MutableStateFlow(0L).asStateFlow()
 
 sealed class VpnStatus {
@@ -22,6 +24,7 @@ interface VpnManager {
     val logs: StateFlow<List<String>>
     val status: StateFlow<VpnStatus>
     val isConnected: StateFlow<Boolean>
+    val warpIngress: StateFlow<Pair<String, Int>?> get() = NO_WARP_INGRESS
 
     /**
      * Wall-clock epoch-ms when the current connection started (0 = not connected). Backed by a

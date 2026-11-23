@@ -260,6 +260,7 @@ object XrayConfig {
         // Block QUIC (UDP/443) so clients fall back to TCP. MUST be false for UDP-capable tunnels
         // (VK-TURN / WireGuard) which carry QUIC natively — blocking it there breaks those engines.
         blockQuic: Boolean = true,
+        blockClientQuic: Boolean = false,
         // Family enforcement (the opposite-family blackhole + IPIfNonMatch routing-resolve that ipv4_only/
         // prefer_ipv4/ipv6_only turn on). IPIfNonMatch makes Xray resolve EVERY domain for routing, and
         // those DNS lookups egress via the proxy — i.e. through the tunnel. On a very slow tunnel (MasterDNS:
@@ -701,10 +702,11 @@ object XrayConfig {
                         warpRelayRule?.let { add(it) }
                         // DNS hijack first so port-53/853 queries reach dns-out before any other rule.
                         dnsOutRules.forEach { add(it) }
+                        if (blockClientQuic) add(quicBlockRule)
                         remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
-                        if (blockQuic) add(quicBlockRule)
+                        if (blockQuic && !blockClientQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
                         (base["rules"] as? JsonArray)?.forEach { add(it) }
@@ -715,10 +717,11 @@ object XrayConfig {
                         cascadeLoopRule?.let { add(it) }
                         warpRelayRule?.let { add(it) }
                         dnsOutRules.forEach { add(it) }
+                        if (blockClientQuic) add(quicBlockRule)
                         remoteDnsProxyRules.forEach { add(it) }
                         fakeDnsProxyRule?.let { add(it) }
                         lanBypassRule?.let { add(it) }
-                        if (blockQuic) add(quicBlockRule)
+                        if (blockQuic && !blockClientQuic) add(quicBlockRule)
                         familyBlockRule?.let { add(it) }
                         if (blockZero) add(blockZeroRule)
                     }
@@ -775,6 +778,7 @@ object XrayConfig {
         warpChainPort: Int? = null,
         warpExitPort: Int? = null,
         warpRelay: WarpRelay? = null,
+        blockClientQuic: Boolean = false,
     ): String {
         val root = runCatching { Json.parseToJsonElement(rawConfigJson).jsonObject }.getOrNull()
             ?: return rawConfigJson
@@ -1066,6 +1070,23 @@ object XrayConfig {
             )
         } else routingFinal
 
+        val quicBlockTag = if (warpClientActive && blockClientQuic) {
+            generateSequence("warp-quic-block") { "$it-" }.first { it !in userOutboundTags }
+        } else null
+        val routingWithQuicBlock = if (quicBlockTag == null) routingWithSafeBalancers else buildJsonObject {
+            routingWithSafeBalancers?.forEach { (key, value) -> if (key != "rules") put(key, value) }
+            putJsonArray("rules") {
+                addJsonObject {
+                    put("type", "field")
+                    putJsonArray("inboundTag") { add("socks-in") }
+                    put("network", "udp")
+                    put("port", 443)
+                    put("outboundTag", quicBlockTag)
+                }
+                (routingWithSafeBalancers?.get("rules") as? JsonArray)?.forEach { add(it) }
+            }
+        }
+
         val newRoot = buildJsonObject {
             root.forEach { (key, value) ->
                 if (key != "inbounds" && key != "outbounds" && key != "routing" && key != "dns" &&
@@ -1112,6 +1133,7 @@ object XrayConfig {
                 // rule matches to the FIRST outbound, and that must stay the config's own (the proxy), never the WARP
                 // SOCKS — as the first entry it made unmatched traffic exit through WARP, skipping the VLESS server.
                 if (warpClientActive) add(olcrtcSocksOutbound(WARP_OUT_TAG, warpChainPort!!, "", ""))
+                if (quicBlockTag != null) addJsonObject { put("tag", quicBlockTag); put("protocol", "blackhole") }
                 // The profile rules reference direct/block tags — make sure they exist.
                 if (mergedRouting != null && "direct" !in userOutboundTags) {
                     addJsonObject {
@@ -1130,7 +1152,7 @@ object XrayConfig {
                 // FakeDNS dns outbound for the hijacked queries.
                 if (injectFake && "dns-out" !in userOutboundTags) add(dnsOutOutbound())
             }
-            if (routingWithSafeBalancers != null) put("routing", routingWithSafeBalancers)
+            if (routingWithQuicBlock != null) put("routing", routingWithQuicBlock)
         }
         return json.encodeToString(newRoot)
     }
