@@ -84,7 +84,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             )
             let settings = networkSettings(from: plan.tunnel, extraExcludedIPv4: extraExcludedIPv4)
             var bridgeYaml = plan.bridge.yaml
-            if plan.snolc != nil || plan.proxy?.kind == .mieru {
+            if plan.snolc != nil {
                 bridgeYaml = bridgeYaml.replacingOccurrences(of: "udp: 'udp'", with: "udp: 'tcp'")
             }
             provider.setTunnelNetworkSettings(settings) { [weak self] error in

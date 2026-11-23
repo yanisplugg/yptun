@@ -11,15 +11,17 @@ import (
 	"github.com/enfein/mieru/v3/pkg/appctl"
 	"github.com/enfein/mieru/v3/pkg/appctl/appctlcommon"
 	"github.com/enfein/mieru/v3/pkg/appctl/appctlpb"
+	"github.com/enfein/mieru/v3/pkg/log"
 	"github.com/enfein/mieru/v3/pkg/protocol"
 	"github.com/enfein/mieru/v3/pkg/socks5"
 )
 
 var mieruRuntime struct {
 	sync.Mutex
-	mux     *protocol.Mux
-	server  *socks5.Server
-	running atomic.Bool
+	mux      *protocol.Mux
+	server   *socks5.Server
+	listener net.Listener
+	running  atomic.Bool
 }
 
 func mieruProfile(link string) (*appctlpb.ClientProfile, error) {
@@ -72,13 +74,24 @@ func MieruStart(link, listenAddr string) error {
 	if err != nil {
 		return fmt.Errorf("parse mieru profile: %w", err)
 	}
-	mux, err := appctlcommon.NewClientMuxFromProfile(profile, nil, nil, nil, nil)
+	// Forward Mieru internal logging to the application log
+	log.SetLevel("INFO")
+	log.SetCallback(func(msg log.LogMessage) {
+		PushLog("mieru", msg.Message)
+	})
+
+	resolver := &net.Resolver{}
+	mux, err := appctlcommon.NewClientMuxFromProfile(profile, nil, nil, resolver, nil)
 	if err != nil {
 		return fmt.Errorf("create mieru mux: %w", err)
 	}
 	server, err := socks5.New(&socks5.Config{
-		UseProxy:         true,
+		UseProxy: true,
+		AuthOpts: socks5.Auth{
+			ClientSideAuthentication: true,
+		},
 		ProxyDialer:      mux,
+		Resolver:         resolver,
 		HandshakeTimeout: 15 * time.Second,
 		HandshakeNoWait:  profile.GetHandshakeMode() == appctlpb.HandshakeMode_HANDSHAKE_NO_WAIT,
 	})
@@ -93,6 +106,7 @@ func MieruStart(link, listenAddr string) error {
 	}
 	mieruRuntime.mux = mux
 	mieruRuntime.server = server
+	mieruRuntime.listener = listener
 	mieruRuntime.running.Store(true)
 	go func() {
 		err := server.Serve(listener)
@@ -117,10 +131,14 @@ func MieruStop() {
 	if mieruRuntime.server != nil {
 		_ = mieruRuntime.server.Close()
 	}
+	if mieruRuntime.listener != nil {
+		_ = mieruRuntime.listener.Close()
+	}
 	if mieruRuntime.mux != nil {
 		mieruRuntime.mux.Close()
 	}
 	mieruRuntime.server = nil
+	mieruRuntime.listener = nil
 	mieruRuntime.mux = nil
 }
 

@@ -404,6 +404,10 @@ fn native_runtime_plan_keeps_mieru_link_for_the_isolated_runtime() {
         AppleProxyRuntimeKind::Mieru
     );
     assert!(plan.proxy.as_ref().unwrap().config.starts_with("mieru://"));
+    assert!(!plan.bridge.tcp_only_udp);
+    assert!(plan.bridge.slow_tunnel);
+    assert!(plan.bridge.drop_ipv6);
+    assert!(plan.bridge.yaml.contains("udp: 'udp'"));
 }
 
 #[test]

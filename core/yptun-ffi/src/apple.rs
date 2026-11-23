@@ -1423,7 +1423,7 @@ pub fn apple_bridge_plan(
     let tcp_only_udp = matches!(
         location.engine,
         EngineType::Stealth | EngineType::MasterDns | EngineType::OpenFlux
-    ) || is_mieru;
+    );
     let slow_tunnel = matches!(
         location.engine,
         EngineType::MasterDns | EngineType::OpenFlux | EngineType::VkTurn
@@ -1431,7 +1431,7 @@ pub fn apple_bridge_plan(
     let drop_ipv6 = matches!(
         location.engine,
         EngineType::VkTurn | EngineType::MasterDns | EngineType::OpenFlux
-    ) || traffic.domain_strategy == "ipv4_only";
+    ) || traffic.domain_strategy == "ipv4_only" || is_mieru;
     let ipv6 = if drop_ipv6 {
         "# ipv6 disabled (IPv4 only/preferred)".to_string()
     } else {
