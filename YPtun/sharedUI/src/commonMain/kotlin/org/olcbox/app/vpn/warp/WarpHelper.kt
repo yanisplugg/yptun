@@ -44,7 +44,7 @@ const val WARP_I1 =
         "de2d8>"
 object WarpHelper {
 
-    private const val DEFAULT_ENDPOINT = "162.159.192.1:2408"
+    private const val DEFAULT_ENDPOINT = "162.159.192.1:894"
     private const val WARP_ENDPOINT_IP = "162.159.192.1"
 
     private fun isIpLiteral(host: String): Boolean =
@@ -57,8 +57,8 @@ object WarpHelper {
         val ep = line?.substringAfter('=')?.trim()?.takeIf { it.isNotBlank() } ?: DEFAULT_ENDPOINT
         val colon = ep.lastIndexOf(':')
         return if (colon > 0) {
-            ep.substring(0, colon).removePrefix("[").removeSuffix("]") to (ep.substring(colon + 1).toIntOrNull() ?: 2408)
-        } else ep to 2408
+            ep.substring(0, colon).removePrefix("[").removeSuffix("]") to (ep.substring(colon + 1).toIntOrNull() ?: 894)
+        } else ep to 894
     }
 
     private val OBFUSCATION_KEYS = setOf(

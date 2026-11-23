@@ -1802,9 +1802,7 @@ class OlcboxVpnService : VpnService() {
                     // Both protocols run in the awgproxy engine ("WireGuard" = the same INI without the
                     // obfuscation knobs): xray's built-in WireGuard needs ~30 s before its first byte through a
                     // proxy hop and resolves its endpoint through a DNS that is itself routed via this tunnel.
-                    val isWifi = currentNetworkTransport == UpstreamTransport.Wifi
-                    val targetPort = if (isWifi) 2408 else 894
-                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = targetPort)
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.
@@ -1815,7 +1813,7 @@ class OlcboxVpnService : VpnService() {
                         warpAwgIniDraft = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfileDraft = localSocksProfile("WARP", awgLocalPort)
                     } else {
-                        warpAwgIniDraft = WarpConfigGenerator.ensureWorkingConfig(engineIni, isWifi = isWifi)
+                        warpAwgIniDraft = WarpConfigGenerator.ensureWorkingConfig(engineIni)
                         warpChainPortDraft = awgLocalPort
                     }
                 }
@@ -3736,8 +3734,7 @@ class OlcboxVpnService : VpnService() {
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
 
         if (ini != null) {
-            val isWifi = currentNetworkTransport == UpstreamTransport.Wifi
-            val updated = WarpConfigGenerator.ensureWorkingConfig(ini, isWifi = isWifi)
+            val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
             if (updated != ini) {
                 ini = updated
                 runCatching { ds.saveTelegramWarpConfig(updated) }

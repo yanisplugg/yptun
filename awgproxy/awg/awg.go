@@ -537,8 +537,8 @@ func parseConfig(ini string) (*wgConfig, error) {
 			if m, err := strconv.Atoi(val); err == nil && m > 0 {
 				c.mtu = m
 			}
-		case "reserved":
-			// "b0, b1, b2" — three decimal bytes (Cloudflare WARP client_id). Anything else is ignored.
+		case "reserved", "client_id", "clientid":
+			// "b0, b1, b2" — three decimal bytes, or base64 3-byte client_id (Cloudflare WARP client_id).
 			parts := strings.Split(val, ",")
 			if len(parts) == 3 {
 				ok := true
@@ -552,6 +552,13 @@ func parseConfig(ini string) (*wgConfig, error) {
 					r[i] = byte(n)
 				}
 				if ok && r != ([3]byte{}) {
+					c.reserved = r
+					c.hasReserved = true
+				}
+			} else if data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(val)); err == nil && len(data) >= 3 {
+				var r [3]byte
+				copy(r[:], data[:3])
+				if r != ([3]byte{}) {
 					c.reserved = r
 					c.hasReserved = true
 				}

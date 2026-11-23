@@ -438,7 +438,7 @@ internal class DesktopEngineController(
                 if (ini == null) {
                     log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
                 } else {
-                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 2408)
+                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.
@@ -448,7 +448,7 @@ internal class DesktopEngineController(
                         warpAwgIni = WarpHelper.withEndpoint(engineIni, "127.0.0.1:${relay.listenPort}")
                         secondProfile = localSocksProfile("WARP", awgLocalPort(listenPort))
                     } else {
-                        warpAwgIni = WarpConfigGenerator.ensureWorkingConfig(engineIni, isWifi = true)
+                        warpAwgIni = WarpConfigGenerator.ensureWorkingConfig(engineIni)
                         warpChainPort = awgLocalPort(listenPort)
                     }
                 }
