@@ -122,6 +122,16 @@ object WarpHelper {
         return forceKeepalive(withEp, 15)
     }
 
+    /** Restore the client AmneziaWG wire format used in 3.7.3. */
+    fun clientAwgIni(ini: String): String {
+        val base = dropKeys(ini, setOf("reserved", "client_id", "clientid"))
+        val withI1 = if (hasI1(base)) base else injectI1(dropKeys(base, setOf("i1")))
+        val (host, port) = endpointOf(ini)
+        // Newer generated accounts stored 894 instead of the original default, 2408.
+        val endpointPort = if (port == 894) 2408 else port
+        return forceKeepalive(withEndpoint(withI1, "${pinnedHost(host)}:$endpointPort"), 25)
+    }
+
     private fun hasI1(ini: String): Boolean = ini.lineSequence().any { line ->
         line.substringBefore('=').trim().equals("i1", ignoreCase = true) &&
             line.substringAfter('=', "").isNotBlank()

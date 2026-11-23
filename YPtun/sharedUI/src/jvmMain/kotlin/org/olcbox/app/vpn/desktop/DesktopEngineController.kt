@@ -417,16 +417,17 @@ internal class DesktopEngineController(
             if (skipReason != null) {
                 log("WARNING: WARP skipped: $skipReason")
             } else {
+                val clientAwg = awg && !serverSide
                 var ini = TelegramProxyStore.loadConfig()
                 if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
-                if (!ini.isNullOrBlank() && !WarpHelper.isUsableCachedAccount(ini, requireI1 = awg && !serverSide)) {
-                    log("WARP: cached config is missing valid Reserved or required I1, regenerating...")
+                if (!clientAwg && !ini.isNullOrBlank() && !WarpHelper.isUsableCachedAccount(ini, requireI1 = false)) {
+                    log("WARP: cached config is missing valid Reserved, regenerating...")
                     ini = null
                 }
 
                 if (ini.isNullOrBlank()) {
                     log("WARP: generating Cloudflare WARP config...")
-                    ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = true) }
+                    ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = !clientAwg) }
                         .onFailure { log("WARP: generation failed: ${it.message}") }.getOrNull()
                     if (ini != null) {
                         runCatching { TelegramProxyStore.saveConfig(ini) }
@@ -435,7 +436,8 @@ internal class DesktopEngineController(
                 if (ini == null) {
                     log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
                 } else {
-                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
+                    val engineIni = if (clientAwg) WarpHelper.clientAwgIni(ini)
+                        else WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.
@@ -453,10 +455,7 @@ internal class DesktopEngineController(
         }
 
         val isClientWarp = warpAwgIni != null && warpRelay == null && profile.rawXrayConfig.isNullOrBlank()
-        if (isClientWarp) {
-            secondProfile = profile
-            warpChainPort = null
-        }
+        if (isClientWarp) secondProfile = profile
 
         requirePortFree(listenPort) { "SOCKS port $listenPort is still in use" }
 
@@ -572,7 +571,8 @@ internal class DesktopEngineController(
             val frontXray = requestedTun
             val xrayPort = if (frontXray) singBoxFrontPort(listenPort) else listenPort
             val xrayHost = if (frontXray) "127.0.0.1" else listenHost
-            val rawXray = effectiveProfile.rawXrayConfig
+            val xrayProfile = if (isClientWarp) profile else effectiveProfile
+            val rawXray = xrayProfile.rawXrayConfig
             var assetPath = ""
             val json = if (!rawXray.isNullOrBlank()) {
                 // A full user Xray config (JSON subscription) runs VERBATIM and its OWN routing wins —
@@ -619,7 +619,7 @@ internal class DesktopEngineController(
             } else {
                 assetPath = ensureGeoAssetPath(routingProfile)
                 XrayConfig.build(
-                    profile = effectiveProfile,
+                    profile = xrayProfile,
                     listenPort = xrayPort,
                     listenHost = xrayHost,
                     socksUsername = socksUsername,
@@ -641,7 +641,7 @@ internal class DesktopEngineController(
                     keepFlowOnChain = warpChainPort != null,
                     warpRelay = warpRelay,
                     routingProfile = xrayRoutingProfile(routingProfile, assetPath),
-                    secondProfile = secondProfile,
+                    secondProfile = if (isClientWarp) configuredSecondProfile else secondProfile,
                     // The "Обход LAN" toggle. Android passes it; desktop did not, so on the Xray core
                     // LAN bypass silently ran on the default no matter what the user set.
                     bypassLan = routing.bypassLan,
@@ -652,7 +652,7 @@ internal class DesktopEngineController(
             if (config.fakeDns != null && rawXray.isNullOrBlank()) {
                 log("FakeDNS spec present -> enabling Xray fakedns (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
             }
-            log("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
+            log("Starting Xray engine=${config.engine}, server=${xrayProfile.server}:${xrayProfile.serverPort}")
             if (assetPath.isNotEmpty()) YpTunCore.xraySetAssetPath(assetPath)
             YpTunCore.xrayStart(json)
             if (frontXray) {
@@ -678,7 +678,7 @@ internal class DesktopEngineController(
                 listenHost = listenHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = if (chained) chainPort else warpChainPort,
+                olcrtcChainPort = if (chained) chainPort else warpChainPort.takeUnless { isClientWarp },
                 olcrtcChainUser = if (chained) socksUsername else "",
                 olcrtcChainPass = if (chained) socksPassword else "",
                 warpRelay = warpRelay,

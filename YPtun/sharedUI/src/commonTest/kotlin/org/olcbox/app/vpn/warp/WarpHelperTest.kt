@@ -61,6 +61,26 @@ class WarpHelperTest {
     }
 
     @Test
+    fun clientAwgKeepsThe373WireFormat() {
+        val ini = """
+            [Interface]
+            client_id = AQID
+            I1 = <b 0xce>
+            I2 = <b 0x01>
+            [Peer]
+            Endpoint = engage.cloudflareclient.com:894
+            PersistentKeepalive = 15
+        """.trimIndent()
+        val prepared = WarpHelper.clientAwgIni(ini)
+        assertEquals(true, prepared.contains("I1 = <b 0xce>"))
+        assertEquals(true, prepared.contains("I2 = <b 0x01>"))
+        assertEquals(false, prepared.contains("client_id"))
+        assertEquals("162.159.192.1" to 2408, WarpHelper.endpointOf(prepared))
+        assertEquals(true, prepared.contains("PersistentKeepalive = 25"))
+        assertEquals(true, WarpHelper.clientAwgIni(ini.replace("I1 = <b 0xce>", "")).contains("I1 = $WARP_I1"))
+    }
+
+    @Test
     fun engineIniKeepsReservedPinsEndpointAndOnlyAwgKeepsObfuscation() {
         val ini = """
             [Interface]

@@ -1795,14 +1795,16 @@ class OlcboxVpnService : VpnService() {
             if (skipReason != null) {
                 addLog("ВНИМАНИЕ: WARP пропущен: $skipReason")
             } else {
-                val ini = obtainWarpIni(requireI1 = awg && !serverSide)
+                val clientAwg = awg && !serverSide
+                val ini = obtainWarpIni(clientAwg)
                 if (ini == null) {
                     addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю БЕЗ WARP")
                 } else {
                     // Both protocols run in the awgproxy engine ("WireGuard" = the same INI without the
                     // obfuscation knobs): xray's built-in WireGuard needs ~30 s before its first byte through a
                     // proxy hop and resolves its endpoint through a DNS that is itself routed via this tunnel.
-                    val engineIni = WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
+                    val engineIni = if (clientAwg) WarpHelper.clientAwgIni(ini)
+                    else WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
                         // routed through this very tunnel.
@@ -1826,7 +1828,7 @@ class OlcboxVpnService : VpnService() {
             else -> secondProfileDraft
         }
         val warpAwgIni = warpAwgIniDraft
-        val warpChainPort = if (isClientWarp) null else warpChainPortDraft
+        val warpChainPort = warpChainPortDraft
         val warpRelay = warpRelayDraft
         return try {
             if (connectionMode.isTunless) {
@@ -1987,7 +1989,8 @@ class OlcboxVpnService : VpnService() {
                     addLog("Каскад: 2-й прокси ЗАДАН, но ссылка неполная/не распозналась — он отброшен, выход через 1-й прокси")
             }
             if (activeProxyCore == ProxyCore.Xray) {
-                val rawXray = effectiveProfile.rawXrayConfig
+                val xrayProfile = if (isClientWarp) profile else effectiveProfile
+                val rawXray = xrayProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
                     // User-supplied full Xray config (e.g. a Happ/Remnawave JSON subscription): run it
@@ -2042,7 +2045,7 @@ class OlcboxVpnService : VpnService() {
                     // Download geoip.dat/geosite.dat if the profile needs them (no-op when present).
                     assetPath = ensureGeoAssetPath(routingProfile)
                     XrayConfig.build(
-                        profile = effectiveProfile,
+                        profile = xrayProfile,
                         listenPort = socksListenPort,
                         listenHost = socksListenHost,
                         socksUsername = socksUsername,
@@ -2066,7 +2069,7 @@ class OlcboxVpnService : VpnService() {
                         keepFlowOnChain = wireguardBase != null || warpChainPort != null,
                         warpRelay = warpRelay,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
-                        secondProfile = secondProfile,
+                        secondProfile = if (isClientWarp) configuredSecondProfile else secondProfile,
                         bypassLan = loadRouting(expandAsn = false).bypassLan,
                         // FakeDNS translated from the imported JSON config — the sing-box branch below
                         // has always honored it; on Xray it used to be dropped on the floor.
@@ -2076,7 +2079,7 @@ class OlcboxVpnService : VpnService() {
                 if (config.fakeDns != null && rawXray.isNullOrBlank()) {
                     addLog("FakeDNS spec present → enabling Xray fakedns (pool ${config.fakeDns!!.inet4Range}, ${config.fakeDns!!.blockRegex.size} block rules)")
                 }
-                addLog("Starting Xray engine=${config.engine}, server=${effectiveProfile.server}:${effectiveProfile.serverPort}")
+                addLog("Starting Xray engine=${config.engine}, server=${xrayProfile.server}:${xrayProfile.serverPort}")
                 xrayEngine().start(json, assetPath)
             } else {
                 // AmneziaWG is a full UDP tunnel: it carries QUIC natively, so don't block QUIC
@@ -2097,7 +2100,7 @@ class OlcboxVpnService : VpnService() {
                     hijackDns = tproxyPortOrNull != null,
                     socksUsername = socksUsername,
                     socksPassword = socksPassword,
-                    olcrtcChainPort = if (chained) chainPort else warpChainPort,
+                    olcrtcChainPort = if (chained) chainPort else warpChainPort.takeUnless { isClientWarp },
                     olcrtcChainUser = if (chained) socksUsername else "",
                     olcrtcChainPass = if (chained) socksPassword else "",
                     wireguardBase = wireguardBase,
@@ -3734,21 +3737,20 @@ class OlcboxVpnService : VpnService() {
 
     /**
      * The cached WARP account (shared with the Telegram-over-WARP proxy) as an AmneziaWG-style INI, or a
-     * fresh one: registers straight with Cloudflare
-     * before the third-party generators. Null — and a log line saying why — when nothing could be obtained.
+     * fresh one. Client AmneziaWG prefers the pre-registered accounts used by 3.7.3.
      */
-    private suspend fun obtainWarpIni(requireI1: Boolean): String? {
+    private suspend fun obtainWarpIni(clientAwg: Boolean): String? {
         val ds = LocationsDataSourceImpl(applicationContext)
         var ini = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
-        if (!ini.isNullOrBlank() && !WarpHelper.isUsableCachedAccount(ini, requireI1)) {
-            addLog("WARP: сохранённый конфиг не содержит корректные Reserved или требуемый I1, выполняю перегенерацию…")
+        if (!clientAwg && !ini.isNullOrBlank() && !WarpHelper.isUsableCachedAccount(ini, requireI1 = false)) {
+            addLog("WARP: сохранённый конфиг не содержит корректные Reserved, выполняю перегенерацию…")
             ini = null
         }
 
         if (ini.isNullOrBlank()) {
             addLog("WARP: генерирую конфиг Cloudflare WARP…")
-            ini = runCatching { WarpConfigGenerator.generate(officialFirst = true) }
+            ini = runCatching { WarpConfigGenerator.generate(officialFirst = !clientAwg) }
                 .onFailure { addLog("WARP: генерация не удалась: ${it.message}") }
                 .getOrNull()
             if (ini != null) {
