@@ -237,7 +237,8 @@ class OlcboxVpnService : VpnService() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var connectivityManager: ConnectivityManager
-    private var currentNetwork: Network? = null
+    @Volatile private var currentNetwork: Network? = null
+    @Volatile private var bindClientWarpSockets = false
     private var currentNetworkTransport: UpstreamTransport? = null
     private var isCallbackRegistered = false
     private var connectionMode = AndroidConnectionMode.Tun
@@ -290,7 +291,19 @@ class OlcboxVpnService : VpnService() {
     }
 
     private val awgProtector = object : AwgProtector {
-        override fun protect(fd: Long): Boolean = safeProtect(fd)
+        override fun protect(fd: Long): Boolean {
+            if (!safeProtect(fd)) return false
+            val upstream = currentNetwork?.takeIf { bindClientWarpSockets } ?: return true
+            try {
+                // The duplicated descriptor refers to the same UDP socket owned by awgproxy.
+                ParcelFileDescriptor.fromFd(fd.toInt()).use { upstream.bindSocket(it.fileDescriptor) }
+                addLog("WARP: UDP-сокет закреплён за ${getNetName(upstream)} (fd=$fd)")
+                return true
+            } catch (e: java.io.IOException) {
+                addLog("WARP: не удалось закрепить UDP-сокет (fd=$fd): ${e.message}")
+                return false
+            }
+        }
     }
 
     private val rtcLogWriter = object : LogWriter {
@@ -1877,6 +1890,7 @@ class OlcboxVpnService : VpnService() {
             } else profile
             val secondProfile = if (isClientWarp) warpExitProfile else secondProfileDraft
             if (warpAwgIni != null && warpRelay == null) {
+                bindClientWarpSockets = blockCellularWarpQuic && !connectionMode.isTunless
                 val ini = if (config.warpProtocol == WarpProtocol.Awg) {
                     suspend fun probe(candidates: List<String>): String? = candidates.firstOrNull { candidate ->
                         coroutineContext.ensureActive()
@@ -3716,6 +3730,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun stopMobile() {
+        bindClientWarpSockets = false
         OlcboxVpnState.setWarpIngress(null)
         OlcboxVpnState.activeSocks = null
         runCatching { singBox?.stop() }
