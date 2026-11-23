@@ -466,7 +466,11 @@ fn apple_import_locations_parses_turnable_links() {
         .expect("TurnableNode present");
     assert_eq!(turnable_entry["engine"], "vkturn");
     assert_eq!(turnable_entry["vkturn"]["core"], "turnable");
-    assert!(turnable_entry["proxy"]["raw_outbound"].as_str().unwrap().contains("\"persistent_keepalive\":15"));
+    let raw_outbound = turnable_entry["proxy"]["rawOutbound"]
+        .as_str()
+        .or_else(|| turnable_entry["proxy"]["raw_outbound"].as_str())
+        .expect("raw outbound present");
+    assert!(raw_outbound.contains("\"persistent_keepalive\":15"));
 }
 
 #[test]

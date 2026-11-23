@@ -78,7 +78,7 @@ object ShareLinkParser {
         if (colon <= 0) return null
         val user = UriCodec.percentDecode(credentials.substring(0, colon))
         val password = UriCodec.percentDecode(credentials.substring(colon + 1))
-        val rawHostPort = UriCodec.percentDecode(authority.substring(at + 1)).trim()
+        val rawHostPort = UriCodec.percentDecode(authority.substring(at + 1)).trim().trimEnd('/')
         val server = if (rawHostPort.startsWith("[")) {
             rawHostPort.substringAfter("[").substringBefore("]")
         } else {
