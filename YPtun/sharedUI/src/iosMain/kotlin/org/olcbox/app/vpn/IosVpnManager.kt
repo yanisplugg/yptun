@@ -629,13 +629,16 @@ class IosVpnManager(
             }
             behavior.pingMode == AppBehaviorSettings.PING_TCP ||
                 profile.type == ProxyProfile.TYPE_MIERU -> {
-                if (isLoopbackHost(profile.server)) null
+                val pingHost = if (profile.type == ProxyProfile.TYPE_MIERU && profile.server == "mieru-config") {
+                    core.mieruEndpoints(profile.mieruConfig).split(',').firstOrNull { it.isNotBlank() } ?: profile.server
+                } else profile.server
+                if (isLoopbackHost(pingHost) || pingHost == "mieru-config") null
                 else {
                     val port = profile.serverPort.takeIf { it in 1..65535 } ?: 443
                     if (connected) {
-                        directTcpPingViaExtension(profile.server, port, timeoutMs)
+                        directTcpPingViaExtension(pingHost, port, timeoutMs)
                     } else {
-                        core.tcpPing(profile.server, port, timeoutMs).takeIf { it > 0 }
+                        core.tcpPing(pingHost, port, timeoutMs).takeIf { it > 0 }
                     }
                 }
             }

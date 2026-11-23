@@ -154,6 +154,7 @@ interface IosCoreBridge {
     fun csqttBridgeWaitTunnel(timeoutMs: Int): Boolean
 
     fun resolveHostIpv4(host: String): String
+    fun mieruEndpoints(link: String): String
 }
 
 /** Throws with [what] + the core's message when a bridge call reported an error. */

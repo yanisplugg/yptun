@@ -84,7 +84,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             )
             let settings = networkSettings(from: plan.tunnel, extraExcludedIPv4: extraExcludedIPv4)
             var bridgeYaml = plan.bridge.yaml
-            if plan.snolc != nil {
+            if plan.snolc != nil || plan.proxy?.kind == .mieru {
                 bridgeYaml = bridgeYaml.replacingOccurrences(of: "udp: 'udp'", with: "udp: 'tcp'")
             }
             provider.setTunnelNetworkSettings(settings) { [weak self] error in
@@ -1167,7 +1167,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private func startWatchdog(_ plan: AppleNativeRuntimePlan) {
         watchdog?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        let slow = !plan.auxiliary.isEmpty || plan.turnable != nil || plan.snolc != nil || plan.csqtt != nil
+        let slow = !plan.auxiliary.isEmpty || plan.turnable != nil || plan.snolc != nil || plan.csqtt != nil || plan.proxy?.kind == .mieru
         resetWatchdogFailures()
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in

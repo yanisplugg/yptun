@@ -1419,14 +1419,15 @@ pub fn apple_bridge_plan(
         )));
     }
 
+    let is_mieru = location.proxy.as_ref().is_some_and(|p| p.kind == TYPE_MIERU);
     let tcp_only_udp = matches!(
         location.engine,
         EngineType::Stealth | EngineType::MasterDns | EngineType::OpenFlux
-    );
+    ) || is_mieru;
     let slow_tunnel = matches!(
         location.engine,
         EngineType::MasterDns | EngineType::OpenFlux | EngineType::VkTurn
-    );
+    ) || is_mieru;
     let drop_ipv6 = matches!(
         location.engine,
         EngineType::VkTurn | EngineType::MasterDns | EngineType::OpenFlux

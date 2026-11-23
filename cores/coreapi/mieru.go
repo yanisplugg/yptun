@@ -77,12 +77,9 @@ func MieruStart(link, listenAddr string) error {
 		return fmt.Errorf("create mieru mux: %w", err)
 	}
 	server, err := socks5.New(&socks5.Config{
-		UseProxy: true,
-		AuthOpts: socks5.Auth{
-			ClientSideAuthentication: true,
-		},
+		UseProxy:         true,
 		ProxyDialer:      mux,
-		HandshakeTimeout: 10 * time.Second,
+		HandshakeTimeout: 15 * time.Second,
 		HandshakeNoWait:  profile.GetHandshakeMode() == appctlpb.HandshakeMode_HANDSHAKE_NO_WAIT,
 	})
 	if err != nil {

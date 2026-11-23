@@ -328,6 +328,10 @@ final class SwiftCoreBridge: NSObject, IosCoreBridge {
         return ips.joined(separator: ",")
     }
 
+    func mieruEndpoints(link: String) -> String {
+        CoreapiMieruEndpoints(link)
+    }
+
     private struct PhysicalInterface {
         let index: UInt32
         let address: sockaddr_storage
