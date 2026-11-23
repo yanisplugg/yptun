@@ -81,6 +81,17 @@ class WarpHelperTest {
     }
 
     @Test
+    fun clientAwgTestsBothPortsWithAndWithoutReserved() {
+        val candidates = WarpHelper.clientAwgCandidates(
+            "[Interface]\nReserved = 1, 2, 3\nI1 = <b 0xce>\n[Peer]\nEndpoint = 162.159.192.1:2408"
+        )
+        assertEquals(listOf(2408, 894, 2408, 894), candidates.map { WarpHelper.endpointOf(it).second })
+        assertEquals(listOf(true, true, false, false), candidates.map { it.contains("Reserved = 1, 2, 3") })
+        assertEquals(true, candidates.all { it.contains("I1 = <b 0xce>") })
+        assertEquals(2, WarpHelper.clientAwgCandidates(candidates.last()).size)
+    }
+
+    @Test
     fun engineIniKeepsReservedPinsEndpointAndOnlyAwgKeepsObfuscation() {
         val ini = """
             [Interface]

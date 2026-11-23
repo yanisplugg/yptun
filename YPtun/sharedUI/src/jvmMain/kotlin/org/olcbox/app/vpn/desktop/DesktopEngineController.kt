@@ -436,7 +436,7 @@ internal class DesktopEngineController(
                 if (ini == null) {
                     log("WARNING: failed to obtain a WARP config, proceeding WITHOUT WARP")
                 } else {
-                    val engineIni = if (clientAwg) WarpHelper.clientAwgIni(ini)
+                    val engineIni = if (clientAwg) ini
                         else WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
@@ -461,7 +461,21 @@ internal class DesktopEngineController(
 
         // WARP over AmneziaWG/WireGuard on the CLIENT side: raise awgproxy first - the main proxy dials through its
         // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
-        if (warpAwgIni != null && warpRelay == null) startWarpAwg(warpAwgIni, listenPort)
+        if (warpAwgIni != null && warpRelay == null) {
+            val ini = if (config.warpProtocol == WarpProtocol.Awg) {
+                WarpHelper.clientAwgCandidates(warpAwgIni).firstOrNull { candidate ->
+                    val (host, port) = WarpHelper.endpointOf(candidate)
+                    val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
+                    log("WARP: probing AmneziaWG via $host:$port (Reserved=$reserved)")
+                    val delayMs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        YpTunCore.awgProbe(candidate)
+                    }
+                    log(if (delayMs >= 0) "WARP: tunnel passed traffic (${delayMs} ms)" else "WARP: tunnel probe failed")
+                    delayMs >= 0
+                } ?: error("WARP: AmneziaWG could not pass traffic. Check the network and WARP account.")
+            } else warpAwgIni
+            startWarpAwg(ini, listenPort)
+        }
 
         if (chained) {
             applyTelemostCookies(config)

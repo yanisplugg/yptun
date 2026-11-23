@@ -1803,7 +1803,7 @@ class OlcboxVpnService : VpnService() {
                     // Both protocols run in the awgproxy engine ("WireGuard" = the same INI without the
                     // obfuscation knobs): xray's built-in WireGuard needs ~30 s before its first byte through a
                     // proxy hop and resolves its endpoint through a DNS that is itself routed via this tunnel.
-                    val engineIni = if (clientAwg) WarpHelper.clientAwgIni(ini)
+                    val engineIni = if (clientAwg) ini
                     else WarpHelper.engineIni(ini, awg, initPackets = !serverSide, targetPort = 894)
                     if (serverSide) {
                         // An IP, never a domain: the core would resolve a domain through its own DNS, which is
@@ -1866,7 +1866,20 @@ class OlcboxVpnService : VpnService() {
             // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
             // WARP over AmneziaWG on the CLIENT side: raise awgproxy first — the main proxy dials through its
             // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
-            if (warpAwgIni != null && warpRelay == null) startWarpAwg(warpAwgIni)
+            if (warpAwgIni != null && warpRelay == null) {
+                val ini = if (config.warpProtocol == WarpProtocol.Awg) {
+                    WarpHelper.clientAwgCandidates(warpAwgIni).firstOrNull { candidate ->
+                        coroutineContext.ensureActive()
+                        val (host, port) = WarpHelper.endpointOf(candidate)
+                        val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
+                        addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
+                        val delayMs = withContext(Dispatchers.IO) { Awg.probe(candidate) }
+                        addLog(if (delayMs >= 0) "WARP: туннель передаёт данные (${delayMs} мс)" else "WARP: проверка туннеля не прошла")
+                        delayMs >= 0
+                    } ?: error("WARP: не удалось передать данные через AmneziaWG. Проверьте сеть и аккаунт WARP.")
+                } else warpAwgIni
+                startWarpAwg(ini)
+            }
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
             // Naive (NaïveProxy) is a native sing-box outbound (cronet) — xray has no equivalent.
