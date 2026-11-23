@@ -51,11 +51,11 @@ internal object WarpConfigGenerator {
         }
 
     /** Direct Cloudflare registration (fallback only — blocked in some regions). */
-    private const val REG_URL = "https://api.cloudflareclient.com/v0a2158/reg"
+    private const val REG_URL = "https://api.cloudflareclient.com/v0a3311/reg"
 
     /** Pass-through of the same API on our Cloudflare Worker, tried when the direct one is blocked or times out. */
-    private const val REG_MIRROR_URL = "https://cache-mirror-7q.cdn-edge-7q.workers.dev/cf/v0a2158/reg"
-    private const val CF_CLIENT_VERSION = "a-6.3-2158"
+    private const val REG_MIRROR_URL = "https://cache-mirror-7q.cdn-edge-7q.workers.dev/cf/v0a3311/reg"
+    private const val CF_CLIENT_VERSION = "a-6.3-3311"
     private const val CF_USER_AGENT = "okhttp/3.12.1"
 
     /**

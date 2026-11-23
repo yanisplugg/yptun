@@ -194,21 +194,20 @@ fun SessionSheet(
                 if (!warpModeStr.isNullOrBlank()) {
                     ingressRows.add(s.sessionIngressWarp to warpModeStr)
                 }
-                if (ingressGeo?.asn != null) {
-                    ingressRows.add("ASN" to ingressGeo?.asn)
-                }
-                if (ingressGeo?.provider != null) {
-                    ingressRows.add(s.sessionProvider to ingressGeo?.provider)
-                }
-                if (ingressGeo?.country != null) {
-                    ingressRows.add(s.sessionCountry to ingressGeo?.country)
-                }
-                if (ingressGeo?.city != null) {
-                    ingressRows.add(s.sessionCity to ingressGeo?.city)
-                }
-                if (ingressRows.isEmpty()) {
-                    ingressRows.add(s.sessionIngressServer to "—")
-                }
+                val isHostIpv4 = ingressHost != null && ":" !in ingressHost && ingressHost.count { it == '.' } == 3
+                val isHostIpv6 = ingressHost != null && ":" in ingressHost
+                val ipv4Val = ingressGeo?.ipv4 ?: if (isHostIpv4) ingressHost else null
+                val ipv6Val = ingressGeo?.ipv6 ?: if (isHostIpv6) ingressHost else null
+
+                ingressRows.add("IPv4" to ipv4Val)
+                ingressRows.add("IPv6" to ipv6Val)
+                ingressRows.add("ASN" to ingressGeo?.asn)
+                ingressRows.add(s.sessionProvider to ingressGeo?.provider)
+                ingressRows.add(s.sessionCountry to ingressGeo?.country)
+                ingressRows.add(s.sessionCity to ingressGeo?.city)
+                ingressRows.add(s.sessionRegion to ingressGeo?.region)
+                ingressRows.add(s.sessionLatitude to ingressGeo?.latitude)
+                ingressRows.add(s.sessionLongitude to ingressGeo?.longitude)
                 ingressRows.forEachIndexed { i, (label, value) ->
                     if (i > 0) SettingsCardDivider()
                     SessionRow(label, value)

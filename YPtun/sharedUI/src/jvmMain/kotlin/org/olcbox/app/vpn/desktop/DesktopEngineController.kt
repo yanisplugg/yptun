@@ -419,6 +419,10 @@ internal class DesktopEngineController(
             } else {
                 var ini = TelegramProxyStore.loadConfig()
                 if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+                if (!ini.isNullOrBlank() && (!ini.contains("Reserved", ignoreCase = true) && !ini.contains("client_id", ignoreCase = true))) {
+                    log("WARP: cached config is outdated (missing Reserved), regenerating...")
+                    ini = null
+                }
 
                 if (ini != null) {
                     val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
@@ -472,6 +476,7 @@ internal class DesktopEngineController(
         // modeled as a socks outbound. Hysteria2 is a NATIVE sing-box outbound since the 1.13 upgrade
         // (the old hysteria2proxy bridge and its YpHy2* exports are gone), so it is passed straight
         // through; like AWG it carries UDP/QUIC itself, so QUIC stays unblocked.
+        val isClientWarp = warpAwgIni != null && warpRelay == null && profile.rawXrayConfig.isNullOrBlank()
         val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
         val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
         // Trust Tunnel (AdGuard) — like AmneziaWG, raises a local SOCKS5 (its own client, SOCKS-only)
@@ -480,6 +485,7 @@ internal class DesktopEngineController(
         val isOpenVpn = profile.type == ProxyProfile.TYPE_OPENVPN
         val hasOpenVpn = isOpenVpn || secondProfile?.type == ProxyProfile.TYPE_OPENVPN
         val effectiveProfile = when {
+            isClientWarp -> localSocksProfile("WARP", awgLocalPort(listenPort))
             isAwg -> prepareAmneziaWgProxy(profile, listenPort)
             isTrustTunnel -> prepareTrustTunnelProxy(profile, listenPort)
             isHy2 -> profile
@@ -490,7 +496,11 @@ internal class DesktopEngineController(
             // (Telegram) survived. The host OS resolver does this once, reliably.
             else -> dialByServerIp(profile)
         }
-        val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel || hasOpenVpn
+        val effectiveSecondProfile = when {
+            isClientWarp -> dialByServerIp(profile)
+            else -> secondProfile
+        }
+        val isLocalUdpTunnel = isAwg || isHy2 || isTrustTunnel || hasOpenVpn || isClientWarp
 
         val traffic = JvmVpnSettings.loadTraffic()
         val routing = loadRoutingExpandingAsn()
@@ -669,7 +679,7 @@ internal class DesktopEngineController(
                 listenHost = listenHost,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                olcrtcChainPort = if (chained) chainPort else warpChainPort,
+                olcrtcChainPort = if (chained) chainPort else (if (isClientWarp) null else warpChainPort),
                 olcrtcChainUser = if (chained) socksUsername else "",
                 olcrtcChainPass = if (chained) socksPassword else "",
                 warpRelay = warpRelay,
@@ -683,7 +693,7 @@ internal class DesktopEngineController(
                 singboxGeoipBase = profilesState.singboxGeoipBase,
                 blockQuic = !isLocalUdpTunnel,
                 sniffOverrideDestination = isLocalUdpTunnel,
-                secondProfile = secondProfile,
+                secondProfile = effectiveSecondProfile,
                 fakeDnsSpec = config.fakeDns,
                 tunMode = requestedTun,
                 splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,

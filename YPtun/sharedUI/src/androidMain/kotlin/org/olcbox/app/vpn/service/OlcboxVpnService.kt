@@ -1819,10 +1819,14 @@ class OlcboxVpnService : VpnService() {
                 }
             }
         }
+        val isClientWarp = warpAwgIniDraft != null && warpRelayDraft == null && profile.rawXrayConfig.isNullOrBlank()
         val wireguardBase = wireguardBaseDraft
-        val secondProfile = secondProfileDraft
+        val secondProfile = when {
+            isClientWarp -> profile
+            else -> secondProfileDraft
+        }
         val warpAwgIni = warpAwgIniDraft
-        val warpChainPort = warpChainPortDraft
+        val warpChainPort = if (isClientWarp) null else warpChainPortDraft
         val warpRelay = warpRelayDraft
         return try {
             if (connectionMode.isTunless) {
@@ -1872,11 +1876,12 @@ class OlcboxVpnService : VpnService() {
             val isOpenVpn = profile.type == ProxyProfile.TYPE_OPENVPN
             val hasOpenVpn = isOpenVpn || secondProfile?.type == ProxyProfile.TYPE_OPENVPN
             val effectiveProfile = when {
+                isClientWarp -> localSocksProfile("WARP", awgLocalPort)
                 isAwg -> prepareAmneziaWgProxy(profile)
                 isTrustTunnel -> prepareTrustTunnelProxy(profile)
                 else -> profile
             }
-            val isLocalUdpTunnel = isAwg || isTrustTunnel
+            val isLocalUdpTunnel = isAwg || isTrustTunnel || isClientWarp
 
             // Happ-style routing profile (per-location override → global default), if any.
             val profilesState = loadRoutingProfilesState()
@@ -3732,6 +3737,10 @@ class OlcboxVpnService : VpnService() {
         val ds = LocationsDataSourceImpl(applicationContext)
         var ini = runCatching { ds.loadTelegramWarpConfig() }.getOrNull()
         if (!ini.isNullOrBlank() && !ini.contains("PrivateKey", ignoreCase = true)) ini = null
+        if (!ini.isNullOrBlank() && (!ini.contains("Reserved", ignoreCase = true) && !ini.contains("client_id", ignoreCase = true))) {
+            addLog("WARP: сохранённый конфиг устарел (нет Reserved), выполняю перегенерацию…")
+            ini = null
+        }
 
         if (ini != null) {
             val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
