@@ -119,6 +119,7 @@ struct OlcboxIosApp: App {
     /// qWDTT, OpenFlux and the QuofortpostProtocols panel families. Registered in Info.plist.
     private static let importSchemes: Set<String> = [
         "qwdtt", "openflux", "masterdns", "snolc", "csqtt", "freeturn", "olcrtc", "amneziawg",
+        "mieru", "mierus", "turnable", "tt",
     ]
 
     private func handleUrl(_ url: URL) {

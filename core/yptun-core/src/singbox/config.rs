@@ -599,7 +599,7 @@ fn proxy_outbound(
                     m.insert("multiplex".into(), mux);
                 }
             }
-            if obj.get("type").and_then(Value::as_str) == Some("wireguard") {
+            if m.get("type").and_then(Value::as_str) == Some("wireguard") {
                 if !m.contains_key("persistent_keepalive_interval") && !m.contains_key("persistent_keepalive") {
                     m.insert("persistent_keepalive_interval".into(), json!(15));
                 }
