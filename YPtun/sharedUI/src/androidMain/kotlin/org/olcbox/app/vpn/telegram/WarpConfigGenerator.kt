@@ -1,5 +1,6 @@
 package org.olcbox.app.vpn.telegram
 
+import android.net.Network
 import android.util.Log
 import awg.Awg
 import io.ktor.client.HttpClient
@@ -207,13 +208,13 @@ private const val TAG = "WarpConfigGen"
     }
 
     /** Direct Cloudflare registration — fallback for regions where the API isn't blocked. */
-    suspend fun registerClientAccount(): String = generateViaCloudflare().also { ini ->
+    suspend fun registerClientAccount(upstream: Network): String = generateViaCloudflare(upstream).also { ini ->
         check(org.olcbox.app.vpn.warp.WarpHelper.isUsableCachedAccount(ini, requireI1 = true)) {
             "WARP: Cloudflare registration did not return a usable client_id"
         }
     }
 
-    private suspend fun generateViaCloudflare(): String {
+    private suspend fun generateViaCloudflare(upstream: Network? = null): String {
         val keyPair = Awg.generateKeyPair()
         val parts = keyPair.split("|")
         require(parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) {
@@ -224,6 +225,12 @@ private const val TAG = "WarpConfigGen"
 
         val client = HttpClient(OkHttp) {
             expectSuccess = false
+            if (upstream != null) engine {
+                config {
+                    socketFactory(upstream.socketFactory)
+                    dns(okhttp3.Dns { host -> upstream.getAllByName(host).toList() })
+                }
+            }
             install(HttpTimeout) {
                 connectTimeoutMillis = 8_000
                 requestTimeoutMillis = 12_000

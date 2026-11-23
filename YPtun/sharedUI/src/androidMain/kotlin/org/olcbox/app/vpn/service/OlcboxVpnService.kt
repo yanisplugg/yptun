@@ -237,8 +237,8 @@ class OlcboxVpnService : VpnService() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var connectivityManager: ConnectivityManager
-    @Volatile private var currentNetwork: Network? = null
-    @Volatile private var bindClientWarpSockets = false
+    private var currentNetwork: Network? = null
+    private var startWarpAfterTun: (suspend () -> Unit)? = null
     private var currentNetworkTransport: UpstreamTransport? = null
     private var isCallbackRegistered = false
     private var connectionMode = AndroidConnectionMode.Tun
@@ -291,19 +291,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private val awgProtector = object : AwgProtector {
-        override fun protect(fd: Long): Boolean {
-            if (!safeProtect(fd)) return false
-            val upstream = currentNetwork?.takeIf { bindClientWarpSockets } ?: return true
-            try {
-                // The duplicated descriptor refers to the same UDP socket owned by awgproxy.
-                ParcelFileDescriptor.fromFd(fd.toInt()).use { upstream.bindSocket(it.fileDescriptor) }
-                addLog("WARP: UDP-сокет закреплён за ${getNetName(upstream)} (fd=$fd)")
-                return true
-            } catch (e: java.io.IOException) {
-                addLog("WARP: не удалось закрепить UDP-сокет (fd=$fd): ${e.message}")
-                return false
-            }
-        }
+        override fun protect(fd: Long): Boolean = safeProtect(fd)
     }
 
     private val rtcLogWriter = object : LogWriter {
@@ -1083,6 +1071,28 @@ class OlcboxVpnService : VpnService() {
         }
 
         vpnInterface = pfd
+        val startDeferredWarp = startWarpAfterTun
+        startWarpAfterTun = null
+        if (startDeferredWarp != null) {
+            addLog("WARP: запускаю проверку после создания TUN (Mobile)")
+            try {
+                startDeferredWarp()
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) { stopTransportProcesses(closeTun = true) }
+                throw e
+            } catch (e: Exception) {
+                val message = e.message ?: "WARP start failed"
+                addLog("WARP: запуск после создания TUN завершился ошибкой: $message")
+                stopTransportProcesses(closeTun = true)
+                if (requestedGeneration == generation) {
+                    setStatus(VpnStatus.Error(message))
+                    updateNotification(ns.notifConnectionFailed)
+                }
+                return
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) return
+        }
         val pending = pendingProtectFds.toList()
         pendingProtectFds.clear()
         for (f in pending) {
@@ -1890,32 +1900,39 @@ class OlcboxVpnService : VpnService() {
             } else profile
             val secondProfile = if (isClientWarp) warpExitProfile else secondProfileDraft
             if (warpAwgIni != null && warpRelay == null) {
-                bindClientWarpSockets = blockCellularWarpQuic && !connectionMode.isTunless
-                val ini = if (config.warpProtocol == WarpProtocol.Awg) {
-                    suspend fun probe(candidates: List<String>): String? = candidates.firstOrNull { candidate ->
-                        coroutineContext.ensureActive()
-                        val (host, port) = WarpHelper.endpointOf(candidate)
-                        val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
-                        addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
-                        startWarpAwg(candidate)
-                        val ready = checkWarpSocks(warpExitProfile)
-                        addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
-                        if (!ready) Awg.stop()
-                        ready
-                    }
-                    addLog("WARP: ядро AmneziaWG ${Awg.version()}")
-                    if (explicitWarpAwg != null) addLog("WARP: использую конфигурацию выбранной AmneziaWG-локации")
-                    val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni) else WarpHelper.clientAwgCandidates(warpAwgIni)
-                    probe(candidates) ?: run {
-                        check(explicitWarpAwg == null) { "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS." }
-                        addLog("WARP: текущий аккаунт не прошёл проверку. Регистрирую новый аккаунт Cloudflare.")
-                        val fresh = WarpConfigGenerator.registerClientAccount()
-                        val ready = probe(WarpHelper.clientAwgCandidates(fresh)) ?: error("WARP: новый аккаунт Cloudflare не передаёт данные через AmneziaWG.")
-                        LocationsDataSourceImpl(applicationContext).saveTelegramWarpConfig(fresh)
-                        ready
-                    }
-                } else warpAwgIni.also { startWarpAwg(it) }
-                OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
+                val startClientWarp: suspend () -> Unit = {
+                    val ini = if (config.warpProtocol == WarpProtocol.Awg) {
+                        suspend fun probe(candidates: List<String>): String? = candidates.firstOrNull { candidate ->
+                            coroutineContext.ensureActive()
+                            val (host, port) = WarpHelper.endpointOf(candidate)
+                            val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
+                            addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
+                            startWarpAwg(candidate)
+                            val ready = checkWarpSocks(warpExitProfile)
+                            addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
+                            if (!ready) Awg.stop()
+                            ready
+                        }
+                        addLog("WARP: ядро AmneziaWG ${Awg.version()}")
+                        if (explicitWarpAwg != null) addLog("WARP: использую конфигурацию выбранной AmneziaWG-локации")
+                        val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni) else WarpHelper.clientAwgCandidates(warpAwgIni)
+                        probe(candidates) ?: run {
+                            check(explicitWarpAwg == null) { "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS." }
+                            addLog("WARP: текущий аккаунт не прошёл проверку. Регистрирую новый аккаунт Cloudflare.")
+                            val fresh = WarpConfigGenerator.registerClientAccount(upstream)
+                            val ready = probe(WarpHelper.clientAwgCandidates(fresh)) ?: error("WARP: новый аккаунт Cloudflare не передаёт данные через AmneziaWG.")
+                            LocationsDataSourceImpl(applicationContext).saveTelegramWarpConfig(fresh)
+                            ready
+                        }
+                    } else warpAwgIni.also { startWarpAwg(it) }
+                    OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
+                }
+                if (blockCellularWarpQuic && !connectionMode.isTunless) {
+                    // Probe after the VPN routes are installed, before forwarding app traffic.
+                    startWarpAfterTun = startClientWarp
+                } else {
+                    startClientWarp()
+                }
             }
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
@@ -3730,7 +3747,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun stopMobile() {
-        bindClientWarpSockets = false
+        startWarpAfterTun = null
         OlcboxVpnState.setWarpIngress(null)
         OlcboxVpnState.activeSocks = null
         runCatching { singBox?.stop() }
