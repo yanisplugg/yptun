@@ -61,6 +61,20 @@ class WarpHelperTest {
     }
 
     @Test
+    fun exitByIpPreservesXhttpHostAndTlsServerName() {
+        val profile = org.olcbox.app.data.model.ProxyProfile(
+            server = "node.example", network = "xhttp", security = "tls",
+        )
+        val implicit = WarpHelper.exitByIp(profile, "192.0.2.1")
+        assertEquals("192.0.2.1", implicit.server)
+        assertEquals("node.example", implicit.host)
+        assertEquals("node.example", implicit.sni)
+        val cdn = WarpHelper.exitByIp(profile.copy(host = "front.example"), "192.0.2.1")
+        assertEquals("front.example", cdn.host)
+        assertEquals("front.example", cdn.sni)
+    }
+
+    @Test
     fun clientAwgKeepsThe373WireFormat() {
         val ini = """
             [Interface]

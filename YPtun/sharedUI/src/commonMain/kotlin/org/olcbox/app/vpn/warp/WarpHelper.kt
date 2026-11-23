@@ -122,6 +122,20 @@ object WarpHelper {
         return forceKeepalive(withEp, 15)
     }
 
+    fun exitByIp(profile: ProxyProfile, ip: String): ProxyProfile {
+        val host = profile.server
+        val keepHttpHost = profile.network in setOf(
+            ProxyProfile.NETWORK_XHTTP, ProxyProfile.NETWORK_WS,
+            ProxyProfile.NETWORK_HTTP, ProxyProfile.NETWORK_HTTPUPGRADE,
+        )
+        val httpHost = profile.host.ifBlank { if (keepHttpHost) host else "" }
+        val sni = profile.sni.ifBlank {
+            if (profile.security == ProxyProfile.SECURITY_TLS && keepHttpHost) httpHost.substringBefore(',').trim()
+            else host
+        }
+        return profile.copy(server = ip, host = httpHost, sni = sni)
+    }
+
     fun clientAwgCandidates(ini: String): List<String> {
         val legacy = clientAwgIni(ini)
         val (host, port) = endpointOf(legacy)

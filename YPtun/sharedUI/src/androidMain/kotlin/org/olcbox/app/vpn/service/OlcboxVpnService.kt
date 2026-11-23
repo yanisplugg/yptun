@@ -1774,7 +1774,12 @@ class OlcboxVpnService : VpnService() {
         //  Client side: awgproxy SOCKS on awgLocalPort; the main proxy dials through it (olcRTC-style chain).
         //  Server side: awgproxy SOCKS is the exit; its UDP rides the main proxy through a core relay (warpRelay).
         var wireguardBaseDraft: ProxyProfile? = null
-        var secondProfileDraft: ProxyProfile? = configuredSecondProfile
+        val explicitWarpAwg = configuredSecondProfile?.takeIf {
+            !chained && config.warpEnabled && config.warpMode == WarpMode.Client &&
+                config.warpProtocol == WarpProtocol.Awg && it.type == ProxyProfile.TYPE_AMNEZIAWG
+        }
+        val cascadeExit = configuredSecondProfile.takeUnless { explicitWarpAwg != null }
+        var secondProfileDraft: ProxyProfile? = cascadeExit
         var warpAwgIniDraft: String? = null
         var warpChainPortDraft: Int? = null
         var warpRelayDraft: WarpRelay? = null
@@ -1798,7 +1803,7 @@ class OlcboxVpnService : VpnService() {
                 addLog("ВНИМАНИЕ: WARP пропущен: $skipReason")
             } else {
                 val clientAwg = awg && !serverSide
-                val ini = obtainWarpIni(clientAwg)
+                val ini = explicitWarpAwg?.awgConfig ?: obtainWarpIni(clientAwg)
                 if (ini == null) {
                     addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю БЕЗ WARP")
                 } else {
@@ -1825,10 +1830,6 @@ class OlcboxVpnService : VpnService() {
         }
         val isClientWarp = warpAwgIniDraft != null && warpRelayDraft == null && profile.rawXrayConfig.isNullOrBlank()
         val wireguardBase = wireguardBaseDraft
-        val secondProfile = when {
-            isClientWarp -> profile
-            else -> secondProfileDraft
-        }
         val warpAwgIni = warpAwgIniDraft
         val warpChainPort = warpChainPortDraft
         val warpRelay = warpRelayDraft
@@ -1871,24 +1872,31 @@ class OlcboxVpnService : VpnService() {
             // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
             // WARP over AmneziaWG on the CLIENT side: raise awgproxy first — the main proxy dials through its
             // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
+            val warpExitProfile = if (blockCellularWarpQuic && isClientWarp) {
+                resolveWarpExitOnUpstream(profile, upstream)
+            } else profile
+            val secondProfile = if (isClientWarp) warpExitProfile else secondProfileDraft
             if (warpAwgIni != null && warpRelay == null) {
                 val ini = if (config.warpProtocol == WarpProtocol.Awg) {
-                    suspend fun probe(account: String): String? = WarpHelper.clientAwgCandidates(account).firstOrNull { candidate ->
+                    suspend fun probe(candidates: List<String>): String? = candidates.firstOrNull { candidate ->
                         coroutineContext.ensureActive()
                         val (host, port) = WarpHelper.endpointOf(candidate)
                         val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
                         addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
                         startWarpAwg(candidate)
-                        val ready = checkWarpSocks(profile)
+                        val ready = checkWarpSocks(warpExitProfile)
                         addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
                         if (!ready) Awg.stop()
                         ready
                     }
                     addLog("WARP: ядро AmneziaWG ${Awg.version()}")
-                    probe(warpAwgIni) ?: run {
+                    if (explicitWarpAwg != null) addLog("WARP: использую конфигурацию выбранной AmneziaWG-локации")
+                    val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni) else WarpHelper.clientAwgCandidates(warpAwgIni)
+                    probe(candidates) ?: run {
+                        check(explicitWarpAwg == null) { "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS." }
                         addLog("WARP: текущий аккаунт не прошёл проверку. Регистрирую новый аккаунт Cloudflare.")
                         val fresh = WarpConfigGenerator.registerClientAccount()
-                        val ready = probe(fresh) ?: error("WARP: новый аккаунт Cloudflare не передаёт данные через AmneziaWG.")
+                        val ready = probe(WarpHelper.clientAwgCandidates(fresh)) ?: error("WARP: новый аккаунт Cloudflare не передаёт данные через AmneziaWG.")
                         LocationsDataSourceImpl(applicationContext).saveTelegramWarpConfig(fresh)
                         ready
                     }
@@ -2017,7 +2025,7 @@ class OlcboxVpnService : VpnService() {
                     addLog("Каскад: 2-й прокси ЗАДАН, но ссылка неполная/не распозналась — он отброшен, выход через 1-й прокси")
             }
             if (activeProxyCore == ProxyCore.Xray) {
-                val xrayProfile = if (isClientWarp) profile else effectiveProfile
+                val xrayProfile = if (isClientWarp) warpExitProfile else effectiveProfile
                 val rawXray = xrayProfile.rawXrayConfig
                 var assetPath = ""
                 val json = if (!rawXray.isNullOrBlank()) {
@@ -2099,7 +2107,7 @@ class OlcboxVpnService : VpnService() {
                         keepFlowOnChain = wireguardBase != null || warpChainPort != null,
                         warpRelay = warpRelay,
                         routingProfile = xrayRoutingProfile(routingProfile, assetPath),
-                        secondProfile = if (isClientWarp) configuredSecondProfile else secondProfile,
+                        secondProfile = if (isClientWarp) cascadeExit else secondProfile,
                         bypassLan = loadRouting(expandAsn = false).bypassLan,
                         // FakeDNS translated from the imported JSON config — the sing-box branch below
                         // has always honored it; on Xray it used to be dropped on the floor.
@@ -3790,6 +3798,24 @@ class OlcboxVpnService : VpnService() {
             }
         }
         return ini?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun resolveWarpExitOnUpstream(profile: ProxyProfile, upstream: Network): ProxyProfile {
+        val host = profile.server
+        if (host.isBlank() || !profile.rawOutbound.isNullOrBlank() || ':' in host ||
+            host.all { it.isDigit() || it == '.' }
+        ) return profile
+        val ip = try {
+            withContext(Dispatchers.IO) {
+                val addresses = upstream.getAllByName(host)
+                (addresses.firstOrNull { it is java.net.Inet4Address } ?: addresses.firstOrNull())?.hostAddress
+            }
+        } catch (e: java.net.UnknownHostException) {
+            addLog("WARP: не удалось разрешить $host в мобильной сети")
+            null
+        } ?: return profile
+        addLog("WARP: адрес VLESS получен через мобильную сеть, TCP идёт через WARP: $ip")
+        return WarpHelper.exitByIp(profile, ip)
     }
 
     private suspend fun checkWarpSocks(profile: ProxyProfile): Boolean = withContext(Dispatchers.IO) {
