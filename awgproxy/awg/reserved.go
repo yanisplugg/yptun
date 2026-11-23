@@ -3,6 +3,8 @@ package awg
 import (
 	"errors"
 
+	"github.com/amnezia-vpn/amneziawg-go/v3/device"
+
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 )
 
@@ -10,8 +12,8 @@ import (
 // outgoing WireGuard message. WARP derives these from the registration client_id and DROPS any packet
 // whose reserved field is zero — which is what amneziawg-go (and wireguard-go) emit by default, so a
 // vanilla bind handshakes but carries no data. The bytes live at offset 1..3 (byte 0 is the message
-// type); junk cover packets are shorter/ignored, so the len>=4 guard is enough. Receive is untouched:
-// the device ignores reserved bytes on inbound. PeekLookAtSocketFd4/6 are delegated so the socket
+// type). AmneziaWG signature and junk packets share the same batch and must pass through unchanged.
+// Peel the WARP bytes from incoming WireGuard headers before passing them to the device. PeekLookAtSocketFd4/6 are delegated so the socket
 // protector (protectBind) still finds the underlying fd through the wrapper.
 type reservedBind struct {
 	conn.Bind
@@ -36,7 +38,7 @@ func (b *reservedBind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uin
 				return n, err
 			}
 			for i := 0; i < n; i++ {
-				if sizes[i] >= 4 {
+				if isWireGuardPacket(packets[i][:sizes[i]]) {
 					packets[i][1] = 0
 					packets[i][2] = 0
 					packets[i][3] = 0
@@ -50,13 +52,31 @@ func (b *reservedBind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uin
 
 func (b *reservedBind) Send(bufs [][]byte, ep conn.Endpoint) error {
 	for _, buf := range bufs {
-		if len(buf) >= 4 {
+		if isWireGuardPacket(buf) && buf[1] == 0 && buf[2] == 0 && buf[3] == 0 {
 			buf[1] = b.reserved[0]
 			buf[2] = b.reserved[1]
 			buf[3] = b.reserved[2]
 		}
 	}
 	return b.Bind.Send(bufs, ep)
+}
+
+func isWireGuardPacket(packet []byte) bool {
+	if len(packet) < 4 {
+		return false
+	}
+	switch uint32(packet[0]) {
+	case device.MessageInitiationType:
+		return len(packet) == device.MessageInitiationSize
+	case device.MessageResponseType:
+		return len(packet) == device.MessageResponseSize
+	case device.MessageCookieReplyType:
+		return len(packet) == device.MessageCookieReplySize
+	case device.MessageTransportType:
+		return len(packet) >= device.MessageTransportSize
+	default:
+		return false
+	}
 }
 
 func (b *reservedBind) PeekLookAtSocketFd4() (int, error) {

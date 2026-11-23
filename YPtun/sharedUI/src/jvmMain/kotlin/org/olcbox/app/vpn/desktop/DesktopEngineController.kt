@@ -424,13 +424,6 @@ internal class DesktopEngineController(
                     ini = null
                 }
 
-                if (ini != null) {
-                    val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
-                    if (updated != ini) {
-                        ini = updated
-                        runCatching { TelegramProxyStore.saveConfig(updated) }
-                    }
-                }
                 if (ini.isNullOrBlank()) {
                     log("WARP: generating Cloudflare WARP config...")
                     ini = runCatching { WarpConfigGenerator.generate(log, officialFirst = true) }

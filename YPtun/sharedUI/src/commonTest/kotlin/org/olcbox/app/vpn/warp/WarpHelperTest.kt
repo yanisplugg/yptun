@@ -76,7 +76,9 @@ class WarpHelperTest {
         val awg = WarpHelper.engineIni(ini, awg = true, initPackets = true)
         assertEquals(true, awg.contains("Reserved"))
         // AmneziaWG keeps Jc/S1/I1 obfuscation, pins IP endpoint, and maps blocked 2408 to 894
-        assertEquals(true, awg.contains("I1") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:894"))
+        assertEquals(true, awg.contains("I1 = <b 0xce>") && awg.contains("Jc = 4") && awg.contains("Endpoint = 162.159.192.1:894"))
+        val withoutI1 = WarpHelper.engineIni(ini.replace("I1 = <b 0xce>", ""), awg = true)
+        assertEquals(true, withoutI1.contains("I1 = $WARP_I1"))
         val server = WarpHelper.engineIni(ini, awg = true, initPackets = false)
         assertEquals(true, !server.contains("I1") && server.contains("Jc = 4"))
         val wg = WarpHelper.engineIni(ini, awg = false)

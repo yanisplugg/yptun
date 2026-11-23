@@ -3746,13 +3746,6 @@ class OlcboxVpnService : VpnService() {
             ini = null
         }
 
-        if (ini != null) {
-            val updated = WarpConfigGenerator.ensureWorkingConfig(ini)
-            if (updated != ini) {
-                ini = updated
-                runCatching { ds.saveTelegramWarpConfig(updated) }
-            }
-        }
         if (ini.isNullOrBlank()) {
             addLog("WARP: генерирую конфиг Cloudflare WARP…")
             ini = runCatching { WarpConfigGenerator.generate(officialFirst = true) }

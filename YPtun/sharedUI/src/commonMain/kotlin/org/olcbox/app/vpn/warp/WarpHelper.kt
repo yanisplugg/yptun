@@ -91,7 +91,7 @@ object WarpHelper {
                 bytes != null && bytes.size >= 3 && bytes.take(3).any { it.toInt() != 0 }
             }
         }
-        return hasReserved && (!requireI1 || fields.any { (key, value) -> key == "i1" && value.isNotEmpty() })
+        return hasReserved && (!requireI1 || hasI1(ini))
     }
 
     /**
@@ -107,8 +107,12 @@ object WarpHelper {
         targetPort: Int? = null,
     ): String {
         val base = if (awg) {
-            val stripped = dropKeys(ini, setOf("i1", "i2", "i3", "i4", "i5"))
-            if (initPackets) injectI1(stripped) else stripped
+            if (initPackets) {
+                val base = dropKeys(ini, setOf("i2", "i3", "i4", "i5"))
+                if (hasI1(base)) base else injectI1(dropKeys(base, setOf("i1")))
+            } else {
+                dropKeys(ini, setOf("i1", "i2", "i3", "i4", "i5"))
+            }
         } else {
             plainWireGuard(ini)
         }
@@ -116,6 +120,11 @@ object WarpHelper {
         val port = targetPort ?: (if (rawPort == 2408) 894 else rawPort)
         val withEp = withEndpoint(base, "${pinnedHost(host)}:$port")
         return forceKeepalive(withEp, 15)
+    }
+
+    private fun hasI1(ini: String): Boolean = ini.lineSequence().any { line ->
+        line.substringBefore('=').trim().equals("i1", ignoreCase = true) &&
+            line.substringAfter('=', "").isNotBlank()
     }
 
     fun injectI1(ini: String): String {
