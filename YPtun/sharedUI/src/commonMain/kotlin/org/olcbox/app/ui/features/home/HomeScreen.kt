@@ -848,7 +848,11 @@ fun HomeScreen(
         }
 
         if (isSessionSheetOpen) {
-            SessionSheet(proxy = { viewModel.tunnelProxy() }, onDismiss = { isSessionSheetOpen = false })
+            SessionSheet(
+                proxy = { viewModel.tunnelProxy() },
+                activeLocation = { state.selectedLocation?.config ?: state.configData },
+                onDismiss = { isSessionSheetOpen = false }
+            )
         }
 
         if (isListViewSheetOpen && appBehavior != null) {

@@ -221,6 +221,95 @@ private suspend fun fetchSessionInfoInternal(client: HttpClient): SessionInfo = 
     }
 }
 
+suspend fun fetchHostGeoInfo(host: String, proxy: SubscriptionFetchProxy?): SessionInfo? {
+    val cleanHost = host.trim().trim('[', ']')
+    if (cleanHost.isBlank() || cleanHost.equals("localhost", ignoreCase = true) || cleanHost == "127.0.0.1") {
+        return null
+    }
+    return runCatching {
+        if (proxy != null) {
+            withProxyAuthentication(proxy) {
+                val client = createProxyHttpClient(proxy, 6_000, 10_000, 10_000)
+                try {
+                    queryHostGeo(client, cleanHost)
+                } finally {
+                    client.close()
+                }
+            }
+        } else {
+            val client = createProxyHttpClient(null, 6_000, 10_000, 10_000)
+            try {
+                queryHostGeo(client, cleanHost)
+            } finally {
+                client.close()
+            }
+        }
+    }.getOrNull()
+}
+
+private suspend fun queryHostGeo(client: HttpClient, host: String): SessionInfo? {
+    try {
+        val resp = withTimeoutOrNull(5_000) { client.get("https://ipwho.is/$host").bodyAsText() }
+        if (resp != null && resp.trimStart().startsWith("{")) {
+            val root = Json.parseToJsonElement(resp).jsonObject
+            if (root["success"]?.jsonPrimitive?.boolean != false) {
+                val conn = root["connection"] as? JsonObject
+                fun JsonObject.text(key: String) = this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val country = root.text("country")
+                val code = root.text("country_code")
+                val ip = root.text("ip")
+                return SessionInfo(
+                    ipv4 = ip?.takeIf { ":" !in it },
+                    ipv6 = ip?.takeIf { ":" in it },
+                    asn = conn?.text("asn"),
+                    provider = conn?.text("isp") ?: conn?.text("org"),
+                    country = if (country != null && code != null) "$country ($code)" else country ?: code,
+                    city = root.text("city"),
+                    region = root.text("region"),
+                    latitude = root.text("latitude"),
+                    longitude = root.text("longitude")
+                )
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {}
+
+    try {
+        val resp = withTimeoutOrNull(5_000) { client.get("http://ip-api.com/json/$host").bodyAsText() }
+        if (resp != null && resp.trimStart().startsWith("{")) {
+            val root = Json.parseToJsonElement(resp).jsonObject
+            if (root["status"]?.jsonPrimitive?.contentOrNull == "success") {
+                fun JsonObject.text(key: String) = this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val country = root.text("country")
+                val code = root.text("countryCode")
+                val query = root.text("query")
+                val asString = root.text("as")
+                val asn = asString?.substringBefore(' ')?.takeIf { it.startsWith("AS", ignoreCase = true) }
+                val isp = root.text("isp")
+                val org = root.text("org")
+                val lat = root["lat"]?.jsonPrimitive?.contentOrNull
+                val lon = root["lon"]?.jsonPrimitive?.contentOrNull
+                return SessionInfo(
+                    ipv4 = query?.takeIf { ":" !in it },
+                    ipv6 = query?.takeIf { ":" in it },
+                    asn = asn,
+                    provider = isp ?: org,
+                    country = if (country != null && code != null) "$country ($code)" else country ?: code,
+                    city = root.text("city"),
+                    region = root.text("regionName"),
+                    latitude = lat,
+                    longitude = lon
+                )
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {}
+
+    return null
+}
+
 private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
 
 private suspend fun HttpClient.plainText(url: String): String? =

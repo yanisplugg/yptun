@@ -592,6 +592,7 @@ interface Strings {
     val hideSessionButton: String
     val hideSessionButtonSubtitle: String
     val sessionTitle: String
+    val sessionSubtitleExit: String
     val sessionProvider: String
     val sessionCountry: String
     val sessionCity: String
@@ -600,6 +601,15 @@ interface Strings {
     val sessionLongitude: String
     val sessionNote: String
     val sessionFailed: String
+    val sessionShowIngress: String
+    val sessionHideIngress: String
+    val sessionIngressTitle: String
+    val sessionIngressServer: String
+    val sessionIngressPort: String
+    val sessionIngressProtocol: String
+    val sessionIngressTransport: String
+    val sessionIngressWarp: String
+    val sessionIngressNote: String
     val speedTestTitle: String
     val speedTestSubtitle: String
     val speedTestAgain: String
@@ -1483,6 +1493,7 @@ object RuStrings : Strings {
     override val hideSessionButton = "Скрыть кнопку «Сессия»"
     override val hideSessionButtonSubtitle = "Убрать кнопку «Сессия» с главного экрана"
     override val sessionTitle = "Сессия"
+    override val sessionSubtitleExit = "Информация о выходном соединении"
     override val sessionProvider = "Провайдер"
     override val sessionCountry = "Страна"
     override val sessionCity = "Город"
@@ -1491,6 +1502,15 @@ object RuStrings : Strings {
     override val sessionLongitude = "Долгота"
     override val sessionNote = "Ваш IP-адрес — это уникальный идентификатор вашего подключения в Интернете, аналогичный обратному адресу в письме. Данные запрашиваются только при открытии этого окна."
     override val sessionFailed = "Не удалось получить данные. Проверьте подключение"
+    override val sessionShowIngress = "Показать ещё (входное соединение)"
+    override val sessionHideIngress = "Скрыть входное соединение"
+    override val sessionIngressTitle = "Входное соединение"
+    override val sessionIngressServer = "Сервер"
+    override val sessionIngressPort = "Порт"
+    override val sessionIngressProtocol = "Протокол"
+    override val sessionIngressTransport = "Транспорт"
+    override val sessionIngressWarp = "Режим WARP"
+    override val sessionIngressNote = "Узел, к которому устройство подключается в первую очередь."
     override val speedTestTitle = "Тест скорости"
     override val speedTestSubtitle = "Проверка вашего подключения к Интернету"
     override val speedTestAgain = "Повторить тест"
@@ -2360,6 +2380,7 @@ object EnStrings : Strings {
     override val hideSessionButton = "Hide the Session button"
     override val hideSessionButtonSubtitle = "Remove the Session button from the home screen"
     override val sessionTitle = "Session"
+    override val sessionSubtitleExit = "Outbound connection information"
     override val sessionProvider = "Provider"
     override val sessionCountry = "Country"
     override val sessionCity = "City"
@@ -2368,6 +2389,15 @@ object EnStrings : Strings {
     override val sessionLongitude = "Longitude"
     override val sessionNote = "Your IP address is a unique identifier of your connection to the Internet, like a return address on a letter. The data is requested only when this window is opened."
     override val sessionFailed = "Could not load the data. Check your connection"
+    override val sessionShowIngress = "Show more (ingress connection)"
+    override val sessionHideIngress = "Hide ingress connection"
+    override val sessionIngressTitle = "Ingress connection"
+    override val sessionIngressServer = "Server"
+    override val sessionIngressPort = "Port"
+    override val sessionIngressProtocol = "Protocol"
+    override val sessionIngressTransport = "Transport"
+    override val sessionIngressWarp = "WARP mode"
+    override val sessionIngressNote = "The node your device establishes a connection with first."
     override val speedTestTitle = "Speed test"
     override val speedTestSubtitle = "Check your Internet connection"
     override val speedTestAgain = "Run again"
@@ -3259,6 +3289,7 @@ object FaStrings : Strings {
     override val hideSessionButton = "پنهان کردن دکمه «نشست»"
     override val hideSessionButtonSubtitle = "حذف دکمه «نشست» از صفحه اصلی"
     override val sessionTitle = "نشست"
+    override val sessionSubtitleExit = "اطلاعات اتصال خروجی"
     override val sessionProvider = "ارائه‌دهنده"
     override val sessionCountry = "کشور"
     override val sessionCity = "شهر"
@@ -3267,6 +3298,15 @@ object FaStrings : Strings {
     override val sessionLongitude = "طول جغرافیایی"
     override val sessionNote = "آدرس IP شناسه یکتای اتصال شما به اینترنت است، مانند آدرس فرستنده روی نامه. داده‌ها فقط هنگام باز شدن این پنجره درخواست می‌شوند."
     override val sessionFailed = "دریافت داده ناموفق بود. اتصال را بررسی کنید"
+    override val sessionShowIngress = "نمایش بیشتر (اتصال ورودی)"
+    override val sessionHideIngress = "پنهان کردن اتصال ورودی"
+    override val sessionIngressTitle = "اتصال ورودی"
+    override val sessionIngressServer = "سرور"
+    override val sessionIngressPort = "پورت"
+    override val sessionIngressProtocol = "پروتکل"
+    override val sessionIngressTransport = "انتقال"
+    override val sessionIngressWarp = "حالت WARP"
+    override val sessionIngressNote = "گره‌ای که دستگاه شما ابتدا به آن متصل می‌شود."
     override val speedTestTitle = "تست سرعت"
     override val speedTestSubtitle = "بررسی اتصال شما به اینترنت"
     override val speedTestAgain = "اجرای دوباره"
@@ -4126,6 +4166,7 @@ object ZhStrings : Strings {
     override val hideSessionButton = "隐藏“会话”按钮"
     override val hideSessionButtonSubtitle = "从主屏幕移除“会话”按钮"
     override val sessionTitle = "会话"
+    override val sessionSubtitleExit = "出站连接信息"
     override val sessionProvider = "服务商"
     override val sessionCountry = "国家"
     override val sessionCity = "城市"
@@ -4134,6 +4175,15 @@ object ZhStrings : Strings {
     override val sessionLongitude = "经度"
     override val sessionNote = "您的 IP 地址是您连接互联网的唯一标识，类似信件上的回邮地址。仅在打开此窗口时才会请求数据。"
     override val sessionFailed = "无法获取数据，请检查连接"
+    override val sessionShowIngress = "显示更多（入站连接）"
+    override val sessionHideIngress = "隐藏入站连接"
+    override val sessionIngressTitle = "入站连接"
+    override val sessionIngressServer = "服务器"
+    override val sessionIngressPort = "端口"
+    override val sessionIngressProtocol = "协议"
+    override val sessionIngressTransport = "传输方式"
+    override val sessionIngressWarp = "WARP 模式"
+    override val sessionIngressNote = "设备首先建立连接的入口节点。"
     override val speedTestTitle = "速度测试"
     override val speedTestSubtitle = "检查您的互联网连接"
     override val speedTestAgain = "重新测试"

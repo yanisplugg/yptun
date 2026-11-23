@@ -1858,9 +1858,9 @@ object XrayConfig {
                         addJsonObject {
                             put("address", profile.server)
                             put("port", profile.serverPort)
-                            if (profile.password.isNotBlank()) {
+                            if (profile.username.isNotBlank() || profile.password.isNotBlank()) {
                                 putJsonArray("users") {
-                                    addJsonObject { put("user", ""); put("pass", profile.password) }
+                                    addJsonObject { put("user", profile.username); put("pass", profile.password) }
                                 }
                             }
                         }

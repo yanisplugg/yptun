@@ -8,11 +8,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,10 +39,20 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.olcbox.app.data.model.EngineType
+import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.ProxyProfile
+import org.olcbox.app.data.model.WarpMode
+import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.data.session.SessionInfo
 import org.olcbox.app.data.session.SpeedPhase
 import org.olcbox.app.data.session.SpeedProgress
+import org.olcbox.app.data.session.fetchHostGeoInfo
 import org.olcbox.app.data.session.fetchSessionInfo
 import org.olcbox.app.data.session.runSpeedTest
 import org.olcbox.app.ui.components.SettingsCaption
@@ -43,6 +60,7 @@ import org.olcbox.app.ui.components.SettingsCard
 import org.olcbox.app.ui.components.SettingsCardDivider
 import org.olcbox.app.ui.components.SettingsNote
 import org.olcbox.app.ui.i18n.LocalStrings
+import org.olcbox.app.ui.i18n.Strings
 import kotlin.math.roundToInt
 
 /**
@@ -50,7 +68,11 @@ import kotlin.math.roundToInt
  * through the live tunnel via [proxy], and nothing is requested until the sheet is opened.
  */
 @Composable
-fun SessionSheet(proxy: () -> SubscriptionFetchProxy?, onDismiss: () -> Unit) {
+fun SessionSheet(
+    proxy: () -> SubscriptionFetchProxy?,
+    activeLocation: () -> LocationConfig? = { null },
+    onDismiss: () -> Unit
+) {
     val s = LocalStrings.current
     var info by remember { mutableStateOf<SessionInfo?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -70,7 +92,27 @@ fun SessionSheet(proxy: () -> SubscriptionFetchProxy?, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val running = speed.phase == SpeedPhase.Ping || speed.phase == SpeedPhase.Download || speed.phase == SpeedPhase.Upload
 
-    HomeSettingsSheet(title = s.sessionTitle, onDismiss = onDismiss) {
+    var showIngress by remember { mutableStateOf(false) }
+    val locationConfig = remember(activeLocation) { activeLocation() }
+    var ingressGeo by remember { mutableStateOf<SessionInfo?>(null) }
+    var ingressGeoLoading by remember { mutableStateOf(false) }
+
+    val (ingressHost, ingressPort) = remember(locationConfig) { extractIngressHostAndPort(locationConfig) }
+
+    LaunchedEffect(showIngress, ingressHost) {
+        if (showIngress && ingressGeo == null && !ingressHost.isNullOrBlank()) {
+            ingressGeoLoading = true
+            runCatching { fetchHostGeoInfo(ingressHost, proxy()) }
+                .onSuccess { ingressGeo = it }
+            ingressGeoLoading = false
+        }
+    }
+
+    HomeSettingsSheet(
+        title = s.sessionTitle,
+        subtitle = s.sessionSubtitleExit,
+        onDismiss = onDismiss
+    ) {
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 6.dp))
         else Spacer(Modifier.height(10.dp))
         SettingsCard {
@@ -95,13 +137,84 @@ fun SessionSheet(proxy: () -> SubscriptionFetchProxy?, onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth().padding(horizontal = 18.dp),
                 horizontalArrangement = Arrangement.End
             ) {
-                androidx.compose.material3.TextButton(
+                TextButton(
                     onClick = { refreshTrigger++ },
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(s.refresh, fontSize = 13.sp)
                 }
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            OutlinedButton(
+                onClick = { showIngress = !showIngress },
+                modifier = Modifier.fillMaxWidth().height(44.dp)
+            ) {
+                Icon(
+                    imageVector = if (showIngress) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = if (showIngress) s.sessionHideIngress else s.sessionShowIngress,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+
+        if (showIngress) {
+            Spacer(Modifier.height(8.dp))
+            SettingsCaption(s.sessionIngressTitle)
+            if (ingressGeoLoading) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 4.dp))
+            }
+            SettingsCard {
+                val ingressProtocol = resolveIngressProtocol(locationConfig)
+                val ingressTransport = resolveIngressTransport(locationConfig)
+                val warpModeStr = resolveWarpModeString(locationConfig, s)
+
+                val ingressRows = mutableListOf<Pair<String, String?>>()
+                if (!ingressHost.isNullOrBlank()) {
+                    ingressRows.add(s.sessionIngressServer to ingressHost)
+                }
+                if (!ingressPort.isNullOrBlank()) {
+                    ingressRows.add(s.sessionIngressPort to ingressPort)
+                }
+                ingressRows.add(s.sessionIngressProtocol to ingressProtocol)
+                if (!ingressTransport.isNullOrBlank()) {
+                    ingressRows.add(s.sessionIngressTransport to ingressTransport)
+                }
+                if (!warpModeStr.isNullOrBlank()) {
+                    ingressRows.add(s.sessionIngressWarp to warpModeStr)
+                }
+                if (ingressGeo?.asn != null) {
+                    ingressRows.add("ASN" to ingressGeo?.asn)
+                }
+                if (ingressGeo?.provider != null) {
+                    ingressRows.add(s.sessionProvider to ingressGeo?.provider)
+                }
+                if (ingressGeo?.country != null) {
+                    ingressRows.add(s.sessionCountry to ingressGeo?.country)
+                }
+                if (ingressGeo?.city != null) {
+                    ingressRows.add(s.sessionCity to ingressGeo?.city)
+                }
+                if (ingressRows.isEmpty()) {
+                    ingressRows.add(s.sessionIngressServer to "—")
+                }
+                ingressRows.forEachIndexed { i, (label, value) ->
+                    if (i > 0) SettingsCardDivider()
+                    SessionRow(label, value)
+                }
+            }
+            SettingsNote(s.sessionIngressNote)
         }
 
         SettingsCaption(s.speedTestTitle)
@@ -130,6 +243,111 @@ fun SessionSheet(proxy: () -> SubscriptionFetchProxy?, onDismiss: () -> Unit) {
         }
         SettingsNote(s.speedTestSubtitle)
     }
+}
+
+private fun extractIngressHostAndPort(config: LocationConfig?): Pair<String?, String?> {
+    if (config == null) return null to null
+    val p = config.proxy
+    if (p != null) {
+        if (p.server.isNotBlank()) {
+            return p.server to (p.serverPort.takeIf { it > 0 }?.toString() ?: "")
+        }
+        if (p.awgConfig.isNotBlank()) {
+            val endpointLine = p.awgConfig.lineSequence()
+                .firstOrNull { it.trim().startsWith("Endpoint", ignoreCase = true) }
+            if (endpointLine != null) {
+                val value = endpointLine.substringAfter('=').trim()
+                val host = value.substringBeforeLast(':').trim().trim('[', ']')
+                val port = value.substringAfterLast(':', "").trim()
+                return host to port
+            }
+        }
+        if (!p.rawOutbound.isNullOrBlank()) {
+            runCatching {
+                val obj = Json.parseToJsonElement(p.rawOutbound).jsonObject
+                val server = obj["server"]?.jsonPrimitive?.contentOrNull
+                val port = obj["server_port"]?.jsonPrimitive?.contentOrNull
+                if (!server.isNullOrBlank()) return server to (port ?: "")
+            }
+        }
+    }
+    if (config.engine == EngineType.Stealth) {
+        return config.bypassProvider to "443"
+    }
+    if (config.engine == EngineType.VkTurn) {
+        return "VK Calls" to "443"
+    }
+    if (config.engine == EngineType.MasterDns) {
+        return (config.masterDns?.domainList()?.firstOrNull()?.takeIf { it.isNotBlank() } ?: "DNS") to "53"
+    }
+    return null to null
+}
+
+private fun resolveIngressProtocol(config: LocationConfig?): String {
+    if (config == null) return "—"
+    return when (config.engine) {
+        EngineType.Stealth -> "olcRTC (${config.bypassProvider})"
+        EngineType.Chain -> "olcRTC + ${(config.proxy?.type?.uppercase() ?: "PROXY")}"
+        EngineType.VkTurn -> "VK-TURN (WebRTC)"
+        EngineType.MasterDns -> "MasterDNS (DNS Tunnel)"
+        EngineType.OpenFlux -> "OpenFlux"
+        EngineType.Snolc -> "SNOLC"
+        EngineType.Standard -> {
+            val p = config.proxy
+            val baseType = when (p?.type?.lowercase()) {
+                ProxyProfile.TYPE_AMNEZIAWG -> "AmneziaWG"
+                "wireguard" -> "WireGuard"
+                ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria 2"
+                ProxyProfile.TYPE_MIERU -> "Mieru"
+                ProxyProfile.TYPE_TRUSTTUNNEL -> "TrustTunnel"
+                ProxyProfile.TYPE_NAIVE -> "NaïveProxy"
+                ProxyProfile.TYPE_SHADOWSOCKS -> "Shadowsocks"
+                ProxyProfile.TYPE_TROJAN -> "Trojan"
+                ProxyProfile.TYPE_VMESS -> "VMess"
+                ProxyProfile.TYPE_VLESS -> "VLESS"
+                else -> p?.type?.uppercase()?.takeIf { it.isNotBlank() } ?: "Standard"
+            }
+            if (config.warpEnabled) {
+                val proto = if (config.warpProtocol == WarpProtocol.Awg) "AWG" else "WG"
+                if (config.warpMode == WarpMode.Client) {
+                    "WARP ($proto) → $baseType"
+                } else {
+                    "$baseType → WARP ($proto)"
+                }
+            } else {
+                baseType
+            }
+        }
+    }
+}
+
+private fun resolveIngressTransport(config: LocationConfig?): String? {
+    if (config == null) return null
+    return when (config.engine) {
+        EngineType.Stealth, EngineType.Chain -> config.transport
+        EngineType.Standard -> {
+            val p = config.proxy ?: return null
+            val net = p.network.uppercase()
+            val sec = when (p.security.lowercase()) {
+                "reality" -> "Reality"
+                "tls" -> "TLS"
+                else -> null
+            }
+            when {
+                sec != null -> "$net ($sec)"
+                p.type == ProxyProfile.TYPE_AMNEZIAWG || p.type == "wireguard" -> "UDP"
+                else -> net.takeIf { it.isNotBlank() }
+            }
+        }
+        else -> null
+    }
+}
+
+private fun resolveWarpModeString(config: LocationConfig?, s: Strings): String? {
+    if (config == null || !config.warpEnabled) return null
+    val proto = if (config.warpProtocol == WarpProtocol.Awg) "AmneziaWG" else "WireGuard"
+    val mode = if (config.warpMode == WarpMode.Client) s.warpModeClient else s.warpModeServer
+    return "$mode ($proto)"
 }
 
 @Composable

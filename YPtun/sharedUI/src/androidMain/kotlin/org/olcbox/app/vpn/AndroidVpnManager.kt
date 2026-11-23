@@ -1251,6 +1251,19 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     -1L
                 }
             if (ms >= 0) return ms
+            // Fallback: fast SOCKS5 probe to 1.1.1.1:53 if Xray bridge HTTP probe timed out or failed
+            val fallbackRtt = runCatching {
+                socks5ConnectRtt(
+                    proxyHost = AndroidSocksProxySettings.connectHost(liveSock.host),
+                    proxyPort = liveSock.port,
+                    username = liveSock.username,
+                    password = liveSock.password,
+                    targetHost = "1.1.1.1",
+                    targetPort = 53,
+                    timeoutMs = pingTimeoutMs.toInt()
+                )
+            }.getOrNull()
+            if (fallbackRtt != null && fallbackRtt >= 0) return fallbackRtt
         }
 
         val port = (20_000..60_000).random()
