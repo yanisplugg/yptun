@@ -20,7 +20,9 @@ object VlessUriParser {
 
         val fragmentIndex = withoutScheme.indexOf('#')
         val remark = if (fragmentIndex >= 0) {
-            UriCodec.percentDecode(withoutScheme.substring(fragmentIndex + 1))
+            val raw = UriCodec.percentDecode(withoutScheme.substring(fragmentIndex + 1))
+            val q = raw.indexOf('?')
+            if (q >= 0) raw.substring(0, q).trim() else raw.trim()
         } else {
             ""
         }

@@ -178,7 +178,13 @@ pub fn parse_vless(uri: &str) -> Option<ProxyProfile> {
     let rest = &t["vless://".len()..];
     let remark = rest
         .find('#')
-        .map(|i| percent_decode(&rest[i + 1..]))
+        .map(|i| {
+            let raw = percent_decode(&rest[i + 1..]);
+            match raw.find('?') {
+                Some(q) => raw[..q].trim().to_string(),
+                None => raw.trim().to_string(),
+            }
+        })
         .unwrap_or_default();
     let before_fragment = before(rest, '#');
     let (authority, query) = match before_fragment.find('?') {

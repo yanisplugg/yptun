@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	sessionReadTimeout = 30 * time.Minute // Increased from 60s to 30min
+	sessionReadTimeout = 40 * time.Second // 4 missed keepalives = dead NAT/connection
 	readBufSize        = 1600
 	keepaliveByte      = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
 	// keepaliveInterval: 1с (как у референсного клиента) — агрессивнее держит
@@ -37,6 +37,39 @@ const (
 	keepaliveMinSize = 25
 	keepaliveMaxSize = 20 // диапазон добавки к keepaliveMinSize (rand.Intn(20))
 )
+
+var (
+	activeSessionsMu sync.Mutex
+	activeSessions   = make(map[int]context.CancelFunc)
+)
+
+func registerActiveSession(id int, cancel context.CancelFunc) {
+	activeSessionsMu.Lock()
+	defer activeSessionsMu.Unlock()
+	activeSessions[id] = cancel
+}
+
+func unregisterActiveSession(id int) {
+	activeSessionsMu.Lock()
+	defer activeSessionsMu.Unlock()
+	delete(activeSessions, id)
+}
+
+// ResetActiveSessions cancels all active worker sessions so they immediately
+// re-acquire TURN allocations and reconnect (e.g. on iOS device wake or network switch).
+func ResetActiveSessions(reason string) {
+	activeSessionsMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(activeSessions))
+	for _, c := range activeSessions {
+		cancels = append(cancels, c)
+	}
+	activeSessionsMu.Unlock()
+
+	log.Printf("[WDTT] Resetting %d active sessions (%s)...", len(cancels), reason)
+	for _, c := range cancels {
+		c()
+	}
+}
 
 // socketBufSize — размер SO_RCVBUF/SO_SNDBUF на сокетах TURN.
 // На iOS/Darwin лимит памяти сетевого расширения PacketTunnelProvider составляет 15 МБ (Jetsam).
@@ -288,6 +321,8 @@ func RunSession(
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	defer sessCancel()
+	registerActiveSession(sessionID, sessCancel)
+	defer unregisterActiveSession(sessionID)
 
 	// Keepalive goroutine (TURN binding request)
 	var sessionWg sync.WaitGroup
@@ -798,6 +833,8 @@ func RunPing(
 
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	defer sessCancel()
+	registerActiveSession(sessionID, sessCancel)
+	defer unregisterActiveSession(sessionID)
 
 	var relayWg sync.WaitGroup
 	relayWg.Add(2)

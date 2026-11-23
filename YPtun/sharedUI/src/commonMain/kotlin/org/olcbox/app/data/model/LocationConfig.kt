@@ -991,12 +991,48 @@ data class LocationConfig(
     /** Effective server bond reassembler port. */
     fun effectiveBondPort(): Int = bondPort.takeIf { it in 1..65535 } ?: DEFAULT_BOND_PORT
 
+    companion object {
+        fun sanitizeNameAndDescription(rawName: String, rawDescription: String): Pair<String, String> {
+            var cleanName = rawName.trim()
+            var desc = rawDescription.trim()
+
+            val qIdx = cleanName.indexOf('?')
+            if (qIdx >= 0) {
+                val queryPart = cleanName.substring(qIdx + 1)
+                cleanName = cleanName.substring(0, qIdx).trim()
+
+                if (desc.isBlank()) {
+                    val serverDescRaw = extractQueryParam(queryPart, "serverDescription")
+                    if (!serverDescRaw.isNullOrBlank()) {
+                        desc = org.olcbox.app.data.importer.SubscriptionDecoder.decodeIfBase64(serverDescRaw).trim()
+                    }
+                }
+            }
+
+            return cleanName to desc
+        }
+
+        private fun extractQueryParam(query: String, paramName: String): String? {
+            val parts = query.split('&')
+            for (p in parts) {
+                val eqIdx = p.indexOf('=')
+                val key = if (eqIdx >= 0) p.substring(0, eqIdx).trim() else p.trim()
+                if (key.equals(paramName, ignoreCase = true)) {
+                    val rawVal = if (eqIdx >= 0) p.substring(eqIdx + 1).trim() else ""
+                    return org.olcbox.app.data.importer.UriCodec.percentDecode(rawVal)
+                }
+            }
+            return null
+        }
+    }
+
     fun normalized(): LocationConfig {
+        val (cleanName, cleanDesc) = sanitizeNameAndDescription(name, description)
         val provider = normalizeProvider(bypassProvider)
         val normalizedTransport = normalizeTransport(transport, provider)
         return copy(
-            name = name.trim(),
-            description = description.trim(),
+            name = cleanName,
+            description = cleanDesc,
             id = id.trim(),
             key = key.trim(),
             bypassProvider = provider,
@@ -1005,8 +1041,12 @@ data class LocationConfig(
             vp8Batch = sanitizeVp8Batch(vp8Batch),
             transportOptions = normalizeTransportOptions(transportOptions),
             engine = engine,
-            proxy = proxy,
-            proxy2 = proxy2,
+            proxy = proxy?.let { p ->
+                if (p.tag.contains('?')) p.copy(tag = p.tag.substringBefore('?').trim()) else p
+            },
+            proxy2 = proxy2?.let { p ->
+                if (p.tag.contains('?')) p.copy(tag = p.tag.substringBefore('?').trim()) else p
+            },
             warpEnabled = warpEnabled,
             warpMode = warpMode,
             warpProtocol = warpProtocol,

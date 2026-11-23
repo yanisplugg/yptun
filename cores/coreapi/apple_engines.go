@@ -107,3 +107,10 @@ func AppleEngineRunning(kind string) bool {
 		return false
 	}
 }
+
+func AppleEngineWake(kind string, reason string) {
+	switch kind {
+	case "wdtt":
+		WdttResetSessions(reason)
+	}
+}

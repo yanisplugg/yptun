@@ -129,4 +129,19 @@ class VlessUriParserTest {
         assertEquals("a.com", profiles[0].server)
         assertEquals("b.com", profiles[1].server)
     }
+
+    @Test
+    fun parsesServerDescriptionInFragment() {
+        val uri = "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@1.2.3.4:8443?type=tcp#Бразилия?serverDescription=8J+MjiDQm9Cw0YLQuNC90YHQutCw0Y8g0JDQvNC10YDQuNC60LA="
+        val p = VlessUriParser.parse(uri)!!
+        assertEquals("Бразилия", p.tag)
+        assertEquals("Бразилия", p.displayName())
+
+        val (cleanName, desc) = org.olcbox.app.data.model.LocationConfig.sanitizeNameAndDescription(
+            "Бразилия?serverDescription=8J+MjiDQm9Cw0YLQuNC90YHQutCw0Y8g0JDQvNC10YDQuNC60LA=",
+            ""
+        )
+        assertEquals("Бразилия", cleanName)
+        assertEquals("🌎 Латинская Америка", desc)
+    }
 }

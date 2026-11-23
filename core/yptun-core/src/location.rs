@@ -342,10 +342,11 @@ impl LocationConfig {
     }
 
     pub fn normalized(&self) -> Self {
+        let (clean_name, clean_desc) = sanitize_name_and_description(&self.name, &self.description);
         let provider = normalize_provider(&self.bypass_provider);
         Self {
-            name: self.name.trim().into(),
-            description: self.description.trim().into(),
+            name: clean_name,
+            description: clean_desc,
             id: self.id.trim().into(),
             key: self.key.trim().into(),
             bypass_provider: provider.into(),
@@ -353,6 +354,24 @@ impl LocationConfig {
             vp8_fps: sanitize_vp8_fps(self.vp8_fps),
             vp8_batch: sanitize_vp8_batch(self.vp8_batch),
             transport_options: normalize_transport_options(&self.transport_options),
+            proxy: self.proxy.as_ref().map(|p| {
+                if p.tag.contains('?') {
+                    let mut cp = p.clone();
+                    cp.tag = cp.tag[..cp.tag.find('?').unwrap()].trim().to_string();
+                    cp
+                } else {
+                    p.clone()
+                }
+            }),
+            proxy2: self.proxy2.as_ref().map(|p| {
+                if p.tag.contains('?') {
+                    let mut cp = p.clone();
+                    cp.tag = cp.tag[..cp.tag.find('?').unwrap()].trim().to_string();
+                    cp
+                } else {
+                    p.clone()
+                }
+            }),
             master_dns: self.master_dns.as_ref().map(MasterDnsConfig::normalized),
             open_flux: self.open_flux.as_ref().map(OpenFluxConfig::normalized),
             snolc: self.snolc.as_ref().map(SnolcConfig::normalized),
@@ -1282,4 +1301,40 @@ impl LocationViewIndex {
                 .collect(),
         }
     }
+}
+
+pub(crate) fn sanitize_name_and_description(raw_name: &str, raw_desc: &str) -> (String, String) {
+    let mut clean_name = raw_name.trim().to_string();
+    let mut desc = raw_desc.trim().to_string();
+
+    if let Some(q_idx) = clean_name.find('?') {
+        let query_part = &clean_name[q_idx + 1..];
+        let name_part = clean_name[..q_idx].trim().to_string();
+        clean_name = name_part;
+
+        if desc.is_empty() {
+            for part in query_part.split('&') {
+                let (k, v) = match part.find('=') {
+                    Some(eq) => (&part[..eq], &part[eq + 1..]),
+                    None => (part, ""),
+                };
+                if k.eq_ignore_ascii_case("serverDescription") {
+                    let decoded_val = crate::uri::percent_decode(v);
+                    let b64_candidate = decoded_val.replace(' ', "+");
+                    if let Some(d) = crate::subscription::decode_base64_chunk(&b64_candidate) {
+                        if !d.trim().is_empty() {
+                            desc = d.trim().to_string();
+                            break;
+                        }
+                    }
+                    if !decoded_val.trim().is_empty() {
+                        desc = decoded_val.trim().to_string();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    (clean_name, desc)
 }

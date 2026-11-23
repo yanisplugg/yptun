@@ -308,8 +308,12 @@ impl ProxyProfile {
     }
 
     pub fn display_name(&self) -> String {
-        if not_blank(&self.tag) {
-            self.tag.clone()
+        let clean = match self.tag.find('?') {
+            Some(i) => self.tag[..i].trim(),
+            None => self.tag.trim(),
+        };
+        if not_blank(clean) {
+            clean.to_string()
         } else {
             format!("{}:{}", self.server, self.server_port)
         }

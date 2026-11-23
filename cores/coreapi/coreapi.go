@@ -442,6 +442,7 @@ func WdttStop() {
 func WdttRunning() bool            { return wdttmobile.IsRunning() }
 func WdttPushCaptcha(token string) { wdttmobile.PushCaptcha(token) }
 func WdttVersion() string          { return wdttmobile.Version() }
+func WdttResetSessions(reason string) { wdttmobile.ResetSessions(reason) }
 
 // ---------------------------------------------------------------------------
 // MasterDNS (DNS tunnel): a local SOCKS5 whose traffic rides inside DNS queries.

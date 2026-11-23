@@ -333,6 +333,9 @@ func YpWdttPushCaptcha(token *C.char) { coreapi.WdttPushCaptcha(gs(token)) }
 //export YpWdttVersion
 func YpWdttVersion() *C.char { return cs(coreapi.WdttVersion()) }
 
+//export YpWdttResetSessions
+func YpWdttResetSessions(reason *C.char) { coreapi.WdttResetSessions(gs(reason)) }
+
 // ---------------------------------------------------------------------------
 // MasterDNS. No socket protector here — desktop has no VpnService, so the TUN layer routes the DNS
 // resolvers around the tunnel instead (see DesktopVpnManager's bypass list).

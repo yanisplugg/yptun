@@ -241,7 +241,7 @@ data class ProxyProfile(
         }
     }
 
-    fun displayName(): String = tag.ifBlank { "$server:$serverPort" }
+    fun displayName(): String = tag.substringBefore('?').trim().ifBlank { "$server:$serverPort" }
 
     /**
      * Identity used for duplicate detection: blanks the display [tag] and canonicalises [awgConfig]

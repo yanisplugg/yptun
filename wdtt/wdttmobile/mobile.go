@@ -150,6 +150,17 @@ func PushCaptcha(token string) { core.PushCaptchaResult(token) }
 // SetPaused toggles the worker-group pause (e.g. on Android Doze).
 func SetPaused(paused bool) { core.SetPaused(paused) }
 
-// SetDeviceSleep is kept for the host's API; qWDTT pauses through SetPaused and has no separate
-// screen-off hint.
-func SetDeviceSleep(asleep bool) {}
+// SetDeviceSleep notifies qWDTT when the device sleeps or wakes up.
+// When waking (asleep == false), it resets active sessions so workers immediately
+// acquire fresh TURN allocations without waiting for timeouts.
+func SetDeviceSleep(asleep bool) {
+	if !asleep {
+		core.ResetActiveSessions("device wake")
+	}
+}
+
+// ResetSessions aborts current worker connections to force immediate reconnection
+// (e.g. after iOS sleep/wake or network change).
+func ResetSessions(reason string) {
+	core.ResetActiveSessions(reason)
+}

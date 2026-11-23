@@ -157,7 +157,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 NativeLogger.setCallback(nil)
                 ttStopGroup.leave()
             }
-            _ = ttStopGroup.wait(timeout: .now() + 5.0)
+            _ = ttStopGroup.wait(timeout: .now() + 0.2)
         }
         Socks5Tunnel.quit()
         CoreapiSbStop()
@@ -226,10 +226,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         }
         let sleptSeconds = Date().timeIntervalSince(sleepDate)
         log("Device woke up after \(Int(sleptSeconds))s sleep")
-        // After ~45s+ of iOS screen-off sleep, carrier NAT / Wi-Fi routers often silently
-        // drop idle TCP/H2/xhttp sockets. Soft-restarting only the proxy engine flushes
-        // stale pooled connections without tearing down the iOS VPN tunnel.
-        if sleptSeconds >= 45 {
+        // After ~30s+ of iOS screen-off sleep, carrier NAT / Wi-Fi routers often silently
+        // drop idle UDP/TCP sockets, and TURN allocations expire.
+        if sleptSeconds >= 30 {
+            if CoreapiWdttRunning() {
+                log("Device woke up after \(Int(sleptSeconds))s; resetting WDTT sessions...")
+                CoreapiWdttResetSessions("wake after \(Int(sleptSeconds))s sleep")
+            }
             refreshProxyAfterNetworkChange(reason: "wake after \(Int(sleptSeconds))s sleep")
         }
     }
@@ -288,9 +291,114 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             // IosVpnManager.watchCaptcha polls "status" expecting "" or an http:// captcha URL.
             completion("")
         case "reload":
-            completion("error:restart-required")
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else {
+                    completion("error:runtime-gone")
+                    return
+                }
+                self.performFastReload(completion: completion)
+            }
         default:
             completion("")
+        }
+    }
+
+    private func performFastReload(completion: @escaping @Sendable (String) -> Void) {
+        lock.lock()
+        guard running, !stopping, !isRefreshing, trustTunnelClient == nil else {
+            lock.unlock()
+            completion("error:restart-required")
+            return
+        }
+        guard let currentPlan = activePlan, let currentProxy = currentPlan.proxy else {
+            lock.unlock()
+            completion("error:restart-required")
+            return
+        }
+        // Auxiliary or specialized engines (wdtt, snolc, csqtt, olcrtc) require clean tunnel restart
+        if !currentPlan.auxiliary.isEmpty || currentPlan.snolc != nil || currentPlan.csqtt != nil || currentPlan.olcrtc != nil || currentPlan.deferredWireguardProxy {
+            lock.unlock()
+            completion("error:restart-required")
+            return
+        }
+        isRefreshing = true
+        lock.unlock()
+
+        defer {
+            lock.lock()
+            isRefreshing = false
+            lock.unlock()
+        }
+
+        do {
+            let request = try AppleTunnelStore.loadRequest()
+            if extractTrustTunnelSpec(from: request) != nil {
+                completion("error:restart-required")
+                return
+            }
+            let logURL = try AppleTunnelStore.url(for: AppleTunnelStore.logFileName)
+            let cacheURL = try AppleTunnelStore.url(for: AppleTunnelStore.cacheFileName)
+            let runtimeDirectory = try AppleTunnelStore.directory()
+
+            let newPlan = try appleNativeRuntimePlan(
+                locationJson: request.locationJSON,
+                trafficJson: request.trafficJSON,
+                routingJson: request.routingJSON,
+                routingProfilesJson: request.routingProfilesJSON,
+                appBehaviorJson: request.appBehaviorJSON,
+                warpConfig: request.warpConfig,
+                socksPort: 10_808,
+                deviceId: request.deviceID,
+                runtimeDirectory: runtimeDirectory.path,
+                logFilePath: logURL.path,
+                cacheFilePath: cacheURL.path
+            )
+
+            guard let newProxy = newPlan.proxy,
+                  newPlan.auxiliary.isEmpty,
+                  newPlan.snolc == nil,
+                  newPlan.csqtt == nil,
+                  newPlan.olcrtc == nil,
+                  !newPlan.deferredWireguardProxy else {
+                completion("error:restart-required")
+                return
+            }
+
+            log("Fast-reloading proxy core: \(currentPlan.displayName) -> \(newPlan.displayName)")
+
+            // Stop existing proxy
+            switch currentProxy.kind {
+            case .singBox:
+                CoreapiSbStop()
+            case .xray:
+                CoreapiXrayStop()
+            case .mieru:
+                CoreapiMieruStop()
+            }
+
+            // Start new proxy
+            switch newProxy.kind {
+            case .singBox:
+                try callCore { CoreapiSbStart(newProxy.config, $0) }
+            case .xray:
+                try startXrayWithIOSLimits(config: newProxy.config)
+            case .mieru:
+                try callCore {
+                    CoreapiMieruStart(
+                        newProxy.config,
+                        "127.0.0.1:\(newProxy.listenPort)",
+                        $0
+                    )
+                }
+            }
+
+            setActivePlan(newPlan)
+            CoreapiFreeOSMemory()
+            log("Fast switch to \(newPlan.displayName) succeeded cleanly")
+            completion("ok")
+        } catch {
+            log("Fast reload failed: \(error.localizedDescription); requiring restart")
+            completion("error:restart-required")
         }
     }
 

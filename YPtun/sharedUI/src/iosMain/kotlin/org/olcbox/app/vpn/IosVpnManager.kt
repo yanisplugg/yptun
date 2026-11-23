@@ -328,7 +328,7 @@ class IosVpnManager(
                     if (reply == "ok") {
                         addLog("Connected to ${active.displayName()}")
                         setStatus(VpnStatus.Connected)
-                        connectedLocationId = targetId
+                        connectedLocationId = currentTargetId
                         inFlightLocationId = null
                         triggerNotificationHaptic(UINotificationFeedbackType.UINotificationFeedbackTypeSuccess)
                         return@withLock
@@ -432,9 +432,9 @@ class IosVpnManager(
         connectGeneration++
         connectJob?.cancel()
         connectWatchdogJob?.cancel()
+        setStatus(VpnStatus.Stopping)
         scope.launch {
             vpnMutex.withLock {
-                setStatus(VpnStatus.Stopping)
                 addLog("Disconnecting tunnel...")
                 val m = manager ?: loadManager(createIfMissing = false)
                 if (m != null &&
