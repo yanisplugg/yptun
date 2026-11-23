@@ -125,11 +125,14 @@ object WarpHelper {
     fun clientAwgCandidates(ini: String): List<String> {
         val legacy = clientAwgIni(ini)
         val (host, port) = endpointOf(legacy)
-        val ports = if (port == 2408 || port == 894) listOf(port, if (port == 2408) 894 else 2408) else listOf(port)
-        val withReserved = if (isUsableCachedAccount(ini, requireI1 = false)) {
-            ports.map { engineIni(ini, awg = true, targetPort = it) }
-        } else emptyList()
-        return withReserved + ports.map { withEndpoint(legacy, "$host:$it") }
+        val endpoints = if (host == WARP_ENDPOINT_IP && port == 2408) {
+            listOf("188.114.99.4:3476", "$host:2408", "$host:894")
+        } else listOf("$host:$port")
+        val hasReserved = isUsableCachedAccount(ini, requireI1 = false)
+        val withReserved = if (hasReserved) engineIni(ini, awg = true) else null
+        return endpoints.flatMap { endpoint ->
+            listOfNotNull(withEndpoint(legacy, endpoint), withReserved?.let { withEndpoint(it, endpoint) })
+        }
     }
 
     /** Restore the client AmneziaWG wire format used in 3.7.3. */

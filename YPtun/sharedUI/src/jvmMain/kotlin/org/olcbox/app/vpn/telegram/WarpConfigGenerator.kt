@@ -198,6 +198,12 @@ private const val BROWSER_USER_AGENT =
     }
 
     /** Direct Cloudflare registration — fallback for regions where the API isn't blocked. */
+    suspend fun registerClientAccount(): String = generateViaCloudflare().also { ini ->
+        check(org.olcbox.app.vpn.warp.WarpHelper.isUsableCachedAccount(ini, requireI1 = true)) {
+            "WARP: Cloudflare registration did not return a usable client_id"
+        }
+    }
+
     private suspend fun generateViaCloudflare(): String {
         val keyPair = YpTunCore.awgGenerateKeyPair()
         val parts = keyPair.split("|")
@@ -245,7 +251,10 @@ private const val BROWSER_USER_AGENT =
                         throw IllegalStateException("Cloudflare WARP registration failed (HTTP ${response.status.value})")
                     }
                     response.bodyAsText()
-                }.onFailure { error = it }.getOrNull()
+                }.onFailure {
+                    if (it is kotlinx.coroutines.CancellationException) throw it
+                    error = it
+                }.getOrNull()
                 if (text != null) break
             }
             text ?: throw error!!

@@ -463,7 +463,7 @@ internal class DesktopEngineController(
         // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
         if (warpAwgIni != null && warpRelay == null) {
             val ini = if (config.warpProtocol == WarpProtocol.Awg) {
-                WarpHelper.clientAwgCandidates(warpAwgIni).firstOrNull { candidate ->
+                suspend fun probe(account: String): String? = WarpHelper.clientAwgCandidates(account).firstOrNull { candidate ->
                     val (host, port) = WarpHelper.endpointOf(candidate)
                     val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
                     log("WARP: probing AmneziaWG via $host:$port (Reserved=$reserved)")
@@ -472,7 +472,15 @@ internal class DesktopEngineController(
                     }
                     log(if (delayMs >= 0) "WARP: tunnel passed traffic (${delayMs} ms)" else "WARP: tunnel probe failed")
                     delayMs >= 0
-                } ?: error("WARP: AmneziaWG could not pass traffic. Check the network and WARP account.")
+                }
+                log("WARP: AmneziaWG core ${YpTunCore.awgVersion()}")
+                probe(warpAwgIni) ?: run {
+                    log("WARP: current account failed the probe. Registering a new Cloudflare account.")
+                    val fresh = WarpConfigGenerator.registerClientAccount()
+                    val ready = probe(fresh) ?: error("WARP: the new Cloudflare account could not pass AmneziaWG traffic.")
+                    TelegramProxyStore.saveConfig(fresh)
+                    ready
+                }
             } else warpAwgIni
             startWarpAwg(ini, listenPort)
         }

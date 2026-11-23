@@ -1868,7 +1868,7 @@ class OlcboxVpnService : VpnService() {
             // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
             if (warpAwgIni != null && warpRelay == null) {
                 val ini = if (config.warpProtocol == WarpProtocol.Awg) {
-                    WarpHelper.clientAwgCandidates(warpAwgIni).firstOrNull { candidate ->
+                    suspend fun probe(account: String): String? = WarpHelper.clientAwgCandidates(account).firstOrNull { candidate ->
                         coroutineContext.ensureActive()
                         val (host, port) = WarpHelper.endpointOf(candidate)
                         val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
@@ -1876,7 +1876,15 @@ class OlcboxVpnService : VpnService() {
                         val delayMs = withContext(Dispatchers.IO) { Awg.probe(candidate) }
                         addLog(if (delayMs >= 0) "WARP: туннель передаёт данные (${delayMs} мс)" else "WARP: проверка туннеля не прошла")
                         delayMs >= 0
-                    } ?: error("WARP: не удалось передать данные через AmneziaWG. Проверьте сеть и аккаунт WARP.")
+                    }
+                    addLog("WARP: ядро AmneziaWG ${Awg.version()}")
+                    probe(warpAwgIni) ?: run {
+                        addLog("WARP: текущий аккаунт не прошёл проверку. Регистрирую новый аккаунт Cloudflare.")
+                        val fresh = WarpConfigGenerator.registerClientAccount()
+                        val ready = probe(fresh) ?: error("WARP: новый аккаунт Cloudflare не передаёт данные через AmneziaWG.")
+                        LocationsDataSourceImpl(applicationContext).saveTelegramWarpConfig(fresh)
+                        ready
+                    }
                 } else warpAwgIni
                 startWarpAwg(ini)
             }

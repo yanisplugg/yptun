@@ -85,10 +85,12 @@ class WarpHelperTest {
         val candidates = WarpHelper.clientAwgCandidates(
             "[Interface]\nReserved = 1, 2, 3\nI1 = <b 0xce>\n[Peer]\nEndpoint = 162.159.192.1:2408"
         )
-        assertEquals(listOf(2408, 894, 2408, 894), candidates.map { WarpHelper.endpointOf(it).second })
-        assertEquals(listOf(true, true, false, false), candidates.map { it.contains("Reserved = 1, 2, 3") })
+        assertEquals(listOf(3476, 3476, 2408, 2408, 894, 894), candidates.map { WarpHelper.endpointOf(it).second })
+        assertEquals("188.114.99.4" to 3476, WarpHelper.endpointOf(candidates.first()))
+        assertEquals(listOf(false, true, false, true, false, true), candidates.map { it.contains("Reserved = 1, 2, 3") })
         assertEquals(true, candidates.all { it.contains("I1 = <b 0xce>") })
-        assertEquals(2, WarpHelper.clientAwgCandidates(candidates.last()).size)
+        assertEquals(3, WarpHelper.clientAwgCandidates(candidates.first { WarpHelper.endpointOf(it).second == 2408 }).size)
+        assertEquals(1, WarpHelper.clientAwgCandidates(candidates.first()).size)
     }
 
     @Test
