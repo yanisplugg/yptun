@@ -680,15 +680,15 @@ data class OpenFluxConfig(
         if (isSession()) return secret.isNotBlank() && carriers.all { it.isComplete() }
         return when (transport) {
             TRANSPORT_MAX -> maxToken.isNotBlank() && maxUid.trim().toLongOrNull() != null
-            // Room carriers are also given the room list their exit printed (base64url), not only a link.
-            TRANSPORT_CUPS, TRANSPORT_AVITO -> docUrl.trim().let { it.startsWith("http", ignoreCase = true) || ROOM_LIST.matches(it) }
-            else -> docUrl.trim().startsWith("http", ignoreCase = true)
+            // Single or comma-separated multi-room links / room lists:
+            else -> isValidCoordinate(transport, docUrl) // room lists & multi-room URLs
+            // other transports also validated by isValidCoordinate above
         }
     }
 
     fun normalized(): OpenFluxConfig = copy(
         transport = transport.takeIf { it in TRANSPORTS } ?: TRANSPORT_YANDEX,
-        docUrl = docUrl.trim(),
+        docUrl = normalizeCoordinateList(docUrl),
         maxToken = maxToken.trim(),
         maxUid = maxUid.trim(),
         dnsServer = dnsServer.trim(),
@@ -736,6 +736,31 @@ data class OpenFluxConfig(
         const val DEFAULT_DNS = "1.1.1.1:53"
         const val DEFAULT_PRIORITY = 50
         private val ROOM_LIST = Regex("[A-Za-z0-9_-]{16,}")
+        private val COORD_SPLIT = Regex("[\\s|]+|,(?=https?://|[A-Za-z0-9_-]{16,}(?:,|\\s|$))")
+
+        /** Splits multi-room/multi-link coordinates separated by newlines, spaces, `|`, or commas between entries. */
+        fun splitCoordinates(raw: String): List<String> = raw.trim()
+            .split(COORD_SPLIT)
+            .map { it.trim().trimEnd(',') }
+            .filter { it.isNotEmpty() }
+
+        /** Normalizes one or several links/rooms into OpenFlux's comma-separated `--url` format. */
+        fun normalizeCoordinateList(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            val parts = splitCoordinates(trimmed)
+            return if (parts.size > 1) parts.joinToString(",") else trimmed
+        }
+
+        /** Checks whether [raw] holds one or more valid coordinates for OpenFlux carrier [type]. */
+        fun isValidCoordinate(type: String, raw: String): Boolean {
+            val items = splitCoordinates(raw)
+            if (items.isEmpty()) return false
+            return when (type) {
+                TRANSPORT_CUPS, TRANSPORT_AVITO -> items.all { it.startsWith("http", ignoreCase = true) || ROOM_LIST.matches(it) }
+                else -> items.all { it.startsWith("http", ignoreCase = true) }
+            }
+        }
 
         fun carrierLabel(type: String): String = when (type) {
             TRANSPORT_DIRECT -> "Напрямую"
@@ -766,11 +791,11 @@ data class OpenFluxCarrier(
 ) {
     fun isComplete(): Boolean = when (type) {
         OpenFluxConfig.TRANSPORT_DIRECT -> dial.substringAfterLast(':', "").toIntOrNull() in 1..65535 && dial.substringBeforeLast(':').isNotBlank()
-        OpenFluxConfig.TRANSPORT_CUPS, OpenFluxConfig.TRANSPORT_AVITO -> url.startsWith("http", ignoreCase = true) || url.length >= 16
-        else -> url.startsWith("http", ignoreCase = true)
+        else -> OpenFluxConfig.isValidCoordinate(type, url)
+        // handled by else above
     }
 
-    fun normalized(): OpenFluxCarrier = copy(url = url.trim(), dial = dial.trim(), priority = priority.coerceIn(1, 1000))
+    fun normalized(): OpenFluxCarrier = copy(url = OpenFluxConfig.normalizeCoordinateList(url), dial = dial.trim(), priority = priority.coerceIn(1, 1000))
 }
 
 /**

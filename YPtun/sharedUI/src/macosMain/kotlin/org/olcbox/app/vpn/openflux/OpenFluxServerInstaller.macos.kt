@@ -7,6 +7,6 @@ import androidx.compose.runtime.remember
 actual fun rememberOpenFluxServerInstaller(): OpenFluxServerInstaller = remember { UnsupportedOpenFluxServerInstaller }
 
 private object UnsupportedOpenFluxServerInstaller : OpenFluxServerInstaller {
-    override suspend fun install(options: OpenFluxInstallOptions, onLog: (String) -> Unit): Result<String> =
+    override suspend fun install(options: OpenFluxInstallOptions, onLog: (String) -> Unit): Result<OpenFluxInstallResult> =
         Result.failure(UnsupportedOperationException("Установка OpenFlux доступна в приложении для Android и ПК"))
 }
