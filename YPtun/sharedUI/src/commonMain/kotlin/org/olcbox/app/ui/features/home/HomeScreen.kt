@@ -116,6 +116,8 @@ fun HomeScreen(
     // «Создать вручную»: a new location that starts on the picked engine (AmneziaWG/WG = Standard + wireguard).
     onAddLocationOfType: (engine: EngineType, wireguard: Boolean) -> Unit = { _, _ -> onAddLocation() },
     onAddVlessLocation: () -> Unit = onAddLocation,
+    onAddSstpLocation: () -> Unit = onAddLocation,
+    onAddNaiveLocation: () -> Unit = onAddLocation,
     onAddTurnableLocation: () -> Unit = onAddLocation,
     // The «Добавить» field: import exactly this text (subscription URLs, share links, JSON).
     onImportTextRequested: (text: String, onImported: () -> Unit, onError: (String) -> Unit) -> Unit =
@@ -918,6 +920,14 @@ fun HomeScreen(
                 onCreateVless = {
                     isAddSheetOpen = false
                     onAddVlessLocation()
+                },
+                onCreateSstp = {
+                    isAddSheetOpen = false
+                    onAddSstpLocation()
+                },
+                onCreateNaive = {
+                    isAddSheetOpen = false
+                    onAddNaiveLocation()
                 },
                 freeServersSettings = appBehavior,
                 onFreeServersSettingsChanged = onAppBehaviorChanged

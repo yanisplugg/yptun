@@ -88,6 +88,8 @@ fun AddConfigurationSheet(
     onStartFreeServers: (limit: Int) -> Unit,
     onCreateManual: (engine: EngineType, wireguard: Boolean) -> Unit,
     onCreateVless: () -> Unit = {},
+    onCreateSstp: () -> Unit = {},
+    onCreateNaive: () -> Unit = {},
     onCreateTurnable: () -> Unit = {},
     // The free-servers options (how many, which source); null starts the search with the saved ones.
     freeServersSettings: AppBehaviorSettings? = null,
@@ -134,6 +136,8 @@ fun AddConfigurationSheet(
                         onBack = { page = AddPage.Main },
                         onPick = onCreateManual,
                         onPickVless = onCreateVless,
+                        onPickSstp = onCreateSstp,
+                        onPickNaive = onCreateNaive,
                         onPickTurnable = onCreateTurnable,
                     )
                 }
@@ -376,6 +380,8 @@ private fun ManualTypePage(
     onBack: () -> Unit,
     onPick: (EngineType, Boolean) -> Unit,
     onPickVless: () -> Unit,
+    onPickSstp: () -> Unit,
+    onPickNaive: () -> Unit,
     onPickTurnable: () -> Unit,
 ) {
     val s = LocalStrings.current
@@ -407,6 +413,10 @@ private fun ManualTypePage(
     SettingsCaption(s.manualOwnServer)
     SettingsCard {
         SettingsCardRow("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickVless() }
+        SettingsCardDivider()
+        SettingsCardRow("SSTP", "Свой SSTP-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickSstp() }
+        SettingsCardDivider()
+        SettingsCardRow("NaïveProxy", "Свой Naïve-сервер (HTTPS/QUIC): вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickNaive() }
         SettingsCardDivider()
         SettingsCardRow("AmneziaWG / WireGuard", s.engineWireguardDesc, icon = Icons.Outlined.Shield) { onPick(EngineType.Standard, true) }
         if (android) {

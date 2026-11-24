@@ -214,6 +214,16 @@ fun OlcboxAppContent(
                             locationViewModel.onVlessEngineSelected()
                             onNavigate(AppScreen.LocationSettings(null))
                         },
+                        onAddSstpLocation = {
+                            locationViewModel.startEditing(null)
+                            locationViewModel.onSstpEngineSelected()
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
+                        onAddNaiveLocation = {
+                            locationViewModel.startEditing(null)
+                            locationViewModel.onNaiveEngineSelected()
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
                         onAddTurnableLocation = {
                             locationViewModel.startEditing(null)
                             locationViewModel.onEngineChanged(org.olcbox.app.data.model.EngineType.VkTurn)

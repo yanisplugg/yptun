@@ -287,6 +287,8 @@ fun LocationSettingsScreen(
             selected = config.engine,
             wireguard = viewModel.isWireguardEngine,
             vless = viewModel.isVlessEngine,
+            sstp = viewModel.isSstpEngine,
+            naive = viewModel.isNaiveEngine,
             onDismiss = { showEnginePicker = false },
             onSelected = { engine ->
                 showEnginePicker = false
@@ -299,6 +301,14 @@ fun LocationSettingsScreen(
             onVless = {
                 showEnginePicker = false
                 viewModel.onVlessEngineSelected()
+            },
+            onSstp = {
+                showEnginePicker = false
+                viewModel.onSstpEngineSelected()
+            },
+            onNaive = {
+                showEnginePicker = false
+                viewModel.onNaiveEngineSelected()
             }
         )
     }
@@ -423,7 +433,13 @@ fun LocationSettingsScreen(
                     SettingsCard {
                         SettingsCardRow(
                             title = s.engineTypeTitle,
-                            value = engineDisplayName(config.engine, viewModel.isWireguardEngine, viewModel.isVlessEngine),
+                            value = engineDisplayName(
+                                config.engine,
+                                viewModel.isWireguardEngine,
+                                viewModel.isVlessEngine,
+                                viewModel.isSstpEngine,
+                                viewModel.isNaiveEngine
+                            ),
                             enabled = !isSaving,
                             onClick = { showEnginePicker = true }
                         )
@@ -484,21 +500,61 @@ fun LocationSettingsScreen(
                 // Main proxy (основной аутбаунд) is the always-on primary outbound, but its editor field
                 // is hidden by request — it comes from the imported/subscription config (config.proxy)
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
-                if (!viewModel.isWireguardEngine && viewModel.isVlessEngine && (viewModel.editingId == null || allowConfigEditing)) {
-                    item {
-                        ProxyField(
-                            title = "VLESS",
-                            subtitle = "Ссылка vless:// или конфиг",
-                            link = viewModel.editingProxyLink,
-                            currentProxy = config.proxy,
-                            error = viewModel.proxyError,
-                            enabled = !isSaving,
-                            onChange = viewModel::onProxyLinkChanged
-                        )
+                if (!viewModel.isWireguardEngine && (viewModel.editingId == null || allowConfigEditing)) {
+                    when {
+                        viewModel.isSstpEngine || config.proxy?.type == ProxyProfile.TYPE_SSTP -> {
+                            item {
+                                ProxyField(
+                                    title = "SSTP",
+                                    subtitle = "Ссылка sstp:// или параметры ниже",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
+                        viewModel.isNaiveEngine || config.proxy?.type == ProxyProfile.TYPE_NAIVE -> {
+                            item {
+                                ProxyField(
+                                    title = "NaïveProxy",
+                                    subtitle = "Ссылка naive+https:// или параметры ниже",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
+                        viewModel.isVlessEngine || config.proxy?.type == ProxyProfile.TYPE_VLESS -> {
+                            item {
+                                ProxyField(
+                                    title = "VLESS",
+                                    subtitle = "Ссылка vless:// или конфиг",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
                     }
                 }
-                if (allowConfigEditing && !viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
-                    item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                if (allowConfigEditing && !viewModel.isWireguardEngine) {
+                    when {
+                        viewModel.isSstpEngine || config.proxy.isManuallyEditableSstp() -> {
+                            item { SstpEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editSstp) }
+                        }
+                        viewModel.isNaiveEngine || config.proxy.isManuallyEditableNaive() -> {
+                            item { NaiveEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editNaive) }
+                        }
+                        config.proxy.isManuallyEditableVless() -> {
+                            item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                        }
+                    }
                 }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
                 if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
@@ -4243,10 +4299,18 @@ private fun coreLabel(core: ProxyCore): String = when (core) {
 
 /** The «Тип» row's value and the picker's names: what the traffic goes through, not the engine's code name. */
 @Composable
-private fun engineDisplayName(engine: EngineType, wireguard: Boolean, vless: Boolean): String {
+private fun engineDisplayName(
+    engine: EngineType,
+    wireguard: Boolean,
+    vless: Boolean,
+    sstp: Boolean = false,
+    naive: Boolean = false
+): String {
     val s = LocalStrings.current
     return when {
         wireguard -> "AmneziaWG / WireGuard"
+        sstp -> "SSTP"
+        naive -> "NaïveProxy"
         vless -> "VLESS"
         engine == EngineType.Standard -> s.engineStandardName
         engine == EngineType.Chain -> s.engineChainName
@@ -4265,10 +4329,14 @@ private fun EnginePickerSheet(
     selected: EngineType,
     wireguard: Boolean,
     vless: Boolean,
+    sstp: Boolean = false,
+    naive: Boolean = false,
     onDismiss: () -> Unit,
     onSelected: (EngineType) -> Unit,
     onWireguard: () -> Unit,
-    onVless: () -> Unit
+    onVless: () -> Unit,
+    onSstp: () -> Unit = {},
+    onNaive: () -> Unit = {}
 ) {
     val s = LocalStrings.current
     // OpenFlux and Snolc have no iOS engine. The build platform, not UIDevice.systemName — that one reads
@@ -4308,9 +4376,13 @@ private fun EnginePickerSheet(
             Text(s.engineTypeTitle, style = MaterialTheme.typography.headlineSmall)
             SettingsCaption(s.engineGroupProxy)
             SettingsCard {
-                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard && !vless) { onSelected(EngineType.Standard) }
+                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard && !vless && !sstp && !naive) { onSelected(EngineType.Standard) }
                 SettingsCardDivider()
                 option("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", vless) { onVless() }
+                SettingsCardDivider()
+                option("SSTP", "Свой SSTP-сервер: вставьте ссылку или заполните поля вручную", sstp) { onSstp() }
+                SettingsCardDivider()
+                option("NaïveProxy", "Свой Naïve-сервер (HTTPS/QUIC): вставьте ссылку или заполните поля вручную", naive) { onNaive() }
                 SettingsCardDivider()
                 option(s.engineChainName, s.engineChainDesc, selected == EngineType.Chain) { onSelected(EngineType.Chain) }
                 SettingsCardDivider()

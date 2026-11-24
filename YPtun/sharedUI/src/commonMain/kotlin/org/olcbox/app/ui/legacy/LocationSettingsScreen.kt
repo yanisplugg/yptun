@@ -356,10 +356,14 @@ fun LocationSettingsScreen(
                     selected = config.engine,
                     wireguard = viewModel.isWireguardEngine,
                     vless = viewModel.isVlessEngine,
+                    sstp = viewModel.isSstpEngine,
+                    naive = viewModel.isNaiveEngine,
                     enabled = !isSaving,
                     onSelected = viewModel::onEngineChanged,
                     onWireguard = viewModel::onWireguardEngineSelected,
-                    onVless = viewModel::onVlessEngineSelected
+                    onVless = viewModel::onVlessEngineSelected,
+                    onSstp = viewModel::onSstpEngineSelected,
+                    onNaive = viewModel::onNaiveEngineSelected
                 )
             }
 
@@ -416,21 +420,61 @@ fun LocationSettingsScreen(
                         onSelected = viewModel::onCoreChanged
                     )
                 }
-                if (!viewModel.isWireguardEngine && viewModel.isVlessEngine && (viewModel.editingId == null || allowConfigEditing)) {
-                    item {
-                        ProxyField(
-                            title = "VLESS",
-                            subtitle = "Ссылка vless:// или конфиг",
-                            link = viewModel.editingProxyLink,
-                            currentProxy = config.proxy,
-                            error = viewModel.proxyError,
-                            enabled = !isSaving,
-                            onChange = viewModel::onProxyLinkChanged
-                        )
+                if (!viewModel.isWireguardEngine && (viewModel.editingId == null || allowConfigEditing)) {
+                    when {
+                        viewModel.isSstpEngine || config.proxy?.type == ProxyProfile.TYPE_SSTP -> {
+                            item {
+                                ProxyField(
+                                    title = "SSTP",
+                                    subtitle = "Ссылка sstp:// или параметры ниже",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
+                        viewModel.isNaiveEngine || config.proxy?.type == ProxyProfile.TYPE_NAIVE -> {
+                            item {
+                                ProxyField(
+                                    title = "NaïveProxy",
+                                    subtitle = "Ссылка naive+https:// или параметры ниже",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
+                        viewModel.isVlessEngine || config.proxy?.type == ProxyProfile.TYPE_VLESS -> {
+                            item {
+                                ProxyField(
+                                    title = "VLESS",
+                                    subtitle = "Ссылка vless:// или конфиг",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
                     }
                 }
-                if (allowConfigEditing && !viewModel.isWireguardEngine && config.proxy.isManuallyEditableVless()) {
-                    item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                if (allowConfigEditing && !viewModel.isWireguardEngine) {
+                    when {
+                        viewModel.isSstpEngine || config.proxy.isManuallyEditableSstp() -> {
+                            item { SstpEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editSstp) }
+                        }
+                        viewModel.isNaiveEngine || config.proxy.isManuallyEditableNaive() -> {
+                            item { NaiveEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editNaive) }
+                        }
+                        config.proxy.isManuallyEditableVless() -> {
+                            item { VlessEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editVless) }
+                        }
+                    }
                 }
                 // Advanced core options appear only when a specific core (not Auto) is chosen.
                 if (!viewModel.isWireguardEngine && config.core != ProxyCore.Auto) {
@@ -920,10 +964,14 @@ private fun EngineSelector(
     selected: EngineType,
     wireguard: Boolean,
     vless: Boolean,
+    sstp: Boolean = false,
+    naive: Boolean = false,
     enabled: Boolean,
     onSelected: (EngineType) -> Unit,
     onWireguard: () -> Unit,
-    onVless: () -> Unit
+    onVless: () -> Unit,
+    onSstp: () -> Unit = {},
+    onNaive: () -> Unit = {}
 ) {
     // OpenFlux has no iOS engine. The build platform, not UIDevice.systemName — that one reads
     // "iPadOS" on an iPad, which a check for "iOS" would miss.
@@ -945,7 +993,11 @@ private fun EngineSelector(
     ) {
         SectionTitle(
             title = LocalStrings.current.engineSection,
-            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE else if (vless) VLESS_ENGINE_SUBTITLE else engineSubtitle(selected)
+            subtitle = if (wireguard) WIREGUARD_ENGINE_SUBTITLE
+            else if (vless) VLESS_ENGINE_SUBTITLE
+            else if (sstp) SSTP_ENGINE_SUBTITLE
+            else if (naive) NAIVE_ENGINE_SUBTITLE
+            else engineSubtitle(selected)
         )
 
         // ONE cohesive block: a single rounded outline drawn ONCE around all engines, with thin
@@ -961,8 +1013,14 @@ private fun EngineSelector(
         ) {
             // AmneziaWG/WG sits right after Standard: it IS a Standard location (see LocationViewModel.isWireguardEngine).
             val cells = options.flatMap { engine ->
-                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && (wireguard || vless))) { onSelected(engine) }
-                if (engine == EngineType.Standard) listOf(cell, EngineCellSpec("VLESS", vless, onVless), EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)) else listOf(cell)
+                val cell = EngineCellSpec(engineLabel(engine), selected == engine && !(engine == EngineType.Standard && (wireguard || vless || sstp || naive))) { onSelected(engine) }
+                if (engine == EngineType.Standard) listOf(
+                    cell,
+                    EngineCellSpec("VLESS", vless, onVless),
+                    EngineCellSpec("SSTP", sstp, onSstp),
+                    EngineCellSpec("Naïve", naive, onNaive),
+                    EngineCellSpec(WIREGUARD_ENGINE_LABEL, wireguard, onWireguard)
+                ) else listOf(cell)
             }
             cells.chunked(2).forEachIndexed { rowIndex, rowOptions ->
                 if (rowIndex > 0) HorizontalDivider(color = outline)
@@ -993,6 +1051,8 @@ private fun EngineSelector(
 
 private const val WIREGUARD_ENGINE_LABEL = "AmneziaWG/WG"
 private const val VLESS_ENGINE_SUBTITLE = "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную"
+private const val SSTP_ENGINE_SUBTITLE = "Свой SSTP-сервер: заполните адрес, порт и логин/пароль"
+private const val NAIVE_ENGINE_SUBTITLE = "Свой Naïve-сервер: HTTPS/QUIC с аутентификацией"
 private const val WIREGUARD_NEEDS_EDITING = "Загрузите файл конфигурации или включите в настройках «Разрешить редактирование конфигураций», чтобы ввести ключи и параметры вручную"
 private const val WIREGUARD_ENGINE_SUBTITLE = "Туннель WireGuard или AmneziaWG: свой wg-quick конфиг, ключи и все параметры"
 

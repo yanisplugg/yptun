@@ -672,6 +672,10 @@ class LocationViewModel(
         editingSnolc = editingConfig.snolc ?: SnolcConfig()
         isVlessEngine = editingConfig.engine == EngineType.Standard &&
             editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_VLESS && it.isManuallyEditableVless() }
+        isSstpEngine = editingConfig.engine == EngineType.Standard &&
+            editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_SSTP && it.isManuallyEditableSstp() }
+        isNaiveEngine = editingConfig.engine == EngineType.Standard &&
+            editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_NAIVE && it.isManuallyEditableNaive() }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -857,6 +861,8 @@ class LocationViewModel(
 
     fun onEngineChanged(engine: EngineType) {
         isVlessEngine = false
+        isSstpEngine = false
+        isNaiveEngine = false
         if (isWireguardEngine) {
             // Leaving AmneziaWG/WG: hand back the proxy it replaced (nothing for a location that was always WG).
             editingConfig = editingConfig.copy(proxy = wgStashedProxy)
@@ -910,6 +916,26 @@ class LocationViewModel(
         proxyError = null
     }
 
+    /** Manual SSTP form: applies [edit] to the main proxy (a fresh SSTP profile when there is none). */
+    fun editSstp(edit: (ProxyProfile) -> ProxyProfile) {
+        val current = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_SSTP }
+            ?: ProxyProfile(type = ProxyProfile.TYPE_SSTP, serverPort = 443)
+        val profile = edit(current).copy(type = ProxyProfile.TYPE_SSTP)
+        editingConfig = editingConfig.copy(proxy = profile)
+        editingProxyLink = ShareLinkComposer.compose(profile).orEmpty()
+        proxyError = null
+    }
+
+    /** Manual Naïve form: applies [edit] to the main proxy (a fresh Naïve profile when there is none). */
+    fun editNaive(edit: (ProxyProfile) -> ProxyProfile) {
+        val current = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_NAIVE }
+            ?: ProxyProfile(type = ProxyProfile.TYPE_NAIVE, serverPort = 443)
+        val profile = edit(current).copy(type = ProxyProfile.TYPE_NAIVE)
+        editingConfig = editingConfig.copy(proxy = profile)
+        editingProxyLink = ShareLinkComposer.compose(profile).orEmpty()
+        proxyError = null
+    }
+
     /** Parses a pasted proxy share link or raw sing-box outbound into [editingConfig].proxy. */
     fun onProxyLinkChanged(value: String) {
         editingProxyLink = value
@@ -922,6 +948,9 @@ class LocationViewModel(
         val profile = ShareLinkParser.parse(trimmed) ?: rawOutboundProfile(trimmed)
         if (profile != null && profile.isComplete()) {
             editingConfig = editingConfig.copy(proxy = profile)
+            if (profile.type == ProxyProfile.TYPE_VLESS) isVlessEngine = true
+            if (profile.type == ProxyProfile.TYPE_SSTP) isSstpEngine = true
+            if (profile.type == ProxyProfile.TYPE_NAIVE) isNaiveEngine = true
             proxyError = null
         } else {
             editingConfig = editingConfig.copy(proxy = null)
@@ -964,6 +993,44 @@ class LocationViewModel(
             proxyError = null
         }
         isVlessEngine = true
+        isSstpEngine = false
+        isNaiveEngine = false
+    }
+
+    /** The «SSTP» entry of the type picker: a Standard location whose main proxy is a hand-made SSTP. */
+    var isSstpEngine by mutableStateOf(false)
+        private set
+
+    fun onSstpEngineSelected() {
+        if (isSstpEngine) return
+        onEngineChanged(EngineType.Standard)
+        if (editingConfig.proxy?.type != ProxyProfile.TYPE_SSTP) {
+            val sstpProfile = ProxyProfile(type = ProxyProfile.TYPE_SSTP, serverPort = 443)
+            editingConfig = editingConfig.copy(proxy = sstpProfile)
+            editingProxyLink = ShareLinkComposer.compose(sstpProfile).orEmpty()
+            proxyError = null
+        }
+        isSstpEngine = true
+        isVlessEngine = false
+        isNaiveEngine = false
+    }
+
+    /** The «Naïve» entry of the type picker: a Standard location whose main proxy is a hand-made Naïve. */
+    var isNaiveEngine by mutableStateOf(false)
+        private set
+
+    fun onNaiveEngineSelected() {
+        if (isNaiveEngine) return
+        onEngineChanged(EngineType.Standard)
+        if (editingConfig.proxy?.type != ProxyProfile.TYPE_NAIVE) {
+            val naiveProfile = ProxyProfile(type = ProxyProfile.TYPE_NAIVE, serverPort = 443)
+            editingConfig = editingConfig.copy(proxy = naiveProfile)
+            editingProxyLink = ShareLinkComposer.compose(naiveProfile).orEmpty()
+            proxyError = null
+        }
+        isNaiveEngine = true
+        isVlessEngine = false
+        isSstpEngine = false
     }
 
     /** Picks the AmneziaWG/WG engine: an empty AmneziaWG template to fill in or paste over. */
