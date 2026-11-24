@@ -3,16 +3,23 @@ package org.olcbox.app.vpn.turnable
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /** Android-only Turnable client subprocess. It exposes the configured route as local TCP/UDP. */
-internal class TurnableProcess(private val log: (String) -> Unit) {
+internal class TurnableProcess(
+    private val log: (String) -> Unit,
+    private val onCaptchaShow: (String) -> Unit = {},
+    private val onCaptchaHide: () -> Unit = {},
+) {
     @Volatile
     private var process: Process? = null
+
+    @Volatile
+    private var captchaActive = false
 
     fun isRunning(): Boolean = process?.isAlive == true
 
@@ -61,6 +68,17 @@ internal class TurnableProcess(private val log: (String) -> Unit) {
                         while (recent.size > 20) recent.removeFirst()
                     }
                     log("turnable: $line")
+                    if (line.contains("VK_CAPTCHA_URL|")) {
+                        val url = line.substringAfter("VK_CAPTCHA_URL|").trim()
+                        if (url.isNotBlank()) {
+                            captchaActive = true
+                            onCaptchaShow(url)
+                        }
+                    }
+                    if (line.contains("VK_CAPTCHA_DONE")) {
+                        captchaActive = false
+                        onCaptchaHide()
+                    }
                     if (line.contains("turnable client started", ignoreCase = true)) ready.complete(Unit)
                 }
             }
@@ -69,9 +87,19 @@ internal class TurnableProcess(private val log: (String) -> Unit) {
             )
         }
 
-        val started = withTimeoutOrNull(START_TIMEOUT_MS) {
-            runCatching { ready.await() }.getOrNull()
+        var deadline = System.currentTimeMillis() + START_TIMEOUT_MS
+        var captchaStartTime = 0L
+        while (System.currentTimeMillis() < deadline && !ready.isCompleted && child.isAlive) {
+            if (captchaActive) {
+                if (captchaStartTime == 0L) captchaStartTime = System.currentTimeMillis()
+                val maxCaptchaDeadline = captchaStartTime + MANUAL_CAPTCHA_TIMEOUT_MS
+                val targetDeadline = System.currentTimeMillis() + START_TIMEOUT_MS
+                deadline = maxOf(deadline, minOf(targetDeadline, maxCaptchaDeadline))
+            }
+            delay(100L)
         }
+
+        val started = if (ready.isCompleted) runCatching { ready.await() }.getOrNull() else null
         if (started == null || !child.isAlive) {
             val detail = synchronized(recent) { recent.takeLast(5).joinToString(" | ") }
             stop()
@@ -81,6 +109,10 @@ internal class TurnableProcess(private val log: (String) -> Unit) {
     }
 
     fun stop() {
+        if (captchaActive) {
+            captchaActive = false
+            onCaptchaHide()
+        }
         val child = process ?: return
         process = null
         runCatching { child.destroy() }
@@ -91,5 +123,6 @@ internal class TurnableProcess(private val log: (String) -> Unit) {
 
     private companion object {
         const val START_TIMEOUT_MS = 20_000L
+        const val MANUAL_CAPTCHA_TIMEOUT_MS = 300_000L
     }
 }

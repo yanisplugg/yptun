@@ -106,7 +106,7 @@ func (V *Handler) authorize() error {
 	name := V.username
 	V.mu.RUnlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	messagesToken, anonymToken, err := V.authorizeAnonymous(ctx, joinURL, name)
@@ -199,6 +199,18 @@ func (V *Handler) authorizeAnonymous(ctx context.Context, joinURL, username stri
 
 			solveStartedAt := time.Now()
 			successToken, solveErr := V.solveCaptcha(ctx, apiErr)
+
+			if solveErr != nil {
+				slog.Warn("vk auto captcha solve failed, attempting manual solve fallback", "error", solveErr)
+				manualToken, manualErr := V.solveManualChallenge(ctx, apiErr)
+				if manualErr == nil && manualToken != "" {
+					slog.Info("vk manual captcha fallback succeeded", "duration_ms", time.Since(solveStartedAt).Milliseconds())
+					successToken = manualToken
+					solveErr = nil
+				} else {
+					slog.Warn("vk manual captcha fallback failed", "error", manualErr)
+				}
+			}
 
 			if solveErr != nil {
 				slog.Warn("vk captcha solve failed", "duration_ms", time.Since(solveStartedAt).Milliseconds(), "error", solveErr)

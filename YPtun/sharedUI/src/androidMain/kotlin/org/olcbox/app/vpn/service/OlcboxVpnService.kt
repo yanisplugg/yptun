@@ -215,7 +215,11 @@ class OlcboxVpnService : VpnService() {
     /** The csqtt VK-TURN core (bridge + Rust client subprocesses) while a csqtt location runs. */
     private val csqttBridge = CsqttBridge { addLog(it) }
     /** Turnable VK-TURN client subprocess; Android-only and mutually exclusive with the other cores. */
-    private val turnableProcess = TurnableProcess { addLog(it) }
+    private val turnableProcess = TurnableProcess(
+        log = { addLog(it) },
+        onCaptchaShow = { freeturnCaptchaPresenter.show(it) },
+        onCaptchaHide = { freeturnCaptchaPresenter.hide() },
+    )
     /** GPL-3.0 mieru client, isolated as a subprocess behind its loopback SOCKS5 listener. */
     private val mieruProcess = MieruProcess { addLog(it) }
 
