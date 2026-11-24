@@ -141,7 +141,7 @@ class IosVpnManager(
                     addLog("Add a valid location before connecting")
                     return@withLock
                 }
-                if (active.engine == EngineType.OpenFlux || active.engine == EngineType.Snolc) {
+                if (active.engine == EngineType.OpenFlux || active.engine == EngineType.Snolc || active.engine == EngineType.Zapret) {
                     setStatus(VpnStatus.Error("${active.engine} на iOS пока не поддерживается"))
                     return@withLock
                 }

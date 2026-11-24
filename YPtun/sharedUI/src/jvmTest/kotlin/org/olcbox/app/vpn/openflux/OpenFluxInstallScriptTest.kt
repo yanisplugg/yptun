@@ -119,11 +119,41 @@ class OpenFluxInstallScriptTest {
         assertTrue(script.lines().any { it == "CUPS_ROOMS=\"6\"" }, script)
         assertTrue("ufw allow 9445/tcp" in script, script)
         val execStart = script.lines().single { it.startsWith("ExecStart=") }
+        assertTrue("--mode=l3" in execStart, execStart)
         assertTrue("--transports \${OPENFLUX_TRANSPORTS}" in execStart, execStart)
         assertTrue("--direct-listen \${OPENFLUX_DIRECT_LISTEN}" in execStart, execStart)
         assertTrue("--mailru-url \${OPENFLUX_MAILRU_URL}" in execStart, execStart)
         assertTrue("--encryption-key-file /etc/openflux/openflux.key" in execStart, execStart)
         assertTrue("--negotiate" in execStart, execStart)
         assertTrue("OPENFLUX_CUPSONLINE_URL" in script, script)
+        assertTrue("ExecStartPre=/opt/openflux/l3-rst.sh add" in script, script)
+        assertTrue("ExecStopPost=/opt/openflux/l3-rst.sh del" in script, script)
+        assertTrue("OUTPUT -p tcp --tcp-flags RST RST -s" in script, script)
+    }
+
+    @Test
+    fun singleTransportCanOptIntoL3AndMultiCanOptOutToL4() {
+        val singleL3 = buildOpenFluxInstallScript(
+            OpenFluxInstallOptions(
+                host = "203.0.113.7",
+                sshPassword = "x",
+                docUrl = url,
+                mode = OpenFluxInstallOptions.MODE_L3,
+            )
+        )
+        assertTrue("--mode=l3" in singleL3, singleL3)
+        assertTrue("ExecStartPre=/opt/openflux/l3-rst.sh add" in singleL3, singleL3)
+
+        val multiL4 = buildOpenFluxInstallScript(
+            OpenFluxInstallOptions(
+                host = "203.0.113.7",
+                sshPassword = "x",
+                secret = "0123456789abcdef0123456789abcdef",
+                carriers = listOf(OpenFluxCarrier(type = OpenFluxConfig.TRANSPORT_MAILRU, url = "https://cloud.mail.ru/public/a/b")),
+                mode = OpenFluxInstallOptions.MODE_L4,
+            )
+        )
+        assertTrue("--mode=l4" in multiL4, multiL4)
+        assertFalse("ExecStartPre=/opt/openflux/l3-rst.sh" in multiL4, multiL4)
     }
 }

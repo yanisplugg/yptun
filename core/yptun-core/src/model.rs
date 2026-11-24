@@ -28,6 +28,9 @@ pub enum EngineType {
     /// snolc (Noise NK over TCP).
     #[serde(rename = "snolc")]
     Snolc,
+    /// Zapret local DPI-bypass engine.
+    #[serde(rename = "zapret")]
+    Zapret,
 }
 
 impl EngineType {
@@ -42,6 +45,7 @@ impl EngineType {
             }
             Some("openflux" | "open-flux") => Self::OpenFlux,
             Some("snolc") => Self::Snolc,
+            Some("zapret" | "zapret-dpi" | "byedpi") => Self::Zapret,
             _ => Self::Stealth,
         }
     }

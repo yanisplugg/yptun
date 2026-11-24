@@ -864,6 +864,134 @@ data class SnolcConfig(
     }
 }
 
+/**
+ * Local userspace DPI-bypass engine ([EngineType.Zapret]): requires no remote server.
+ * Serves a local SOCKS5 proxy that applies TLS Record splitting, TCP segmentation/host tricks,
+ * optional QUIC blocking (to force HTTP/2 over desynced TLS), UDP dummy packets, and clean DoH DNS.
+ */
+@Serializable
+data class ZapretConfig(
+    /** Preset strategy: [STRATEGY_AUTO], [STRATEGY_TLSREC], [STRATEGY_SPLIT], or [STRATEGY_CUSTOM]. */
+    val strategy: String = STRATEGY_AUTO,
+    /** Split offset / TCP chunk size for initial ClientHello or HTTP payload (1..64 bytes). */
+    @SerialName("split_size")
+    val splitSize: Int = DEFAULT_SPLIT_SIZE,
+    /** Split TLS ClientHello into multiple valid TLS records (`0x16 0x03 ...`). */
+    @SerialName("tls_rec_split")
+    val tlsRecSplit: Boolean = true,
+    /** Split initial TCP payload into small segments with `TCP_NODELAY`. */
+    @SerialName("tcp_split")
+    val tcpSplit: Boolean = true,
+    /** Maximum initial TCP segments when [tcpSplit] is enabled. */
+    @SerialName("split_count")
+    val splitCount: Int = DEFAULT_SPLIT_COUNT,
+    /** Inter-segment delay in milliseconds (0..25 ms). */
+    @SerialName("split_delay_ms")
+    val splitDelayMs: Int = DEFAULT_SPLIT_DELAY_MS,
+    /** Apply mixed-case / split `Host:` header evasion for plain HTTP. */
+    @SerialName("http_host_tricks")
+    val httpHostTricks: Boolean = true,
+    /** Drop UDP/443 (QUIC) so browsers/apps use TCP TLS-desynced HTTP/2 instead. */
+    @SerialName("block_quic")
+    val blockQuic: Boolean = true,
+    /** Optional dummy UDP packets sent before a non-DNS UDP flow when QUIC is not blocked (0..6). */
+    @SerialName("udp_fake_count")
+    val udpFakeCount: Int = 0,
+    /** Clean DoH or plain DNS resolver used by Zapret (`https://...` or IP[:port]). */
+    @SerialName("dns_server")
+    val dnsServer: String = DEFAULT_DNS_SERVER,
+    /** Optional newline/comma-separated domain suffixes to bypass (blank = all TLS/HTTP traffic). */
+    val targets: String = "",
+) {
+    fun normalized(): ZapretConfig {
+        val normStrategy = strategy.trim().lowercase().takeIf { it in STRATEGIES } ?: STRATEGY_AUTO
+        return when (normStrategy) {
+            STRATEGY_AUTO -> copy(
+                strategy = STRATEGY_AUTO,
+                splitSize = DEFAULT_SPLIT_SIZE,
+                tlsRecSplit = true,
+                tcpSplit = true,
+                splitCount = DEFAULT_SPLIT_COUNT,
+                splitDelayMs = DEFAULT_SPLIT_DELAY_MS,
+                httpHostTricks = true,
+                blockQuic = true,
+                udpFakeCount = 0,
+                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
+                targets = targets.trim(),
+            )
+            STRATEGY_TLSREC -> copy(
+                strategy = STRATEGY_TLSREC,
+                splitSize = 2,
+                tlsRecSplit = true,
+                tcpSplit = false,
+                splitCount = 2,
+                splitDelayMs = 0,
+                httpHostTricks = true,
+                blockQuic = false,
+                udpFakeCount = 2,
+                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
+                targets = targets.trim(),
+            )
+            STRATEGY_SPLIT -> copy(
+                strategy = STRATEGY_SPLIT,
+                splitSize = 3,
+                tlsRecSplit = false,
+                tcpSplit = true,
+                splitCount = 6,
+                splitDelayMs = 1,
+                httpHostTricks = true,
+                blockQuic = true,
+                udpFakeCount = 0,
+                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
+                targets = targets.trim(),
+            )
+            else -> copy(
+                strategy = STRATEGY_CUSTOM,
+                splitSize = splitSize.coerceIn(1, 64),
+                splitCount = splitCount.coerceIn(1, 16),
+                splitDelayMs = splitDelayMs.coerceIn(0, 25),
+                udpFakeCount = udpFakeCount.coerceIn(0, 6),
+                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
+                targets = targets.trim(),
+            )
+        }
+    }
+
+    fun withPreset(preset: String): ZapretConfig = copy(strategy = preset).normalized()
+
+    fun isComplete(): Boolean = true
+
+    fun summary(): String = when (normalized().strategy) {
+        STRATEGY_TLSREC -> "TLS Record + UDP"
+        STRATEGY_SPLIT -> "TCP Split + QUIC block"
+        STRATEGY_CUSTOM -> buildList {
+            if (tlsRecSplit) add("TLSRec")
+            if (tcpSplit) add("Split")
+            if (blockQuic) add("No-QUIC")
+        }.ifEmpty { listOf("Direct") }.joinToString(" + ")
+        else -> "Auto (TLSRec + Split)"
+    }
+
+    fun targetSuffixes(): List<String> = targets
+        .split('\n', '\r', ',', ';', ' ')
+        .map { it.trim().trimStart('.').lowercase() }
+        .filter { it.isNotEmpty() }
+
+    companion object {
+        const val STRATEGY_AUTO = "auto"
+        const val STRATEGY_TLSREC = "tlsrec"
+        const val STRATEGY_SPLIT = "split"
+        const val STRATEGY_CUSTOM = "custom"
+        val STRATEGIES = listOf(STRATEGY_AUTO, STRATEGY_TLSREC, STRATEGY_SPLIT, STRATEGY_CUSTOM)
+
+        const val DEFAULT_SPLIT_SIZE = 2
+        const val DEFAULT_SPLIT_COUNT = 4
+        const val DEFAULT_SPLIT_DELAY_MS = 1
+        const val DEFAULT_DNS_SERVER = "https://1.1.1.1/dns-query"
+        const val DEFAULT_LOCATION_NAME = "Zapret (DPI)"
+    }
+}
+
 /** One additional olcRTC room for the multi-room (aggregation) feature. */
 @Serializable
 data class ExtraRoom(
@@ -951,6 +1079,9 @@ data class LocationConfig(
     /** snolc tunnel for the [EngineType.Snolc] engine. Null for other engines. */
     @SerialName("snolc")
     val snolc: SnolcConfig? = null,
+    /** Zapret DPI-bypass settings for [EngineType.Zapret]. Null for other engines. */
+    @SerialName("zapret")
+    val zapret: ZapretConfig? = null,
     /** Per-location advanced core options, surfaced only when [core] is not Auto. Null = defaults. */
     val advanced: AdvancedCoreConfig? = null,
     /**
@@ -1029,6 +1160,7 @@ data class LocationConfig(
             masterDns = masterDns?.normalized(),
             openFlux = openFlux?.normalized(),
             snolc = snolc?.normalized(),
+            zapret = if (engine == EngineType.Zapret) (zapret ?: ZapretConfig()).normalized() else zapret?.normalized(),
             routingProfileId = routingProfileId.trim(),
             fakeDns = fakeDns,
         )
@@ -1109,6 +1241,7 @@ data class LocationConfig(
         // OpenFlux needs the carrier's coordinates: the Yandex Docs URL, or the MAX token + callee id.
         EngineType.OpenFlux -> openFlux?.isComplete() == true
         EngineType.Snolc -> snolc?.isComplete() == true
+        EngineType.Zapret -> true
     }
 
     /**
@@ -1669,6 +1802,9 @@ data class LocationEntry(
     val openFlux: OpenFluxConfig? = null,
     @SerialName("snolc")
     val snolc: SnolcConfig? = null,
+    /** Zapret DPI-bypass settings for [EngineType.Zapret]. Null for other engines. */
+    @SerialName("zapret")
+    val zapret: ZapretConfig? = null,
     val advanced: AdvancedCoreConfig? = null,
     @SerialName("fake_dns")
     val fakeDns: FakeDnsSpec? = null,
@@ -1758,6 +1894,7 @@ data class LocationEntry(
                 masterDns = masterDns,
                 openFlux = openFlux,
                 snolc = snolc,
+                zapret = zapret,
                 advanced = advanced,
                 fakeDns = fakeDns,
                 routingProfileId = routingProfileId.orEmpty(),
@@ -1794,6 +1931,7 @@ data class LocationEntry(
             masterDns = config.masterDns,
             openFlux = config.openFlux,
             snolc = config.snolc,
+            zapret = config.zapret,
             advanced = config.advanced,
             fakeDns = config.fakeDns,
             routingProfileId = config.routingProfileId.ifBlank { null },
@@ -1838,6 +1976,7 @@ data class LocationEntry(
                 masterDns = config.masterDns,
                 openFlux = config.openFlux,
                 snolc = config.snolc,
+            zapret = config.zapret,
                 advanced = config.advanced,
                 fakeDns = config.fakeDns,
                 routingProfileId = config.routingProfileId.ifBlank { null },

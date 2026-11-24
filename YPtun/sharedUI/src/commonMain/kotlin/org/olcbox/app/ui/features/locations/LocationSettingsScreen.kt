@@ -124,6 +124,7 @@ import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.OpenFluxCarrier
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
+import org.olcbox.app.data.model.ZapretConfig
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -288,6 +289,7 @@ fun LocationSettingsScreen(
             hysteria2 = viewModel.isHysteria2Engine,
             sstp = viewModel.isSstpEngine,
             naive = viewModel.isNaiveEngine,
+            canSelectZapret = viewModel.canSelectZapretForCurrentEdit(),
             onDismiss = { showEnginePicker = false },
             onSelected = { engine ->
                 showEnginePicker = false
@@ -775,6 +777,14 @@ fun LocationSettingsScreen(
                     showAutoInstall = false,
                     onChange = viewModel::updateOpenFlux,
                     onAutoInstall = { showOpenFluxInstall = true }
+                )
+            }
+
+            if (config.engine == EngineType.Zapret) {
+                zapretSection(
+                    config = viewModel.editingZapret,
+                    enabled = !isSaving,
+                    onChange = viewModel::updateZapret,
                 )
             }
 
@@ -2207,6 +2217,127 @@ private fun OpenFluxCarriersEditor(
                 "Без ключа шифрования мультитранспорт не запустится.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+private fun LazyListScope.zapretSection(
+    config: ZapretConfig,
+    enabled: Boolean,
+    onChange: ((ZapretConfig) -> ZapretConfig) -> Unit,
+) {
+    item {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SectionTitle(
+                title = "Zapret — локальный обход DPI",
+                subtitle = "Работает бесплатно без удалённого сервера: режет TLS/TCP-заголовки на устройстве, подменяет DNS на DoH и при необходимости блокирует QUIC."
+            )
+            Text(
+                text = "Стратегия обхода",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    ZapretConfig.STRATEGY_AUTO to "Авто (рекомендуется)",
+                    ZapretConfig.STRATEGY_TLSREC to "TLS Record + UDP",
+                    ZapretConfig.STRATEGY_SPLIT to "TCP Split + No-QUIC",
+                    ZapretConfig.STRATEGY_CUSTOM to "Своя",
+                ).forEach { (key, label) ->
+                    FilterChip(
+                        selected = config.strategy == key,
+                        onClick = { onChange { it.withPreset(key) } },
+                        enabled = enabled,
+                        label = { Text(label) }
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = config.dnsServer,
+                onValueChange = { v -> onChange { it.copy(dnsServer = v) } },
+                label = { Text("DNS (DoH или IP)") },
+                placeholder = { Text(ZapretConfig.DEFAULT_DNS_SERVER) },
+                supportingText = { Text("Помогает обойти подмену DNS у провайдера (по умолчанию Cloudflare DoH)") },
+                singleLine = true,
+                enabled = enabled,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth()
+            )
+            VkTurnSwitchRow("Блокировать QUIC (UDP/443) для YouTube/браузера", config.blockQuic, enabled) { v ->
+                onChange { it.copy(strategy = ZapretConfig.STRATEGY_CUSTOM, blockQuic = v) }
+            }
+            if (config.strategy == ZapretConfig.STRATEGY_CUSTOM) {
+                VkTurnSwitchRow("Разделять TLS ClientHello (TLS Record Split)", config.tlsRecSplit, enabled) { v ->
+                    onChange { it.copy(tlsRecSplit = v) }
+                }
+                VkTurnSwitchRow("Резать первый TCP-пакет на сегменты (TCP Split)", config.tcpSplit, enabled) { v ->
+                    onChange { it.copy(tcpSplit = v) }
+                }
+                VkTurnSwitchRow("Обфускация HTTP Host (для сайтов без HTTPS)", config.httpHostTricks, enabled) { v ->
+                    onChange { it.copy(httpHostTricks = v) }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    VkTurnField(
+                        value = config.splitSize.toString(),
+                        onValueChange = { v ->
+                            val n = v.filter(Char::isDigit).toIntOrNull()?.coerceIn(1, 64) ?: 1
+                            onChange { it.copy(splitSize = n) }
+                        },
+                        label = "Размер куска (байт)",
+                        placeholder = ZapretConfig.DEFAULT_SPLIT_SIZE.toString(),
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
+                    )
+                    VkTurnField(
+                        value = config.splitDelayMs.toString(),
+                        onValueChange = { v ->
+                            val n = v.filter(Char::isDigit).toIntOrNull()?.coerceIn(0, 25) ?: 0
+                            onChange { it.copy(splitDelayMs = n) }
+                        },
+                        label = "Пауза (мс)",
+                        placeholder = ZapretConfig.DEFAULT_SPLIT_DELAY_MS.toString(),
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (!config.blockQuic) {
+                    VkTurnField(
+                        value = config.udpFakeCount.toString(),
+                        onValueChange = { v ->
+                            val n = v.filter(Char::isDigit).toIntOrNull()?.coerceIn(0, 6) ?: 0
+                            onChange { it.copy(udpFakeCount = n) }
+                        },
+                        label = "UDP фейк-пакеты перед потоком (0–6)",
+                        placeholder = "0",
+                        enabled = enabled,
+                        keyboardType = KeyboardType.Number
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = config.targets,
+                onValueChange = { v -> onChange { it.copy(targets = v) } },
+                label = { Text("Домены (необязательно)") },
+                placeholder = { Text("youtube.com, googlevideo.com, discord.com (пусто = весь трафик)") },
+                supportingText = { Text("Если пусто — обход DPI применяется ко всему TLS/HTTP трафику. Доступна только 1 локация Zapret.") },
+                enabled = enabled,
+                minLines = 1,
+                maxLines = 4,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
@@ -4166,6 +4297,7 @@ private fun engineDisplayName(
         engine == EngineType.VkTurn -> "VK-TURN"
         engine == EngineType.MasterDns -> "MasterDNS"
         engine == EngineType.OpenFlux -> "OpenFlux"
+        engine == EngineType.Zapret -> "Zapret (DPI)"
         else -> "Snolc"
     }
 }
@@ -4180,6 +4312,7 @@ private fun EnginePickerSheet(
     hysteria2: Boolean = false,
     sstp: Boolean = false,
     naive: Boolean = false,
+    canSelectZapret: Boolean = true,
     onDismiss: () -> Unit,
     onSelected: (EngineType) -> Unit,
     onWireguard: () -> Unit,
@@ -4257,6 +4390,12 @@ private fun EnginePickerSheet(
                     SettingsCardDivider()
                 }
                 option("MasterDNS", s.engineMasterDnsDesc, selected == EngineType.MasterDns) { onSelected(EngineType.MasterDns) }
+                if (!ios && (canSelectZapret || selected == EngineType.Zapret)) {
+                    SettingsCardDivider()
+                    option("Zapret (DPI)", "Бесплатный локальный обход DPI (доступна 1 локация)", selected == EngineType.Zapret) {
+                        onSelected(EngineType.Zapret)
+                    }
+                }
             }
         }
     }

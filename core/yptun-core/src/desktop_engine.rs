@@ -630,6 +630,7 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
                 self.start_open_flux(&config, listen_host, listen_port, socks_username, socks_password)?
             }
             EngineType::Snolc => self.start_snolc(&config, listen_host, listen_port, socks_username, socks_password)?,
+            EngineType::Zapret => return Err("Zapret engine is started via the Kotlin runtime".into()),
         }
         if self.tun_request.is_some() && !self.tun_handled_in_core {
             self.log(&format!(
@@ -687,6 +688,7 @@ impl<C: EngineCore, H: EngineHost> DesktopEngineController<C, H> {
                     }
             }
             EngineType::Snolc => self.host.snolc_running() && (!self.snolc_proxy_active || proxy()),
+            EngineType::Zapret => false,
         }
     }
 

@@ -400,6 +400,7 @@ pub enum Step {
     MasterDns { port: i32 },
     OpenFlux { port: i32 },
     Snolc { port: i32 },
+    Zapret { port: i32 },
     /// sing-box or Xray serving the main SOCKS. `upstream_port` is the local hop it dials through.
     ProxyCore { port: i32, upstream_port: Option<i32> },
 }
@@ -414,6 +415,7 @@ impl Step {
             | Self::MasterDns { port }
             | Self::OpenFlux { port }
             | Self::Snolc { port }
+            | Self::Zapret { port }
             | Self::ProxyCore { port, .. } => *port,
         }
     }
@@ -496,6 +498,14 @@ pub fn topology(location: &LocationConfig, socks_port: i32, caps: &PlatformCaps)
                 steps.push(Step::ProxyCore { port: main, upstream_port: Some(ports.olcrtc_chain()) });
             } else {
                 steps.push(Step::Snolc { port: main });
+            }
+        }
+        EngineType::Zapret => {
+            if proxy_usable(location).is_some() {
+                steps.push(Step::Zapret { port: ports.olcrtc_chain() });
+                steps.push(Step::ProxyCore { port: main, upstream_port: Some(ports.olcrtc_chain()) });
+            } else {
+                steps.push(Step::Zapret { port: main });
             }
         }
     }

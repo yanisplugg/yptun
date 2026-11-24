@@ -840,7 +840,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         // tunnel, so ignore the manual ping-mode override and fall through to the tunnelPing branch below.
         val tunnelOnlyEngine =
             locationConfig.engine == EngineType.VkTurn || locationConfig.engine == EngineType.MasterDns ||
-                locationConfig.engine == EngineType.OpenFlux || locationConfig.engine == EngineType.Snolc
+                locationConfig.engine == EngineType.OpenFlux || locationConfig.engine == EngineType.Snolc ||
+                locationConfig.engine == EngineType.Zapret
         if (!tunnelOnlyEngine) {
             when (behavior.pingMode) {
                 AppBehaviorSettings.PING_TCP -> if (hasProxy) return tcpPing(server, serverPort)
@@ -861,6 +862,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // OpenFlux: its "server" is a Yandex document / a MAX account — only the live tunnel measures.
             locationConfig.engine == EngineType.OpenFlux -> tunnelPing()
             locationConfig.engine == EngineType.Snolc -> tunnelPing()
+            locationConfig.engine == EngineType.Zapret ->
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing() else null
             proxyType == ProxyProfile.TYPE_MIERU ->
                 if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
                 else (tcpPing(server, serverPort) ?: icmpPing(server))
@@ -881,6 +884,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             proxyType == ProxyProfile.TYPE_OPENVPN ->
                 if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
                 else icmpPing(locationConfig.proxy?.server.orEmpty())
+            proxyType == ProxyProfile.TYPE_NAIVE ->
+                if (isActive && OlcboxVpnState.activeSocks != null) tunnelPing()
+                else naiveReachabilityPing(locationConfig.proxy)
             // Plain proxies: TCP latency to the (reachable) proxy server.
             locationConfig.engine == EngineType.Standard ->
                 tcpPing(locationConfig.proxy?.server, locationConfig.proxy?.serverPort)
@@ -1038,21 +1044,26 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         return buf
     }
 
-    /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
+    /** TCP-connect latency to host:port in ms (IPv4-first across resolved addrs), or null if unreachable. */
     private suspend fun tcpPing(host: String?, port: Int?): Long? = withContext(Dispatchers.IO) {
-        if (host.isNullOrBlank() || port == null || port !in 1..65535) return@withContext null
-        var best: Long? = null
-        repeat(TCP_PING_ATTEMPTS) {
-            val elapsed = runCatching {
-                java.net.Socket().use { socket ->
-                    val start = System.nanoTime()
-                    socket.connect(java.net.InetSocketAddress(host, port), pingTimeoutMs.toInt())
-                    (System.nanoTime() - start) / 1_000_000L
-                }
-            }.getOrNull()
-            if (elapsed != null && (best == null || elapsed < best!!)) best = elapsed
+        PingProbeHelpers.tcpPing(host, port, pingTimeoutMs.toInt(), TCP_PING_ATTEMPTS)
+    }
+
+    private suspend fun naiveReachabilityPing(profile: ProxyProfile?): Long? = withContext(Dispatchers.IO) {
+        if (profile == null || profile.server.isBlank() || profile.serverPort !in 1..65535) return@withContext null
+        if (profile.naiveQuic) {
+            PingProbeHelpers.tcpPing(profile.server, profile.serverPort, pingTimeoutMs.toInt(), TCP_PING_ATTEMPTS)
+                ?: icmpPing(profile.server)
+        } else {
+            PingProbeHelpers.tlsPing(
+                host = profile.server,
+                port = profile.serverPort,
+                sni = profile.sni,
+                allowInsecure = profile.allowInsecure,
+                timeoutMs = pingTimeoutMs.toInt(),
+                attempts = TCP_PING_ATTEMPTS,
+            ) ?: PingProbeHelpers.tcpPing(profile.server, profile.serverPort, pingTimeoutMs.toInt(), TCP_PING_ATTEMPTS)
         }
-        best
     }
 
     // --- User-selectable ping methods (Settings → «Пинг») ---
@@ -1117,10 +1128,12 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             if (profile.type == ProxyProfile.TYPE_MIERU) {
                 return@withContext mieruUrlTest(profile, isActiveLocation, url, method)
             }
-            // Hysteria2 and Naive are native sing-box protocols, not xray-serviceable; the via-proxy
-            // URL test isn't available (use Auto/ICMP ping mode instead — Auto's TCP probe still
-            // reaches a naive server's HTTPS port).
-            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE ||
+            if (profile.type == ProxyProfile.TYPE_NAIVE) {
+                return@withContext naiveUrlTest(profile, isActiveLocation, url, method)
+            }
+            // Hysteria2, OpenVPN and SSTP are native sing-box protocols, not xray-serviceable; the via-proxy
+            // URL test isn't available (use Auto/ICMP ping mode instead).
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 ||
                 profile.type == ProxyProfile.TYPE_OPENVPN || profile.type == ProxyProfile.TYPE_SSTP
             ) {
                 OlcboxVpnState.addLog("Proxy $method ping: ${profile.type} not supported (use Auto/ICMP)")
@@ -1215,6 +1228,33 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             TrustTunnelCore.stop(process)
             runCatching { java.io.File(appContext.filesDir, dirName).deleteRecursively() }
         }
+    }
+
+    private suspend fun naiveUrlTest(
+        profile: ProxyProfile,
+        isActiveLocation: Boolean,
+        url: String,
+        method: String,
+    ): Long? {
+        val liveSock = OlcboxVpnState.activeSocks
+        if (isActiveLocation && liveSock != null && status.value is VpnStatus.Connected) {
+            val configJson = PingProbeHelpers.buildLiveSocksPingConfig(
+                tag = "naive-live-ping",
+                host = AndroidSocksProxySettings.connectHost(liveSock.host),
+                port = liveSock.port,
+                username = liveSock.username,
+                password = liveSock.password,
+            )
+            val ms = runCatching { xraybridge.Xraybridge.measureDelay(configJson, url, method, pingTimeoutMs) }
+                .getOrElse {
+                    OlcboxVpnState.addLog("Proxy $method ping (live Naive) error: ${it.message}")
+                    -1L
+                }
+            if (ms >= 0) return ms
+            val fallbackRtt = tunnelPing()
+            if (fallbackRtt != null && fallbackRtt >= 0) return fallbackRtt
+        }
+        return naiveReachabilityPing(profile)
     }
 
     private suspend fun mieruUrlTest(

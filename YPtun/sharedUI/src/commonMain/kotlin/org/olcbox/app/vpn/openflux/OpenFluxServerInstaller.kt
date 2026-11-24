@@ -32,12 +32,22 @@ data class OpenFluxInstallOptions(
     val context: String = "",
     /** Require authenticated Session negotiation (`--negotiate`); ignored when [secret] is blank. */
     val negotiate: Boolean = false,
+    /** Node forwarding mode (`l3` or `l4`). Empty defaults multi-transport sessions to `l3` and single-transport to `l4`. */
+    val mode: String = "",
 ) {
+    fun effectiveMode(): String = when (mode.trim().lowercase()) {
+        MODE_L3 -> MODE_L3
+        MODE_L4 -> MODE_L4
+        else -> if (carriers.isNotEmpty()) MODE_L3 else MODE_L4
+    }
+
     companion object {
         const val DEFAULT_CUPS_ROOMS = 8
         const val MIN_CUPS_ROOMS = 1
         const val MAX_CUPS_ROOMS = 64
         const val DEFAULT_DIRECT_PORT = 8445
+        const val MODE_L3 = "l3"
+        const val MODE_L4 = "l4"
     }
 }
 

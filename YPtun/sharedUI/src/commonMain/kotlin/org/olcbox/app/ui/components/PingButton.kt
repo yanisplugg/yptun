@@ -59,6 +59,7 @@ fun PingButton(
         engine == org.olcbox.app.data.model.EngineType.MasterDns ||
         engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
         engine == org.olcbox.app.data.model.EngineType.Snolc ||
+        engine == org.olcbox.app.data.model.EngineType.Zapret ||
         isMieru
 
     val descriptionText = when {

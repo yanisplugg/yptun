@@ -289,7 +289,8 @@ fun LocationRow(
         val isVkTurn = location.config?.engine == org.olcbox.app.data.model.EngineType.VkTurn
         val isMasterDns = location.config?.engine == org.olcbox.app.data.model.EngineType.MasterDns ||
             location.config?.engine == org.olcbox.app.data.model.EngineType.OpenFlux ||
-            location.config?.engine == org.olcbox.app.data.model.EngineType.Snolc
+            location.config?.engine == org.olcbox.app.data.model.EngineType.Snolc ||
+            location.config?.engine == org.olcbox.app.data.model.EngineType.Zapret
         val isMieru = location.config?.proxy?.type == org.olcbox.app.data.model.ProxyProfile.TYPE_MIERU
         val isUnprobed = isVkTurn || isMasterDns || isMieru
         // "Значок" mode shows a check/cross instead of the raw latency (per user setting).
@@ -420,6 +421,8 @@ private fun locationSubtitle(location: LocationItem): String {
         EngineType.OpenFlux -> listOfNotNull("OpenFlux", config.openFlux?.summary())
 
         EngineType.Snolc -> listOfNotNull("Snolc", config.snolc?.summary())
+
+        EngineType.Zapret -> listOfNotNull("Zapret", config.zapret?.summary())
 
         else -> listOf(
             config?.providerName()
@@ -660,7 +663,8 @@ private fun CompactPingIndicator(
     // MasterDNS and Mieru have no off-tunnel probe: a NULL ping means "not measurable", NOT "offline".
     val isMasterDns = location.config?.engine == EngineType.MasterDns ||
         location.config?.engine == EngineType.OpenFlux ||
-        location.config?.engine == EngineType.Snolc
+        location.config?.engine == EngineType.Snolc ||
+        location.config?.engine == EngineType.Zapret
     val isMieru = location.config?.proxy?.type == ProxyProfile.TYPE_MIERU
     val isUnprobed = isVkTurn || isMasterDns || isMieru
     val iconResult = LocalPingResultDisplay.current != AppBehaviorSettings.PING_RESULT_TIME

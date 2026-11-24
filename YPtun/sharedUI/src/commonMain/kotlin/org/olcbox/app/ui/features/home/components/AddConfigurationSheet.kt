@@ -92,6 +92,8 @@ fun AddConfigurationSheet(
     onCreateSstp: () -> Unit = {},
     onCreateNaive: () -> Unit = {},
     onCreateTurnable: () -> Unit = {},
+    hasZapretLocation: Boolean = false,
+    onCreateZapret: () -> Unit = {},
     // The free-servers options (how many, which source); null starts the search with the saved ones.
     freeServersSettings: AppBehaviorSettings? = null,
     onFreeServersSettingsChanged: (AppBehaviorSettings) -> Unit = {}
@@ -123,6 +125,8 @@ fun AddConfigurationSheet(
                             if (freeServersSettings != null) page = AddPage.FreeServers
                             else onStartFreeServers(AppBehaviorSettings.DEFAULT_FREE_SERVERS_LIMIT)
                         },
+                        hasZapretLocation = hasZapretLocation,
+                        onCreateZapret = onCreateZapret,
                         onManualClick = { page = AddPage.Manual }
                     )
                     AddPage.FreeServers -> freeServersSettings?.let { settings ->
@@ -141,6 +145,8 @@ fun AddConfigurationSheet(
                         onPickSstp = onCreateSstp,
                         onPickNaive = onCreateNaive,
                         onPickTurnable = onCreateTurnable,
+                        hasZapretLocation = hasZapretLocation,
+                        onPickZapret = onCreateZapret,
                     )
                 }
             }
@@ -155,8 +161,11 @@ private fun AddMainPage(
     onImportText: (String) -> Unit,
     onImportFileClick: () -> Unit,
     onFreeServersClick: () -> Unit,
+    hasZapretLocation: Boolean,
+    onCreateZapret: () -> Unit,
     onManualClick: () -> Unit
 ) {
+    val ios = remember { org.olcbox.app.update.UpdatePlatform.current().os == "ios" }
     val s = LocalStrings.current
     val clipboard = LocalClipboardManager.current
     var text by remember { mutableStateOf("") }
@@ -230,6 +239,19 @@ private fun AddMainPage(
             icon = Icons.Outlined.Public,
             onClick = onFreeServersClick
         )
+        if (!ios) {
+            SettingsCardDivider()
+            SettingsCardRow(
+                title = "Zapret (обход DPI)",
+                subtitle = if (hasZapretLocation) {
+                    "Локация уже создана (доступна только 1 локация)"
+                } else {
+                    "Бесплатный локальный обход DPI без сервера (1 локация)"
+                },
+                icon = Icons.Outlined.Shield,
+                onClick = onCreateZapret
+            )
+        }
         SettingsCardDivider()
         SettingsCardRow(
             title = s.addManualTitle,
@@ -386,6 +408,8 @@ private fun ManualTypePage(
     onPickSstp: () -> Unit,
     onPickNaive: () -> Unit,
     onPickTurnable: () -> Unit,
+    hasZapretLocation: Boolean = false,
+    onPickZapret: () -> Unit = {},
 ) {
     val s = LocalStrings.current
     // OpenFlux and Snolc have no iOS engine (same rule as the engine picker in the location screen).
@@ -410,6 +434,12 @@ private fun ManualTypePage(
         if (!ios) {
             SettingsCardDivider()
             SettingsCardRow("OpenFlux", s.engineOpenFluxDesc, icon = Icons.Outlined.Description) { onPick(EngineType.OpenFlux, false) }
+            SettingsCardDivider()
+            SettingsCardRow(
+                "Zapret (обход DPI)",
+                if (hasZapretLocation) "Локация уже создана (доступна 1 локация)" else "Бесплатный локальный обход DPI без сервера",
+                icon = Icons.Outlined.Shield
+            ) { onPickZapret() }
         }
     }
 

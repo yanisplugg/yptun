@@ -309,6 +309,7 @@ impl LocationEditor {
                 EngineType::MasterDns => self.editing_master_dns.is_complete(),
                 EngineType::OpenFlux => self.editing_open_flux.is_complete(),
                 EngineType::Snolc => self.editing_snolc.is_complete(),
+                EngineType::Zapret => true,
             }
     }
 

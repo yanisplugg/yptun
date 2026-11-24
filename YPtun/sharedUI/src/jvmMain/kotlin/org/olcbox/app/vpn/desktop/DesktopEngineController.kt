@@ -21,6 +21,7 @@ import org.olcbox.app.vpn.warp.WarpHelper
 import org.olcbox.app.vpn.warp.WarpRelay
 import org.olcbox.app.vpn.telegram.WarpConfigGenerator
 import org.olcbox.app.vpn.telegram.TelegramProxyStore
+import org.olcbox.app.vpn.zapret.ZapretSocksServer
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.net.InetSocketAddress
@@ -126,6 +127,7 @@ internal class DesktopEngineController(
             EngineType.MasterDns -> startMasterDns(config, listenHost, listenPort, socksUsername, socksPassword)
             EngineType.OpenFlux -> startOpenFlux(config, listenHost, listenPort, socksUsername, socksPassword)
             EngineType.Snolc -> startSnolc(config, listenHost, listenPort, socksUsername, socksPassword)
+            EngineType.Zapret -> startZapret(config, listenHost, listenPort, socksUsername, socksPassword)
         }
         if (requestedTun && !tunHandledInCore) {
             log("Per-process split tunneling unavailable (core is ${activeProxyCore}); falling back to tun2socks for all apps")
@@ -162,6 +164,7 @@ internal class DesktopEngineController(
         trustTunnel.stop()
         openFlux.stop()
         snolc.stop()
+        zapretServer.stop()
         csqtt.stop()
         roomPool?.stop()
         roomPool = null
@@ -189,6 +192,7 @@ internal class DesktopEngineController(
             if (openFluxProxyActive) proxyCoreRunning() else (!singBoxFrontActive || YpTunCore.sbRunning())
         // snolc: subprocess serving the session-login SOCKS itself (RFC 1929 patch, real UDP ASSOCIATE).
         EngineType.Snolc -> snolc.isRunning() && (!snolcProxyActive || proxyCoreRunning())
+        EngineType.Zapret -> zapretServer.isRunning && (!singBoxFrontActive || YpTunCore.sbRunning())
     }
 
     /** True when the active MasterDNS engine also fronts a proxy core (proxy-over-MasterDNS). */
@@ -801,6 +805,7 @@ internal class DesktopEngineController(
         routing: org.olcbox.app.data.model.RoutingRules,
         traffic: org.olcbox.app.data.model.TrafficSettings,
         blockQuic: Boolean,
+        extraBypassProcesses: List<String> = emptyList(),
     ) {
         if (!awaitSocksPortOpen(xrayPort, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("Xray SOCKS port $xrayPort did not open")
@@ -838,6 +843,7 @@ internal class DesktopEngineController(
             tunMode = true,
             splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
             splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+            extraBypassProcesses = extraBypassProcesses,
             tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
             mixedInbound = true,
             logFilePath = singBoxLogPath(),
@@ -847,6 +853,58 @@ internal class DesktopEngineController(
         YpTunCore.sbStart(json)
         tunHandledInCore = true
         singBoxFrontActive = true
+    }
+
+    private val zapretServer = ZapretSocksServer()
+
+    private fun currentProcessNames(): List<String> {
+        val cmd = ProcessHandle.current().info().command().orElse("")
+        val exe = cmd.substringAfterLast('\\').substringAfterLast('/').trim()
+        return buildList {
+            if (exe.isNotEmpty()) add(exe)
+            add("YPtun.exe")
+            add("java.exe")
+            add("javaw.exe")
+        }.distinct()
+    }
+
+    private suspend fun startZapret(
+        config: LocationConfig,
+        listenHost: String,
+        listenPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
+        val zapret = (config.zapret ?: org.olcbox.app.data.model.ZapretConfig()).normalized()
+        val front = requestedTun
+        val port = if (front) singBoxFrontPort(listenPort) else listenPort
+        val host = if (front) "127.0.0.1" else listenHost
+        requirePortFree(port) { "Zapret port $port is still in use" }
+        zapretServer.start(
+            config = zapret,
+            listenHost = host,
+            listenPort = port,
+            socksUsername = if (front) "" else socksUsername,
+            socksPassword = if (front) "" else socksPassword,
+            log = log,
+        )
+        if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
+            throw IllegalStateException("Zapret SOCKS port $port did not open")
+        }
+        log("Zapret ready on $host:$port (${zapret.summary()})")
+        if (front) {
+            startSingBoxFront(
+                xrayPort = port,
+                listenHost = listenHost,
+                listenPort = listenPort,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                routing = loadRoutingExpandingAsn(),
+                traffic = JvmVpnSettings.loadTraffic(),
+                blockQuic = zapret.blockQuic,
+                extraBypassProcesses = currentProcessNames(),
+            )
+        }
     }
 
     // ---------------------------------------------------------------------------------------

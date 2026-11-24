@@ -124,6 +124,7 @@ import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.vpn.warp.WarpRelay
 import org.olcbox.app.vpn.warp.WarpHelper
 import org.olcbox.app.vpn.telegram.WarpConfigGenerator
+import org.olcbox.app.vpn.zapret.ZapretSocksServer
 import org.olcbox.app.data.model.VkTurnConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
@@ -228,6 +229,8 @@ class OlcboxVpnService : VpnService() {
 
     /** snolc client subprocess for [EngineType.Snolc]; null when another engine is running. */
     private var snolcProcess: Process? = null
+    /** Zapret DPI-bypass SOCKS5 engine for [EngineType.Zapret]; null when another engine is running. */
+    private var zapretServer: ZapretSocksServer? = null
 
     /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
     private var snolcProxyActive: Boolean = false
@@ -241,8 +244,8 @@ class OlcboxVpnService : VpnService() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var connectivityManager: ConnectivityManager
-    private var currentNetwork: Network? = null
-    private var startWarpAfterTun: (suspend () -> Unit)? = null
+    @Volatile private var currentNetwork: Network? = null
+    @Volatile private var bindAwgToUpstream = false
     private var currentNetworkTransport: UpstreamTransport? = null
     private var isCallbackRegistered = false
     private var connectionMode = AndroidConnectionMode.Tun
@@ -295,7 +298,26 @@ class OlcboxVpnService : VpnService() {
     }
 
     private val awgProtector = object : AwgProtector {
-        override fun protect(fd: Long): Boolean = safeProtect(fd)
+        override fun protect(fd: Long): Boolean {
+            val protected = safeProtect(fd)
+            val upstream = currentNetwork?.takeIf { bindAwgToUpstream }
+            if (upstream != null && fd in 1..65535) {
+                // Bind UDP socket directly to the cellular uplink even pre-TUN (when safeProtect returns
+                // false and queues the fd for post-establish protect()), so Awg traffic never loops or
+                // leaks onto the wrong interface before TUN routes install.
+                val bound = runCatching {
+                    android.os.ParcelFileDescriptor.fromFd(fd.toInt()).use {
+                        upstream.bindSocket(it.fileDescriptor)
+                    }
+                    true
+                }.getOrElse { e ->
+                    addLog("WARP: не удалось привязать UDP-сокет (fd=$fd) к ${getNetName(upstream)}: ${e.message}")
+                    false
+                }
+                if (vpnInterface == null) return bound
+            }
+            return protected
+        }
     }
 
     private val rtcLogWriter = object : LogWriter {
@@ -1075,35 +1097,13 @@ class OlcboxVpnService : VpnService() {
         }
 
         vpnInterface = pfd
-        val startDeferredWarp = startWarpAfterTun
-        startWarpAfterTun = null
-        if (startDeferredWarp != null) {
-            addLog("WARP: запускаю проверку после создания TUN (Mobile)")
-            try {
-                startDeferredWarp()
-            } catch (e: CancellationException) {
-                withContext(NonCancellable) { stopTransportProcesses(closeTun = true) }
-                throw e
-            } catch (e: Exception) {
-                val message = e.message ?: "WARP start failed"
-                addLog("WARP: запуск после создания TUN завершился ошибкой: $message")
-                stopTransportProcesses(closeTun = true)
-                if (requestedGeneration == generation) {
-                    setStatus(VpnStatus.Error(message))
-                    updateNotification(ns.notifConnectionFailed)
-                }
-                return
-            }
-            coroutineContext.ensureActive()
-            if (requestedGeneration != generation) return
-        }
         val pending = pendingProtectFds.toList()
         pendingProtectFds.clear()
         for (f in pending) {
             val ok = runCatching { this@OlcboxVpnService.protect(f) }.getOrDefault(false)
             Log.d(TAG, "safeProtect drained fd=$f -> $ok")
         }
-        if (startDeferredWarp == null) runCatching { Awg.protectSockets() }
+        runCatching { Awg.protectSockets() }
 
         // Publish protect() so the independent Telegram-over-WARP proxy can keep its WARP UDP socket
         // out of this tun while it's up (see VpnSocketProtectBridge). Cleared on teardown.
@@ -1161,6 +1161,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.MasterDns -> startMasterDnsCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.OpenFlux -> startOpenFluxCore(location, requestedGeneration, setErrorOnFailure)
             EngineType.Snolc -> startSnolcCore(location, requestedGeneration, setErrorOnFailure)
+            EngineType.Zapret -> startZapretCore(location, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -1363,6 +1364,60 @@ class OlcboxVpnService : VpnService() {
             val staleRequest = requestedGeneration != generation
             val message = e.message ?: "Transport failed"
             addLog(if (staleRequest) "snolc start canceled: $message" else "snolc start failed: $message")
+            stopMobileAndWait()
+            if (!staleRequest && setErrorOnFailure) {
+                setStatus(VpnStatus.Error(message))
+                updateNotification(ns.notifConnectionFailed)
+            }
+            false
+        }
+    }
+
+    private suspend fun startZapretCore(
+        location: LocationConfig,
+        requestedGeneration: Long,
+        setErrorOnFailure: Boolean,
+    ): Boolean {
+        val zapret = (location.normalized().zapret ?: org.olcbox.app.data.model.ZapretConfig()).normalized()
+        return try {
+            waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
+            if (isLocalSocksPortOpen(socksListenPort)) {
+                throw IllegalStateException("SOCKS port $socksListenPort is still in use")
+            }
+            activeProxyCore = ProxyCore.Auto
+            val server = zapretServer ?: ZapretSocksServer().also { zapretServer = it }
+            addLog("Starting Zapret DPI bypass on $socksListenHost:$socksListenPort (${zapret.summary()})")
+            server.start(
+                config = zapret,
+                listenHost = socksListenHost,
+                listenPort = socksListenPort,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                protectSocket = { socket -> runCatching { this@OlcboxVpnService.protect(socket) } },
+                protectDatagram = { datagram -> runCatching { this@OlcboxVpnService.protect(datagram) } },
+                log = { msg -> addLog(msg) },
+            )
+            if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {
+                throw IllegalStateException("Zapret SOCKS port $socksListenPort did not open")
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("Zapret start superseded")
+                return false
+            }
+            addLog("Zapret ready on $socksListenHost:$socksListenPort")
+            publishActiveSocks()
+            true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                addLog("Zapret start canceled")
+                stopMobileAndWait()
+            }
+            throw e
+        } catch (e: Exception) {
+            val staleRequest = requestedGeneration != generation
+            val message = e.message ?: "Zapret failed"
+            addLog(if (staleRequest) "Zapret start canceled: $message" else "Zapret start failed: $message")
             stopMobileAndWait()
             if (!staleRequest && setErrorOnFailure) {
                 setStatus(VpnStatus.Error(message))
@@ -1918,55 +1973,45 @@ class OlcboxVpnService : VpnService() {
             // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
             // WARP over AmneziaWG on the CLIENT side: raise awgproxy first — the main proxy dials through its
             // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
-            val deferClientWarp = blockCellularWarpQuic && !connectionMode.isTunless
-            val warpExitProfile = if (blockCellularWarpQuic && isClientWarp && !deferClientWarp) {
+            val warpExitProfile = if (blockCellularWarpQuic && isClientWarp) {
                 resolveWarpExitOnUpstream(profile, upstream)
             } else profile
             val secondProfile = if (isClientWarp) warpExitProfile else secondProfileDraft
+            bindAwgToUpstream = cellularUpstream && warpRelay == null
             if (warpAwgIni != null && warpRelay == null) {
-                val startClientWarp: suspend () -> Unit = {
-                    val ini = if (config.warpProtocol == WarpProtocol.Awg) {
-                        suspend fun probe(candidates: List<String>): String? = candidates.firstOrNull { candidate ->
-                            coroutineContext.ensureActive()
-                            val (host, port) = WarpHelper.endpointOf(candidate)
-                            val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
-                            addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
-                            startWarpAwg(candidate)
-                            val ready = if (deferClientWarp && isClientWarp) {
-                                checkWarpCascade()
-                            } else {
-                                checkWarpSocks(warpExitProfile)
-                            }
-                            addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
-                            if (!ready) Awg.stop()
-                            ready
-                        }
-                        addLog("WARP: ядро AmneziaWG ${Awg.version()}")
-                        if (explicitWarpAwg != null) addLog("WARP: использую конфигурацию выбранной AmneziaWG-локации")
-                        val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni)
-                        else WarpHelper.clientAwgCandidates(warpAwgIni, preferReserved = cellularUpstream)
-                        var registered = initialWarpRegistration?.getOrNull()
-                        val ready = probe(candidates) ?: run {
-                            check(explicitWarpAwg == null) {
-                                "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS."
-                            }
-                            val fresh = if (initialWarpRegistration == null) registerClientWarp().getOrNull() else null
-                            checkNotNull(fresh) { "WARP: ни один адрес с текущим профилем не передаёт данные." }
-                            registered = fresh
-                            probe(WarpHelper.clientAwgCandidates(fresh, preferReserved = cellularUpstream))
-                                ?: error("WARP: новый профиль Cloudflare не передаёт данные через AmneziaWG.")
-                        }
-                        registered?.let { warpDataSource.saveClientWarpConfig(it) }
+                val ini = if (config.warpProtocol == WarpProtocol.Awg) {
+                    suspend fun probe(candidates: List<String>): String? = candidates.firstOrNull { candidate ->
+                        coroutineContext.ensureActive()
+                        val (host, port) = WarpHelper.endpointOf(candidate)
+                        val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
+                        addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
+                        startWarpAwg(candidate)
+                        val ready = checkWarpSocks(warpExitProfile)
+                        addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
+                        if (!ready) Awg.stop()
                         ready
-                    } else warpAwgIni.also { startWarpAwg(it) }
-                    OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
-                }
-                if (deferClientWarp) {
-                    // Probe after the VPN routes are installed, before forwarding app traffic.
-                    startWarpAfterTun = startClientWarp
-                } else {
-                    startClientWarp()
-                }
+                    }
+                    addLog("WARP: ядро AmneziaWG ${Awg.version()}")
+                    if (explicitWarpAwg != null) addLog("WARP: использую конфигурацию выбранной AmneziaWG-локации")
+                    val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni)
+                    else WarpHelper.clientAwgCandidates(warpAwgIni, preferReserved = cellularUpstream)
+                    var registered = initialWarpRegistration?.getOrNull()
+                    val ready = probe(candidates) ?: run {
+                        check(explicitWarpAwg == null) {
+                            "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS."
+                        }
+                        val fresh = if (initialWarpRegistration?.isSuccess != true) {
+                            registerClientWarp().getOrNull()
+                        } else null
+                        checkNotNull(fresh) { "WARP: ни один адрес с текущим профилем не передаёт данные." }
+                        registered = fresh
+                        probe(WarpHelper.clientAwgCandidates(fresh, preferReserved = cellularUpstream))
+                            ?: error("WARP: новый профиль Cloudflare не передаёт данные через AmneziaWG.")
+                    }
+                    registered?.let { warpDataSource.saveClientWarpConfig(it) }
+                    ready
+                } else warpAwgIni.also { startWarpAwg(it) }
+                OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
             }
             val isAwg = profile.type == ProxyProfile.TYPE_AMNEZIAWG
             val isHy2 = profile.type == ProxyProfile.TYPE_HYSTERIA2
@@ -3032,6 +3077,7 @@ class OlcboxVpnService : VpnService() {
         EngineType.MasterDns -> masterDnsClient?.isRunning == true && (!masterDnsProxyActive || proxyCoreRunning())
         EngineType.OpenFlux -> openFluxProcess?.isAlive == true && (!openFluxProxyActive || proxyCoreRunning())
         EngineType.Snolc -> snolcProcess?.isAlive == true && (!snolcProxyActive || proxyCoreRunning())
+        EngineType.Zapret -> zapretServer?.isRunning == true
     }
 
     private suspend fun awaitSocksPortOpen(port: Int, timeoutMs: Long): Boolean {
@@ -3781,7 +3827,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun stopMobile() {
-        startWarpAfterTun = null
+        bindAwgToUpstream = false
         OlcboxVpnState.setWarpIngress(null)
         OlcboxVpnState.activeSocks = null
         runCatching { singBox?.stop() }
@@ -3813,6 +3859,8 @@ class OlcboxVpnService : VpnService() {
         }
         snolcProcess = null
         snolcProxyActive = false
+        runCatching { zapretServer?.stop() }
+        zapretServer = null
         runCatching { Awg.stop() }
         stopTrustTunnelProcess()
         val provider = lastMobileProvider
@@ -3896,38 +3944,6 @@ class OlcboxVpnService : VpnService() {
             true
         } catch (e: java.io.IOException) {
             addLog("WARP: SOCKS CONNECT к ${target.hostString}:${target.port}: ${e.message}")
-            false
-        }
-    }
-
-    private suspend fun checkWarpCascade(): Boolean = withContext(Dispatchers.IO) {
-        val target = java.net.URI(AppBehaviorSettings.DEFAULT_PING_URL)
-        try {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress(socksConnectHost(), socksListenPort), SOCKET_CONNECT_TIMEOUT_MS)
-                socket.soTimeout = 12_000
-                OlcrtcBond.socks5Connect(socket, socksUsername, socksPassword, target.host, 443)
-                val factory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
-                val tls = factory.createSocket(socket, target.host, 443, true) as javax.net.ssl.SSLSocket
-                tls.use {
-                    it.sslParameters = it.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
-                    it.soTimeout = socket.soTimeout
-                    it.startHandshake()
-                    val request = "GET ${target.rawPath} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n"
-                    it.getOutputStream().apply {
-                        write(request.toByteArray(Charsets.US_ASCII))
-                        flush()
-                    }
-                    val status = it.inputStream.bufferedReader(Charsets.US_ASCII).readLine()
-                    check(status?.split(' ', limit = 3)?.getOrNull(1) == "204") { "ответ: ${status ?: "EOF"}" }
-                }
-            }
-            addLog("WARP: HTTPS через каскад вернул HTTP 204")
-            true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            addLog("WARP: HTTPS через каскад: ${e.message ?: e.javaClass.simpleName}")
             false
         }
     }

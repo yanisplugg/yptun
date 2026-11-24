@@ -153,7 +153,8 @@ class HomeScreenViewModel(
         // connected one that measures the wrong tunnel — keep the neutral dash (null).
         val isMieru = config.proxy?.type == ProxyProfile.TYPE_MIERU
         val tunnelOnly = config.engine == EngineType.VkTurn || config.engine == EngineType.MasterDns ||
-            config.engine == EngineType.OpenFlux || config.engine == EngineType.Snolc
+            config.engine == EngineType.OpenFlux || config.engine == EngineType.Snolc ||
+            config.engine == EngineType.Zapret
         val isConnected = _state.value.isVpnConnected
         val isActive = isConnected && (
             config.normalized() == _state.value.configData ||

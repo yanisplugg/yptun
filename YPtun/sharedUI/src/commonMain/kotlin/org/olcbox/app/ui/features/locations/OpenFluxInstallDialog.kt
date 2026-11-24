@@ -64,6 +64,12 @@ internal fun OpenFluxInstallDialog(
     var useKey by remember { mutableStateOf(false) }
     var sshKey by remember { mutableStateOf("") }
     var keyPassphrase by remember { mutableStateOf("") }
+    var nodeMode by remember(config.isSession()) {
+        mutableStateOf(
+            if (config.isSession()) OpenFluxInstallOptions.MODE_L3
+            else OpenFluxInstallOptions.MODE_L4
+        )
+    }
 
     var docUrlsText by remember {
         mutableStateOf(OpenFluxConfig.splitCoordinates(config.docUrl).joinToString("\n"))
@@ -336,6 +342,39 @@ internal fun OpenFluxInstallDialog(
                     }
                 }
 
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Режим работы ноды",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        FilterChip(
+                            selected = nodeMode == OpenFluxInstallOptions.MODE_L3,
+                            onClick = { nodeMode = OpenFluxInstallOptions.MODE_L3 },
+                            enabled = !running,
+                            label = { Text("L3 (быстрый, x3 скорость)") }
+                        )
+                        FilterChip(
+                            selected = nodeMode == OpenFluxInstallOptions.MODE_L4,
+                            onClick = { nodeMode = OpenFluxInstallOptions.MODE_L4 },
+                            enabled = !running,
+                            label = { Text("L4 (совместимый)") }
+                        )
+                    }
+                    Text(
+                        if (nodeMode == OpenFluxInstallOptions.MODE_L3) {
+                            "Пакетный режим L3 (CAP_NET_RAW + правило RST только для IP ноды) значительно быстрее L4 — рекомендуется для мультитранспорта."
+                        } else {
+                            "Потоковый режим L4 (gVisor) работает без iptables/raw-сокетов, но ограничивает пропускную способность."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 InstallLogView(log, logScroll)
                 result?.exceptionOrNull()?.let { err ->
                     Text(
@@ -384,6 +423,7 @@ internal fun OpenFluxInstallDialog(
                                     secret = config.secret.trim(),
                                     context = config.context.trim(),
                                     negotiate = config.negotiate,
+                                    mode = nodeMode,
                                 )
                             ) { line -> log.add(line) }
                             res.getOrNull()?.let { ok ->

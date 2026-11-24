@@ -387,6 +387,7 @@ impl LocationConfig {
             EngineType::MasterDns => self.master_dns.as_ref().is_some_and(MasterDnsConfig::is_complete),
             EngineType::OpenFlux => self.open_flux.as_ref().is_some_and(OpenFluxConfig::is_complete),
             EngineType::Snolc => self.snolc.as_ref().is_some_and(SnolcConfig::is_complete),
+            EngineType::Zapret => true,
         }
     }
 

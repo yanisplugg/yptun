@@ -160,6 +160,8 @@ object SingBoxConfig {
         // "bypass_selected" → listed processes go direct (everything else through the proxy).
         splitTunnelMode: String = SPLIT_TUNNEL_ALL,
         splitTunnelProcesses: List<String> = emptyList(),
+        // Always-direct process names in tunMode (e.g. our own process when Zapret runs in-process).
+        extraBypassProcesses: List<String> = emptyList(),
         // Desktop only, [tunMode] only: upstream server IPs carved OUT of the TUN's auto_route, so an
         // engine's own traffic never loops through the tunnel it provides. Android does this with
         // VpnService.protect(); desktop has no protect, and auto_detect_interface only binds sing-box's
@@ -564,6 +566,13 @@ object SingBoxConfig {
                         addJsonObject {
                             putJsonArray("port") { add(53) }
                             put("action", "hijack-dns")
+                        }
+                    }
+                    val extraDirectProcesses = extraBypassProcesses.filter { it.isNotBlank() }.distinct()
+                    if (tunMode && extraDirectProcesses.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("process_name") { extraDirectProcesses.forEach { add(it) } }
+                            put("outbound", directTag)
                         }
                     }
                     // Per-process split tunneling (desktop): FIRST so a per-app decision wins over

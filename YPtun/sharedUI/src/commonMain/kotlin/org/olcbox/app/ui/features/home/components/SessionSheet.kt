@@ -301,6 +301,7 @@ private fun resolveIngressProtocol(config: LocationConfig?): String {
         EngineType.MasterDns -> "MasterDNS (DNS Tunnel)"
         EngineType.OpenFlux -> "OpenFlux"
         EngineType.Snolc -> "SNOLC"
+        EngineType.Zapret -> "Zapret (DPI)"
         EngineType.Standard -> {
             val p = config.proxy
             val baseType = when (p?.type?.lowercase()) {

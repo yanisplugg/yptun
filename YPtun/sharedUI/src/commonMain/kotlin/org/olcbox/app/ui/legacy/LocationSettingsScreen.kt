@@ -4032,6 +4032,7 @@ private fun engineLabel(engine: EngineType): String = when (engine) {
     EngineType.MasterDns -> "MasterDNS"
     EngineType.OpenFlux -> "OpenFlux"
     EngineType.Snolc -> "Snolc"
+    EngineType.Zapret -> "Zapret"
 }
 
 private fun engineSubtitle(engine: EngineType): String = when (engine) {
@@ -4042,6 +4043,7 @@ private fun engineSubtitle(engine: EngineType): String = when (engine) {
     EngineType.MasterDns -> "Туннель через DNS (MasterDnsVPN: несколько резолверов + ARQ)"
     EngineType.OpenFlux -> "TCP-туннель через Яндекс Документы (старый или новый редактор) или звонок MAX до своей выходной ноды"
     EngineType.Snolc -> "Rust-туннель Noise по TCP до своей ноды (github.com/owenewans/snolc), автоустановка на VPS"
+    EngineType.Zapret -> "Локальный DPI-обход (фрагментация TLS/TCP + DoH, без сервера)"
 }
 
 private fun engineProtocolLabel(type: String): String = when (type) {

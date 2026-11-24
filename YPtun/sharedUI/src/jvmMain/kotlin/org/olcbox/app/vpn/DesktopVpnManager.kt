@@ -281,9 +281,9 @@ class DesktopVpnManager private constructor(
             org.olcbox.app.data.model.AppBehaviorSettings.PING_ICMP ->
                 if (hasProxy) return icmpPing(server)
             org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_GET ->
-                if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "GET")
+                if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "GET", isActive)
             org.olcbox.app.data.model.AppBehaviorSettings.PING_PROXY_HEAD ->
-                if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "HEAD")
+                if (hasProxy) return proxyUrlTest(config, behavior.effectivePingUrl(), "HEAD", isActive)
             else -> { /* PING_AUTO → engine-specific default below */ }
         }
         val proxyType = profile?.type
@@ -291,6 +291,8 @@ class DesktopVpnManager private constructor(
             // Obfuscated transports whose real endpoint is blocked/hidden: probe through the live
             // tunnel when connected; otherwise the best standalone probe available.
             config.engine == EngineType.VkTurn -> tunnelPing()
+            config.engine == EngineType.Zapret ->
+                if (isActive && isConnected.value) tunnelPing() else null
             proxyType == ProxyProfile.TYPE_MIERU ->
                 if (isActive && isConnected.value) tunnelPing() else (tcpPing(server, serverPort) ?: icmpPing(server))
             proxyType == ProxyProfile.TYPE_AMNEZIAWG ->
@@ -304,6 +306,8 @@ class DesktopVpnManager private constructor(
                 if (isActive && isConnected.value) tunnelPing() else tcpPing(server, serverPort)
             proxyType == ProxyProfile.TYPE_OPENVPN ->
                 if (isActive && isConnected.value) tunnelPing() else icmpPing(profile?.server.orEmpty())
+            proxyType == ProxyProfile.TYPE_NAIVE ->
+                if (isActive && isConnected.value) tunnelPing() else naiveReachabilityPing(profile)
             config.engine == EngineType.Standard || config.engine == EngineType.Chain ->
                 tcpPing(profile?.server, profile?.serverPort)
             else -> OlcRtcConnectionChecker.ping(
@@ -313,21 +317,26 @@ class DesktopVpnManager private constructor(
         }
     }
 
-    /** TCP-connect latency to host:port in ms, best of a few attempts, or null if unreachable. */
+    /** TCP-connect latency to host:port in ms (IPv4-first across resolved addrs), or null if unreachable. */
     private suspend fun tcpPing(host: String?, port: Int?): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
-        if (host.isNullOrBlank() || port == null || port !in 1..65535) return@withContext null
-        var best: Long? = null
-        repeat(TCP_PING_ATTEMPTS) {
-            val elapsed = runCatching {
-                Socket().use { socket ->
-                    val start = System.nanoTime()
-                    socket.connect(InetSocketAddress(host, port), pingTimeoutMs.toInt())
-                    (System.nanoTime() - start) / 1_000_000L
-                }
-            }.getOrNull()
-            if (elapsed != null && (best == null || elapsed < best!!)) best = elapsed
+        PingProbeHelpers.tcpPing(host, port, pingTimeoutMs.toInt(), TCP_PING_ATTEMPTS)
+    }
+
+    private suspend fun naiveReachabilityPing(profile: ProxyProfile?): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (profile == null || profile.server.isBlank() || profile.serverPort !in 1..65535) return@withContext null
+        if (profile.naiveQuic) {
+            PingProbeHelpers.tcpPing(profile.server, profile.serverPort, pingTimeoutMs.toInt(), TCP_PING_ATTEMPTS)
+                ?: icmpPing(profile.server)
+        } else {
+            PingProbeHelpers.tlsPing(
+                host = profile.server,
+                port = profile.serverPort,
+                sni = profile.sni,
+                allowInsecure = profile.allowInsecure,
+                timeoutMs = pingTimeoutMs.toInt(),
+                attempts = TCP_PING_ATTEMPTS,
+            ) ?: PingProbeHelpers.tcpPing(profile.server, profile.serverPort, pingTimeoutMs.toInt(), TCP_PING_ATTEMPTS)
         }
-        best
     }
 
     /**
@@ -460,12 +469,16 @@ class DesktopVpnManager private constructor(
      * fetches [url] through the location's proxy. AmneziaWG goes through a throwaway awg tunnel;
      * Hysteria2 isn't xray-serviceable (use Auto/ICMP). Works while disconnected.
      */
-    private suspend fun proxyUrlTest(location: LocationConfig, url: String, method: String): Long? =
-        kotlinx.coroutines.withContext(Dispatchers.IO) {
-            val profile = location.proxy ?: run {
-                addLog("Proxy $method ping: location has no proxy")
-                return@withContext null
-            }
+    private suspend fun proxyUrlTest(
+        location: LocationConfig,
+        url: String,
+        method: String,
+        isActive: Boolean = false,
+    ): Long? = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val profile = location.proxy ?: run {
+            addLog("Proxy $method ping: location has no proxy")
+            return@withContext null
+        }
             if (profile.type == ProxyProfile.TYPE_AMNEZIAWG) {
                 val awgConfig = profile.awgConfig.orEmpty()
                 if (awgConfig.isBlank()) return@withContext null
@@ -502,6 +515,25 @@ class DesktopVpnManager private constructor(
                 }
                 addLog("Proxy $method ping: Mieru is supported on Android or while connected")
                 return@withContext null
+            }
+            if (profile.type == ProxyProfile.TYPE_NAIVE) {
+                if (isActive && isConnected.value) {
+                    val socks = liveSocks()
+                    val configJson = PingProbeHelpers.buildLiveSocksPingConfig(
+                        tag = "naive-live-ping",
+                        host = socks.host,
+                        port = socks.port,
+                        username = socks.username,
+                        password = socks.password,
+                    )
+                    val ms = runCatching {
+                        org.olcbox.app.vpn.desktop.YpTunCore.xrayMeasureDelay(configJson, url, method, pingTimeoutMs.toInt())
+                    }.getOrDefault(-1L)
+                    if (ms >= 0) return@withContext ms
+                    val fallbackRtt = tunnelPing()
+                    if (fallbackRtt != null && fallbackRtt >= 0) return@withContext fallbackRtt
+                }
+                return@withContext naiveReachabilityPing(profile)
             }
             if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_OPENVPN || profile.type == ProxyProfile.TYPE_SSTP) {
                 addLog("Proxy $method ping: ${profile.type} is not supported by the Xray probe (use Auto/ICMP)")
@@ -825,7 +857,14 @@ class DesktopVpnManager private constructor(
         try {
             val ready = CompletableDeferred<Unit>()
             val startupFailure = CompletableDeferred<String>()
-            val desktopMode = if (connectionModeProvider() == AndroidConnectionMode.Proxy) {
+            val desktopMode = if (connectionModeProvider() == AndroidConnectionMode.Proxy ||
+                (DesktopMode.current() == DesktopMode.LinuxTun && location.engine == EngineType.Zapret)
+            ) {
+                if (DesktopMode.current() == DesktopMode.LinuxTun && location.engine == EngineType.Zapret &&
+                    connectionModeProvider() != AndroidConnectionMode.Proxy
+                ) {
+                    addLog("Zapret on Linux uses System Proxy mode to prevent TUN routing loops")
+                }
                 DesktopMode.SystemProxy
             } else {
                 DesktopMode.current()

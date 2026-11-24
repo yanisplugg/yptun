@@ -41,6 +41,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
+import org.olcbox.app.data.model.ZapretConfig
 import org.olcbox.app.data.model.WarpMode
 import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
@@ -180,6 +181,10 @@ class LocationViewModel(
     var editingSnolc by mutableStateOf(SnolcConfig())
         private set
 
+    /** Editable Zapret DPI-bypass settings for the [EngineType.Zapret] engine. */
+    var editingZapret by mutableStateOf(ZapretConfig())
+        private set
+
     var proxyError by mutableStateOf<String?>(null)
         private set
 
@@ -248,6 +253,7 @@ class LocationViewModel(
             EngineType.MasterDns -> masterDnsFieldsValid
             EngineType.OpenFlux -> editingOpenFlux.isComplete()
             EngineType.Snolc -> editingSnolc.isComplete()
+            EngineType.Zapret -> true
         }
 
     init {
@@ -670,6 +676,7 @@ class LocationViewModel(
         editingMasterDns = editingConfig.masterDns ?: MasterDnsConfig()
         editingOpenFlux = editingConfig.openFlux ?: OpenFluxConfig()
         editingSnolc = editingConfig.snolc ?: SnolcConfig()
+        editingZapret = editingConfig.zapret ?: ZapretConfig()
         isVlessEngine = editingConfig.engine == EngineType.Standard &&
             editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_VLESS && it.isManuallyEditableVless() }
         isSstpEngine = editingConfig.engine == EngineType.Standard &&
@@ -854,6 +861,47 @@ class LocationViewModel(
         editingConfig = editingConfig.copy(snolc = updated)
     }
 
+    /** Applies an edit to the Zapret DPI-bypass config and keeps [editingConfig] in sync. */
+    fun updateZapret(transform: (ZapretConfig) -> ZapretConfig) {
+        val updated = transform(editingZapret)
+        editingZapret = updated
+        editingConfig = editingConfig.copy(zapret = updated)
+    }
+
+    val zapretLocation: LocationItem?
+        get() = locations.firstOrNull { it.config?.engine == EngineType.Zapret }
+
+    val hasZapretLocation: Boolean
+        get() = zapretLocation != null
+
+    fun canSelectZapretForCurrentEdit(): Boolean =
+        zapretLocation.let { it == null || it.storageId == editingId }
+
+    fun createOrSelectZapretLocation(
+        onCreated: () -> Unit = {},
+        onAlreadyExists: (String) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val existing = zapretLocation
+            if (existing != null) {
+                locationsRepository.setActiveLocationId(existing.storageId)
+                loadLocations()
+                onAlreadyExists("Можно создать только 1 локацию Zapret")
+                return@launch
+            }
+            val cfg = LocationConfig(
+                name = ZapretConfig.DEFAULT_LOCATION_NAME,
+                engine = EngineType.Zapret,
+                zapret = ZapretConfig(),
+            ).normalized()
+            val id = "zapret_dpi"
+            locationsRepository.saveLocation(id, cfg)
+            locationsRepository.setActiveLocationId(id)
+            loadLocations()
+            onCreated()
+        }
+    }
+
     /** Applies an edit to the MasterDNS (DNS tunnel) config and keeps [editingConfig] in sync. */
     fun updateMasterDns(transform: (MasterDnsConfig) -> MasterDnsConfig) {
         val updated = transform(editingMasterDns)
@@ -908,6 +956,12 @@ class LocationViewModel(
             editingConfig = editingConfig.copy(snolc = editingSnolc)
         } else if (previous == EngineType.Snolc) {
             editingConfig = editingConfig.copy(snolc = null)
+        }
+        if (engine == EngineType.Zapret) {
+            editingConfig = editingConfig.copy(zapret = editingZapret)
+            if (editingName.isBlank()) editingName = ZapretConfig.DEFAULT_LOCATION_NAME
+        } else if (previous == EngineType.Zapret) {
+            editingConfig = editingConfig.copy(zapret = null)
         }
     }
 
@@ -1271,8 +1325,7 @@ class LocationViewModel(
 
     fun saveEditing(onComplete: () -> Unit) {
         validateName(editingName)
-        // olcRTC fields are only required for Stealth/Chain engines.
-        if (editingConfig.engine != EngineType.Standard) {
+        if (editingConfig.engine == EngineType.Stealth || editingConfig.engine == EngineType.Chain) {
             validateServer(editingConfig.id)
             validateKey(editingConfig.key)
         } else {
@@ -1286,6 +1339,20 @@ class LocationViewModel(
             isSaving = true
 
             val finalConfig = editingConfig.copy(name = editingName).normalized()
+
+            if (finalConfig.engine == EngineType.Zapret) {
+                val otherZapret = locations.firstOrNull {
+                    it.config?.engine == EngineType.Zapret && it.storageId != editingId
+                }
+                if (otherZapret != null) {
+                    locationsRepository.setActiveLocationId(otherZapret.storageId)
+                    loadLocations()
+                    delay(300)
+                    onComplete()
+                    isSaving = false
+                    return@launch
+                }
+            }
 
             // Dedup on add: if this is a brand-new location identical to one already saved, just select
             // the existing one instead of creating a duplicate.
@@ -1412,7 +1479,8 @@ class LocationViewModel(
             // connected) — NEVER treat them as unreachable / delete them.
             .filter {
                 it.config?.engine != EngineType.VkTurn && it.config?.engine != EngineType.MasterDns &&
-                    it.config?.engine != EngineType.OpenFlux && it.config?.engine != EngineType.Snolc
+                    it.config?.engine != EngineType.OpenFlux && it.config?.engine != EngineType.Snolc &&
+                        it.config?.engine != EngineType.Zapret
             }
             .map { it.storageId }
             .filter { pings.containsKey(it) && pings[it] == null }

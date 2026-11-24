@@ -14,7 +14,7 @@ object ConfigShareService {
      */
     fun shareLink(config: LocationConfig, universal: Boolean): String {
         val hasOwnLink = when (config.engine) {
-            EngineType.MasterDns, EngineType.OpenFlux, EngineType.Snolc -> false
+            EngineType.MasterDns, EngineType.OpenFlux, EngineType.Snolc, EngineType.Zapret -> false
             EngineType.VkTurn -> config.vkturn?.usesTurnable() != true
             else -> true
         }

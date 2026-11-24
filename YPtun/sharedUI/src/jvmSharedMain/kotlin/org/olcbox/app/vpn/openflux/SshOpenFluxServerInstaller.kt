@@ -217,6 +217,8 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
         .filter { it.type in OpenFluxConfig.SESSION_CARRIERS }
         .distinctBy { it.type }
     val multiMode = carriers.isNotEmpty()
+    val effectiveMode = options.copy(carriers = carriers).effectiveMode()
+    val isL3 = effectiveMode == OpenFluxInstallOptions.MODE_L3
     val normalizedDocUrl = OpenFluxConfig.normalizeCoordinateList(options.docUrl)
     val transport = options.transport.takeIf { it in OpenFluxConfig.TRANSPORTS } ?: OpenFluxConfig.TRANSPORT_YANDEX
     val autoCups = if (multiMode) {
@@ -226,7 +228,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
     }
 
     val envLines = mutableListOf<String>()
-    val execParts = mutableListOf("--role=exit", "--mode=l4")
+    val execParts = mutableListOf("--role=exit", "--mode=$effectiveMode")
     var directPortToOpen: Int? = null
 
     if (multiMode) {
@@ -296,6 +298,41 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
         """.trimIndent() + "\n"
     }.orEmpty()
 
+    val l3HelperPath = "/opt/openflux/l3-rst.sh"
+    val l3SetupBlock = if (isL3) {
+        """
+        if ! command -v iptables >/dev/null 2>&1; then
+          echo "ОШИБКА: для режима L3 нужен iptables, а его на сервере нет"
+          exit 1
+        fi
+        if ! command -v ip >/dev/null 2>&1; then
+          echo "ОШИБКА: для режима L3 нужна команда ip (iproute2)"
+          exit 1
+        fi
+        mkdir -p /opt/openflux
+        cat > $l3HelperPath <<'L3EOF'
+        #!/bin/sh
+        ip=${d}(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
+        [ -n "${d}ip" ] || exit 0
+        rule="OUTPUT -p tcp --tcp-flags RST RST -s ${d}ip -j DROP"
+        case "$1" in
+          add) iptables -C ${d}rule 2>/dev/null || iptables -A ${d}rule ;;
+          del) while iptables -D ${d}rule 2>/dev/null; do :; done ;;
+        esac
+        exit 0
+        L3EOF
+        chmod 755 $l3HelperPath
+        """.trimIndent() + "\n"
+    } else {
+        "rm -f $l3HelperPath\n"
+    }
+    val l3UnitHooks = if (isL3) {
+        "ExecStartPre=$l3HelperPath add\nExecStopPost=$l3HelperPath del\n"
+    } else {
+        ""
+    }
+    val modeLabel = if (isL3) "L3" else "L4"
+
     val postStartBlock = if (autoCups) {
         val envUpdate = if (multiMode) {
             """
@@ -332,7 +369,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
         $envUpdate
         systemctl daemon-reload
         echo "${ROOMS_MARK}${d}rooms"
-        systemctl is-active openflux && echo "Служба openflux активна (создано комнат cups.online: $cupsRooms)"
+        systemctl is-active openflux && echo "Служба openflux активна (режим $modeLabel, создано комнат cups.online: $cupsRooms)"
         """.trimIndent()
     } else {
         val statusLabel = if (multiMode) {
@@ -351,7 +388,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
           fi
           exit 1
         fi
-        systemctl is-active openflux && echo "Служба openflux активна ($statusLabel)"
+        systemctl is-active openflux && echo "Служба openflux активна ($statusLabel, режим $modeLabel)"
         """.trimIndent()
     }
 
@@ -367,6 +404,9 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
               systemctl disable --now openflux >/dev/null 2>&1 || true
               rm -f /etc/systemd/system/openflux.service
             fi
+            if [ -x $l3HelperPath ]; then
+              $l3HelperPath del >/dev/null 2>&1 || true
+            fi
             if command -v iptables >/dev/null 2>&1; then
               while iptables -D $rst 2>/dev/null; do :; done
             fi
@@ -377,6 +417,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
             """.trimIndent()
         )
         append('\n')
+        append(l3SetupBlock)
         append(keyBlock)
         append(ufwBlock)
         append("cat > /etc/openflux/openflux.env <<'ENVFILE'\n")
@@ -391,7 +432,7 @@ internal fun buildOpenFluxInstallScript(options: OpenFluxInstallOptions): String
             Wants=network-online.target
             [Service]
             EnvironmentFile=/etc/openflux/openflux.env
-            ExecStart=/usr/local/bin/openflux $execArgs
+            ${l3UnitHooks}ExecStart=/usr/local/bin/openflux $execArgs
             Restart=always
             RestartSec=60
             [Install]

@@ -934,6 +934,22 @@ fun HomeScreen(
                     isAddSheetOpen = false
                     onAddNaiveLocation()
                 },
+                hasZapretLocation = locationViewModel.hasZapretLocation,
+                onCreateZapret = {
+                    isAddSheetOpen = false
+                    locationViewModel.createOrSelectZapretLocation(
+                        onCreated = {
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Создана локация Zapret (DPI)")
+                            }
+                        },
+                        onAlreadyExists = { msg ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    )
+                },
                 freeServersSettings = appBehavior,
                 onFreeServersSettingsChanged = onAppBehaviorChanged
             )
