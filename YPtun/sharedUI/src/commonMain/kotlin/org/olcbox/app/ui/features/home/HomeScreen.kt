@@ -116,6 +116,7 @@ fun HomeScreen(
     // «Создать вручную»: a new location that starts on the picked engine (AmneziaWG/WG = Standard + wireguard).
     onAddLocationOfType: (engine: EngineType, wireguard: Boolean) -> Unit = { _, _ -> onAddLocation() },
     onAddVlessLocation: () -> Unit = onAddLocation,
+    onAddHysteria2Location: () -> Unit = onAddLocation,
     onAddSstpLocation: () -> Unit = onAddLocation,
     onAddNaiveLocation: () -> Unit = onAddLocation,
     onAddTurnableLocation: () -> Unit = onAddLocation,
@@ -920,6 +921,10 @@ fun HomeScreen(
                 onCreateVless = {
                     isAddSheetOpen = false
                     onAddVlessLocation()
+                },
+                onCreateHysteria2 = {
+                    isAddSheetOpen = false
+                    onAddHysteria2Location()
                 },
                 onCreateSstp = {
                     isAddSheetOpen = false

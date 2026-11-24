@@ -88,6 +88,7 @@ fun AddConfigurationSheet(
     onStartFreeServers: (limit: Int) -> Unit,
     onCreateManual: (engine: EngineType, wireguard: Boolean) -> Unit,
     onCreateVless: () -> Unit = {},
+    onCreateHysteria2: () -> Unit = {},
     onCreateSstp: () -> Unit = {},
     onCreateNaive: () -> Unit = {},
     onCreateTurnable: () -> Unit = {},
@@ -136,6 +137,7 @@ fun AddConfigurationSheet(
                         onBack = { page = AddPage.Main },
                         onPick = onCreateManual,
                         onPickVless = onCreateVless,
+                        onPickHysteria2 = onCreateHysteria2,
                         onPickSstp = onCreateSstp,
                         onPickNaive = onCreateNaive,
                         onPickTurnable = onCreateTurnable,
@@ -380,6 +382,7 @@ private fun ManualTypePage(
     onBack: () -> Unit,
     onPick: (EngineType, Boolean) -> Unit,
     onPickVless: () -> Unit,
+    onPickHysteria2: () -> Unit,
     onPickSstp: () -> Unit,
     onPickNaive: () -> Unit,
     onPickTurnable: () -> Unit,
@@ -413,6 +416,8 @@ private fun ManualTypePage(
     SettingsCaption(s.manualOwnServer)
     SettingsCard {
         SettingsCardRow("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickVless() }
+        SettingsCardDivider()
+        SettingsCardRow("Hysteria 2", "Свой Hysteria 2 сервер (QUIC): вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickHysteria2() }
         SettingsCardDivider()
         SettingsCardRow("SSTP", "Свой SSTP-сервер: вставьте ссылку или заполните поля вручную", icon = Icons.Outlined.Public) { onPickSstp() }
         SettingsCardDivider()

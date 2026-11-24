@@ -143,4 +143,72 @@ class SstpEditorTest {
             Dispatchers.resetMain()
         }
     }
+
+    @Test
+    fun fieldsBuildACompleteHysteria2Profile() {
+        Dispatchers.setMain(StandardTestDispatcher())
+        try {
+            val vm = LocationViewModel(LocationsRepositoryImpl(Source()))
+            vm.startEditing(null)
+            vm.onHysteria2EngineSelected()
+            assertTrue(vm.isHysteria2Engine)
+            assertEquals(EngineType.Standard, vm.editingConfig.engine)
+
+            vm.editHysteria2 {
+                it.copy(
+                    server = "hy2.example.com",
+                    serverPort = 443,
+                    password = "mypassword",
+                    sni = "sni.example.com",
+                    alpn = listOf("h3"),
+                    hy2Obfs = "salamander",
+                    hy2ObfsPassword = "obfspassword",
+                    hy2UpMbps = 100,
+                    hy2DownMbps = 200,
+                    hy2Ports = "443,5000-6000",
+                    allowInsecure = true
+                )
+            }
+            val p = vm.editingConfig.proxy
+            assertNotNull(p)
+            assertTrue(p.isComplete())
+            assertEquals(ProxyProfile.TYPE_HYSTERIA2, p.type)
+            assertEquals("hy2.example.com", p.server)
+            assertEquals(443, p.serverPort)
+            assertEquals("mypassword", p.password)
+            assertEquals("sni.example.com", p.sni)
+            assertEquals(listOf("h3"), p.alpn)
+            assertEquals("salamander", p.hy2Obfs)
+            assertEquals("obfspassword", p.hy2ObfsPassword)
+            assertEquals(100, p.hy2UpMbps)
+            assertEquals(200, p.hy2DownMbps)
+            assertEquals("443,5000-6000", p.hy2Ports)
+            assertTrue(p.allowInsecure)
+
+            val link = vm.editingProxyLink
+            assertTrue(link.startsWith("hysteria2://mypassword@hy2.example.com:443"))
+            assertTrue(link.contains("sni=sni.example.com"))
+            assertTrue(link.contains("alpn=h3"))
+            assertTrue(link.contains("obfs=salamander"))
+            assertTrue(link.contains("obfs-password=obfspassword"))
+            assertTrue(link.contains("insecure=1"))
+
+            val parsed = ShareLinkParser.parse(link)
+            assertNotNull(parsed)
+            assertEquals(ProxyProfile.TYPE_HYSTERIA2, parsed.type)
+            assertEquals("hy2.example.com", parsed.server)
+            assertEquals(443, parsed.serverPort)
+            assertEquals("mypassword", parsed.password)
+            assertEquals("sni.example.com", parsed.sni)
+            assertEquals(listOf("h3"), parsed.alpn)
+            assertEquals("salamander", parsed.hy2Obfs)
+            assertEquals("obfspassword", parsed.hy2ObfsPassword)
+            assertEquals(100, parsed.hy2UpMbps)
+            assertEquals(200, parsed.hy2DownMbps)
+            assertEquals("443,5000-6000", parsed.hy2Ports)
+            assertTrue(parsed.allowInsecure)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
 }

@@ -287,6 +287,7 @@ fun LocationSettingsScreen(
             selected = config.engine,
             wireguard = viewModel.isWireguardEngine,
             vless = viewModel.isVlessEngine,
+            hysteria2 = viewModel.isHysteria2Engine,
             sstp = viewModel.isSstpEngine,
             naive = viewModel.isNaiveEngine,
             onDismiss = { showEnginePicker = false },
@@ -301,6 +302,10 @@ fun LocationSettingsScreen(
             onVless = {
                 showEnginePicker = false
                 viewModel.onVlessEngineSelected()
+            },
+            onHysteria2 = {
+                showEnginePicker = false
+                viewModel.onHysteria2EngineSelected()
             },
             onSstp = {
                 showEnginePicker = false
@@ -437,6 +442,7 @@ fun LocationSettingsScreen(
                                 config.engine,
                                 viewModel.isWireguardEngine,
                                 viewModel.isVlessEngine,
+                                viewModel.isHysteria2Engine,
                                 viewModel.isSstpEngine,
                                 viewModel.isNaiveEngine
                             ),
@@ -502,6 +508,19 @@ fun LocationSettingsScreen(
                 // and is applied as-is. Only the core options + the optional second (cascade) proxy show.
                 if (!viewModel.isWireguardEngine && (viewModel.editingId == null || allowConfigEditing)) {
                     when {
+                        viewModel.isHysteria2Engine || config.proxy?.type == ProxyProfile.TYPE_HYSTERIA2 -> {
+                            item {
+                                ProxyField(
+                                    title = "Hysteria 2",
+                                    subtitle = "Ссылка hysteria2:// или параметры ниже",
+                                    link = viewModel.editingProxyLink,
+                                    currentProxy = config.proxy,
+                                    error = viewModel.proxyError,
+                                    enabled = !isSaving,
+                                    onChange = viewModel::onProxyLinkChanged
+                                )
+                            }
+                        }
                         viewModel.isSstpEngine || config.proxy?.type == ProxyProfile.TYPE_SSTP -> {
                             item {
                                 ProxyField(
@@ -545,6 +564,9 @@ fun LocationSettingsScreen(
                 }
                 if (allowConfigEditing && !viewModel.isWireguardEngine) {
                     when {
+                        viewModel.isHysteria2Engine || config.proxy.isManuallyEditableHysteria2() -> {
+                            item { Hysteria2Editor(config.proxy, enabled = !isSaving, onEdit = viewModel::editHysteria2) }
+                        }
                         viewModel.isSstpEngine || config.proxy.isManuallyEditableSstp() -> {
                             item { SstpEditor(config.proxy, enabled = !isSaving, onEdit = viewModel::editSstp) }
                         }
@@ -4303,12 +4325,14 @@ private fun engineDisplayName(
     engine: EngineType,
     wireguard: Boolean,
     vless: Boolean,
+    hysteria2: Boolean = false,
     sstp: Boolean = false,
     naive: Boolean = false
 ): String {
     val s = LocalStrings.current
     return when {
         wireguard -> "AmneziaWG / WireGuard"
+        hysteria2 -> "Hysteria 2"
         sstp -> "SSTP"
         naive -> "NaïveProxy"
         vless -> "VLESS"
@@ -4329,12 +4353,14 @@ private fun EnginePickerSheet(
     selected: EngineType,
     wireguard: Boolean,
     vless: Boolean,
+    hysteria2: Boolean = false,
     sstp: Boolean = false,
     naive: Boolean = false,
     onDismiss: () -> Unit,
     onSelected: (EngineType) -> Unit,
     onWireguard: () -> Unit,
     onVless: () -> Unit,
+    onHysteria2: () -> Unit = {},
     onSstp: () -> Unit = {},
     onNaive: () -> Unit = {}
 ) {
@@ -4376,9 +4402,11 @@ private fun EnginePickerSheet(
             Text(s.engineTypeTitle, style = MaterialTheme.typography.headlineSmall)
             SettingsCaption(s.engineGroupProxy)
             SettingsCard {
-                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard && !vless && !sstp && !naive) { onSelected(EngineType.Standard) }
+                option(s.engineStandardName, s.engineStandardDesc, selected == EngineType.Standard && !wireguard && !vless && !sstp && !naive && !hysteria2) { onSelected(EngineType.Standard) }
                 SettingsCardDivider()
                 option("VLESS", "Свой VLESS-сервер: вставьте ссылку или заполните поля вручную", vless) { onVless() }
+                SettingsCardDivider()
+                option("Hysteria 2", "Свой Hysteria 2 сервер (QUIC): вставьте ссылку или заполните поля вручную", hysteria2) { onHysteria2() }
                 SettingsCardDivider()
                 option("SSTP", "Свой SSTP-сервер: вставьте ссылку или заполните поля вручную", sstp) { onSstp() }
                 SettingsCardDivider()

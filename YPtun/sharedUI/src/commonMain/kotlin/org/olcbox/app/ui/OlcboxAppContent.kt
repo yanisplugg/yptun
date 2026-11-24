@@ -214,6 +214,11 @@ fun OlcboxAppContent(
                             locationViewModel.onVlessEngineSelected()
                             onNavigate(AppScreen.LocationSettings(null))
                         },
+                        onAddHysteria2Location = {
+                            locationViewModel.startEditing(null)
+                            locationViewModel.onHysteria2EngineSelected()
+                            onNavigate(AppScreen.LocationSettings(null))
+                        },
                         onAddSstpLocation = {
                             locationViewModel.startEditing(null)
                             locationViewModel.onSstpEngineSelected()

@@ -676,6 +676,8 @@ class LocationViewModel(
             editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_SSTP && it.isManuallyEditableSstp() }
         isNaiveEngine = editingConfig.engine == EngineType.Standard &&
             editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_NAIVE && it.isManuallyEditableNaive() }
+        isHysteria2Engine = editingConfig.engine == EngineType.Standard &&
+            editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_HYSTERIA2 && it.isManuallyEditableHysteria2() }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
             LocationConfig.DEFAULT_BYPASS_PROVIDER
@@ -863,6 +865,7 @@ class LocationViewModel(
         isVlessEngine = false
         isSstpEngine = false
         isNaiveEngine = false
+        isHysteria2Engine = false
         if (isWireguardEngine) {
             // Leaving AmneziaWG/WG: hand back the proxy it replaced (nothing for a location that was always WG).
             editingConfig = editingConfig.copy(proxy = wgStashedProxy)
@@ -936,6 +939,16 @@ class LocationViewModel(
         proxyError = null
     }
 
+    /** Manual Hysteria 2 form: applies [edit] to the main proxy (a fresh Hysteria 2 profile when there is none). */
+    fun editHysteria2(edit: (ProxyProfile) -> ProxyProfile) {
+        val current = editingConfig.proxy?.takeIf { it.type == ProxyProfile.TYPE_HYSTERIA2 }
+            ?: ProxyProfile(type = ProxyProfile.TYPE_HYSTERIA2, serverPort = 443, security = ProxyProfile.SECURITY_TLS)
+        val profile = edit(current).copy(type = ProxyProfile.TYPE_HYSTERIA2, security = ProxyProfile.SECURITY_TLS)
+        editingConfig = editingConfig.copy(proxy = profile)
+        editingProxyLink = ShareLinkComposer.compose(profile).orEmpty()
+        proxyError = null
+    }
+
     /** Parses a pasted proxy share link or raw sing-box outbound into [editingConfig].proxy. */
     fun onProxyLinkChanged(value: String) {
         editingProxyLink = value
@@ -951,6 +964,7 @@ class LocationViewModel(
             if (profile.type == ProxyProfile.TYPE_VLESS) isVlessEngine = true
             if (profile.type == ProxyProfile.TYPE_SSTP) isSstpEngine = true
             if (profile.type == ProxyProfile.TYPE_NAIVE) isNaiveEngine = true
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2) isHysteria2Engine = true
             proxyError = null
         } else {
             editingConfig = editingConfig.copy(proxy = null)
@@ -995,6 +1009,7 @@ class LocationViewModel(
         isVlessEngine = true
         isSstpEngine = false
         isNaiveEngine = false
+        isHysteria2Engine = false
     }
 
     /** The «SSTP» entry of the type picker: a Standard location whose main proxy is a hand-made SSTP. */
@@ -1013,6 +1028,7 @@ class LocationViewModel(
         isSstpEngine = true
         isVlessEngine = false
         isNaiveEngine = false
+        isHysteria2Engine = false
     }
 
     /** The «Naïve» entry of the type picker: a Standard location whose main proxy is a hand-made Naïve. */
@@ -1031,6 +1047,26 @@ class LocationViewModel(
         isNaiveEngine = true
         isVlessEngine = false
         isSstpEngine = false
+        isHysteria2Engine = false
+    }
+
+    /** The «Hysteria 2» entry of the type picker: a Standard location whose main proxy is a hand-made Hysteria 2. */
+    var isHysteria2Engine by mutableStateOf(false)
+        private set
+
+    fun onHysteria2EngineSelected() {
+        if (isHysteria2Engine) return
+        onEngineChanged(EngineType.Standard)
+        if (editingConfig.proxy?.type != ProxyProfile.TYPE_HYSTERIA2) {
+            val hy2Profile = ProxyProfile(type = ProxyProfile.TYPE_HYSTERIA2, serverPort = 443, security = ProxyProfile.SECURITY_TLS)
+            editingConfig = editingConfig.copy(proxy = hy2Profile)
+            editingProxyLink = ShareLinkComposer.compose(hy2Profile).orEmpty()
+            proxyError = null
+        }
+        isHysteria2Engine = true
+        isVlessEngine = false
+        isSstpEngine = false
+        isNaiveEngine = false
     }
 
     /** Picks the AmneziaWG/WG engine: an empty AmneziaWG template to fill in or paste over. */
