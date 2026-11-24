@@ -393,6 +393,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
 
             setActivePlan(newPlan)
+            resetWatchdogFailures()
             CoreapiFreeOSMemory()
             log("Fast switch to \(newPlan.displayName) succeeded cleanly")
             completion("ok")
@@ -609,26 +610,32 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         pathMonitor = monitor
     }
 
-    /// Soft-restarts ONLY the active proxy engine (sing-box / xray / mieru) in-place while
+    /// Soft-restarts active network engines (AmneziaWG / sing-box / xray / mieru / wdtt) in-place while
     /// keeping `utun` and `hev-socks5-tunnel` alive. Fixes the iOS "10-minute sleep" freeze
-    /// and Wi-Fi <-> LTE handoff drops by discarding stale NAT / HTTP2 / xmux sockets.
+    /// and Wi-Fi <-> LTE handoff drops by discarding stale NAT / UDP / HTTP2 sockets.
     private func refreshProxyAfterNetworkChange(reason: String) {
         if CoreapiWdttRunning() {
             log("Resetting WDTT sessions on network change: \(reason)")
             CoreapiWdttResetSessions(reason)
         }
-        let proxyToRefresh: AppleProxyRuntimePlan
+        let proxyToRefresh: AppleProxyRuntimePlan?
+        let awgToRefresh: AppleAmneziaWgRuntimePlan?
         lock.lock()
-        guard running, !isRefreshing, let proxy = activePlan?.proxy else {
+        guard running, !isRefreshing else {
             lock.unlock()
             return
         }
-        if let lastRefresh = lastRefreshAt, Date().timeIntervalSince(lastRefresh) < 15 {
+        proxyToRefresh = activePlan?.proxy
+        awgToRefresh = activePlan?.amneziaWg
+        if proxyToRefresh == nil && (awgToRefresh == nil || !CoreapiAwgRunning()) {
+            lock.unlock()
+            return
+        }
+        if let lastRefresh = lastRefreshAt, Date().timeIntervalSince(lastRefresh) < 5 {
             lock.unlock()
             return
         }
         isRefreshing = true
-        proxyToRefresh = proxy
         lock.unlock()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -640,25 +647,41 @@ final class NativeTunnelRuntime: @unchecked Sendable {
                 self.lock.unlock()
             }
             guard self.isRunning else { return }
-            self.log("Soft-refreshing proxy core (\(reason))...")
-            do {
-                switch proxyToRefresh.kind {
-                case .singBox:
-                    CoreapiSbStop()
-                    try self.callCore { CoreapiSbStart(proxyToRefresh.config, $0) }
-                case .xray:
-                    CoreapiXrayStop()
-                    try self.startXrayWithIOSLimits(config: proxyToRefresh.config)
-                case .mieru:
-                    CoreapiMieruStop()
+            if let awg = awgToRefresh, CoreapiAwgRunning() {
+                self.log("Refreshing AmneziaWG core (\(reason))...")
+                CoreapiAwgStop()
+                do {
                     try self.callCore {
-                        CoreapiMieruStart(proxyToRefresh.config, "127.0.0.1:\(proxyToRefresh.listenPort)", $0)
+                        CoreapiAwgStart(awg.iniConfig, awg.listenAddress, $0)
                     }
+                    self.resetWatchdogFailures()
+                    self.log("AmneziaWG core refreshed cleanly (\(reason))")
+                } catch {
+                    self.log("AmneziaWG core refresh failed (\(reason)): \(error.localizedDescription)")
                 }
-                CoreapiFreeOSMemory()
-                self.log("Proxy core refreshed cleanly (\(reason))")
-            } catch {
-                self.log("Proxy core refresh failed (\(reason)): \(error.localizedDescription)")
+            }
+            if let proxyToRefresh {
+                self.log("Soft-refreshing proxy core (\(reason))...")
+                do {
+                    switch proxyToRefresh.kind {
+                    case .singBox:
+                        CoreapiSbStop()
+                        try self.callCore { CoreapiSbStart(proxyToRefresh.config, $0) }
+                    case .xray:
+                        CoreapiXrayStop()
+                        try self.startXrayWithIOSLimits(config: proxyToRefresh.config)
+                    case .mieru:
+                        CoreapiMieruStop()
+                        try self.callCore {
+                            CoreapiMieruStart(proxyToRefresh.config, "127.0.0.1:\(proxyToRefresh.listenPort)", $0)
+                        }
+                    }
+                    self.resetWatchdogFailures()
+                    CoreapiFreeOSMemory()
+                    self.log("Proxy core refreshed cleanly (\(reason))")
+                } catch {
+                    self.log("Proxy core refresh failed (\(reason)): \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -1279,7 +1302,6 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private func startWatchdog(_ plan: AppleNativeRuntimePlan) {
         watchdog?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        let slow = !plan.auxiliary.isEmpty || plan.turnable != nil || plan.snolc != nil || plan.csqtt != nil || plan.proxy?.kind == .mieru
         resetWatchdogFailures()
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in
@@ -1287,17 +1309,19 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             if os_proc_available_memory() < 16 * 1024 * 1024 {
                 CoreapiFreeOSMemory()
             }
-            if plan.snolc != nil {
+            guard let currentPlan = self.activePlan else { return }
+            if currentPlan.snolc != nil {
                 self.flushSnolcLog()
             }
             if self.isCurrentlyRefreshing {
                 return
             }
-            if self.coresRunning(plan) {
+            if self.coresRunning(currentPlan) {
                 self.resetWatchdogFailures()
                 return
             }
-            let limit = slow ? 6 : 3
+            let isSlow = !currentPlan.auxiliary.isEmpty || currentPlan.turnable != nil || currentPlan.snolc != nil || currentPlan.csqtt != nil || currentPlan.proxy?.kind == .mieru
+            let limit = isSlow ? 6 : 3
             let failures = self.incrementWatchdogFailures()
             try? AppleTunnelStore.appendLog("Core health check failed (\(failures)/\(limit))")
             guard failures >= limit else { return }

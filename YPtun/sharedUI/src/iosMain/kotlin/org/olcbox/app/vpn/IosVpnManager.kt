@@ -150,6 +150,7 @@ class IosVpnManager(
     private var connectGeneration = 0L
     private var inFlightLocationId: String? = null
     private var connectedLocationId: String? = null
+    private var isRestartingTunnel = false
     private var lastStartEpochMs: Long = 0L
     private var lastKnownActiveLocation: LocationConfig? = null
 
@@ -339,6 +340,7 @@ class IosVpnManager(
                     if (connection.status != platform.NetworkExtension.NEVPNStatusDisconnected &&
                         connection.status != platform.NetworkExtension.NEVPNStatusInvalid
                     ) {
+                        isRestartingTunnel = true
                         connection.stopVPNTunnel()
                         awaitDisconnected(m)
                         // Give PacketTunnelProvider's post-stopTunnel exit(0) (150ms) time to finish
@@ -348,19 +350,31 @@ class IosVpnManager(
                         manager = null
                         m = loadManager(createIfMissing = true) ?: m
                     }
-                    if (requestedGeneration != connectGeneration) return@withLock
+                    if (requestedGeneration != connectGeneration) {
+                        isRestartingTunnel = false
+                        return@withLock
+                    }
                     var started = false
                     for (attempt in 0..3) {
-                        if (requestedGeneration != connectGeneration) return@withLock
+                        if (requestedGeneration != connectGeneration) {
+                            isRestartingTunnel = false
+                            return@withLock
+                        }
                         var waitCount = 0
-                        while (m.connection.status == platform.NetworkExtension.NEVPNStatusDisconnecting && waitCount < 25) {
-                            delay(200)
+                        while (m.connection.status == platform.NetworkExtension.NEVPNStatusDisconnecting && waitCount < 10) {
+                            delay(150)
+                            runCatching {
+                                suspendCancellableCoroutine<Unit> { cont ->
+                                    m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                                }
+                            }
                             waitCount++
                         }
                         memScoped {
                             val err = alloc<ObjCObjectVar<NSError?>>()
                             if (m.connection.startVPNTunnelAndReturnError(err.ptr)) {
                                 started = true
+                                isRestartingTunnel = false
                             } else {
                                 if (attempt < 3) {
                                     delay(400L * (attempt + 1))
@@ -370,6 +384,7 @@ class IosVpnManager(
                                         }
                                     }
                                 } else {
+                                    isRestartingTunnel = false
                                     error(err.value?.localizedDescription ?: "VPN start failed")
                                 }
                             }
@@ -377,7 +392,10 @@ class IosVpnManager(
                         if (started) break
                     }
                 }
-                if (requestedGeneration != connectGeneration) return@withLock
+                if (requestedGeneration != connectGeneration) {
+                    isRestartingTunnel = false
+                    return@withLock
+                }
                 result.onSuccess {
                     connectWatchdogJob?.cancel()
                     val expectedGeneration = requestedGeneration
@@ -393,6 +411,7 @@ class IosVpnManager(
                     }
                 }
                 result.onFailure {
+                    isRestartingTunnel = false
                     if (requestedGeneration == connectGeneration) {
                         inFlightLocationId = null
                     }
@@ -411,6 +430,7 @@ class IosVpnManager(
 
     override fun stopVpn() {
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight)
+        isRestartingTunnel = false
         inFlightLocationId = null
         connectedLocationId = null
         connectGeneration++
@@ -1175,6 +1195,9 @@ class IosVpnManager(
                 manager?.let { watchCaptcha(it) }
             }
             NEVPNStatusConnected -> {
+                if (isRestartingTunnel) {
+                    return
+                }
                 connectWatchdogJob?.cancel()
                 wasConnecting = false
                 _connectedSince.value = conn.connectedDate
@@ -1201,12 +1224,16 @@ class IosVpnManager(
                 }
             }
             NEVPNStatusReasserting -> setStatus(VpnStatus.Reconnecting)
-            NEVPNStatusDisconnecting -> setStatus(VpnStatus.Stopping)
+            NEVPNStatusDisconnecting -> {
+                if (!isRestartingTunnel && connectJob?.isActive != true) {
+                    setStatus(VpnStatus.Stopping)
+                }
+            }
             else -> {
                 connectWatchdogJob?.cancel()
                 val wasConnected = _status.value == VpnStatus.Connected
                 _connectedSince.value = 0L
-                val isReconnecting = connectJob?.isActive == true
+                val isReconnecting = isRestartingTunnel || connectJob?.isActive == true
                 if (!isReconnecting) {
                     inFlightLocationId = null
                     connectedLocationId = null
