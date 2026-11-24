@@ -64,6 +64,18 @@ class HomeScreenViewModel(
     val state get() = _state.asStateFlow()
     val logs get() = vpnManager.logs
 
+    private var vpnLoadingWatchdogJob: kotlinx.coroutines.Job? = null
+
+    private fun startVpnLoadingWatchdog() {
+        vpnLoadingWatchdogJob?.cancel()
+        vpnLoadingWatchdogJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(15_000L)
+            if (_state.value.isVpnLoading) {
+                _state.update { it.copy(isVpnLoading = false) }
+            }
+        }
+    }
+
     init {
         loadCurrentConfig()
         startSubscriptionAutoRefresh()
@@ -79,6 +91,7 @@ class HomeScreenViewModel(
 
         viewModelScope.launch {
             vpnManager.status.collect { status ->
+                vpnLoadingWatchdogJob?.cancel()
                 _state.update {
                     when (status) {
                         VpnStatus.Connected -> it.copy(isVpnConnected = true, isVpnLoading = false)
@@ -191,6 +204,7 @@ class HomeScreenViewModel(
 
         viewModelScope.launch {
             _state.update { it.copy(isVpnLoading = true, connectError = null) }
+            startVpnLoadingWatchdog()
             try {
                 if (_state.value.isVpnConnected || vpnManager.status.value is VpnStatus.Connected) {
                     vpnManager.stopVpn()
@@ -307,6 +321,7 @@ class HomeScreenViewModel(
             VpnStatus.Connecting,
             VpnStatus.Reconnecting -> viewModelScope.launch {
                 _state.update { it.copy(isVpnLoading = true, connectError = null) }
+                startVpnLoadingWatchdog()
                 vpnManager.startVpn()
             }
 
@@ -317,6 +332,7 @@ class HomeScreenViewModel(
                 if (forceIfError) {
                     viewModelScope.launch {
                         _state.update { it.copy(isVpnLoading = true, connectError = null) }
+                        startVpnLoadingWatchdog()
                         vpnManager.startVpn()
                     }
                 } else {

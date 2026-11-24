@@ -269,24 +269,6 @@ class IosVpnManager(
     }
 
     override fun startVpn() {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-        if (now - lastStartEpochMs < 400L) {
-            return
-        }
-        lastStartEpochMs = now
-
-        val targetId = lastKnownActiveLocation?.let { it.id.ifBlank { it.displayName() } }
-        if (connectJob?.isActive == true && inFlightLocationId != null && inFlightLocationId == targetId) {
-            return
-        }
-
-        val currentManager = manager
-        val isActuallyConnected = currentManager?.connection?.status == NEVPNStatusConnected
-        if (isActuallyConnected && connectedLocationId != null && connectedLocationId == targetId && _status.value == VpnStatus.Connected) {
-            return
-        }
-
-        inFlightLocationId = targetId
         triggerImpactHaptic(UIImpactFeedbackStyle.UIImpactFeedbackStyleMedium)
         val requestedGeneration = ++connectGeneration
         connectJob?.cancel()
@@ -309,6 +291,8 @@ class IosVpnManager(
 
                 // Redundant start: already connected to this exact location
                 if (isConn && connectedLocationId == currentTargetId && _status.value == VpnStatus.Connected) {
+                    _status.value = VpnStatus.Reconnecting
+                    setStatus(VpnStatus.Connected)
                     return@withLock
                 }
 
@@ -1222,28 +1206,38 @@ class IosVpnManager(
                 connectWatchdogJob?.cancel()
                 val wasConnected = _status.value == VpnStatus.Connected
                 _connectedSince.value = 0L
-                inFlightLocationId = null
-                connectedLocationId = null
+                val isReconnecting = connectJob?.isActive == true
+                if (!isReconnecting) {
+                    inFlightLocationId = null
+                    connectedLocationId = null
+                }
                 val failure = IosSharedStore.readText(IosTunnelSession.ERROR_FILE)?.trim().orEmpty()
                 if (wasConnecting && failure.isNotEmpty()) {
                     setStatus(VpnStatus.Error(failure))
-                } else {
+                } else if (!isReconnecting) {
                     setStatus(VpnStatus.Disconnected)
                 }
-                if (wasConnected) {
+                if (wasConnected && !isReconnecting) {
                     NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.vpn.disconnected", null)
                 }
-                wasConnecting = false
+                if (!isReconnecting) {
+                    wasConnecting = false
+                }
             }
         }
     }
 
     private suspend fun awaitDisconnected(m: NETunnelProviderManager) {
-        // TrustTunnel teardown (stopping DNS proxies + event loop + vpn_close) can take 2–4s;
-        // wait up to 6s so startVPNTunnel never collides with a dying extension process.
-        repeat(60) {
+        repeat(20) {
+            runCatching {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    m.loadFromPreferencesWithCompletionHandler { cont.resume(Unit) }
+                }
+            }
             val s = m.connection.status
-            if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) return
+            if (s == platform.NetworkExtension.NEVPNStatusDisconnected || s == platform.NetworkExtension.NEVPNStatusInvalid) {
+                return
+            }
             delay(100)
         }
     }

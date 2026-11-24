@@ -220,21 +220,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             return
         }
         CoreapiFreeOSMemory()
-        guard let sleepDate else {
-            log("Device woke up")
-            return
+        let sleptSeconds = sleepDate.map { Int(Date().timeIntervalSince($0)) } ?? -1
+        log("Device woke up (slept: \(sleptSeconds >= 0 ? "\(sleptSeconds)s" : "unknown"))")
+        if CoreapiWdttRunning() {
+            log("Device woke up; resetting WDTT sessions...")
+            CoreapiWdttResetSessions("device wake")
         }
-        let sleptSeconds = Date().timeIntervalSince(sleepDate)
-        log("Device woke up after \(Int(sleptSeconds))s sleep")
-        // After ~30s+ of iOS screen-off sleep, carrier NAT / Wi-Fi routers often silently
-        // drop idle UDP/TCP sockets, and TURN allocations expire.
-        if sleptSeconds >= 30 {
-            if CoreapiWdttRunning() {
-                log("Device woke up after \(Int(sleptSeconds))s; resetting WDTT sessions...")
-                CoreapiWdttResetSessions("wake after \(Int(sleptSeconds))s sleep")
-            }
-            refreshProxyAfterNetworkChange(reason: "wake after \(Int(sleptSeconds))s sleep")
-        }
+        refreshProxyAfterNetworkChange(reason: "device wake")
     }
 
     func handle(message: String, completion: @escaping @Sendable (String) -> Void) {
@@ -621,6 +613,10 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     /// keeping `utun` and `hev-socks5-tunnel` alive. Fixes the iOS "10-minute sleep" freeze
     /// and Wi-Fi <-> LTE handoff drops by discarding stale NAT / HTTP2 / xmux sockets.
     private func refreshProxyAfterNetworkChange(reason: String) {
+        if CoreapiWdttRunning() {
+            log("Resetting WDTT sessions on network change: \(reason)")
+            CoreapiWdttResetSessions(reason)
+        }
         let proxyToRefresh: AppleProxyRuntimePlan
         lock.lock()
         guard running, !isRefreshing, let proxy = activePlan?.proxy else {
