@@ -1121,7 +1121,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             // URL test isn't available (use Auto/ICMP ping mode instead — Auto's TCP probe still
             // reaches a naive server's HTTPS port).
             if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_NAIVE ||
-                profile.type == ProxyProfile.TYPE_OPENVPN
+                profile.type == ProxyProfile.TYPE_OPENVPN || profile.type == ProxyProfile.TYPE_SSTP
             ) {
                 OlcboxVpnState.addLog("Proxy $method ping: ${profile.type} not supported (use Auto/ICMP)")
                 return@withContext null

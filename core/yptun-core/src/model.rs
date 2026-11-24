@@ -78,6 +78,7 @@ pub const TYPE_AMNEZIAWG: &str = "amneziawg";
 pub const TYPE_TRUSTTUNNEL: &str = "trusttunnel";
 pub const TYPE_HYSTERIA2: &str = "hysteria2";
 pub const TYPE_NAIVE: &str = "naive";
+pub const TYPE_SSTP: &str = "sstp";
 /// sing-box 1.14 OpenVPN client endpoint (JSON is stored in `raw_outbound`).
 pub const TYPE_OPENVPN: &str = "openvpn-client";
 
@@ -281,7 +282,7 @@ impl ProxyProfile {
     pub fn is_complete(&self) -> bool {
         let port_ok = (1..=65535).contains(&self.server_port);
         match self.kind.as_str() {
-            TYPE_HYSTERIA2 | TYPE_NAIVE => return not_blank(&self.server) && port_ok,
+            TYPE_HYSTERIA2 | TYPE_NAIVE | TYPE_SSTP => return not_blank(&self.server) && port_ok,
             TYPE_AMNEZIAWG => return not_blank(&self.awg_config),
             TYPE_TRUSTTUNNEL => return not_blank(&self.tt_config),
             _ => {}

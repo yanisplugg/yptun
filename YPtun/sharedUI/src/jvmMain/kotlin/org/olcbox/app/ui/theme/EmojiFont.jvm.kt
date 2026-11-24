@@ -6,14 +6,25 @@ import androidx.compose.ui.text.platform.Font
 
 // Bundled Google Noto Color Emoji font (Android system emoji font) — renders the exact same Android
 // emoji glyphs and country flags on Linux and Windows.
+private object EmojiFontLoader
+
 private val androidEmojiFamily: FontFamily? by lazy {
     runCatching {
-        val bytes = object {}.javaClass.classLoader
-            ?.getResourceAsStream("fonts/NotoColorEmoji.ttf")
-            ?.use { it.readBytes() }
-            ?: object {}.javaClass.classLoader
-                ?.getResourceAsStream("fonts/TwemojiMozilla.ttf")
-                ?.use { it.readBytes() }
+        val loaders = listOfNotNull(
+            Thread.currentThread().contextClassLoader,
+            EmojiFontLoader::class.java.classLoader,
+            ClassLoader.getSystemClassLoader()
+        )
+        fun loadFontBytes(resourcePath: String): ByteArray? {
+            for (cl in loaders) {
+                val stream = cl.getResourceAsStream(resourcePath)
+                if (stream != null) return stream.use { it.readBytes() }
+            }
+            return null
+        }
+
+        val bytes = loadFontBytes("fonts/NotoColorEmoji.ttf")
+            ?: loadFontBytes("fonts/TwemojiMozilla.ttf")
             ?: return@runCatching null
         FontFamily(Font(identity = "NotoColorEmoji", data = bytes))
     }.getOrNull()
@@ -21,3 +32,4 @@ private val androidEmojiFamily: FontFamily? by lazy {
 
 @Composable
 actual fun emojiFontFamily(): FontFamily? = androidEmojiFamily
+

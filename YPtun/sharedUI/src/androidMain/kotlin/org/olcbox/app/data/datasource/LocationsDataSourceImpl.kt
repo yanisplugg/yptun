@@ -23,6 +23,7 @@ private val KEY_LEGACY_SELECTED_LOCATION_ID = stringPreferencesKey("selected_hys
 private val KEY_DEVICE_IDENTITY = stringPreferencesKey("olcbox_device_identity")
 private val KEY_APP_INSTALL_ID = stringPreferencesKey("olcbox_app_install_id")
 private val KEY_TG_WARP_CONFIG = stringPreferencesKey("olcbox_tg_warp_config")
+private val KEY_CLIENT_WARP_CONFIG = stringPreferencesKey("olcbox_client_warp_config")
 private val KEY_PROVIDER_REPORT_STATE = stringPreferencesKey("olcbox_provider_report_state")
 
 class LocationsDataSourceImpl(
@@ -161,6 +162,20 @@ class LocationsDataSourceImpl(
     override suspend fun saveTelegramWarpConfig(value: String) {
         context.vpnPrefDataStore.edit {
             it[KEY_TG_WARP_CONFIG] = value
+        }
+    }
+
+    suspend fun loadClientWarpConfig(): String? =
+        context.vpnPrefDataStore.data.first()[KEY_CLIENT_WARP_CONFIG]
+
+    suspend fun saveClientWarpConfig(value: String) {
+        context.vpnPrefDataStore.edit { it[KEY_CLIENT_WARP_CONFIG] = value }
+    }
+
+    override suspend fun resetWarpConfigs() {
+        context.vpnPrefDataStore.edit {
+            it.remove(KEY_TG_WARP_CONFIG)
+            it.remove(KEY_CLIENT_WARP_CONFIG)
         }
     }
 

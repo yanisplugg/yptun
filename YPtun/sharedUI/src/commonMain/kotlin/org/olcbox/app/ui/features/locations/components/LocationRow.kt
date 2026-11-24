@@ -442,6 +442,10 @@ private fun protocolLabel(type: String?): String = when (type) {
     ProxyProfile.TYPE_TROJAN -> "Trojan"
     ProxyProfile.TYPE_SHADOWSOCKS -> "Shadowsocks"
     ProxyProfile.TYPE_MIERU -> "Mieru"
+    ProxyProfile.TYPE_NAIVE -> "Naive"
+    ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
+    ProxyProfile.TYPE_SSTP -> "SSTP"
+    ProxyProfile.TYPE_AMNEZIAWG -> "AmneziaWG"
     null, "" -> "Proxy"
     else -> type.uppercase()
 }

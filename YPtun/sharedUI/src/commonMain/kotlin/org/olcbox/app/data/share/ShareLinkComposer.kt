@@ -41,6 +41,7 @@ object ShareLinkComposer {
             ProxyProfile.TYPE_VMESS -> composeVmess(profile)
             ProxyProfile.TYPE_HYSTERIA2 -> composeHysteria2(profile)
             ProxyProfile.TYPE_NAIVE -> composeNaive(profile)
+            ProxyProfile.TYPE_SSTP -> composeSstp(profile)
             else -> profile.rawOutbound?.takeIf { it.isNotBlank() }
         }
     }
@@ -52,6 +53,30 @@ object ShareLinkComposer {
         }
         append(p.server).append(':').append(p.serverPort)
         if (p.sni.isNotBlank()) append("?sni=").append(percentEncode(p.sni))
+        appendRemark(p.tag)
+    }
+
+    private fun composeSstp(p: ProxyProfile): String = buildString {
+        append("sstp://")
+        if (p.username.isNotBlank() || p.password.isNotBlank()) {
+            append(percentEncode(p.username))
+            if (p.password.isNotBlank()) {
+                append(':').append(percentEncode(p.password))
+            }
+            append('@')
+        }
+        append(p.server)
+        if (p.serverPort != 443 && p.serverPort in 1..65535) {
+            append(':').append(p.serverPort)
+        }
+        val params = buildList {
+            if (p.sni.isNotBlank() && p.sni != p.server) add("sni" to p.sni)
+            if (p.allowInsecure) add("insecure" to "1")
+        }
+        if (params.isNotEmpty()) {
+            append('?')
+            append(params.joinToString("&") { (k, v) -> "$k=${percentEncode(v)}" })
+        }
         appendRemark(p.tag)
     }
 

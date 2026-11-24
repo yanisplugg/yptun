@@ -118,9 +118,13 @@ fun SessionSheet(
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 6.dp))
         else Spacer(Modifier.height(10.dp))
         SettingsCard {
+            val countryVal = info?.country?.let { c ->
+                val flag = org.olcbox.app.util.countryCodeToEmojiFlag(c)
+                if (flag != null) "$flag $c" else c
+            }
             val rows = listOf(
                 "IPv4" to info?.ipv4, "IPv6" to info?.ipv6, "ASN" to info?.asn,
-                s.sessionProvider to info?.provider, s.sessionCountry to info?.country,
+                s.sessionProvider to info?.provider, s.sessionCountry to countryVal,
                 s.sessionCity to info?.city, s.sessionRegion to info?.region,
                 s.sessionLatitude to info?.latitude, s.sessionLongitude to info?.longitude
             )
@@ -205,7 +209,11 @@ fun SessionSheet(
                 ingressRows.add("IPv6" to ipv6Val)
                 ingressRows.add("ASN" to ingressGeo?.asn)
                 ingressRows.add(s.sessionProvider to ingressGeo?.provider)
-                ingressRows.add(s.sessionCountry to ingressGeo?.country)
+                val ingressCountryVal = ingressGeo?.country?.let { c ->
+                    val flag = org.olcbox.app.util.countryCodeToEmojiFlag(c)
+                    if (flag != null) "$flag $c" else c
+                }
+                ingressRows.add(s.sessionCountry to ingressCountryVal)
                 ingressRows.add(s.sessionCity to ingressGeo?.city)
                 ingressRows.add(s.sessionRegion to ingressGeo?.region)
                 ingressRows.add(s.sessionLatitude to ingressGeo?.latitude)
@@ -359,16 +367,31 @@ private fun SessionRow(label: String, value: String?) {
     ) {
         Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp)
         Spacer(Modifier.width(16.dp))
-        Text(
-            text = value ?: "—",
-            color = if (value == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
-            textAlign = TextAlign.End,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        val textValue = value ?: "—"
+        val (emoji, rest) = org.olcbox.app.util.parseEmojiAndName(textValue)
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (emoji.isNotBlank()) {
+                Text(
+                    text = emoji,
+                    fontFamily = org.olcbox.app.ui.theme.emojiFontFamily(),
+                    fontSize = 16.sp
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                text = if (emoji.isNotBlank()) rest else textValue,
+                color = if (value == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 14.sp,
+                textAlign = TextAlign.End,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

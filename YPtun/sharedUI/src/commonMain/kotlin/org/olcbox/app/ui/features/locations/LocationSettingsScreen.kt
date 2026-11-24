@@ -4480,6 +4480,7 @@ private fun engineProtocolLabel(type: String): String = when (type) {
     ProxyProfile.TYPE_HYSTERIA2 -> "Hysteria2"
     ProxyProfile.TYPE_NAIVE -> "Naive"
     ProxyProfile.TYPE_MIERU -> "Mieru"
+    ProxyProfile.TYPE_SSTP -> "SSTP"
     ProxyProfile.TYPE_OPENVPN -> "OpenVPN"
     else -> type.uppercase()
 }

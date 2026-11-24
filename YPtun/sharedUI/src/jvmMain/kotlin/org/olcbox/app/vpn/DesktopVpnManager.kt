@@ -503,7 +503,7 @@ class DesktopVpnManager private constructor(
                 addLog("Proxy $method ping: Mieru is supported on Android or while connected")
                 return@withContext null
             }
-            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_OPENVPN) {
+            if (profile.type == ProxyProfile.TYPE_HYSTERIA2 || profile.type == ProxyProfile.TYPE_OPENVPN || profile.type == ProxyProfile.TYPE_SSTP) {
                 addLog("Proxy $method ping: ${profile.type} is not supported by the Xray probe (use Auto/ICMP)")
                 return@withContext null
             }

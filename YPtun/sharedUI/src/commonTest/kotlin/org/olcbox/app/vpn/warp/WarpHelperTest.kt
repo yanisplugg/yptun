@@ -96,15 +96,18 @@ class WarpHelperTest {
 
     @Test
     fun clientAwgTestsBothPortsWithAndWithoutReserved() {
-        val candidates = WarpHelper.clientAwgCandidates(
-            "[Interface]\nReserved = 1, 2, 3\nI1 = <b 0xce>\n[Peer]\nEndpoint = 162.159.192.1:2408"
-        )
+        val ini = "[Interface]\nReserved = 1, 2, 3\nI1 = <b 0xce>\n[Peer]\nEndpoint = 162.159.192.1:2408"
+        val candidates = WarpHelper.clientAwgCandidates(ini)
         assertEquals(listOf(3476, 3476, 2408, 2408, 894, 894), candidates.map { WarpHelper.endpointOf(it).second })
         assertEquals("188.114.99.4" to 3476, WarpHelper.endpointOf(candidates.first()))
         assertEquals(listOf(false, true, false, true, false, true), candidates.map { it.contains("Reserved = 1, 2, 3") })
         assertEquals(true, candidates.all { it.contains("I1 = <b 0xce>") })
         assertEquals(3, WarpHelper.clientAwgCandidates(candidates.first { WarpHelper.endpointOf(it).second == 2408 }).size)
         assertEquals(1, WarpHelper.clientAwgCandidates(candidates.first()).size)
+        val cellular = WarpHelper.clientAwgCandidates(ini, preferReserved = true)
+        assertEquals(candidates.chunked(2).flatMap { it.reversed() }, cellular)
+        val shared = ini.replace("Reserved = 1, 2, 3\n", "")
+        assertEquals(WarpHelper.clientAwgCandidates(shared), WarpHelper.clientAwgCandidates(shared, preferReserved = true))
     }
 
     @Test

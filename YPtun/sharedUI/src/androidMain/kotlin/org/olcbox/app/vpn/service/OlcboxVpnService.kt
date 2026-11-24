@@ -1099,7 +1099,7 @@ class OlcboxVpnService : VpnService() {
             val ok = runCatching { this@OlcboxVpnService.protect(f) }.getOrDefault(false)
             Log.d(TAG, "safeProtect drained fd=$f -> $ok")
         }
-        runCatching { Awg.protectSockets() }
+        if (startDeferredWarp == null) runCatching { Awg.protectSockets() }
 
         // Publish protect() so the independent Telegram-over-WARP proxy can keep its WARP UDP socket
         // out of this tun while it's up (see VpnSocketProtectBridge). Cleared on teardown.
@@ -1806,6 +1806,17 @@ class OlcboxVpnService : VpnService() {
         var warpAwgIniDraft: String? = null
         var warpChainPortDraft: Int? = null
         var warpRelayDraft: WarpRelay? = null
+        val cellularUpstream = upstream.transportOrNull() == UpstreamTransport.Cellular
+        val warpDataSource = LocationsDataSourceImpl(applicationContext)
+        var initialWarpRegistration: Result<String>? = null
+        suspend fun registerClientWarp(): Result<String> {
+            addLog("WARP: регистрирую отдельный профиль Cloudflare для каскада")
+            return runCatching { WarpConfigGenerator.registerClientAccount(upstream) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    addLog("WARP: регистрация профиля не удалась: ${it.message}")
+                }
+        }
         if (config.warpEnabled) {
             val serverSide = config.warpMode == WarpMode.Server
             val awg = config.warpProtocol == WarpProtocol.Awg
@@ -1826,7 +1837,16 @@ class OlcboxVpnService : VpnService() {
                 addLog("ВНИМАНИЕ: WARP пропущен: $skipReason")
             } else {
                 val clientAwg = awg && !serverSide
-                val ini = explicitWarpAwg?.awgConfig ?: obtainWarpIni(clientAwg)
+                val savedClientWarp = if (clientAwg && explicitWarpAwg == null) {
+                    warpDataSource.loadClientWarpConfig()?.takeIf {
+                        WarpHelper.isUsableCachedAccount(it, requireI1 = true)
+                    }
+                } else null
+                if (clientAwg && cellularUpstream && explicitWarpAwg == null && savedClientWarp == null) {
+                    initialWarpRegistration = registerClientWarp()
+                }
+                val ini = explicitWarpAwg?.awgConfig ?: savedClientWarp ?:
+                    initialWarpRegistration?.getOrNull() ?: obtainWarpIni(clientAwg)
                 if (ini == null) {
                     addLog("ВНИМАНИЕ: не удалось получить конфиг WARP, продолжаю БЕЗ WARP")
                 } else {
@@ -1856,8 +1876,7 @@ class OlcboxVpnService : VpnService() {
         val warpAwgIni = warpAwgIniDraft
         val warpChainPort = warpChainPortDraft
         val warpRelay = warpRelayDraft
-        val blockCellularWarpQuic = warpAwgIni != null && warpRelay == null &&
-            upstream.transportOrNull() == UpstreamTransport.Cellular
+        val blockCellularWarpQuic = warpAwgIni != null && warpRelay == null && cellularUpstream
         if (blockCellularWarpQuic) addLog("WARP: мобильная сеть, блокирую UDP/443 для перехода на HTTPS по TCP")
         return try {
             if (connectionMode.isTunless) {
@@ -1895,7 +1914,8 @@ class OlcboxVpnService : VpnService() {
             // so keep QUIC unblocked and force the sing-box core (xray has no hysteria2).
             // WARP over AmneziaWG on the CLIENT side: raise awgproxy first — the main proxy dials through its
             // SOCKS. (On the SERVER side awgproxy starts AFTER the core, whose relay it sends its UDP to.)
-            val warpExitProfile = if (blockCellularWarpQuic && isClientWarp) {
+            val deferClientWarp = blockCellularWarpQuic && !connectionMode.isTunless
+            val warpExitProfile = if (blockCellularWarpQuic && isClientWarp && !deferClientWarp) {
                 resolveWarpExitOnUpstream(profile, upstream)
             } else profile
             val secondProfile = if (isClientWarp) warpExitProfile else secondProfileDraft
@@ -1908,26 +1928,36 @@ class OlcboxVpnService : VpnService() {
                             val reserved = WarpHelper.isUsableCachedAccount(candidate, requireI1 = false)
                             addLog("WARP: проверяю AmneziaWG через $host:$port (Reserved=$reserved)")
                             startWarpAwg(candidate)
-                            val ready = checkWarpSocks(warpExitProfile)
+                            val ready = if (deferClientWarp && isClientWarp) {
+                                checkWarpCascade()
+                            } else {
+                                checkWarpSocks(warpExitProfile)
+                            }
                             addLog(if (ready) "WARP: рабочий туннель передаёт данные" else "WARP: рабочий туннель не прошёл проверку")
                             if (!ready) Awg.stop()
                             ready
                         }
                         addLog("WARP: ядро AmneziaWG ${Awg.version()}")
                         if (explicitWarpAwg != null) addLog("WARP: использую конфигурацию выбранной AmneziaWG-локации")
-                        val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni) else WarpHelper.clientAwgCandidates(warpAwgIni)
-                        probe(candidates) ?: run {
-                            check(explicitWarpAwg == null) { "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS." }
-                            addLog("WARP: текущий аккаунт не прошёл проверку. Регистрирую новый аккаунт Cloudflare.")
-                            val fresh = WarpConfigGenerator.registerClientAccount(upstream)
-                            val ready = probe(WarpHelper.clientAwgCandidates(fresh)) ?: error("WARP: новый аккаунт Cloudflare не передаёт данные через AmneziaWG.")
-                            LocationsDataSourceImpl(applicationContext).saveTelegramWarpConfig(fresh)
-                            ready
+                        val candidates = if (explicitWarpAwg != null) listOf(warpAwgIni)
+                        else WarpHelper.clientAwgCandidates(warpAwgIni, preferReserved = cellularUpstream)
+                        var registered = initialWarpRegistration?.getOrNull()
+                        val ready = probe(candidates) ?: run {
+                            check(explicitWarpAwg == null) {
+                                "WARP: выбранная AmneziaWG-локация не смогла подключиться к VLESS."
+                            }
+                            val fresh = if (initialWarpRegistration == null) registerClientWarp().getOrNull() else null
+                            checkNotNull(fresh) { "WARP: ни один адрес с текущим профилем не передаёт данные." }
+                            registered = fresh
+                            probe(WarpHelper.clientAwgCandidates(fresh, preferReserved = cellularUpstream))
+                                ?: error("WARP: новый профиль Cloudflare не передаёт данные через AmneziaWG.")
                         }
+                        registered?.let { warpDataSource.saveClientWarpConfig(it) }
+                        ready
                     } else warpAwgIni.also { startWarpAwg(it) }
                     OlcboxVpnState.setWarpIngress(WarpHelper.endpointOf(ini))
                 }
-                if (blockCellularWarpQuic && !connectionMode.isTunless) {
+                if (deferClientWarp) {
                     // Probe after the VPN routes are installed, before forwarding app traffic.
                     startWarpAfterTun = startClientWarp
                 } else {
@@ -3862,6 +3892,38 @@ class OlcboxVpnService : VpnService() {
             true
         } catch (e: java.io.IOException) {
             addLog("WARP: SOCKS CONNECT к ${target.hostString}:${target.port}: ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun checkWarpCascade(): Boolean = withContext(Dispatchers.IO) {
+        val target = java.net.URI(AppBehaviorSettings.DEFAULT_PING_URL)
+        try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(socksConnectHost(), socksListenPort), SOCKET_CONNECT_TIMEOUT_MS)
+                socket.soTimeout = 12_000
+                OlcrtcBond.socks5Connect(socket, socksUsername, socksPassword, target.host, 443)
+                val factory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+                val tls = factory.createSocket(socket, target.host, 443, true) as javax.net.ssl.SSLSocket
+                tls.use {
+                    it.sslParameters = it.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+                    it.soTimeout = socket.soTimeout
+                    it.startHandshake()
+                    val request = "GET ${target.rawPath} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n"
+                    it.getOutputStream().apply {
+                        write(request.toByteArray(Charsets.US_ASCII))
+                        flush()
+                    }
+                    val status = it.inputStream.bufferedReader(Charsets.US_ASCII).readLine()
+                    check(status?.split(' ', limit = 3)?.getOrNull(1) == "204") { "ответ: ${status ?: "EOF"}" }
+                }
+            }
+            addLog("WARP: HTTPS через каскад вернул HTTP 204")
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            addLog("WARP: HTTPS через каскад: ${e.message ?: e.javaClass.simpleName}")
             false
         }
     }

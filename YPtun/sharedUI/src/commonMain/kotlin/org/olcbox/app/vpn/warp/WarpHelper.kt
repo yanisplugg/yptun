@@ -136,7 +136,7 @@ object WarpHelper {
         return profile.copy(server = ip, host = httpHost, sni = sni)
     }
 
-    fun clientAwgCandidates(ini: String): List<String> {
+    fun clientAwgCandidates(ini: String, preferReserved: Boolean = false): List<String> {
         val legacy = clientAwgIni(ini)
         val (host, port) = endpointOf(legacy)
         val endpoints = if (host == WARP_ENDPOINT_IP && port == 2408) {
@@ -144,8 +144,9 @@ object WarpHelper {
         } else listOf("$host:$port")
         val hasReserved = isUsableCachedAccount(ini, requireI1 = false)
         val withReserved = if (hasReserved) engineIni(ini, awg = true) else null
+        val variants = if (preferReserved) listOfNotNull(withReserved, legacy) else listOfNotNull(legacy, withReserved)
         return endpoints.flatMap { endpoint ->
-            listOfNotNull(withEndpoint(legacy, endpoint), withReserved?.let { withEndpoint(it, endpoint) })
+            variants.map { withEndpoint(it, endpoint) }
         }
     }
 

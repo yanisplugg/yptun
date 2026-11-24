@@ -231,6 +231,7 @@ data class ProxyProfile(
     fun isComplete(): Boolean {
         if (type == TYPE_HYSTERIA2) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_NAIVE) return server.isNotBlank() && serverPort in 1..65535
+        if (type == TYPE_SSTP) return server.isNotBlank() && serverPort in 1..65535
         if (type == TYPE_AMNEZIAWG) return awgConfig.isNotBlank()
         if (type == TYPE_TRUSTTUNNEL) return ttConfig.isNotBlank()
         if (type == TYPE_MIERU) return mieruConfig.startsWith("mieru://", ignoreCase = true) ||
@@ -290,6 +291,7 @@ data class ProxyProfile(
         const val TYPE_HYSTERIA2 = "hysteria2"
         const val TYPE_NAIVE = "naive"
         const val TYPE_MIERU = "mieru"
+        const val TYPE_SSTP = "sstp"
         /** sing-box 1.14 OpenVPN client endpoint (stored in [rawOutbound]). */
         const val TYPE_OPENVPN = "openvpn-client"
 

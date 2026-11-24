@@ -95,6 +95,7 @@ interface LocationsDataSource {
      */
     suspend fun loadTelegramWarpConfig(): String? = null
     suspend fun saveTelegramWarpConfig(value: String) = Unit
+    suspend fun resetWarpConfigs() = saveTelegramWarpConfig("")
 
     /**
      * Persisted state for the Happ-style provider-usage report — an opaque JSON string mapping each
@@ -903,7 +904,7 @@ class LocationsRepositoryImpl(
     }
 
     override suspend fun resetTelegramWarpConfig() {
-        dataSource.saveTelegramWarpConfig("")
+        dataSource.resetWarpConfigs()
     }
 
     private suspend fun resolveParsedImport(

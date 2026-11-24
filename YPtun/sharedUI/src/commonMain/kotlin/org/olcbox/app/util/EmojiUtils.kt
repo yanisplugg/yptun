@@ -1,7 +1,25 @@
 package org.olcbox.app.util
 
 /**
- * Splits a leading emoji (if any) from the rest of the name.
+ * Converts a 2-letter ISO 3166-1 alpha-2 country code (e.g. "US", "RU", "DE", "FI")
+ * into a standard 2-codepoint regional-indicator emoji flag string (🇺🇸, 🇷🇺, 🇩🇪, 🇫🇮).
+ */
+fun countryCodeToEmojiFlag(countryCode: String?): String? {
+    if (countryCode == null) return null
+    val clean = countryCode.trim().uppercase()
+    if (clean.length != 2 || !clean.all { it in 'A'..'Z' }) return null
+    val hi1 = 0xD83C.toChar()
+    val lo1 = (0xDDE6 + (clean[0] - 'A')).toChar()
+    val hi2 = 0xD83C.toChar()
+    val lo2 = (0xDDE6 + (clean[1] - 'A')).toChar()
+    return "$hi1$lo1$hi2$lo2"
+}
+
+private val BRACKET_COUNTRY_REGEX = Regex("""^[\[\(]([A-Za-z]{2})[\]\)]\s*(.*)$""")
+private val PREFIX_COUNTRY_REGEX = Regex("""^([A-Za-z]{2})\s*[-|:]\s*(.*)$""")
+
+/**
+ * Splits a leading emoji (if any) or leading country tag (e.g. `[US]`, `FI - `) from the rest of the name.
  *
  * Handles multi-codepoint emoji correctly — especially country flags, which are a pair of
  * regional-indicator symbols (e.g. 🇫🇮 = U+1F1EB U+1F1EE). Also consumes ZWJ sequences,
@@ -12,7 +30,23 @@ fun parseEmojiAndName(rawName: String, defaultEmoji: String = ""): Pair<String, 
     if (trimmed.isEmpty()) return defaultEmoji to ""
 
     if (!isEmojiCodePoint(codePointAt(trimmed, 0))) {
-        return defaultEmoji to ""
+        val bracketMatch = BRACKET_COUNTRY_REGEX.find(trimmed)
+        if (bracketMatch != null) {
+            val flag = countryCodeToEmojiFlag(bracketMatch.groupValues[1])
+            if (flag != null) {
+                val rest = bracketMatch.groupValues[2].trim()
+                return flag to rest.ifBlank { trimmed }
+            }
+        }
+        val prefixMatch = PREFIX_COUNTRY_REGEX.find(trimmed)
+        if (prefixMatch != null) {
+            val flag = countryCodeToEmojiFlag(prefixMatch.groupValues[1])
+            if (flag != null) {
+                val rest = prefixMatch.groupValues[2].trim()
+                return flag to rest.ifBlank { trimmed }
+            }
+        }
+        return defaultEmoji to trimmed
     }
 
     var end = 0
@@ -23,11 +57,12 @@ fun parseEmojiAndName(rawName: String, defaultEmoji: String = ""): Pair<String, 
         end += if (cp >= 0x10000) 2 else 1
     }
 
-    if (end == 0) return defaultEmoji to ""
+    if (end == 0) return defaultEmoji to trimmed
     val emoji = trimmed.substring(0, end)
     val name = trimmed.substring(end).trim()
-    return emoji to name
+    return emoji to (name.ifBlank { trimmed })
 }
+
 
 // String.codePointAt is JVM-only; this is its surrogate-pair logic for every target.
 private fun codePointAt(s: String, i: Int): Int {

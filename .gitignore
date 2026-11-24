@@ -20,6 +20,7 @@
 
 # --- IDE / OS ---
 .idea/
+.codex-attachments/
 *.iml
 .DS_Store
 Thumbs.db

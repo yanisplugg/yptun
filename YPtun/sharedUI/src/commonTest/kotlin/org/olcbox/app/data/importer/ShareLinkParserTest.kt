@@ -103,4 +103,36 @@ class ShareLinkParserTest {
         val p = ProxyProfile(tag = "raw", rawOutbound = raw)
         assertTrue(p.isComplete())
     }
+
+    @Test
+    fun parsesAndComposesSstpLink() {
+        val uri = "sstp://testuser:testpass@vpn.example.com:443?sni=vpn.example.com&insecure=1#MySSTP"
+        val p = ShareLinkParser.parse(uri)
+        kotlin.test.assertNotNull(p)
+        assertEquals(ProxyProfile.TYPE_SSTP, p.type)
+        assertEquals("vpn.example.com", p.server)
+        assertEquals(443, p.serverPort)
+        assertEquals("testuser", p.username)
+        assertEquals("testpass", p.password)
+        assertEquals("vpn.example.com", p.sni)
+        assertTrue(p.allowInsecure)
+        assertEquals("MySSTP", p.tag)
+        assertTrue(p.isComplete())
+
+        val composed = org.olcbox.app.data.share.ShareLinkComposer.compose(p)
+        kotlin.test.assertNotNull(composed)
+        assertTrue(composed.startsWith("sstp://testuser:testpass@vpn.example.com"))
+        assertTrue("insecure=1" in composed)
+        assertTrue(composed.endsWith("#MySSTP"))
+
+        val reparsed = ShareLinkParser.parse(composed)
+        kotlin.test.assertNotNull(reparsed)
+        assertEquals(p.type, reparsed.type)
+        assertEquals(p.server, reparsed.server)
+        assertEquals(p.serverPort, reparsed.serverPort)
+        assertEquals(p.username, reparsed.username)
+        assertEquals(p.password, reparsed.password)
+        assertEquals(p.tag, reparsed.tag)
+        assertEquals(p.allowInsecure, reparsed.allowInsecure)
+    }
 }

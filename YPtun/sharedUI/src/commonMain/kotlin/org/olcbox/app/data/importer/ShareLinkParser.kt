@@ -21,6 +21,7 @@ object ShareLinkParser {
             trimmed.startsWith("ss://", true) -> parseShadowsocks(trimmed)
             trimmed.startsWith("hysteria2://", true) || trimmed.startsWith("hy2://", true) -> parseHysteria2(trimmed)
             trimmed.startsWith("naive+", true) || trimmed.startsWith("naive://", true) -> parseNaive(trimmed)
+            trimmed.startsWith("sstp://", true) -> parseSstp(trimmed)
             trimmed.startsWith("mieru://", true) || trimmed.startsWith("mierus://", true) -> parseMieru(trimmed)
             // amneziawg://<base64url(wg-quick INI)> — the compact link form produced by sharing.
             trimmed.startsWith("amneziawg://", true) -> {
@@ -286,6 +287,47 @@ object ShareLinkParser {
             security = ProxyProfile.SECURITY_TLS,
             sni = (params["sni"] ?: params["peer"]).orEmpty(),
             naiveQuic = quic || params["network"]?.equals("quic", true) == true,
+        )
+    }
+
+    // --- sstp://user:pass@host:port?sni=...#name (SSTP; Secure Socket Tunneling Protocol) ---
+    private fun parseSstp(uri: String): ProxyProfile? {
+        val withoutScheme = uri.substring("sstp://".length)
+        val remark = withoutScheme.substringAfter('#', "").let(UriCodec::percentDecode)
+        val beforeFragment = withoutScheme.substringBefore('#')
+        val query = beforeFragment.substringAfter('?', "")
+        var authority = beforeFragment.substringBefore('?').trimEnd('/')
+
+        var user = ""
+        var pass = ""
+        val atIndex = authority.lastIndexOf('@')
+        if (atIndex >= 0) {
+            val userInfo = authority.substring(0, atIndex)
+            user = UriCodec.percentDecode(userInfo.substringBefore(':'))
+            pass = UriCodec.percentDecode(userInfo.substringAfter(':', ""))
+            authority = authority.substring(atIndex + 1)
+        }
+        val hostPort = UriCodec.splitHostPort(authority)
+        val host = hostPort?.first ?: authority.trim('[', ']')
+        val port = hostPort?.second ?: 443 // SSTP default is 443
+        if (host.isBlank()) return null
+
+        val params = UriCodec.parseQuery(query)
+        val username = user.ifBlank { params["user"] ?: params["username"].orEmpty() }
+        val password = pass.ifBlank { params["pass"] ?: params["password"].orEmpty() }
+        val allowInsecure = params["allowInsecure"] == "1" || params["insecure"] == "1" ||
+            params["insecure"]?.equals("true", true) == true
+
+        return ProxyProfile(
+            tag = remark.ifBlank { "SSTP $host" },
+            type = ProxyProfile.TYPE_SSTP,
+            server = host,
+            serverPort = port,
+            username = username,
+            password = password,
+            security = ProxyProfile.SECURITY_TLS,
+            sni = (params["sni"] ?: params["peer"] ?: host).trim(),
+            allowInsecure = allowInsecure,
         )
     }
 
