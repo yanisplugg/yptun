@@ -4,11 +4,13 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ZapretConfig
 import org.olcbox.app.vpn.PingProbeHelpers
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -18,7 +20,7 @@ import kotlin.test.assertTrue
 class ZapretSocksServerTest {
 
     @Test
-    fun zapretConfigNormalizesPresetsAndIsCompleteWithoutServer() {
+    fun zapretConfigNormalizesAltPresetsAndLegacyKeys() {
         val cfg = LocationConfig(
             name = "Zapret (DPI)",
             engine = EngineType.Zapret,
@@ -27,46 +29,87 @@ class ZapretSocksServerTest {
         assertTrue(cfg.isComplete())
         assertEquals(ZapretConfig.STRATEGY_AUTO, cfg.zapret?.strategy)
 
-        val tlsRec = ZapretConfig().withPreset(ZapretConfig.STRATEGY_TLSREC)
-        assertTrue(tlsRec.tlsRecSplit)
-        assertEquals(false, tlsRec.blockQuic)
-        assertEquals(2, tlsRec.udpFakeCount)
+        val alt2 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT2)
+        assertEquals(false, alt2.tlsRecSplit)
+        assertTrue(alt2.tcpSplit)
+        assertEquals(ZapretConfig.SPLIT_MODE_MULTI_SNI, alt2.splitMode)
+
+        val alt3 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3)
+        assertTrue(alt3.oob)
+
+        val alt5 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5)
+        assertEquals(false, alt5.blockQuic)
+        assertEquals(3, alt5.udpFakeCount)
+
+        // Legacy strategy names map cleanly to ALT presets.
+        assertEquals(ZapretConfig.STRATEGY_ALT1, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_TLSREC).strategy)
+        assertEquals(ZapretConfig.STRATEGY_ALT2, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_SPLIT).strategy)
     }
 
     @Test
-    fun tlsRecordSplitPreservesExactHandshakeBytesAcrossMultipleRecords() {
-        val fakeClientHelloPayload = ByteArray(180) { i -> ((i * 7 + 13) and 0xFF).toByte() }.also { p ->
-            p[0] = 0x01 // HandshakeType: ClientHello
-            p[1] = 0x00; p[2] = 0x00; p[3] = (176).toByte()
-            p[4] = 0x03; p[5] = 0x03
-        }
-        val singleRecord = ByteArray(5 + fakeClientHelloPayload.size).also { r ->
-            r[0] = 0x16
-            r[1] = 0x03
-            r[2] = 0x01
-            r[3] = ((fakeClientHelloPayload.size shr 8) and 0xFF).toByte()
-            r[4] = (fakeClientHelloPayload.size and 0xFF).toByte()
-            fakeClientHelloPayload.copyInto(r, 5)
-        }
+    fun tlsRecordSplitTwoAndThreeRecordsPreserveExactHandshakeBytes() {
+        val hello = ZapretSocksServer.buildProbeClientHello("www.youtube.com")
+        assertEquals("www.youtube.com", ZapretSocksServer.sniffHost(hello, hello.size))
+        val origRecLen = ((hello[3].toInt() and 0xFF) shl 8) or (hello[4].toInt() and 0xFF)
+        val origPayload = hello.copyOfRange(5, 5 + origRecLen)
 
-        val split = ZapretSocksServer.splitTlsClientHelloRecords(singleRecord, singleRecord.size, splitOffset = 10)
-        assertTrue(split.size == singleRecord.size + 5, "Expected one extra 5-byte TLS header")
+        for (count in listOf(2, 3)) {
+            val split = ZapretSocksServer.splitTlsClientHelloRecords(hello, hello.size, splitOffset = 10, recordCount = count)
+            assertEquals(hello.size + (count - 1) * 5, split.size, "Expected ${count - 1} extra 5-byte TLS headers")
 
-        // Reassemble both TLS records and confirm the inner ClientHello bytes are byte-for-byte identical.
-        val reassembled = ByteArrayOutputStream()
-        var pos = 0
-        var records = 0
-        while (pos < split.size) {
-            assertEquals(0x16, split[pos].toInt() and 0xFF)
-            assertEquals(0x03, split[pos + 1].toInt() and 0xFF)
-            assertEquals(0x01, split[pos + 2].toInt() and 0xFF)
-            val recLen = ((split[pos + 3].toInt() and 0xFF) shl 8) or (split[pos + 4].toInt() and 0xFF)
-            reassembled.write(split, pos + 5, recLen)
-            pos += 5 + recLen
-            records++
+            val reassembled = ByteArrayOutputStream()
+            var pos = 0
+            var records = 0
+            while (pos < split.size) {
+                assertEquals(0x16, split[pos].toInt() and 0xFF)
+                assertEquals(0x03, split[pos + 1].toInt() and 0xFF)
+                assertEquals(0x01, split[pos + 2].toInt() and 0xFF)
+                val recLen = ((split[pos + 3].toInt() and 0xFF) shl 8) or (split[pos + 4].toInt() and 0xFF)
+                reassembled.write(split, pos + 5, recLen)
+                pos += 5 + recLen
+                records++
+            }
+            assertEquals(count, records)
+            assertContentEquals(origPayload, reassembled.toByteArray())
         }
-        assertEquals(2, records)
-        assertContentEquals(fakeClientHelloPayload, reassembled.toByteArray())
+    }
+
+    @Test
+    fun desyncSplitsAcrossSniAndFiresOobWithoutAlteringTcpPayload() {
+        val hello = ZapretSocksServer.buildProbeClientHello("discord.com")
+        val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3).copy(splitDelayMs = 0)
+        val out = ByteArrayOutputStream()
+        val oobCount = AtomicInteger(0)
+        ZapretSocksServer.writeDesyncedInitial(out, hello, hello.size, cfg, onUrgentByte = { oobCount.incrementAndGet() })
+        assertEquals(1, oobCount.get())
+        // Without tlsRecSplit, TCP bytes match ClientHello verbatim across split writes.
+        assertContentEquals(hello, out.toByteArray())
+
+        val cuts = ZapretSocksServer.computeTcpSplitBoundaries(
+            len = hello.size,
+            splitMode = ZapretConfig.SPLIT_MODE_MULTI_SNI,
+            splitSize = 2,
+            splitCount = 6,
+            hostStart = 120,
+            hostMid = 126,
+        )
+        assertTrue(1 in cuts && 126 in cuts, "Expected both early offset and SNI midpoint cuts in $cuts")
+    }
+
+    @Test
+    fun readHttpBodyHandlesContentLengthWithoutEofAndChunkedEncoding() {
+        val dnsPayload = byteArrayOf(0x12, 0x34, 0x01, 0x00, 0x00, 0x01)
+        val clStream = object : ByteArrayInputStream(
+            ("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: ${dnsPayload.size}\r\n\r\n")
+                .toByteArray(Charsets.US_ASCII) + dnsPayload + byteArrayOf(99, 99) // trailing bytes after Content-Length
+        ) {}
+        assertContentEquals(dnsPayload, ZapretSocksServer.readHttpBody(clStream))
+
+        val chunkedStream = ByteArrayInputStream(
+            ("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" +
+                "3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n").toByteArray(Charsets.US_ASCII)
+        )
+        assertContentEquals("abcdef".toByteArray(Charsets.US_ASCII), ZapretSocksServer.readHttpBody(chunkedStream))
     }
 
     @Test
@@ -96,7 +139,7 @@ class ZapretSocksServerTest {
             val zapret = ZapretSocksServer()
             try {
                 zapret.start(
-                    config = ZapretConfig(splitSize = 2, splitCount = 4, splitDelayMs = 0),
+                    config = ZapretConfig(strategy = ZapretConfig.STRATEGY_ALT2, splitDelayMs = 0),
                     listenHost = "127.0.0.1",
                     listenPort = socksPort,
                     socksUsername = "u",
@@ -107,12 +150,10 @@ class ZapretSocksServerTest {
                     client.soTimeout = 3_000
                     val out = client.getOutputStream()
                     val inp = client.getInputStream()
-                    // Auth negotiation
                     out.write(byteArrayOf(0x05, 0x01, 0x02)); out.flush()
                     assertContentEquals(byteArrayOf(0x05, 0x02), inp.readNBytes(2))
                     out.write(byteArrayOf(0x01, 0x01, 'u'.code.toByte(), 0x01, 'p'.code.toByte())); out.flush()
                     assertContentEquals(byteArrayOf(0x01, 0x00), inp.readNBytes(2))
-                    // CONNECT 127.0.0.1:echoPort
                     val port = echoServer.localPort
                     out.write(
                         byteArrayOf(

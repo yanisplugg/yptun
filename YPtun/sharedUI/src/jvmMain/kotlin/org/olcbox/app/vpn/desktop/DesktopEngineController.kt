@@ -805,6 +805,7 @@ internal class DesktopEngineController(
         routing: org.olcbox.app.data.model.RoutingRules,
         traffic: org.olcbox.app.data.model.TrafficSettings,
         blockQuic: Boolean,
+        remoteDnsOverHttps: Boolean = false,
         extraBypassProcesses: List<String> = emptyList(),
     ) {
         if (!awaitSocksPortOpen(xrayPort, MOBILE_READY_TIMEOUT_MS)) {
@@ -837,6 +838,7 @@ internal class DesktopEngineController(
             routingProfile = null,
             blockQuic = blockQuic,
             forceFamilyResolve = false,
+            remoteDnsOverHttps = remoteDnsOverHttps,
             // DNS goes to Xray as a plain SOCKS5 CONNECT instead of a UDP ASSOCIATE — the associate
             // path is exactly what died on the tun2socks bridge.
             preferTcpRemoteDns = true,
@@ -861,8 +863,12 @@ internal class DesktopEngineController(
         val cmd = ProcessHandle.current().info().command().orElse("")
         val exe = cmd.substringAfterLast('\\').substringAfterLast('/').trim()
         return buildList {
-            if (exe.isNotEmpty()) add(exe)
+            if (exe.isNotEmpty()) {
+                add(exe)
+                add(exe.lowercase())
+            }
             add("YPtun.exe")
+            add("yptun.exe")
             add("java.exe")
             add("javaw.exe")
         }.distinct()
@@ -876,12 +882,19 @@ internal class DesktopEngineController(
         socksPassword: String,
     ) {
         val zapret = (config.zapret ?: org.olcbox.app.data.model.ZapretConfig()).normalized()
+        val effectiveZapret = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            ZapretSocksServer.resolveRuntimeConfig(
+                config = zapret,
+                forceRefresh = false,
+                log = log,
+            )
+        }
         val front = requestedTun
         val port = if (front) singBoxFrontPort(listenPort) else listenPort
         val host = if (front) "127.0.0.1" else listenHost
         requirePortFree(port) { "Zapret port $port is still in use" }
         zapretServer.start(
-            config = zapret,
+            config = effectiveZapret,
             listenHost = host,
             listenPort = port,
             socksUsername = if (front) "" else socksUsername,
@@ -891,8 +904,11 @@ internal class DesktopEngineController(
         if (!awaitSocksPortOpen(port, MOBILE_READY_TIMEOUT_MS)) {
             throw IllegalStateException("Zapret SOCKS port $port did not open")
         }
-        log("Zapret ready on $host:$port (${zapret.summary()})")
+        log("Zapret ready on $host:$port (${effectiveZapret.summary()})")
         if (front) {
+            val baseTraffic = JvmVpnSettings.loadTraffic()
+            val zapretDns = effectiveZapret.dnsServer.takeIf { it.startsWith("https://", ignoreCase = true) }
+                ?: org.olcbox.app.data.model.ZapretConfig.DEFAULT_DNS_SERVER
             startSingBoxFront(
                 xrayPort = port,
                 listenHost = listenHost,
@@ -900,8 +916,9 @@ internal class DesktopEngineController(
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
                 routing = loadRoutingExpandingAsn(),
-                traffic = JvmVpnSettings.loadTraffic(),
-                blockQuic = zapret.blockQuic,
+                traffic = baseTraffic.copy(remoteDns = zapretDns),
+                blockQuic = effectiveZapret.blockQuic,
+                remoteDnsOverHttps = true,
                 extraBypassProcesses = currentProcessNames(),
             )
         }

@@ -557,6 +557,15 @@ object SingBoxConfig {
                     ) {
                         addJsonObject { put("action", "sniff") }
                     }
+                    // Extra internal host processes (e.g. embedded Zapret in TUN front mode) must bypass
+                    // BOTH hijack-dns and proxy routing so their DoH/outbound sockets never loop back in.
+                    val extraDirectProcesses = extraBypassProcesses.filter { it.isNotBlank() }.distinct()
+                    if (tunMode && extraDirectProcesses.isNotEmpty()) {
+                        addJsonObject {
+                            putJsonArray("process_name") { extraDirectProcesses.forEach { add(it) } }
+                            put("outbound", directTag)
+                        }
+                    }
                     if (tunMode || hijackDns) {
                         // System DNS queries arriving via the TUN or TPROXY are answered by sing-box itself.
                         addJsonObject {
@@ -566,13 +575,6 @@ object SingBoxConfig {
                         addJsonObject {
                             putJsonArray("port") { add(53) }
                             put("action", "hijack-dns")
-                        }
-                    }
-                    val extraDirectProcesses = extraBypassProcesses.filter { it.isNotBlank() }.distinct()
-                    if (tunMode && extraDirectProcesses.isNotEmpty()) {
-                        addJsonObject {
-                            putJsonArray("process_name") { extraDirectProcesses.forEach { add(it) } }
-                            put("outbound", directTag)
                         }
                     }
                     // Per-process split tunneling (desktop): FIRST so a per-app decision wins over

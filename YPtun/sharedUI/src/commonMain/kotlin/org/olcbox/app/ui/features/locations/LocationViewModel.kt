@@ -42,6 +42,8 @@ import org.olcbox.app.data.model.MasterDnsConfig
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.ZapretConfig
+import org.olcbox.app.vpn.zapret.ZapretAltProbeResult
+import org.olcbox.app.vpn.zapret.probeZapretAltStrategies
 import org.olcbox.app.data.model.WarpMode
 import org.olcbox.app.data.model.WarpProtocol
 import org.olcbox.app.data.model.VkTurnConfig
@@ -183,6 +185,13 @@ class LocationViewModel(
 
     /** Editable Zapret DPI-bypass settings for the [EngineType.Zapret] engine. */
     var editingZapret by mutableStateOf(ZapretConfig())
+        private set
+
+    var zapretAutoTuning by mutableStateOf(false)
+        private set
+    var zapretProbeResults by mutableStateOf<List<ZapretAltProbeResult>>(emptyList())
+        private set
+    var zapretLastAutoPicked by mutableStateOf<String?>(null)
         private set
 
     var proxyError by mutableStateOf<String?>(null)
@@ -677,6 +686,9 @@ class LocationViewModel(
         editingOpenFlux = editingConfig.openFlux ?: OpenFluxConfig()
         editingSnolc = editingConfig.snolc ?: SnolcConfig()
         editingZapret = editingConfig.zapret ?: ZapretConfig()
+        zapretAutoTuning = false
+        zapretProbeResults = emptyList()
+        zapretLastAutoPicked = null
         isVlessEngine = editingConfig.engine == EngineType.Standard &&
             editingConfig.proxy.let { it?.type == ProxyProfile.TYPE_VLESS && it.isManuallyEditableVless() }
         isSstpEngine = editingConfig.engine == EngineType.Standard &&
@@ -866,6 +878,33 @@ class LocationViewModel(
         val updated = transform(editingZapret)
         editingZapret = updated
         editingConfig = editingConfig.copy(zapret = updated)
+    }
+
+    /** Probes ALT1..ALT7 live and highlights working presets (optionally selecting the winner). */
+    fun runZapretAutoTune(applyWinner: Boolean = false) {
+        if (zapretAutoTuning) return
+        zapretAutoTuning = true
+        zapretLastAutoPicked = null
+        val snapshot = editingZapret
+        viewModelScope.launch {
+            try {
+                val res = probeZapretAltStrategies(snapshot, forceRefresh = true)
+                zapretProbeResults = res.probes
+                val winnerInfo = ZapretConfig.ALT_PRESETS.firstOrNull { it.key == res.selectedStrategy }
+                val winnerPassed = res.probes.firstOrNull { it.strategyKey == res.selectedStrategy }?.succeeded == true
+                zapretLastAutoPicked = if (winnerPassed && winnerInfo != null) {
+                    val rtt = res.probes.firstOrNull { it.strategyKey == res.selectedStrategy }?.rttMs
+                    "Рабочий профиль: ${winnerInfo.shortLabel}" + (rtt?.let { " ($it мс)" } ?: "")
+                } else {
+                    "Ни один ALT не получил TLS ServerHello (проверьте сеть или включённый VPN)"
+                }
+                if (applyWinner && winnerPassed) {
+                    updateZapret { it.withPreset(res.selectedStrategy) }
+                }
+            } finally {
+                zapretAutoTuning = false
+            }
+        }
     }
 
     val zapretLocation: LocationItem?

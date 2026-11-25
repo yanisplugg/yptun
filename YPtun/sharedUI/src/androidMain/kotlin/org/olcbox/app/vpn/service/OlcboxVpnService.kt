@@ -989,6 +989,9 @@ class OlcboxVpnService : VpnService() {
         }
 
         updateUnderlyingNetwork(upstream)
+        if (location.engine == EngineType.Zapret) {
+            ZapretSocksServer.invalidateAutoCache()
+        }
         stopMobileAndWait()
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) return
@@ -1161,7 +1164,7 @@ class OlcboxVpnService : VpnService() {
             EngineType.MasterDns -> startMasterDnsCore(location, upstream, requestedGeneration, setErrorOnFailure)
             EngineType.OpenFlux -> startOpenFluxCore(location, requestedGeneration, setErrorOnFailure)
             EngineType.Snolc -> startSnolcCore(location, requestedGeneration, setErrorOnFailure)
-            EngineType.Zapret -> startZapretCore(location, requestedGeneration, setErrorOnFailure)
+            EngineType.Zapret -> startZapretCore(location, upstream, requestedGeneration, setErrorOnFailure)
         }
     }
 
@@ -1375,26 +1378,52 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun startZapretCore(
         location: LocationConfig,
+        upstream: android.net.Network,
         requestedGeneration: Long,
         setErrorOnFailure: Boolean,
     ): Boolean {
         val zapret = (location.normalized().zapret ?: org.olcbox.app.data.model.ZapretConfig()).normalized()
         return try {
+            if (connectionMode.isTunless) {
+                bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
+            }
             waitForSocksPortReleased(socksListenPort, SOCKS_RELEASE_QUICK_TIMEOUT_MS)
             if (isLocalSocksPortOpen(socksListenPort)) {
                 throw IllegalStateException("SOCKS port $socksListenPort is still in use")
             }
             activeProxyCore = ProxyCore.Auto
+            val protectTcp: (java.net.Socket) -> Unit = { socket ->
+                runCatching { this@OlcboxVpnService.protect(socket) }
+                runCatching { (currentNetwork ?: upstream).bindSocket(socket) }
+            }
+            val protectUdp: (java.net.DatagramSocket) -> Unit = { datagram ->
+                runCatching { this@OlcboxVpnService.protect(datagram) }
+                runCatching { (currentNetwork ?: upstream).bindSocket(datagram) }
+            }
+            val effectiveZapret = withContext(Dispatchers.IO) {
+                ZapretSocksServer.resolveRuntimeConfig(
+                    config = zapret,
+                    protectSocket = protectTcp,
+                    protectDatagram = protectUdp,
+                    forceRefresh = false,
+                    log = { msg -> addLog(msg) },
+                )
+            }
+            coroutineContext.ensureActive()
+            if (requestedGeneration != generation) {
+                addLog("Zapret start superseded")
+                return false
+            }
             val server = zapretServer ?: ZapretSocksServer().also { zapretServer = it }
-            addLog("Starting Zapret DPI bypass on $socksListenHost:$socksListenPort (${zapret.summary()})")
+            addLog("Starting Zapret DPI bypass on $socksListenHost:$socksListenPort (${effectiveZapret.summary()})")
             server.start(
-                config = zapret,
+                config = effectiveZapret,
                 listenHost = socksListenHost,
                 listenPort = socksListenPort,
                 socksUsername = socksUsername,
                 socksPassword = socksPassword,
-                protectSocket = { socket -> runCatching { this@OlcboxVpnService.protect(socket) } },
-                protectDatagram = { datagram -> runCatching { this@OlcboxVpnService.protect(datagram) } },
+                protectSocket = protectTcp,
+                protectDatagram = protectUdp,
                 log = { msg -> addLog(msg) },
             )
             if (!awaitSocksPortOpen(socksListenPort, MOBILE_READY_TIMEOUT_MS)) {

@@ -125,6 +125,7 @@ import org.olcbox.app.data.model.OpenFluxCarrier
 import org.olcbox.app.data.model.OpenFluxConfig
 import org.olcbox.app.data.model.SnolcConfig
 import org.olcbox.app.data.model.ZapretConfig
+import org.olcbox.app.vpn.zapret.ZapretAltProbeResult
 import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.ExtraRoom
 import org.olcbox.app.data.model.RoutingProfile
@@ -784,6 +785,10 @@ fun LocationSettingsScreen(
                 zapretSection(
                     config = viewModel.editingZapret,
                     enabled = !isSaving,
+                    autoTuning = viewModel.zapretAutoTuning,
+                    probeResults = viewModel.zapretProbeResults,
+                    lastAutoPicked = viewModel.zapretLastAutoPicked,
+                    onAutoTune = viewModel::runZapretAutoTune,
                     onChange = viewModel::updateZapret,
                 )
             }
@@ -2226,19 +2231,27 @@ private fun OpenFluxCarriersEditor(
 private fun LazyListScope.zapretSection(
     config: ZapretConfig,
     enabled: Boolean,
+    autoTuning: Boolean,
+    probeResults: List<ZapretAltProbeResult>,
+    lastAutoPicked: String?,
+    onAutoTune: (applyWinner: Boolean) -> Unit,
     onChange: ((ZapretConfig) -> ZapretConfig) -> Unit,
 ) {
     item {
+        val normalized = config.normalized()
+        val probeMap = probeResults.associateBy { it.strategyKey }
+        val activePreset = ZapretConfig.PRESETS.firstOrNull { it.key == normalized.strategy }
+
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SectionTitle(
                 title = "Zapret — локальный обход DPI",
-                subtitle = "Работает бесплатно без удалённого сервера: режет TLS/TCP-заголовки на устройстве, подменяет DNS на DoH и при необходимости блокирует QUIC."
+                subtitle = "Работает бесплатно без сервера и root: выбирайте готовые ALT-конфиги или Автоподбор рабочего обхода под вашего провайдера."
             )
             Text(
-                text = "Стратегия обхода",
+                text = "Профиль / ALT-конфиг",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -2247,20 +2260,70 @@ private fun LazyListScope.zapretSection(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf(
-                    ZapretConfig.STRATEGY_AUTO to "Авто (рекомендуется)",
-                    ZapretConfig.STRATEGY_TLSREC to "TLS Record + UDP",
-                    ZapretConfig.STRATEGY_SPLIT to "TCP Split + No-QUIC",
-                    ZapretConfig.STRATEGY_CUSTOM to "Своя",
-                ).forEach { (key, label) ->
+                ZapretConfig.PRESETS.forEach { preset ->
+                    val probe = probeMap[preset.key]
+                    val badge = when {
+                        probe == null -> ""
+                        probe.succeeded -> " ✓ ${probe.rttMs ?: 0}мс"
+                        else -> " ✗"
+                    }
                     FilterChip(
-                        selected = config.strategy == key,
-                        onClick = { onChange { it.withPreset(key) } },
-                        enabled = enabled,
-                        label = { Text(label) }
+                        selected = normalized.strategy == preset.key,
+                        onClick = { onChange { it.withPreset(preset.key) } },
+                        enabled = enabled && !autoTuning,
+                        label = { Text(preset.label + badge) }
                     )
                 }
             }
+            if (activePreset != null) {
+                SettingsNote(text = activePreset.description)
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { onAutoTune(true) },
+                    enabled = enabled && !autoTuning,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (autoTuning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(if (autoTuning) "Проверка ALT…" else "Подобрать рабочий ALT")
+                }
+                OutlinedButton(
+                    onClick = { onAutoTune(false) },
+                    enabled = enabled && !autoTuning
+                ) {
+                    Text("Тест ALT 1–7")
+                }
+            }
+            if (!lastAutoPicked.isNullOrBlank()) {
+                Text(
+                    text = lastAutoPicked,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (normalized.strategy == ZapretConfig.STRATEGY_AUTO) {
+                OutlinedTextField(
+                    value = config.probeTargets,
+                    onValueChange = { v -> onChange { it.copy(probeTargets = v) } },
+                    label = { Text("Домены для автоподбора (Авторежим)") },
+                    placeholder = { Text(ZapretConfig.DEFAULT_PROBE_TARGETS) },
+                    supportingText = { Text("При подключении Авторежим проверяет ALT 1–7 на этих сайтах и включает первый рабочий") },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             OutlinedTextField(
                 value = config.dnsServer,
                 onValueChange = { v -> onChange { it.copy(dnsServer = v) } },
@@ -2275,12 +2338,60 @@ private fun LazyListScope.zapretSection(
             VkTurnSwitchRow("Блокировать QUIC (UDP/443) для YouTube/браузера", config.blockQuic, enabled) { v ->
                 onChange { it.copy(strategy = ZapretConfig.STRATEGY_CUSTOM, blockQuic = v) }
             }
-            if (config.strategy == ZapretConfig.STRATEGY_CUSTOM) {
+            if (normalized.strategy == ZapretConfig.STRATEGY_CUSTOM) {
                 VkTurnSwitchRow("Разделять TLS ClientHello (TLS Record Split)", config.tlsRecSplit, enabled) { v ->
                     onChange { it.copy(tlsRecSplit = v) }
                 }
-                VkTurnSwitchRow("Резать первый TCP-пакет на сегменты (TCP Split)", config.tcpSplit, enabled) { v ->
+                if (config.tlsRecSplit) {
+                    Text(
+                        text = "Число TLS-записей",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(2 to "2 записи (SNI)", 3 to "3 записи (Агрессив.)").forEach { (cnt, lbl) ->
+                            FilterChip(
+                                selected = config.tlsRecCount == cnt,
+                                onClick = { onChange { it.copy(tlsRecCount = cnt) } },
+                                enabled = enabled,
+                                label = { Text(lbl) }
+                            )
+                        }
+                    }
+                }
+                VkTurnSwitchRow("Резать пакет на TCP-сегменты по SNI (Split)", config.tcpSplit, enabled) { v ->
                     onChange { it.copy(tcpSplit = v) }
+                }
+                if (config.tcpSplit) {
+                    Text(
+                        text = "Точка нарезки (Split mode)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            ZapretConfig.SPLIT_MODE_ONE_PLUS_MIDSLD to "1 + середина SNI",
+                            ZapretConfig.SPLIT_MODE_MIDSLD to "Середина SNI",
+                            ZapretConfig.SPLIT_MODE_MULTI_SNI to "Multisplit SNI",
+                            ZapretConfig.SPLIT_MODE_FIXED to "Фикс. куски",
+                        ).forEach { (modeKey, modeLabel) ->
+                            FilterChip(
+                                selected = config.splitMode == modeKey,
+                                onClick = { onChange { it.copy(splitMode = modeKey) } },
+                                enabled = enabled,
+                                label = { Text(modeLabel) }
+                            )
+                        }
+                    }
+                }
+                VkTurnSwitchRow("OOB / Urgent-байт в SNI (ByeDPI)", config.oob, enabled) { v ->
+                    onChange { it.copy(oob = v) }
                 }
                 VkTurnSwitchRow("Обфускация HTTP Host (для сайтов без HTTPS)", config.httpHostTricks, enabled) { v ->
                     onChange { it.copy(httpHostTricks = v) }

@@ -865,36 +865,45 @@ data class SnolcConfig(
 }
 
 /**
- * Local userspace DPI-bypass engine ([EngineType.Zapret]): requires no remote server.
- * Serves a local SOCKS5 proxy that applies TLS Record splitting, TCP segmentation/host tricks,
- * optional QUIC blocking (to force HTTP/2 over desynced TLS), UDP dummy packets, and clean DoH DNS.
+ * Local userspace DPI-bypass engine ([EngineType.Zapret]): requires no remote server or root.
+ * Serves a local SOCKS5 proxy supporting ALT preset profiles, automatic live strategy selection
+ * ([STRATEGY_AUTO]), TLS Record multi-splitting, SNI-aware TCP segmentation, OOB urgent-byte
+ * desync, HTTP `Host:` evasion, QUIC blocking/UDP dummy packets, and DoH resolution.
  */
 @Serializable
 data class ZapretConfig(
-    /** Preset strategy: [STRATEGY_AUTO], [STRATEGY_TLSREC], [STRATEGY_SPLIT], or [STRATEGY_CUSTOM]. */
+    /** Preset strategy: [STRATEGY_AUTO], `alt1`..`alt7`, or [STRATEGY_CUSTOM]. */
     val strategy: String = STRATEGY_AUTO,
-    /** Split offset / TCP chunk size for initial ClientHello or HTTP payload (1..64 bytes). */
+    /** Fixed TCP chunk size (1..64 bytes) when [splitMode] is [SPLIT_MODE_FIXED]. */
     @SerialName("split_size")
     val splitSize: Int = DEFAULT_SPLIT_SIZE,
     /** Split TLS ClientHello into multiple valid TLS records (`0x16 0x03 ...`). */
     @SerialName("tls_rec_split")
     val tlsRecSplit: Boolean = true,
-    /** Split initial TCP payload into small segments with `TCP_NODELAY`. */
+    /** Number of TLS records when [tlsRecSplit] is enabled (2 or 3). */
+    @SerialName("tls_rec_count")
+    val tlsRecCount: Int = DEFAULT_TLS_REC_COUNT,
+    /** Split initial TLS/HTTP payload into separate TCP segments (`TCP_NODELAY`). */
     @SerialName("tcp_split")
     val tcpSplit: Boolean = true,
-    /** Maximum initial TCP segments when [tcpSplit] is enabled. */
+    /** Where to slice TCP segments: [SPLIT_MODE_ONE_PLUS_MIDSLD], [SPLIT_MODE_MIDSLD], [SPLIT_MODE_MULTI_SNI], or [SPLIT_MODE_FIXED]. */
+    @SerialName("split_mode")
+    val splitMode: String = SPLIT_MODE_ONE_PLUS_MIDSLD,
+    /** Maximum initial TCP segments when [splitMode] is [SPLIT_MODE_FIXED]. */
     @SerialName("split_count")
     val splitCount: Int = DEFAULT_SPLIT_COUNT,
     /** Inter-segment delay in milliseconds (0..25 ms). */
     @SerialName("split_delay_ms")
     val splitDelayMs: Int = DEFAULT_SPLIT_DELAY_MS,
-    /** Apply mixed-case / split `Host:` header evasion for plain HTTP. */
+    /** Inject a TCP OOB urgent byte (`MSG_OOB`) between split segments inside SNI. */
+    val oob: Boolean = false,
+    /** Apply mixed-case `Host:` header evasion for plain HTTP. */
     @SerialName("http_host_tricks")
     val httpHostTricks: Boolean = true,
     /** Drop UDP/443 (QUIC) so browsers/apps use TCP TLS-desynced HTTP/2 instead. */
     @SerialName("block_quic")
     val blockQuic: Boolean = true,
-    /** Optional dummy UDP packets sent before a non-DNS UDP flow when QUIC is not blocked (0..6). */
+    /** Dummy UDP packets sent before a non-DNS UDP flow when QUIC is not blocked (0..6). */
     @SerialName("udp_fake_count")
     val udpFakeCount: Int = 0,
     /** Clean DoH or plain DNS resolver used by Zapret (`https://...` or IP[:port]). */
@@ -902,92 +911,167 @@ data class ZapretConfig(
     val dnsServer: String = DEFAULT_DNS_SERVER,
     /** Optional newline/comma-separated domain suffixes to bypass (blank = all TLS/HTTP traffic). */
     val targets: String = "",
+    /** Probe domains used by [STRATEGY_AUTO] to pick the best working ALT config. */
+    @SerialName("probe_targets")
+    val probeTargets: String = DEFAULT_PROBE_TARGETS,
 ) {
     fun normalized(): ZapretConfig {
-        val normStrategy = strategy.trim().lowercase().takeIf { it in STRATEGIES } ?: STRATEGY_AUTO
-        return when (normStrategy) {
-            STRATEGY_AUTO -> copy(
-                strategy = STRATEGY_AUTO,
-                splitSize = DEFAULT_SPLIT_SIZE,
-                tlsRecSplit = true,
-                tcpSplit = true,
-                splitCount = DEFAULT_SPLIT_COUNT,
-                splitDelayMs = DEFAULT_SPLIT_DELAY_MS,
-                httpHostTricks = true,
-                blockQuic = true,
-                udpFakeCount = 0,
-                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
-                targets = targets.trim(),
-            )
-            STRATEGY_TLSREC -> copy(
-                strategy = STRATEGY_TLSREC,
-                splitSize = 2,
-                tlsRecSplit = true,
-                tcpSplit = false,
-                splitCount = 2,
-                splitDelayMs = 0,
-                httpHostTricks = true,
-                blockQuic = false,
-                udpFakeCount = 2,
-                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
-                targets = targets.trim(),
-            )
-            STRATEGY_SPLIT -> copy(
-                strategy = STRATEGY_SPLIT,
-                splitSize = 3,
-                tlsRecSplit = false,
-                tcpSplit = true,
-                splitCount = 6,
-                splitDelayMs = 1,
-                httpHostTricks = true,
-                blockQuic = true,
-                udpFakeCount = 0,
-                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
-                targets = targets.trim(),
-            )
-            else -> copy(
-                strategy = STRATEGY_CUSTOM,
-                splitSize = splitSize.coerceIn(1, 64),
-                splitCount = splitCount.coerceIn(1, 16),
-                splitDelayMs = splitDelayMs.coerceIn(0, 25),
-                udpFakeCount = udpFakeCount.coerceIn(0, 6),
-                dnsServer = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER },
-                targets = targets.trim(),
+        val rawStrategy = strategy.trim().lowercase()
+        val mappedStrategy = when (rawStrategy) {
+            STRATEGY_LEGACY_TLSREC -> STRATEGY_ALT1
+            STRATEGY_LEGACY_SPLIT -> STRATEGY_ALT2
+            in STRATEGIES -> rawStrategy
+            else -> STRATEGY_AUTO
+        }
+        val cleanDns = dnsServer.trim().ifBlank { DEFAULT_DNS_SERVER }
+        val cleanTargets = targets.trim()
+        val cleanProbes = probeTargets.trim().ifBlank { DEFAULT_PROBE_TARGETS }
+        val cleanSplitMode = splitMode.trim().lowercase().takeIf { it in SPLIT_MODES } ?: SPLIT_MODE_ONE_PLUS_MIDSLD
+        return when (mappedStrategy) {
+            STRATEGY_AUTO -> applyPresetFields(STRATEGY_AUTO, DEFAULT_SPLIT_SIZE, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT1 -> applyPresetFields(STRATEGY_ALT1, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT2 -> applyPresetFields(STRATEGY_ALT2, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, true, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 2, true, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 2, false, true, false, 3, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT6 -> applyPresetFields(STRATEGY_ALT6, 3, true, 3, true, SPLIT_MODE_MULTI_SNI, 8, 3, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT7 -> applyPresetFields(STRATEGY_ALT7, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 2, true, true, false, 2, cleanDns, cleanTargets, cleanProbes)
+            else -> applyPresetFields(
+                STRATEGY_CUSTOM,
+                splitSize.coerceIn(1, 64),
+                tlsRecSplit,
+                tlsRecCount.coerceIn(2, 3),
+                tcpSplit,
+                cleanSplitMode,
+                splitCount.coerceIn(1, 16),
+                splitDelayMs.coerceIn(0, 25),
+                oob,
+                httpHostTricks,
+                blockQuic,
+                udpFakeCount.coerceIn(0, 6),
+                cleanDns,
+                cleanTargets,
+                cleanProbes,
             )
         }
     }
+
+    private fun applyPresetFields(
+        strategy: String,
+        splitSize: Int,
+        tlsRecSplit: Boolean,
+        tlsRecCount: Int,
+        tcpSplit: Boolean,
+        splitMode: String,
+        splitCount: Int,
+        splitDelayMs: Int,
+        oob: Boolean,
+        httpHostTricks: Boolean,
+        blockQuic: Boolean,
+        udpFakeCount: Int,
+        dns: String,
+        targets: String,
+        probes: String,
+    ) = copy(
+        strategy = strategy,
+        splitSize = splitSize,
+        tlsRecSplit = tlsRecSplit,
+        tlsRecCount = tlsRecCount,
+        tcpSplit = tcpSplit,
+        splitMode = splitMode,
+        splitCount = splitCount,
+        splitDelayMs = splitDelayMs,
+        oob = oob,
+        httpHostTricks = httpHostTricks,
+        blockQuic = blockQuic,
+        udpFakeCount = udpFakeCount,
+        dnsServer = dns,
+        targets = targets,
+        probeTargets = probes,
+    )
 
     fun withPreset(preset: String): ZapretConfig = copy(strategy = preset).normalized()
 
     fun isComplete(): Boolean = true
 
-    fun summary(): String = when (normalized().strategy) {
-        STRATEGY_TLSREC -> "TLS Record + UDP"
-        STRATEGY_SPLIT -> "TCP Split + QUIC block"
-        STRATEGY_CUSTOM -> buildList {
-            if (tlsRecSplit) add("TLSRec")
-            if (tcpSplit) add("Split")
-            if (blockQuic) add("No-QUIC")
+    fun summary(): String {
+        val n = normalized()
+        PRESETS.firstOrNull { it.key == n.strategy }?.let { return it.shortLabel }
+        return buildList {
+            if (n.tlsRecSplit) add("TLSRec×${n.tlsRecCount}")
+            if (n.tcpSplit) add(
+                when (n.splitMode) {
+                    SPLIT_MODE_MIDSLD -> "Split(midsld)"
+                    SPLIT_MODE_MULTI_SNI -> "Multisplit(SNI)"
+                    SPLIT_MODE_FIXED -> "Split(${n.splitSize}B)"
+                    else -> "Split(1+midsld)"
+                }
+            )
+            if (n.oob) add("OOB")
+            if (n.blockQuic) add("No-QUIC") else if (n.udpFakeCount > 0) add("UDP-Fake×${n.udpFakeCount}")
         }.ifEmpty { listOf("Direct") }.joinToString(" + ")
-        else -> "Auto (TLSRec + Split)"
     }
 
-    fun targetSuffixes(): List<String> = targets
+    fun targetSuffixes(): List<String> = parseDomainList(targets)
+
+    fun probeHosts(): List<String> = parseDomainList(probeTargets).ifEmpty { listOf("www.youtube.com", "discord.com") }
+
+    private fun parseDomainList(raw: String): List<String> = raw
         .split('\n', '\r', ',', ';', ' ')
         .map { it.trim().trimStart('.').lowercase() }
         .filter { it.isNotEmpty() }
 
+    data class PresetInfo(
+        val key: String,
+        val label: String,
+        val shortLabel: String,
+        val description: String,
+    )
+
     companion object {
         const val STRATEGY_AUTO = "auto"
-        const val STRATEGY_TLSREC = "tlsrec"
-        const val STRATEGY_SPLIT = "split"
+        const val STRATEGY_ALT1 = "alt1"
+        const val STRATEGY_ALT2 = "alt2"
+        const val STRATEGY_ALT3 = "alt3"
+        const val STRATEGY_ALT4 = "alt4"
+        const val STRATEGY_ALT5 = "alt5"
+        const val STRATEGY_ALT6 = "alt6"
+        const val STRATEGY_ALT7 = "alt7"
         const val STRATEGY_CUSTOM = "custom"
-        val STRATEGIES = listOf(STRATEGY_AUTO, STRATEGY_TLSREC, STRATEGY_SPLIT, STRATEGY_CUSTOM)
+        // Legacy keys from earlier Zapret builds, automatically migrated in normalized().
+        const val STRATEGY_LEGACY_TLSREC = "tlsrec"
+        const val STRATEGY_LEGACY_SPLIT = "split"
+
+        const val SPLIT_MODE_ONE_PLUS_MIDSLD = "1+midsld"
+        const val SPLIT_MODE_MIDSLD = "midsld"
+        const val SPLIT_MODE_MULTI_SNI = "multi_sni"
+        const val SPLIT_MODE_FIXED = "fixed"
+        val SPLIT_MODES = listOf(SPLIT_MODE_ONE_PLUS_MIDSLD, SPLIT_MODE_MIDSLD, SPLIT_MODE_MULTI_SNI, SPLIT_MODE_FIXED)
+
+        val ALT_PRESETS: List<PresetInfo> = listOf(
+            PresetInfo(STRATEGY_ALT1, "ALT 1 · TLSRec + Split SNI", "ALT 1 (TLSRec + Split)", "2 TLS-записи + резка в 1 и середине SNI, QUIC выкл."),
+            PresetInfo(STRATEGY_ALT2, "ALT 2 · Multisplit (без TLSRec)", "ALT 2 (Multisplit SNI)", "Только TCP-сегменты по SNI (обходит ТСПУ, режущие 2 TLS-записи)"),
+            PresetInfo(STRATEGY_ALT3, "ALT 3 · OOB (URG + Split)", "ALT 3 (OOB + Split)", "TCP-сегмент до середины SNI + Urgent OOB-байт (ByeDPI)"),
+            PresetInfo(STRATEGY_ALT4, "ALT 4 · TLSRec + OOB", "ALT 4 (TLSRec + OOB)", "TLS Record Split + OOB Urgent-байт + блокировка QUIC"),
+            PresetInfo(STRATEGY_ALT5, "ALT 5 · Multisplit + UDP/QUIC", "ALT 5 (Multisplit + UDP)", "Multisplit по SNI без блокировки QUIC + фейк-пакеты UDP для Discord"),
+            PresetInfo(STRATEGY_ALT6, "ALT 6 · Агрессивный (3× TLSRec)", "ALT 6 (3× TLSRec + пауза)", "3 TLS-записи + частый Multisplit SNI с паузой 3 мс"),
+            PresetInfo(STRATEGY_ALT7, "ALT 7 · TLSRec + OOB + UDP", "ALT 7 (TLSRec + OOB + UDP)", "TLS Record + OOB с разрешённым QUIC и UDP-фейками"),
+        )
+
+        val PRESETS: List<PresetInfo> = listOf(
+            PresetInfo(STRATEGY_AUTO, "Авто (автоподбор ALT)", "Авто (подбор ALT)", "При подключении сам проверяет ALT 1–7 и выбирает рабочий"),
+        ) + ALT_PRESETS + listOf(
+            PresetInfo(STRATEGY_CUSTOM, "Свой (ручной)", "Свой", "Ручная настройка TLSRec, Multisplit, OOB, QUIC и пауз"),
+        )
+
+        val STRATEGIES = PRESETS.map { it.key }
 
         const val DEFAULT_SPLIT_SIZE = 2
+        const val DEFAULT_TLS_REC_COUNT = 2
         const val DEFAULT_SPLIT_COUNT = 4
-        const val DEFAULT_SPLIT_DELAY_MS = 1
+        const val DEFAULT_SPLIT_DELAY_MS = 2
         const val DEFAULT_DNS_SERVER = "https://1.1.1.1/dns-query"
+        const val DEFAULT_PROBE_TARGETS = "www.youtube.com, discord.com"
         const val DEFAULT_LOCATION_NAME = "Zapret (DPI)"
     }
 }
