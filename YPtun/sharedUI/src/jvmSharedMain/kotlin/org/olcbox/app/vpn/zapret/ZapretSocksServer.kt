@@ -218,6 +218,10 @@ class ZapretSocksServer {
             writeSocksReply(clientOut, 0x04)
             return
         }
+        if (isStaleMappedDnsIp(targetAddr)) {
+            writeSocksReply(clientOut, 0x04)
+            return
+        }
 
         val remote = Socket()
         try {
@@ -740,6 +744,9 @@ class ZapretSocksServer {
                 // signature_algorithms (0x000d)
                 writeShort(0x000d); writeShort(10); writeShort(8)
                 writeShort(0x0403); writeShort(0x0804); writeShort(0x0401); writeShort(0x0503)
+                // extended_master_secret (0x0017) & renegotiation_info (0xff01)
+                writeShort(0x0017); writeShort(0)
+                writeShort(0xff01); writeShort(1); write(0)
                 // ALPN (0x0010): h2, http/1.1
                 writeShort(0x0010); writeShort(14); writeShort(12)
                 write(2); write('h'.code); write('2'.code)
@@ -747,10 +754,10 @@ class ZapretSocksServer {
             }.toByteArray()
 
             val body = ByteArrayOutputStream().apply {
-                writeShort(0x0303) // legacy_version TLS 1.2
+                writeShort(0x0303) // TLS 1.2
                 write(Random.nextBytes(32)) // random
                 write(0) // session_id_length = 0
-                val ciphers = intArrayOf(0x1301, 0x1302, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca8, 0xcca9)
+                val ciphers = intArrayOf(0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca8, 0xcca9)
                 writeShort(ciphers.size * 2)
                 for (c in ciphers) writeShort(c)
                 write(1); write(0) // compression: null
@@ -773,6 +780,12 @@ class ZapretSocksServer {
         private fun ByteArrayOutputStream.writeShort(v: Int) {
             write((v shr 8) and 0xFF)
             write(v and 0xFF)
+        }
+
+        internal fun isStaleMappedDnsIp(addr: InetAddress): Boolean {
+            val b = (addr as? Inet4Address)?.address ?: return false
+            // 100.64.0.0/10 is reserved for hev-socks5-tunnel's synthetic mapdns pool.
+            return (b[0].toInt() and 0xFF) == 100 && (b[1].toInt() and 0xC0) == 64
         }
 
         internal fun shouldDesync(cfg: ZapretConfig, dstHost: String, sniffedHost: String?): Boolean {
@@ -805,20 +818,21 @@ class ZapretSocksServer {
                 } else {
                     buf.copyOf(len)
                 }
+                val sniSpanInFramed = if (!cfg.tlsRecSplit) {
+                    val recLen = ((framed[3].toInt() and 0xFF) shl 8) or (framed[4].toInt() and 0xFF)
+                    findTlsSniPayloadRange(framed, 5, minOf(framed.size, 5 + recLen))
+                } else {
+                    null
+                }
                 val sniMidInFramed = if (cfg.tlsRecSplit && framed.size > len) {
-                    // First record boundary falls right at the split inside SNI / last record cut.
                     findLastTlsRecordStart(framed)
                 } else {
-                    val recLen = ((framed[3].toInt() and 0xFF) shl 8) or (framed[4].toInt() and 0xFF)
-                    val span = findTlsSniPayloadRange(framed, 5, minOf(framed.size, 5 + recLen))
-                    span?.let { (it.first + it.last) / 2 }
+                    sniSpanInFramed?.let { (it.first + it.last) / 2 }
                 }
-                val sniStartInFramed = if (!cfg.tlsRecSplit) {
-                    val recLen = ((framed[3].toInt() and 0xFF) shl 8) or (framed[4].toInt() and 0xFF)
-                    findTlsSniPayloadRange(framed, 5, minOf(framed.size, 5 + recLen))?.first
-                } else {
-                    5 + (((framed[3].toInt() and 0xFF) shl 8) or (framed[4].toInt() and 0xFF))
-                }
+                val sniStartInFramed = sniSpanInFramed?.first
+                    ?: (5 + (((framed[3].toInt() and 0xFF) shl 8) or (framed[4].toInt() and 0xFF)))
+                val sniEndInFramed = sniSpanInFramed?.let { it.last + 1 }
+                    ?: (sniMidInFramed?.let { minOf(framed.size - 1, it + 16) })
 
                 val cuts = if (cfg.tcpSplit) {
                     computeTcpSplitBoundaries(
@@ -828,6 +842,7 @@ class ZapretSocksServer {
                         splitCount = cfg.splitCount,
                         hostStart = sniStartInFramed,
                         hostMid = sniMidInFramed,
+                        hostEnd = sniEndInFramed,
                     )
                 } else if (cfg.tlsRecSplit && framed.size > len) {
                     collectTlsRecordBoundaries(framed)
@@ -836,6 +851,7 @@ class ZapretSocksServer {
                 }
                 val oobOffset = if (cfg.oob) (sniMidInFramed ?: 1).coerceIn(1, framed.size - 1) else null
                 val mergedCuts = if (oobOffset != null) (cuts + oobOffset).distinct().sorted() else cuts
+                val disorderSliceIdx = if (cfg.splitMode == ZapretConfig.SPLIT_MODE_SNI_HOLE) 1 else 0
                 writeSplitSlices(
                     out = out,
                     buf = framed,
@@ -844,6 +860,7 @@ class ZapretSocksServer {
                     oobAtOffset = oobOffset,
                     disorder = cfg.disorder,
                     disorderTtl = cfg.disorderTtl,
+                    disorderSliceIndex = disorderSliceIdx,
                     rawSocket = rawSocket,
                     onUrgentByte = onUrgentByte,
                     onTtlChange = ttlSetter,
@@ -862,6 +879,7 @@ class ZapretSocksServer {
                         splitCount = cfg.splitCount,
                         hostStart = hostRange?.first,
                         hostMid = hostRange?.let { (it.first + it.last) / 2 },
+                        hostEnd = hostRange?.let { it.last + 1 },
                     )
                 } else {
                     emptyList()
@@ -876,6 +894,7 @@ class ZapretSocksServer {
                 } else {
                     cuts
                 }
+                val disorderSliceIdx = if (cfg.splitMode == ZapretConfig.SPLIT_MODE_SNI_HOLE) 1 else 0
                 writeSplitSlices(
                     out = out,
                     buf = payload,
@@ -884,6 +903,7 @@ class ZapretSocksServer {
                     oobAtOffset = oobOffset,
                     disorder = cfg.disorder,
                     disorderTtl = cfg.disorderTtl,
+                    disorderSliceIndex = disorderSliceIdx,
                     rawSocket = rawSocket,
                     onUrgentByte = onUrgentByte,
                     onTtlChange = ttlSetter,
@@ -903,6 +923,7 @@ class ZapretSocksServer {
             oobAtOffset: Int?,
             disorder: Boolean,
             disorderTtl: Int,
+            disorderSliceIndex: Int,
             rawSocket: Socket?,
             onUrgentByte: (() -> Unit)?,
             onTtlChange: ((Int) -> Boolean)?,
@@ -912,17 +933,23 @@ class ZapretSocksServer {
                 out.flush()
                 return
             }
+            val cleanCuts = cuts.filter { it in 1 until buf.size }.distinct().sorted()
+            if (cleanCuts.isEmpty()) {
+                out.write(buf)
+                out.flush()
+                return
+            }
+            val targetSlice = disorderSliceIndex.coerceIn(0, cleanCuts.size - 1)
             var prev = 0
-            var isFirstSlice = true
-            for (cut in cuts) {
-                if (cut <= prev || cut >= buf.size) continue
-                val ttlLowered = isFirstSlice && disorder && onTtlChange?.invoke(disorderTtl.coerceIn(1, 8)) == true
+            var sliceIdx = 0
+            for (cut in cleanCuts) {
+                val ttlLowered = sliceIdx == targetSlice && disorder && onTtlChange?.invoke(disorderTtl.coerceIn(1, 8)) == true
                 out.write(buf, prev, cut - prev)
                 out.flush()
                 if (ttlLowered) {
                     // Let the kernel push the low-TTL segment to the NIC before restoring TTL=64.
                     runCatching { Thread.sleep(maxOf(delayMs, 3).toLong()) }
-                    onTtlChange?.invoke(64)
+                    onTtlChange(64)
                 } else if (delayMs > 0) {
                     runCatching { Thread.sleep(delayMs.toLong()) }
                 }
@@ -931,7 +958,7 @@ class ZapretSocksServer {
                     onUrgentByte?.invoke()
                 }
                 prev = cut
-                isFirstSlice = false
+                sliceIdx++
             }
             if (prev < buf.size) {
                 out.write(buf, prev, buf.size - prev)
@@ -946,13 +973,16 @@ class ZapretSocksServer {
             splitCount: Int,
             hostStart: Int?,
             hostMid: Int?,
+            hostEnd: Int? = null,
         ): List<Int> {
             if (len <= 1) return emptyList()
             val mid = (hostMid ?: (len / 2)).coerceIn(1, len - 1)
             val start = (hostStart ?: (mid / 2).coerceAtLeast(1)).coerceIn(1, len - 1)
+            val end = (hostEnd ?: (mid + 8).coerceAtMost(len - 1)).coerceIn((start + 1).coerceAtMost(len - 1), len - 1)
             val raw = when (splitMode) {
                 ZapretConfig.SPLIT_MODE_ONE -> listOf(1)
                 ZapretConfig.SPLIT_MODE_MIDSLD -> listOf(mid)
+                ZapretConfig.SPLIT_MODE_SNI_HOLE -> listOf(start, end)
                 ZapretConfig.SPLIT_MODE_MULTI_SNI -> listOf(1, 2, start, (start + mid) / 2, mid, (mid + 2).coerceAtMost(len - 1))
                 ZapretConfig.SPLIT_MODE_FIXED -> buildList {
                     add(1)

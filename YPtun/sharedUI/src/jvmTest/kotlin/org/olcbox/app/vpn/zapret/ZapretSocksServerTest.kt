@@ -36,16 +36,18 @@ class ZapretSocksServerTest {
         assertEquals(false, alt2.oob)
 
         val alt3 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3)
-        assertTrue(alt3.tlsRecSplit)
+        assertEquals(false, alt3.tlsRecSplit)
+        assertEquals(ZapretConfig.SPLIT_MODE_SNI_HOLE, alt3.splitMode)
         assertTrue(alt3.disorder)
         assertEquals(false, alt3.oob)
 
         val alt4 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT4)
         assertEquals(3, alt4.tlsRecCount)
-        assertEquals(false, alt4.oob)
+        assertEquals(ZapretConfig.SPLIT_MODE_SNI_HOLE, alt4.splitMode)
+        assertTrue(alt4.disorder)
 
         val alt5 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5)
-        assertEquals(ZapretConfig.SPLIT_MODE_ONE, alt5.splitMode)
+        assertTrue(alt5.oob)
         assertTrue(alt5.disorder)
 
         val alt6 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT6)
@@ -109,6 +111,19 @@ class ZapretSocksServerTest {
         )
         assertEquals(listOf(1, 64), ttlSequence)
         assertContentEquals(hello, disorderOut.toByteArray())
+
+        // SNI-Hole drops the second slice (SNI itself), keeping header & tail at TTL=64.
+        val holeTtl = mutableListOf<Int>()
+        val holeCfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3).copy(splitDelayMs = 0)
+        val holeOut = ByteArrayOutputStream()
+        ZapretSocksServer.writeDesyncedInitial(
+            holeOut, hello, hello.size, holeCfg,
+            onTtlChange = { ttl -> holeTtl.add(ttl); true },
+        )
+        assertEquals(listOf(1, 64), holeTtl)
+        assertContentEquals(hello, holeOut.toByteArray())
+        assertTrue(ZapretSocksServer.isStaleMappedDnsIp(InetAddress.getByName("100.64.0.104")))
+        assertEquals(false, ZapretSocksServer.isStaleMappedDnsIp(InetAddress.getByName("1.1.1.1")))
 
         val cuts = ZapretSocksServer.computeTcpSplitBoundaries(
             len = hello.size,

@@ -2408,6 +2408,7 @@ private fun LazyListScope.zapretSection(
                             ZapretConfig.SPLIT_MODE_ONE to "1 байт (-s1)",
                             ZapretConfig.SPLIT_MODE_ONE_PLUS_MIDSLD to "1 + середина SNI",
                             ZapretConfig.SPLIT_MODE_MIDSLD to "Середина SNI",
+                            ZapretConfig.SPLIT_MODE_SNI_HOLE to "SNI-дыра (Hole)",
                             ZapretConfig.SPLIT_MODE_MULTI_SNI to "Multisplit SNI",
                             ZapretConfig.SPLIT_MODE_FIXED to "Фикс. куски",
                         ).forEach { (modeKey, modeLabel) ->

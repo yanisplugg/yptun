@@ -936,9 +936,9 @@ data class ZapretConfig(
             STRATEGY_AUTO -> applyPresetFields(STRATEGY_AUTO, DEFAULT_SPLIT_SIZE, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
             STRATEGY_ALT1 -> applyPresetFields(STRATEGY_ALT1, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
             STRATEGY_ALT2 -> applyPresetFields(STRATEGY_ALT2, 2, false, 2, true, SPLIT_MODE_MIDSLD, 4, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 3, true, 3, true, SPLIT_MODE_MULTI_SNI, 8, 5, false, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 1, false, 2, true, SPLIT_MODE_ONE, 2, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, false, 2, true, SPLIT_MODE_SNI_HOLE, 4, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 2, true, 3, true, SPLIT_MODE_SNI_HOLE, 4, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 2, false, 2, true, SPLIT_MODE_MIDSLD, 4, 3, true, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
             STRATEGY_ALT6 -> applyPresetFields(STRATEGY_ALT6, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 3, true, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
             STRATEGY_ALT7 -> applyPresetFields(STRATEGY_ALT7, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 3, false, true, 1, true, false, 3, cleanDns, cleanTargets, cleanProbes)
             else -> applyPresetFields(
@@ -1015,6 +1015,7 @@ data class ZapretConfig(
                     SPLIT_MODE_ONE -> "Split(1)"
                     SPLIT_MODE_MIDSLD -> "Split(midsld)"
                     SPLIT_MODE_MULTI_SNI -> "Multisplit(SNI)"
+                    SPLIT_MODE_SNI_HOLE -> "SNI-Hole"
                     SPLIT_MODE_FIXED -> "Split(${n.splitSize}B)"
                     else -> "Split(1+midsld)"
                 }
@@ -1059,15 +1060,16 @@ data class ZapretConfig(
         const val SPLIT_MODE_ONE_PLUS_MIDSLD = "1+midsld"
         const val SPLIT_MODE_MIDSLD = "midsld"
         const val SPLIT_MODE_MULTI_SNI = "multi_sni"
+        const val SPLIT_MODE_SNI_HOLE = "sni_hole"
         const val SPLIT_MODE_FIXED = "fixed"
-        val SPLIT_MODES = listOf(SPLIT_MODE_ONE, SPLIT_MODE_ONE_PLUS_MIDSLD, SPLIT_MODE_MIDSLD, SPLIT_MODE_MULTI_SNI, SPLIT_MODE_FIXED)
+        val SPLIT_MODES = listOf(SPLIT_MODE_ONE, SPLIT_MODE_ONE_PLUS_MIDSLD, SPLIT_MODE_MIDSLD, SPLIT_MODE_MULTI_SNI, SPLIT_MODE_SNI_HOLE, SPLIT_MODE_FIXED)
 
         val ALT_PRESETS: List<PresetInfo> = listOf(
             PresetInfo(STRATEGY_ALT1, "ALT 1 · TLSRec + Split SNI", "ALT 1 (TLSRec + Split)", "2 TLS-записи + резка в 1 и середине SNI, QUIC выкл."),
-            PresetInfo(STRATEGY_ALT2, "ALT 2 · Disorder (TTL=1, SNI)", "ALT 2 (Disorder SNI)", "Out-of-order TCP: 1-й кусок до SNI с TTL=1, затем 2-й (против ТСПУ YouTube)"),
-            PresetInfo(STRATEGY_ALT3, "ALT 3 · TLSRec + Disorder (TTL=1)", "ALT 3 (TLSRec + Disorder)", "Комбо: 2 TLS-записи + out-of-order TTL=1 по SNI, QUIC выкл."),
-            PresetInfo(STRATEGY_ALT4, "ALT 4 · 3× TLSRec (1 + SNI)", "ALT 4 (3× TLSRec 1+SNI)", "3 TLS-записи (резка в 1-м байте и середине SNI) + Multisplit"),
-            PresetInfo(STRATEGY_ALT5, "ALT 5 · Disorder 1 байт (-d1)", "ALT 5 (Disorder 1)", "Out-of-order TCP на 1-м байте (TTL=1), без изменения TLS-записей"),
+            PresetInfo(STRATEGY_ALT2, "ALT 2 · Disorder (TTL=1, SNI)", "ALT 2 (Disorder SNI)", "Out-of-order TCP: 1-й кусок до SNI с TTL=1, затем 2-й"),
+            PresetInfo(STRATEGY_ALT3, "ALT 3 · SNI-Hole Disorder (TTL=1)", "ALT 3 (SNI-Hole)", "Домен целиком (SNI) отправляется с TTL=1 (исчезает для ТСПУ) и пересылается позже"),
+            PresetInfo(STRATEGY_ALT4, "ALT 4 · TLSRec + SNI-Hole", "ALT 4 (TLSRec + Hole)", "3 TLS-записи + SNI-сегмент с TTL=1, QUIC выкл."),
+            PresetInfo(STRATEGY_ALT5, "ALT 5 · Disorder + OOB", "ALT 5 (Disorder + OOB)", "Комбо: Disorder TTL=1 по SNI + Urgent OOB-байт"),
             PresetInfo(STRATEGY_ALT6, "ALT 6 · OOB (URG + Split)", "ALT 6 (OOB + Split)", "TCP-сегмент до SNI + Urgent OOB-байт (ByeDPI -o), QUIC выкл."),
             PresetInfo(STRATEGY_ALT7, "ALT 7 · TLSRec + Disorder + UDP", "ALT 7 (Disorder + UDP)", "TLS Record + Disorder TTL=1 с разрешённым QUIC и UDP-фейками"),
         )
