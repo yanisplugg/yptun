@@ -232,6 +232,9 @@ class OlcboxVpnService : VpnService() {
     private var snolcProcess: Process? = null
     /** Zapret DPI-bypass SOCKS5 engine for [EngineType.Zapret]; null when another engine is running. */
     private var zapretServer: ZapretSocksServer? = null
+    private var zapretRootProcess: Process? = null
+    @Volatile private var zapretRootActive: Boolean = false
+    private val zapretRootFlagFile get() = File(filesDir, "zapret_root.applied")
 
     /** True when a proxy core fronts the snolc tunnel (proxy-over-snolc). */
     private var snolcProxyActive: Boolean = false
@@ -528,6 +531,7 @@ class OlcboxVpnService : VpnService() {
 
         // A killed process leaves the redirect rules pointing at a dead port = no internet at all.
         if (tproxyFlagFile.exists()) scope.launch { teardownTproxyRules() }
+        if (zapretRootFlagFile.exists()) scope.launch { stopZapretRootHelper() }
 
         installMobileCallbacks()
         observeSpeedNotificationSetting()
@@ -1409,14 +1413,30 @@ class OlcboxVpnService : VpnService() {
                     runCatching { (currentNetwork ?: upstream).bindSocket(datagram) }
                 }
             }
-            val effectiveZapret = withContext(Dispatchers.IO) {
-                ZapretSocksServer.resolveRuntimeConfig(
-                    config = zapret,
-                    protectSocket = protectTcp,
-                    protectDatagram = protectUdp,
-                    forceRefresh = false,
-                    log = { msg -> addLog(msg) },
+            val rootActive = if (zapret.rootMode) {
+                startZapretRootHelper(zapret)
+            } else {
+                if (zapretRootFlagFile.exists()) stopZapretRootHelper()
+                false
+            }
+            val effectiveZapret = if (rootActive && zapret.rootSplitSni) {
+                // Keep ClientHello unsplit in userspace so NFQUEUE injects decoy + splits cleanly at wire level.
+                zapret.copy(
+                    tlsRecSplit = false,
+                    tcpSplit = false,
+                    disorder = false,
+                    oob = false,
                 )
+            } else {
+                withContext(Dispatchers.IO) {
+                    ZapretSocksServer.resolveRuntimeConfig(
+                        config = zapret,
+                        protectSocket = protectTcp,
+                        protectDatagram = protectUdp,
+                        forceRefresh = false,
+                        log = { msg -> addLog(msg) },
+                    )
+                }
             }
             coroutineContext.ensureActive()
             if (requestedGeneration != generation) {
@@ -3395,6 +3415,103 @@ class OlcboxVpnService : VpnService() {
         }
     }
 
+    private suspend fun startZapretRootHelper(config: org.olcbox.app.data.model.ZapretConfig): Boolean =
+        withContext(Dispatchers.IO) {
+            stopZapretRootHelperSync()
+            val binFile = File(applicationInfo.nativeLibraryDir, "libzapretroot.so")
+            if (!binFile.exists()) {
+                addLog("Zapret Root: libzapretroot.so не найден, используется обычный режим")
+                return@withContext false
+            }
+            val safeSni = config.rootDecoySni
+                .filter { it.isLetterOrDigit() || it == '.' || it == '-' }
+                .ifBlank { org.olcbox.app.data.model.ZapretConfig.DEFAULT_ROOT_DECOY_SNI }
+            val uid = android.os.Process.myUid()
+            val args = buildString {
+                append('"').append(binFile.absolutePath).append('"')
+                append(" --queue 240")
+                append(" --ttl ").append(config.rootFakeTtl.coerceIn(1, 16))
+                append(" --sni ").append(safeSni)
+                append(" --repeats ").append(config.rootFakeCount.coerceIn(1, 5))
+                append(" --badsum ").append(if (config.rootBadSum) 1 else 0)
+                append(" --split-sni ").append(if (config.rootSplitSni) 1 else 0)
+            }
+            val cmd = """
+                export PATH=/system/bin:/system/xbin:/vendor/bin:${'$'}PATH
+                IPT=$(command -v iptables || echo /system/bin/iptables)
+                if [ "${'$'}(id -u)" != "0" ]; then echo "ERR_NO_ROOT"; exit 1; fi
+                while ${'$'}IPT -t mangle -D OUTPUT -m owner --uid-owner $uid -p tcp -m multiport --dports 80,443 -m connbytes --connbytes 1:6 --connbytes-dir original --connbytes-mode packets -m mark ! --mark 0x20000/0x20000 -j NFQUEUE --queue-num 240 --queue-bypass 2>/dev/null; do :; done
+                while ${'$'}IPT -t mangle -D OUTPUT -m owner --uid-owner $uid -p tcp --dport 443 -m mark ! --mark 0x20000/0x20000 -j NFQUEUE --queue-num 240 --queue-bypass 2>/dev/null; do :; done
+                if ${'$'}IPT -t mangle -I OUTPUT -m owner --uid-owner $uid -p tcp -m multiport --dports 80,443 -m connbytes --connbytes 1:6 --connbytes-dir original --connbytes-mode packets -m mark ! --mark 0x20000/0x20000 -j NFQUEUE --queue-num 240 --queue-bypass 2>/dev/null; then
+                    :
+                elif ${'$'}IPT -t mangle -I OUTPUT -m owner --uid-owner $uid -p tcp --dport 443 -m mark ! --mark 0x20000/0x20000 -j NFQUEUE --queue-num 240 --queue-bypass 2>/dev/null; then
+                    :
+                else
+                    echo "ERR_NO_NFQUEUE"
+                    exit 2
+                fi
+                exec $args
+            """.trimIndent()
+            return@withContext try {
+                zapretRootFlagFile.writeText(uid.toString())
+                val proc = ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start()
+                zapretRootProcess = proc
+                val reader = proc.inputStream.bufferedReader()
+                val firstLine = withTimeoutOrNull(2_500L) { reader.readLine() }
+                if (firstLine != null && firstLine.startsWith("zapret_root: active")) {
+                    zapretRootActive = true
+                    addLog("Zapret Root включён: $firstLine")
+                    thread(name = "ZapretRootLog", isDaemon = true) {
+                        runCatching {
+                            reader.forEachLine { line -> addLog(line) }
+                        }
+                    }
+                    true
+                } else {
+                    addLog("Zapret Root не запущен (${firstLine ?: "timeout/denied"}) — используется обычный режим")
+                    stopZapretRootHelperSync()
+                    false
+                }
+            } catch (e: Exception) {
+                addLog("Zapret Root ошибка: ${e.message} — используется обычный режим")
+                stopZapretRootHelperSync()
+                false
+            }
+        }
+
+    private suspend fun stopZapretRootHelper() = withContext(Dispatchers.IO) {
+        stopZapretRootHelperSync()
+    }
+
+    private fun stopZapretRootHelperSync() {
+        val wasFlagged = zapretRootFlagFile.exists()
+        val hadProcess = zapretRootProcess != null
+        zapretRootActive = false
+        zapretRootProcess?.let { p ->
+            runCatching { p.destroy() }
+            if (runCatching { !p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(true)) {
+                runCatching { p.destroyForcibly() }
+            }
+        }
+        zapretRootProcess = null
+        if (!wasFlagged && !hadProcess) return
+        val uid = runCatching { zapretRootFlagFile.readText().trim().toIntOrNull() }.getOrNull()
+            ?: android.os.Process.myUid()
+        val script = """
+            export PATH=/system/bin:/system/xbin:/vendor/bin:${'$'}PATH
+            IPT=$(command -v iptables || echo /system/bin/iptables)
+            pkill -f libzapretroot.so 2>/dev/null || true
+            while ${'$'}IPT -t mangle -D OUTPUT -m owner --uid-owner $uid -p tcp -m multiport --dports 80,443 -m connbytes --connbytes 1:6 --connbytes-dir original --connbytes-mode packets -m mark ! --mark 0x20000/0x20000 -j NFQUEUE --queue-num 240 --queue-bypass 2>/dev/null; do :; done
+            while ${'$'}IPT -t mangle -D OUTPUT -m owner --uid-owner $uid -p tcp --dport 443 -m mark ! --mark 0x20000/0x20000 -j NFQUEUE --queue-num 240 --queue-bypass 2>/dev/null; do :; done
+        """.trimIndent()
+        val code = runCatching {
+            val p = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
+            p.inputStream.readBytes()
+            p.waitFor()
+        }.getOrDefault(-1)
+        if (code == 0) zapretRootFlagFile.delete()
+    }
+
     private fun establishSystemVpnTunnel(): ParcelFileDescriptor? {
         return try {
             // Rust computes the complete route/address plan; Kotlin only applies it to Android's
@@ -3899,6 +4016,7 @@ class OlcboxVpnService : VpnService() {
         snolcProxyActive = false
         runCatching { zapretServer?.stop() }
         zapretServer = null
+        stopZapretRootHelperSync()
         runCatching { Awg.stop() }
         stopTrustTunnelProcess()
         val provider = lastMobileProvider

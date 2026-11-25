@@ -415,6 +415,41 @@ android.sourceSets.getByName("main").jniLibs.srcDir(csqttJniLibsDir.get().asFile
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(copyCsqttAndroid) }
 
+// --- Zapret Root NFQUEUE helper (src/main/jni/zapret_root/zapret_root.c), packaged as lib/<abi>/libzapretroot.so ---
+val zapretRootSource = file("src/main/jni/zapret_root/zapret_root.c")
+val zapretRootJniLibsDir = layout.buildDirectory.dir("generated/zapretroot/jniLibs")
+val buildZapretRootAndroid = tasks.register("buildZapretRootAndroid") {
+    group = "build"
+    description = "Compiles the Zapret Root NFQUEUE helper binary for every packaged ABI."
+}
+androidAbiFilters.forEach { abi ->
+    val clang = when (abi) {
+        "arm64-v8a" -> "aarch64-linux-android23-clang"
+        "armeabi-v7a" -> "armv7a-linux-androideabi23-clang"
+        "x86_64" -> "x86_64-linux-android23-clang"
+        "x86" -> "i686-linux-android23-clang"
+        else -> error("Unsupported ABI for Zapret Root: $abi")
+    }
+    val task = tasks.register<Exec>("buildZapretRootAndroid_$abi") {
+        val output = zapretRootJniLibsDir.map { it.file("$abi/libzapretroot.so") }
+        inputs.file(zapretRootSource)
+        outputs.file(output)
+        val compiler = openfluxNdkDir.resolve("toolchains/llvm/prebuilt/$openfluxHostTag/bin/$clang$openfluxClangSuffix").absolutePath
+        commandLine(
+            compiler,
+            "-O2", "-fPIE", "-pie", "-s",
+            "-Wl,-z,max-page-size=16384",
+            "-o", output.get().asFile.absolutePath,
+            zapretRootSource.absolutePath,
+        )
+        doFirst { output.get().asFile.parentFile.mkdirs() }
+    }
+    buildZapretRootAndroid.configure { dependsOn(task) }
+}
+android.sourceSets.getByName("main").jniLibs.srcDir(zapretRootJniLibsDir.get().asFile)
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildZapretRootAndroid) }
+
 // In AGP 9.0+ Kotlin settings for Android are configured like this:
 kotlin {
     compilerOptions {

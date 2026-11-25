@@ -61,6 +61,22 @@ class ZapretSocksServerTest {
         // Legacy strategy names map cleanly to ALT presets.
         assertEquals(ZapretConfig.STRATEGY_ALT1, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_TLSREC).strategy)
         assertEquals(ZapretConfig.STRATEGY_ALT3, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_SPLIT).strategy)
+
+        // Root mode tuning clamps bounds, defaults blank decoy SNI, and survives preset switches.
+        val rootCfg = ZapretConfig(
+            strategy = ZapretConfig.STRATEGY_ALT4,
+            rootMode = true,
+            rootFakeTtl = 99,
+            rootFakeCount = 0,
+            rootDecoySni = "   ",
+            rootBadSum = true,
+            rootSplitSni = true,
+        ).withPreset(ZapretConfig.STRATEGY_ALT6)
+        assertTrue(rootCfg.rootMode)
+        assertEquals(16, rootCfg.rootFakeTtl)
+        assertEquals(1, rootCfg.rootFakeCount)
+        assertEquals(ZapretConfig.DEFAULT_ROOT_DECOY_SNI, rootCfg.rootDecoySni)
+        assertEquals("ALT 6 (OOB + Split) + Root", rootCfg.summary())
     }
 
     @Test

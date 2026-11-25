@@ -45,7 +45,10 @@ import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.MeetingRoom
 import androidx.compose.material.icons.rounded.Public
@@ -2240,6 +2243,18 @@ private fun LazyListScope.zapretSection(
     item {
         val normalized = config.normalized()
         val probeMap = probeResults.associateBy { it.strategyKey }
+        var altExpanded by remember { mutableStateOf(false) }
+        var advancedExpanded by remember { mutableStateOf(false) }
+        val selectedPreset = ZapretConfig.PRESETS.firstOrNull { it.key == normalized.strategy }
+            ?: ZapretConfig.PRESETS.first()
+        val selectedProbe = probeMap[selectedPreset.key]
+        val selectedSubtitle = when {
+            selectedProbe != null && selectedProbe.succeeded ->
+                "✓ ${selectedProbe.rttMs ?: 0} мс (${selectedProbe.details})"
+            selectedProbe != null ->
+                "✗ Не прошёл (${selectedProbe.details})"
+            else -> selectedPreset.description
+        }
 
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -2247,7 +2262,7 @@ private fun LazyListScope.zapretSection(
         ) {
             SectionTitle(
                 title = "Zapret — локальный обход DPI",
-                subtitle = "Работает бесплатно без сервера и root: выбирайте готовые ALT-конфиги или Автоподбор рабочего обхода под вашего провайдера."
+                subtitle = "Работает бесплатно без сервера: выбирайте ALT-конфиг, Автоподбор или усиленный Root-режим в расширенных настройках."
             )
             Text(
                 text = "Профиль / ALT-конфиг",
@@ -2255,54 +2270,95 @@ private fun LazyListScope.zapretSection(
                 color = MaterialTheme.colorScheme.onSurface
             )
             SettingsCard {
-                ZapretConfig.PRESETS.forEachIndexed { index, preset ->
-                    if (index > 0) SettingsCardDivider()
-                    val selected = normalized.strategy == preset.key
-                    val probe = probeMap[preset.key]
-                    val subtitle = when {
-                        probe != null && probe.succeeded ->
-                            "✓ ${probe.rttMs ?: 0} мс (${probe.details})"
-                        probe != null ->
-                            "✗ Не прошёл (${probe.details})"
-                        else -> preset.description
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = enabled && !autoTuning) {
-                                onChange { it.withPreset(preset.key) }
-                            }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = preset.label,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = when {
-                                    probe != null && probe.succeeded -> MaterialTheme.colorScheme.primary
-                                    probe != null -> MaterialTheme.colorScheme.error
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = enabled && !autoTuning) {
+                            altExpanded = !altExpanded
                         }
-                        if (selected) {
-                            Icon(
-                                imageVector = Icons.Rounded.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = selectedPreset.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = selectedSubtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = when {
+                                selectedProbe != null && selectedProbe.succeeded -> MaterialTheme.colorScheme.primary
+                                selectedProbe != null -> MaterialTheme.colorScheme.error
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                    Icon(
+                        imageVector = if (altExpanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = if (altExpanded) "Свернуть список ALT" else "Выбрать ALT-профиль",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            AnimatedVisibility(visible = altExpanded) {
+                SettingsCard {
+                    ZapretConfig.PRESETS.forEachIndexed { index, preset ->
+                        if (index > 0) SettingsCardDivider()
+                        val selected = normalized.strategy == preset.key
+                        val probe = probeMap[preset.key]
+                        val subtitle = when {
+                            probe != null && probe.succeeded ->
+                                "✓ ${probe.rttMs ?: 0} мс (${probe.details})"
+                            probe != null ->
+                                "✗ Не прошёл (${probe.details})"
+                            else -> preset.description
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = enabled && !autoTuning) {
+                                    onChange { it.withPreset(preset.key) }
+                                    altExpanded = false
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = preset.label,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when {
+                                        probe != null && probe.succeeded -> MaterialTheme.colorScheme.primary
+                                        probe != null -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            }
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -2339,33 +2395,6 @@ private fun LazyListScope.zapretSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
-            }
-            if (normalized.strategy == ZapretConfig.STRATEGY_AUTO) {
-                OutlinedTextField(
-                    value = config.probeTargets,
-                    onValueChange = { v -> onChange { it.copy(probeTargets = v) } },
-                    label = { Text("Домены для автоподбора (Авторежим)") },
-                    placeholder = { Text(ZapretConfig.DEFAULT_PROBE_TARGETS) },
-                    supportingText = { Text("При подключении Авторежим проверяет ALT 1–7 на этих сайтах и включает первый рабочий") },
-                    singleLine = true,
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            OutlinedTextField(
-                value = config.dnsServer,
-                onValueChange = { v -> onChange { it.copy(dnsServer = v) } },
-                label = { Text("DNS (DoH или IP)") },
-                placeholder = { Text(ZapretConfig.DEFAULT_DNS_SERVER) },
-                supportingText = { Text("Помогает обойти подмену DNS у провайдера (по умолчанию Cloudflare DoH)") },
-                singleLine = true,
-                enabled = enabled,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth()
-            )
-            VkTurnSwitchRow("Блокировать QUIC (UDP/443) для YouTube/браузера", config.blockQuic, enabled) { v ->
-                onChange { it.copy(strategy = ZapretConfig.STRATEGY_CUSTOM, blockQuic = v) }
             }
             if (normalized.strategy == ZapretConfig.STRATEGY_CUSTOM) {
                 VkTurnSwitchRow("Разделять TLS ClientHello (TLS Record Split)", config.tlsRecSplit, enabled) { v ->
@@ -2473,17 +2502,161 @@ private fun LazyListScope.zapretSection(
                     )
                 }
             }
-            OutlinedTextField(
-                value = config.targets,
-                onValueChange = { v -> onChange { it.copy(targets = v) } },
-                label = { Text("Домены (необязательно)") },
-                placeholder = { Text("youtube.com, googlevideo.com, discord.com (пусто = весь трафик)") },
-                supportingText = { Text("Если пусто — обход DPI применяется ко всему TLS/HTTP трафику. Доступна только 1 локация Zapret.") },
-                enabled = enabled,
-                minLines = 1,
-                maxLines = 4,
-                modifier = Modifier.fillMaxWidth()
-            )
+
+            SettingsCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { advancedExpanded = !advancedExpanded }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = if (advancedExpanded) "Скрыть расширенные настройки" else "Показать расширенные настройки",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (normalized.rootMode) {
+                                "Root-маскировка включена (TTL=${normalized.rootFakeTtl}, SNI=${normalized.rootDecoySni})"
+                            } else {
+                                "Root-режим маскировки, DNS, QUIC и домены"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (normalized.rootMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = if (advancedExpanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = advancedExpanded) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    VkTurnSwitchRow(
+                        "Root-режим (NFQUEUE + фейк-пакеты DPI)",
+                        normalized.rootMode,
+                        enabled
+                    ) { v ->
+                        onChange { it.copy(rootMode = v) }
+                    }
+                    SettingsNote(
+                        text = if (normalized.rootMode) {
+                            "На уровне ядра через su + iptables NFQUEUE отправляются фейковые TLS ClientHello (TTL=${normalized.rootFakeTtl}, приманка ${normalized.rootDecoySni}) и выполняется disorder-нарезка настоящего SNI — сильно повышает пробитие YouTube/видео и ТСПУ. Если root не выдан, клиент автоматически останется на userspace ALT."
+                        } else {
+                            "Требует root (su) на Android. Позволяет отправлять сырые фейк-пакеты с низким TTL и badsum прямо через NFQUEUE — намного эффективнее против ТСПУ, чем обычный режим без root."
+                        }
+                    )
+                    if (normalized.rootMode) {
+                        OutlinedTextField(
+                            value = config.rootDecoySni,
+                            onValueChange = { v -> onChange { it.copy(rootDecoySni = v) } },
+                            label = { Text("Фейковый SNI (приманка)") },
+                            placeholder = { Text(ZapretConfig.DEFAULT_ROOT_DECOY_SNI) },
+                            supportingText = { Text("Незаблокированный домен для фейковых ClientHello (например, ozon.ru или ya.ru)") },
+                            singleLine = true,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            VkTurnField(
+                                value = config.rootFakeTtl.toString(),
+                                onValueChange = { v ->
+                                    val n = v.filter(Char::isDigit).toIntOrNull()?.coerceIn(1, 16)
+                                        ?: ZapretConfig.DEFAULT_ROOT_FAKE_TTL
+                                    onChange { it.copy(rootFakeTtl = n) }
+                                },
+                                label = "TTL фейков (1–16)",
+                                placeholder = ZapretConfig.DEFAULT_ROOT_FAKE_TTL.toString(),
+                                enabled = enabled,
+                                keyboardType = KeyboardType.Number,
+                                modifier = Modifier.weight(1f)
+                            )
+                            VkTurnField(
+                                value = config.rootFakeCount.toString(),
+                                onValueChange = { v ->
+                                    val n = v.filter(Char::isDigit).toIntOrNull()?.coerceIn(1, 5)
+                                        ?: ZapretConfig.DEFAULT_ROOT_FAKE_COUNT
+                                    onChange { it.copy(rootFakeCount = n) }
+                                },
+                                label = "Повторы фейка (1–5)",
+                                placeholder = ZapretConfig.DEFAULT_ROOT_FAKE_COUNT.toString(),
+                                enabled = enabled,
+                                keyboardType = KeyboardType.Number,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        VkTurnSwitchRow(
+                            "Искажать TCP-чексумму фейков (badsum)",
+                            normalized.rootBadSum,
+                            enabled
+                        ) { v ->
+                            onChange { it.copy(rootBadSum = v) }
+                        }
+                        VkTurnSwitchRow(
+                            "Disorder-нарезка настоящего SNI в NFQUEUE",
+                            normalized.rootSplitSni,
+                            enabled
+                        ) { v ->
+                            onChange { it.copy(rootSplitSni = v) }
+                        }
+                    }
+
+                    if (normalized.strategy == ZapretConfig.STRATEGY_AUTO) {
+                        OutlinedTextField(
+                            value = config.probeTargets,
+                            onValueChange = { v -> onChange { it.copy(probeTargets = v) } },
+                            label = { Text("Домены для автоподбора (Авторежим)") },
+                            placeholder = { Text(ZapretConfig.DEFAULT_PROBE_TARGETS) },
+                            supportingText = { Text("При подключении Авторежим проверяет ALT 1–7 на этих сайтах и включает первый рабочий") },
+                            singleLine = true,
+                            enabled = enabled,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = config.dnsServer,
+                        onValueChange = { v -> onChange { it.copy(dnsServer = v) } },
+                        label = { Text("DNS (DoH или IP)") },
+                        placeholder = { Text(ZapretConfig.DEFAULT_DNS_SERVER) },
+                        supportingText = { Text("Помогает обойти подмену DNS у провайдера (по умолчанию Cloudflare DoH)") },
+                        singleLine = true,
+                        enabled = enabled,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    VkTurnSwitchRow("Блокировать QUIC (UDP/443) для YouTube/браузера", config.blockQuic, enabled) { v ->
+                        onChange { it.copy(strategy = ZapretConfig.STRATEGY_CUSTOM, blockQuic = v) }
+                    }
+                    OutlinedTextField(
+                        value = config.targets,
+                        onValueChange = { v -> onChange { it.copy(targets = v) } },
+                        label = { Text("Домены (необязательно)") },
+                        placeholder = { Text("youtube.com, googlevideo.com, discord.com (пусто = весь трафик)") },
+                        supportingText = { Text("Если пусто — обход DPI применяется ко всему TLS/HTTP трафику. Доступна только 1 локация Zapret.") },
+                        enabled = enabled,
+                        minLines = 1,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
         }
     }
 }

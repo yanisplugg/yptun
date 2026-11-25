@@ -919,6 +919,24 @@ data class ZapretConfig(
     /** Probe domains used by [STRATEGY_AUTO] to pick the best working ALT config. */
     @SerialName("probe_targets")
     val probeTargets: String = DEFAULT_PROBE_TARGETS,
+    /** Android Root mode (`su`): runs native NFQUEUE + SOCK_RAW fake-TTL/badsum injector alongside Zapret. */
+    @SerialName("root_mode")
+    val rootMode: Boolean = false,
+    /** Low IP TTL used for decoy fake TLS ClientHello packets in root mode (1..16). */
+    @SerialName("root_fake_ttl")
+    val rootFakeTtl: Int = DEFAULT_ROOT_FAKE_TTL,
+    /** Decoy whitelisted SNI placed inside fake ClientHello packets (e.g. `ozon.ru`, `ya.ru`). */
+    @SerialName("root_decoy_sni")
+    val rootDecoySni: String = DEFAULT_ROOT_DECOY_SNI,
+    /** Number of decoy fake packets injected before each real ClientHello (1..5). */
+    @SerialName("root_fake_count")
+    val rootFakeCount: Int = DEFAULT_ROOT_FAKE_COUNT,
+    /** Intentionally corrupt TCP checksum on fake packets so target servers ignore them while DPI parses them. */
+    @SerialName("root_bad_sum")
+    val rootBadSum: Boolean = true,
+    /** Split intercepted real TLS ClientHello at midsld out-of-order inside the NFQUEUE daemon. */
+    @SerialName("root_split_sni")
+    val rootSplitSni: Boolean = true,
 ) {
     fun normalized(): ZapretConfig {
         val rawStrategy = strategy.trim().lowercase()
@@ -999,6 +1017,12 @@ data class ZapretConfig(
         dnsServer = dns,
         targets = targets,
         probeTargets = probes,
+        rootMode = rootMode,
+        rootFakeTtl = rootFakeTtl.coerceIn(1, 16),
+        rootDecoySni = rootDecoySni.trim().ifBlank { DEFAULT_ROOT_DECOY_SNI },
+        rootFakeCount = rootFakeCount.coerceIn(1, 5),
+        rootBadSum = rootBadSum,
+        rootSplitSni = rootSplitSni,
     )
 
     fun withPreset(preset: String): ZapretConfig = copy(strategy = preset).normalized()
@@ -1007,7 +1031,8 @@ data class ZapretConfig(
 
     fun summary(): String {
         val n = normalized()
-        PRESETS.firstOrNull { it.key == n.strategy }?.let { return it.shortLabel }
+        val rootSuffix = if (n.rootMode) " + Root" else ""
+        PRESETS.firstOrNull { it.key == n.strategy }?.let { return it.shortLabel + rootSuffix }
         return buildList {
             if (n.tlsRecSplit) add("TLSRec×${n.tlsRecCount}")
             if (n.tcpSplit) add(
@@ -1023,6 +1048,7 @@ data class ZapretConfig(
             if (n.disorder) add("Disorder(TTL=${n.disorderTtl})")
             if (n.oob) add("OOB")
             if (n.blockQuic) add("No-QUIC") else if (n.udpFakeCount > 0) add("UDP-Fake×${n.udpFakeCount}")
+            if (n.rootMode) add("Root(TTL=${n.rootFakeTtl})")
         }.ifEmpty { listOf("Direct") }.joinToString(" + ")
     }
 
@@ -1090,6 +1116,9 @@ data class ZapretConfig(
         const val DEFAULT_DNS_SERVER = "https://1.1.1.1/dns-query"
         const val DEFAULT_PROBE_TARGETS = "www.youtube.com, discord.com"
         const val DEFAULT_LOCATION_NAME = "Zapret (DPI)"
+        const val DEFAULT_ROOT_FAKE_TTL = 5
+        const val DEFAULT_ROOT_DECOY_SNI = "ozon.ru"
+        const val DEFAULT_ROOT_FAKE_COUNT = 2
     }
 }
 
