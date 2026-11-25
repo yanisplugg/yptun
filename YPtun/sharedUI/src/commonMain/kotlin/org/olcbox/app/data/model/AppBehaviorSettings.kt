@@ -33,7 +33,14 @@ data class CustomGroup(
  */
 object SubscriptionUserAgentHolder {
     @kotlin.concurrent.Volatile
-    var mode: String = AppBehaviorSettings.SUB_UA_YPTUN
+    var mode: String = AppBehaviorSettings.SUB_UA_BOTH
+
+    @kotlin.concurrent.Volatile
+    var sendDeviceInfoToSubscriptions: Boolean = true
+
+    /** [mode] normalized to [AppBehaviorSettings.SUBSCRIPTION_UA_MODES]: legacy "yptun" and unknown values mean [AppBehaviorSettings.SUB_UA_BOTH]. */
+    fun effectiveMode(): String =
+        if (mode in AppBehaviorSettings.SUBSCRIPTION_UA_MODES) mode else AppBehaviorSettings.SUB_UA_BOTH
 }
 
 /** General application behavior toggles (the "Настройки приложения" screen). */

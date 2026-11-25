@@ -1137,6 +1137,58 @@ class LocationsRepositoryImplTest {
         assertEquals(9000, entry.location.vkturn?.listenPort)
     }
 
+    @Test
+    fun subscriptionUserAgentModesAndDeviceInfoRespectHolder() = runTest {
+        val prevMode = org.olcbox.app.data.model.SubscriptionUserAgentHolder.mode
+        val prevIdentity = org.olcbox.app.data.model.SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions
+        try {
+            val link = "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls&type=tcp#Plain"
+
+            suspend fun probe(mode: String, sendIdentity: Boolean): Pair<List<String?>, List<String?>> {
+                org.olcbox.app.data.model.SubscriptionUserAgentHolder.mode = mode
+                org.olcbox.app.data.model.SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = sendIdentity
+                val uas = mutableListOf<String?>()
+                val hwids = mutableListOf<String?>()
+                val engine = MockEngine { request ->
+                    if (!request.url.encodedPath.endsWith("/info") && !request.url.encodedPath.endsWith("/json")) {
+                        uas += request.headers[HttpHeaders.UserAgent]
+                        hwids += request.headers["x-hwid"]
+                    }
+                    respond(link)
+                }
+                val source = FakeLocationsDataSource()
+                assertTrue(
+                    LocationsRepositoryImpl(source, HttpClient(engine), StaticIdentityProvider("hwid-test"))
+                        .importText("https://example.test/sub")
+                )
+                return uas to hwids
+            }
+
+            // SUB_UA_BOTH: main fetch uses YPtun UA + secondary Happ UA fetch for FakeDNS/metadata
+            val (bothUas, bothHwids) = probe(org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_BOTH, true)
+            assertEquals(CurrentAppInfo.userAgent, bothUas.first())
+            assertTrue(org.olcbox.app.data.model.AppBehaviorSettings.HAPP_USER_AGENT in bothUas)
+            assertEquals("hwid-test", bothHwids.first())
+
+            // SUB_UA_YPTUN_ONLY: only YPtun UA, never Happ
+            val (yptunUas, _) = probe(org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_YPTUN_ONLY, true)
+            assertEquals(listOf(CurrentAppInfo.userAgent), yptunUas)
+
+            // SUB_UA_HAPP: only Happ UA
+            val (happUas, _) = probe(org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_HAPP, true)
+            assertEquals(listOf(org.olcbox.app.data.model.AppBehaviorSettings.HAPP_USER_AGENT), happUas)
+
+            // SUB_UA_V2RAYTUN + sendDeviceInfoToSubscriptions = false: v2raytun UA and no x-hwid
+            val (v2Uas, v2Hwids) = probe(org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_V2RAYTUN, false)
+            assertEquals(1, v2Uas.size)
+            assertTrue(v2Uas.single().orEmpty().startsWith(org.olcbox.app.data.model.AppBehaviorSettings.V2RAYTUN_UA_PREFIX))
+            assertEquals(listOf<String?>(null), v2Hwids)
+        } finally {
+            org.olcbox.app.data.model.SubscriptionUserAgentHolder.mode = prevMode
+            org.olcbox.app.data.model.SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = prevIdentity
+        }
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),

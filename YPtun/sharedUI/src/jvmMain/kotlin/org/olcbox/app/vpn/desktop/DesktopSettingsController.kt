@@ -120,12 +120,8 @@ class DesktopSettingsController {
             _appBehavior.value = behaviorWithDefaults
             JvmVpnSettings.saveAppBehavior(behaviorWithDefaults)
         }
-        if (_appBehavior.value.subscriptionUserAgent == AppBehaviorSettings.SUB_UA_HAPP) {
-            val fixed = _appBehavior.value.copy(subscriptionUserAgent = AppBehaviorSettings.SUB_UA_YPTUN)
-            _appBehavior.value = fixed
-            JvmVpnSettings.saveAppBehavior(fixed)
-        }
-        SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
+        SubscriptionUserAgentHolder.mode = _appBehavior.value.effectiveSubscriptionUa()
+        SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = _appBehavior.value.sendDeviceInfoToSubscriptions
     }
 
     // --- per-process split tunneling (desktop analog of Android's per-app VPN) --------------
@@ -311,7 +307,8 @@ class DesktopSettingsController {
 
     fun setAppBehavior(value: AppBehaviorSettings) {
         _appBehavior.value = value
-        SubscriptionUserAgentHolder.mode = value.subscriptionUserAgent
+        SubscriptionUserAgentHolder.mode = value.effectiveSubscriptionUa()
+        SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = value.sendDeviceInfoToSubscriptions
         JvmVpnSettings.saveAppBehavior(value)
     }
 

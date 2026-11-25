@@ -206,7 +206,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                     setAppBehavior(behaviorWithDefaults)
                 }
                 // Mirror the subscription User-Agent choice into the process holder the fetch reads.
-                SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
+                SubscriptionUserAgentHolder.mode = _appBehavior.value.effectiveSubscriptionUa()
+                SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = _appBehavior.value.sendDeviceInfoToSubscriptions
                 // Restore the Telegram-over-WARP proxy if the user left it on (config is cached).
                 restoreTelegramProxyIfEnabled()
                 val lang = AppLanguage.fromId(preferences[KEY_ANDROID_LANGUAGE])
@@ -504,7 +505,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     fun setAppBehavior(settings: AppBehaviorSettings) {
         val previous = _appBehavior.value
         _appBehavior.value = settings
-        SubscriptionUserAgentHolder.mode = settings.subscriptionUserAgent
+        SubscriptionUserAgentHolder.mode = settings.effectiveSubscriptionUa()
+        SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = settings.sendDeviceInfoToSubscriptions
         scope.launch {
             appContext.vpnPrefDataStore.edit { preferences ->
                 preferences[KEY_ANDROID_APP_BEHAVIOR] =

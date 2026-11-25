@@ -931,19 +931,22 @@ class LocationsRepositoryImpl(
             val userAgentOverride: String? = null
         )
 
+        val allowHappFallback = SubscriptionUserAgentHolder.effectiveMode() == AppBehaviorSettings.SUB_UA_BOTH
         val attempts = buildList {
             // 1. User's chosen UA in Identity mode (with HWID, device model, app ID)
             add(FetchAttempt(SubscriptionRequestMode.Identity, forceHapp = false))
             // 2. User's chosen UA in Compatibility mode (standard */* Accept, no extra headers)
             add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false))
-            // 3. Happ UA in Identity mode (for Remnawave/Happ panels requiring Happ headers)
-            add(FetchAttempt(SubscriptionRequestMode.Identity, forceHapp = true))
-            // 4. Happ UA in Compatibility mode (generic Happ client)
-            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = true))
-            // 5. v2rayN UA in Compatibility mode (widely whitelisted across all V2Ray/Marzban/3x-ui panels)
-            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false, userAgentOverride = "v2rayN/6.23"))
-            // 6. Clash UA in Compatibility mode
-            add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false, userAgentOverride = "ClashforWindows/0.20.39"))
+            if (allowHappFallback) {
+                // 3. Happ UA in Identity mode (for Remnawave/Happ panels requiring Happ headers)
+                add(FetchAttempt(SubscriptionRequestMode.Identity, forceHapp = true))
+                // 4. Happ UA in Compatibility mode (generic Happ client)
+                add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = true))
+                // 5. v2rayN UA in Compatibility mode (widely whitelisted across all V2Ray/Marzban/3x-ui panels)
+                add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false, userAgentOverride = "v2rayN/6.23"))
+                // 6. Clash UA in Compatibility mode
+                add(FetchAttempt(SubscriptionRequestMode.Compatibility, forceHapp = false, userAgentOverride = "ClashforWindows/0.20.39"))
+            }
         }
 
         for (attempt in attempts) {
@@ -1190,10 +1193,10 @@ class LocationsRepositoryImpl(
 
     /** Resolves the user's subscription User-Agent choice ([SubscriptionUserAgentHolder]) to a string. */
     private fun subscriptionUserAgent(): String =
-        if (SubscriptionUserAgentHolder.mode == AppBehaviorSettings.SUB_UA_YPTUN) {
-            CurrentAppInfo.userAgent
-        } else {
-            AppBehaviorSettings.HAPP_USER_AGENT
+        when (SubscriptionUserAgentHolder.effectiveMode()) {
+            AppBehaviorSettings.SUB_UA_HAPP -> AppBehaviorSettings.HAPP_USER_AGENT
+            AppBehaviorSettings.SUB_UA_V2RAYTUN -> AppBehaviorSettings.V2RAYTUN_UA_PREFIX + DeviceInfo.os.lowercase()
+            else -> CurrentAppInfo.userAgent // both, yptun_only
         }
 
     private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1206,12 +1209,14 @@ class LocationsRepositoryImpl(
         userAgentOverride: String? = null
     ): DownloadedSubscription? {
         val userAgent = userAgentOverride ?: if (forceHapp) AppBehaviorSettings.HAPP_USER_AGENT else subscriptionUserAgent()
-        val hwid = if (requestMode == SubscriptionRequestMode.Identity) {
+        val sendIdentity = requestMode == SubscriptionRequestMode.Identity &&
+            SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions
+        val hwid = if (sendIdentity) {
             deviceIdentityProvider.hwid()
         } else {
             null
         }
-        val appId = if (requestMode == SubscriptionRequestMode.Identity) {
+        val appId = if (sendIdentity) {
             runCatching { deviceIdentityProvider.appId() }.getOrNull()
         } else {
             null
@@ -1236,7 +1241,7 @@ class LocationsRepositoryImpl(
                         headers {
                             append(HttpHeaders.Accept, acceptHeader)
                             append(HttpHeaders.UserAgent, userAgent)
-                            if (requestMode == SubscriptionRequestMode.Identity) {
+                            if (sendIdentity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                 // Remnawave HWID device-limit descriptors.
@@ -1272,7 +1277,7 @@ class LocationsRepositoryImpl(
                         headers {
                             append(HttpHeaders.Accept, "application/json")
                             append(HttpHeaders.UserAgent, userAgent)
-                            if (requestMode == SubscriptionRequestMode.Identity) {
+                            if (sendIdentity) {
                                 append("x-hwid", hwid.orEmpty())
                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                             }
@@ -1291,6 +1296,9 @@ class LocationsRepositoryImpl(
                     }
                     if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT && isJsonBody(content)) {
                         content
+                    } else if (SubscriptionUserAgentHolder.effectiveMode() != AppBehaviorSettings.SUB_UA_BOTH) {
+                        // YPtun-only / v2rayTun / Happ-only (non-JSON): never send an extra Happ request.
+                        null
                     } else {
                         val fromHappUa = if (userAgent == AppBehaviorSettings.HAPP_USER_AGENT) {
                             null
@@ -1300,7 +1308,7 @@ class LocationsRepositoryImpl(
                                     headers {
                                         append(HttpHeaders.Accept, "application/json, text/plain, */*")
                                         append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
-                                        if (requestMode == SubscriptionRequestMode.Identity) {
+                                        if (sendIdentity) {
                                             append("x-hwid", hwid.orEmpty())
                                             if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                         }
@@ -1321,7 +1329,7 @@ class LocationsRepositoryImpl(
                                         headers {
                                             append(HttpHeaders.Accept, "application/json, text/plain, */*")
                                             append(HttpHeaders.UserAgent, AppBehaviorSettings.HAPP_USER_AGENT)
-                                            if (requestMode == SubscriptionRequestMode.Identity) {
+                                            if (sendIdentity) {
                                                 append("x-hwid", hwid.orEmpty())
                                                 if (!appId.isNullOrBlank()) append(HEADER_APP_ID, appId)
                                             }

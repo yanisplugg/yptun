@@ -85,12 +85,8 @@ class IosSettingsController {
             _appBehavior.value = behaviorWithDefaults
             IosSharedStore.saveAppBehavior(behaviorWithDefaults)
         }
-        if (_appBehavior.value.subscriptionUserAgent == AppBehaviorSettings.SUB_UA_HAPP) {
-            val fixed = _appBehavior.value.copy(subscriptionUserAgent = AppBehaviorSettings.SUB_UA_YPTUN)
-            _appBehavior.value = fixed
-            IosSharedStore.saveAppBehavior(fixed)
-        }
-        SubscriptionUserAgentHolder.mode = _appBehavior.value.subscriptionUserAgent
+        SubscriptionUserAgentHolder.mode = _appBehavior.value.effectiveSubscriptionUa()
+        SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = _appBehavior.value.sendDeviceInfoToSubscriptions
         ensureGeoAssets()
     }
 
@@ -240,7 +236,8 @@ class IosSettingsController {
             platform.Foundation.NSNotificationCenter.defaultCenter.postNotificationName("org.yptun.notify.clearExpiry", null)
         }
         _appBehavior.value = value
-        SubscriptionUserAgentHolder.mode = value.subscriptionUserAgent
+        SubscriptionUserAgentHolder.mode = value.effectiveSubscriptionUa()
+        SubscriptionUserAgentHolder.sendDeviceInfoToSubscriptions = value.sendDeviceInfoToSubscriptions
         IosSharedStore.saveAppBehavior(value)
     }
 
