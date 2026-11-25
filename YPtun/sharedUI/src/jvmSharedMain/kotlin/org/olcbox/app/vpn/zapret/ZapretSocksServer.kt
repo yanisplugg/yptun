@@ -525,7 +525,7 @@ class ZapretSocksServer {
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
         private const val INITIAL_TLS_READ_TIMEOUT_MS = 350
         private const val CONNECT_TIMEOUT_MS = 4_500
-        private const val PROBE_TIMEOUT_MS = 2_500
+        private const val PROBE_TIMEOUT_MS = 3_200
         private const val DNS_TIMEOUT_MS = 2_000
         private const val DNS_CACHE_TTL_MS = 120_000L
         private const val AUTO_CACHE_TTL_MS = 10 * 60_000L
@@ -794,7 +794,11 @@ class ZapretSocksServer {
             cfg: ZapretConfig,
             rawSocket: Socket? = null,
             onUrgentByte: (() -> Unit)? = null,
+            onTtlChange: ((Int) -> Boolean)? = null,
         ) {
+            val ttlSetter: ((Int) -> Boolean)? = onTtlChange ?: rawSocket?.let { s ->
+                { ttl -> setZapretSocketTtl(s, ttl) }
+            }
             if (isTlsClientHello(buf, len)) {
                 val framed = if (cfg.tlsRecSplit) {
                     splitTlsClientHelloRecords(buf, len, cfg.splitSize, cfg.tlsRecCount)
@@ -832,7 +836,18 @@ class ZapretSocksServer {
                 }
                 val oobOffset = if (cfg.oob) (sniMidInFramed ?: 1).coerceIn(1, framed.size - 1) else null
                 val mergedCuts = if (oobOffset != null) (cuts + oobOffset).distinct().sorted() else cuts
-                writeSplitSlices(out, framed, mergedCuts, cfg.splitDelayMs, oobOffset, rawSocket, onUrgentByte)
+                writeSplitSlices(
+                    out = out,
+                    buf = framed,
+                    cuts = mergedCuts,
+                    delayMs = cfg.splitDelayMs,
+                    oobAtOffset = oobOffset,
+                    disorder = cfg.disorder,
+                    disorderTtl = cfg.disorderTtl,
+                    rawSocket = rawSocket,
+                    onUrgentByte = onUrgentByte,
+                    onTtlChange = ttlSetter,
+                )
                 return
             }
 
@@ -861,7 +876,18 @@ class ZapretSocksServer {
                 } else {
                     cuts
                 }
-                writeSplitSlices(out, payload, mergedCuts, cfg.splitDelayMs, oobOffset, rawSocket, onUrgentByte)
+                writeSplitSlices(
+                    out = out,
+                    buf = payload,
+                    cuts = mergedCuts,
+                    delayMs = cfg.splitDelayMs,
+                    oobAtOffset = oobOffset,
+                    disorder = cfg.disorder,
+                    disorderTtl = cfg.disorderTtl,
+                    rawSocket = rawSocket,
+                    onUrgentByte = onUrgentByte,
+                    onTtlChange = ttlSetter,
+                )
                 return
             }
 
@@ -875,8 +901,11 @@ class ZapretSocksServer {
             cuts: List<Int>,
             delayMs: Int,
             oobAtOffset: Int?,
+            disorder: Boolean,
+            disorderTtl: Int,
             rawSocket: Socket?,
             onUrgentByte: (() -> Unit)?,
+            onTtlChange: ((Int) -> Boolean)?,
         ) {
             if (cuts.isEmpty()) {
                 out.write(buf)
@@ -884,16 +913,25 @@ class ZapretSocksServer {
                 return
             }
             var prev = 0
+            var isFirstSlice = true
             for (cut in cuts) {
                 if (cut <= prev || cut >= buf.size) continue
+                val ttlLowered = isFirstSlice && disorder && onTtlChange?.invoke(disorderTtl.coerceIn(1, 8)) == true
                 out.write(buf, prev, cut - prev)
                 out.flush()
+                if (ttlLowered) {
+                    // Let the kernel push the low-TTL segment to the NIC before restoring TTL=64.
+                    runCatching { Thread.sleep(maxOf(delayMs, 3).toLong()) }
+                    onTtlChange?.invoke(64)
+                } else if (delayMs > 0) {
+                    runCatching { Thread.sleep(delayMs.toLong()) }
+                }
                 if (oobAtOffset != null && cut == oobAtOffset) {
                     runCatching { rawSocket?.sendUrgentData('a'.code) }
                     onUrgentByte?.invoke()
                 }
-                if (delayMs > 0) runCatching { Thread.sleep(delayMs.toLong()) }
                 prev = cut
+                isFirstSlice = false
             }
             if (prev < buf.size) {
                 out.write(buf, prev, buf.size - prev)
@@ -978,8 +1016,8 @@ class ZapretSocksServer {
                 else -> splitOffset.coerceIn(1, recLen - 1)
             }
             val cuts = if (recordCount >= 3 && mainCut >= 3) {
-                val earlyCut = (sniSpan?.first?.minus(5) ?: 2).coerceIn(1, mainCut - 1)
-                listOf(earlyCut, mainCut).distinct().sorted()
+                // Cut right after HandshakeType (0x01) + at SNI midpoint so record 1 breaks ClientHello signatures.
+                listOf(1, mainCut).distinct().sorted()
             } else {
                 listOf(mainCut)
             }

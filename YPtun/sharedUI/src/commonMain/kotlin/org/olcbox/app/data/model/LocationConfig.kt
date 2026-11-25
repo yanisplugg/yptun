@@ -897,6 +897,11 @@ data class ZapretConfig(
     val splitDelayMs: Int = DEFAULT_SPLIT_DELAY_MS,
     /** Inject a TCP OOB urgent byte (`MSG_OOB`) between split segments inside SNI. */
     val oob: Boolean = false,
+    /** Send the first split TCP segment with low IP TTL ([disorderTtl]) so it expires before DPI and retransmits out-of-order. */
+    val disorder: Boolean = false,
+    /** Hop limit / IP TTL used for the initial segment when [disorder] is enabled (1..8). */
+    @SerialName("disorder_ttl")
+    val disorderTtl: Int = DEFAULT_DISORDER_TTL,
     /** Apply mixed-case `Host:` header evasion for plain HTTP. */
     @SerialName("http_host_tricks")
     val httpHostTricks: Boolean = true,
@@ -928,14 +933,14 @@ data class ZapretConfig(
         val cleanProbes = probeTargets.trim().ifBlank { DEFAULT_PROBE_TARGETS }
         val cleanSplitMode = splitMode.trim().lowercase().takeIf { it in SPLIT_MODES } ?: SPLIT_MODE_ONE_PLUS_MIDSLD
         return when (mappedStrategy) {
-            STRATEGY_AUTO -> applyPresetFields(STRATEGY_AUTO, DEFAULT_SPLIT_SIZE, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT1 -> applyPresetFields(STRATEGY_ALT1, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT2 -> applyPresetFields(STRATEGY_ALT2, 3, true, 3, true, SPLIT_MODE_MULTI_SNI, 8, 5, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 5, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 1, false, 2, true, SPLIT_MODE_ONE, 2, 6, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 4, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT6 -> applyPresetFields(STRATEGY_ALT6, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 3, true, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT7 -> applyPresetFields(STRATEGY_ALT7, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 3, true, true, false, 3, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_AUTO -> applyPresetFields(STRATEGY_AUTO, DEFAULT_SPLIT_SIZE, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT1 -> applyPresetFields(STRATEGY_ALT1, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT2 -> applyPresetFields(STRATEGY_ALT2, 2, false, 2, true, SPLIT_MODE_MIDSLD, 4, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 3, true, 3, true, SPLIT_MODE_MULTI_SNI, 8, 5, false, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 1, false, 2, true, SPLIT_MODE_ONE, 2, 4, false, true, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT6 -> applyPresetFields(STRATEGY_ALT6, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 3, true, false, 1, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT7 -> applyPresetFields(STRATEGY_ALT7, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 3, false, true, 1, true, false, 3, cleanDns, cleanTargets, cleanProbes)
             else -> applyPresetFields(
                 STRATEGY_CUSTOM,
                 splitSize.coerceIn(1, 64),
@@ -946,6 +951,8 @@ data class ZapretConfig(
                 splitCount.coerceIn(1, 16),
                 splitDelayMs.coerceIn(0, 25),
                 oob,
+                disorder,
+                disorderTtl.coerceIn(1, 8),
                 httpHostTricks,
                 blockQuic,
                 udpFakeCount.coerceIn(0, 6),
@@ -966,6 +973,8 @@ data class ZapretConfig(
         splitCount: Int,
         splitDelayMs: Int,
         oob: Boolean,
+        disorder: Boolean,
+        disorderTtl: Int,
         httpHostTricks: Boolean,
         blockQuic: Boolean,
         udpFakeCount: Int,
@@ -982,6 +991,8 @@ data class ZapretConfig(
         splitCount = splitCount,
         splitDelayMs = splitDelayMs,
         oob = oob,
+        disorder = disorder,
+        disorderTtl = disorderTtl,
         httpHostTricks = httpHostTricks,
         blockQuic = blockQuic,
         udpFakeCount = udpFakeCount,
@@ -1008,6 +1019,7 @@ data class ZapretConfig(
                     else -> "Split(1+midsld)"
                 }
             )
+            if (n.disorder) add("Disorder(TTL=${n.disorderTtl})")
             if (n.oob) add("OOB")
             if (n.blockQuic) add("No-QUIC") else if (n.udpFakeCount > 0) add("UDP-Fake×${n.udpFakeCount}")
         }.ifEmpty { listOf("Direct") }.joinToString(" + ")
@@ -1051,19 +1063,19 @@ data class ZapretConfig(
         val SPLIT_MODES = listOf(SPLIT_MODE_ONE, SPLIT_MODE_ONE_PLUS_MIDSLD, SPLIT_MODE_MIDSLD, SPLIT_MODE_MULTI_SNI, SPLIT_MODE_FIXED)
 
         val ALT_PRESETS: List<PresetInfo> = listOf(
-            PresetInfo(STRATEGY_ALT1, "ALT 1 · TLSRec + Split SNI", "ALT 1 (TLSRec + Split)", "2 TLS-записи + резка в 1 и середине SNI (пауза 4 мс), QUIC выкл."),
-            PresetInfo(STRATEGY_ALT2, "ALT 2 · 3× TLSRec + Multisplit", "ALT 2 (3× TLSRec)", "3 TLS-записи + глубокая нарезка SNI с паузой 5 мс, QUIC выкл."),
-            PresetInfo(STRATEGY_ALT3, "ALT 3 · Split 1+SNI (без TLSRec)", "ALT 3 (Split 1+SNI)", "TCP-резка на 1-м байте и в середине SNI (без TLSRec и OOB), QUIC выкл."),
-            PresetInfo(STRATEGY_ALT4, "ALT 4 · Split 1 (ByeDPI -s1)", "ALT 4 (Split 1)", "Классический сплит на 1-м байте (пауза 6 мс, без TLSRec и OOB)"),
-            PresetInfo(STRATEGY_ALT5, "ALT 5 · Multisplit SNI", "ALT 5 (Multisplit SNI)", "Сегментация в 6 точках вокруг SNI (без TLSRec и OOB), QUIC выкл."),
+            PresetInfo(STRATEGY_ALT1, "ALT 1 · TLSRec + Split SNI", "ALT 1 (TLSRec + Split)", "2 TLS-записи + резка в 1 и середине SNI, QUIC выкл."),
+            PresetInfo(STRATEGY_ALT2, "ALT 2 · Disorder (TTL=1, SNI)", "ALT 2 (Disorder SNI)", "Out-of-order TCP: 1-й кусок до SNI с TTL=1, затем 2-й (против ТСПУ YouTube)"),
+            PresetInfo(STRATEGY_ALT3, "ALT 3 · TLSRec + Disorder (TTL=1)", "ALT 3 (TLSRec + Disorder)", "Комбо: 2 TLS-записи + out-of-order TTL=1 по SNI, QUIC выкл."),
+            PresetInfo(STRATEGY_ALT4, "ALT 4 · 3× TLSRec (1 + SNI)", "ALT 4 (3× TLSRec 1+SNI)", "3 TLS-записи (резка в 1-м байте и середине SNI) + Multisplit"),
+            PresetInfo(STRATEGY_ALT5, "ALT 5 · Disorder 1 байт (-d1)", "ALT 5 (Disorder 1)", "Out-of-order TCP на 1-м байте (TTL=1), без изменения TLS-записей"),
             PresetInfo(STRATEGY_ALT6, "ALT 6 · OOB (URG + Split)", "ALT 6 (OOB + Split)", "TCP-сегмент до SNI + Urgent OOB-байт (ByeDPI -o), QUIC выкл."),
-            PresetInfo(STRATEGY_ALT7, "ALT 7 · TLSRec + OOB + UDP/QUIC", "ALT 7 (TLSRec + OOB + UDP)", "TLS Record + OOB с разрешённым QUIC и UDP-фейками для Discord"),
+            PresetInfo(STRATEGY_ALT7, "ALT 7 · TLSRec + Disorder + UDP", "ALT 7 (Disorder + UDP)", "TLS Record + Disorder TTL=1 с разрешённым QUIC и UDP-фейками"),
         )
 
         val PRESETS: List<PresetInfo> = listOf(
             PresetInfo(STRATEGY_AUTO, "Авто (автоподбор ALT)", "Авто (подбор ALT)", "При подключении сам проверяет ALT 1–7 и выбирает рабочий"),
         ) + ALT_PRESETS + listOf(
-            PresetInfo(STRATEGY_CUSTOM, "Свой (ручной)", "Свой", "Ручная настройка TLSRec, Multisplit, OOB, QUIC и пауз"),
+            PresetInfo(STRATEGY_CUSTOM, "Свой (ручной)", "Свой", "Ручная настройка TLSRec, Disorder TTL, Split, OOB, QUIC и пауз"),
         )
 
         val STRATEGIES = PRESETS.map { it.key }
@@ -1072,6 +1084,7 @@ data class ZapretConfig(
         const val DEFAULT_TLS_REC_COUNT = 2
         const val DEFAULT_SPLIT_COUNT = 4
         const val DEFAULT_SPLIT_DELAY_MS = 4
+        const val DEFAULT_DISORDER_TTL = 1
         const val DEFAULT_DNS_SERVER = "https://1.1.1.1/dns-query"
         const val DEFAULT_PROBE_TARGETS = "www.youtube.com, discord.com"
         const val DEFAULT_LOCATION_NAME = "Zapret (DPI)"

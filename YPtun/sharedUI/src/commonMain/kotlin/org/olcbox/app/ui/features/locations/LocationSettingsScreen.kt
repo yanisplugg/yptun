@@ -2420,6 +2420,9 @@ private fun LazyListScope.zapretSection(
                         }
                     }
                 }
+                VkTurnSwitchRow("Disorder TCP (TTL=1 на 1-й кусок для YouTube)", config.disorder, enabled) { v ->
+                    onChange { it.copy(disorder = v) }
+                }
                 VkTurnSwitchRow("OOB / Urgent-байт в SNI (ByeDPI)", config.oob, enabled) { v ->
                     onChange { it.copy(oob = v) }
                 }

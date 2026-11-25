@@ -30,25 +30,30 @@ class ZapretSocksServerTest {
         assertEquals(ZapretConfig.STRATEGY_AUTO, cfg.zapret?.strategy)
 
         val alt2 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT2)
-        assertTrue(alt2.tlsRecSplit)
-        assertEquals(3, alt2.tlsRecCount)
+        assertEquals(false, alt2.tlsRecSplit)
+        assertTrue(alt2.disorder)
         assertTrue(alt2.tcpSplit)
         assertEquals(false, alt2.oob)
 
         val alt3 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3)
-        assertEquals(false, alt3.tlsRecSplit)
-        assertEquals(ZapretConfig.SPLIT_MODE_ONE_PLUS_MIDSLD, alt3.splitMode)
+        assertTrue(alt3.tlsRecSplit)
+        assertTrue(alt3.disorder)
         assertEquals(false, alt3.oob)
 
         val alt4 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT4)
-        assertEquals(ZapretConfig.SPLIT_MODE_ONE, alt4.splitMode)
+        assertEquals(3, alt4.tlsRecCount)
         assertEquals(false, alt4.oob)
+
+        val alt5 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5)
+        assertEquals(ZapretConfig.SPLIT_MODE_ONE, alt5.splitMode)
+        assertTrue(alt5.disorder)
 
         val alt6 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT6)
         assertTrue(alt6.oob)
 
         val alt7 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT7)
         assertEquals(false, alt7.blockQuic)
+        assertTrue(alt7.disorder)
         assertEquals(3, alt7.udpFakeCount)
 
         // Legacy strategy names map cleanly to ALT presets.
@@ -85,7 +90,7 @@ class ZapretSocksServerTest {
     }
 
     @Test
-    fun desyncSplitsAcrossSniAndFiresOobWithoutAlteringTcpPayload() {
+    fun desyncSplitsAcrossSniAndFiresOobAndDisorderTtl() {
         val hello = ZapretSocksServer.buildProbeClientHello("discord.com")
         val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT6).copy(splitDelayMs = 0)
         val out = ByteArrayOutputStream()
@@ -94,6 +99,16 @@ class ZapretSocksServerTest {
         assertEquals(1, oobCount.get())
         // Without tlsRecSplit, TCP bytes match ClientHello verbatim across split writes.
         assertContentEquals(hello, out.toByteArray())
+
+        val ttlSequence = mutableListOf<Int>()
+        val disorderCfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT2).copy(splitDelayMs = 0)
+        val disorderOut = ByteArrayOutputStream()
+        ZapretSocksServer.writeDesyncedInitial(
+            disorderOut, hello, hello.size, disorderCfg,
+            onTtlChange = { ttl -> ttlSequence.add(ttl); true },
+        )
+        assertEquals(listOf(1, 64), ttlSequence)
+        assertContentEquals(hello, disorderOut.toByteArray())
 
         val cuts = ZapretSocksServer.computeTcpSplitBoundaries(
             len = hello.size,
