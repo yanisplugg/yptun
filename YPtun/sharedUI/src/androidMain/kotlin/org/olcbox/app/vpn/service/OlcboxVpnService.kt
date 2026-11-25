@@ -199,6 +199,7 @@ class OlcboxVpnService : VpnService() {
     @Volatile
     private var lastJitsiStopCompletedAtMs = 0L
 
+    @Volatile
     private var vpnInterface: ParcelFileDescriptor? = null
 
     /**
@@ -1393,12 +1394,20 @@ class OlcboxVpnService : VpnService() {
             }
             activeProxyCore = ProxyCore.Auto
             val protectTcp: (java.net.Socket) -> Unit = { socket ->
-                runCatching { this@OlcboxVpnService.protect(socket) }
-                runCatching { (currentNetwork ?: upstream).bindSocket(socket) }
+                if (vpnInterface != null) {
+                    val ok = runCatching { this@OlcboxVpnService.protect(socket) }.getOrDefault(false)
+                    if (!ok) addLog("Zapret: protect(TCP) returned false")
+                } else {
+                    runCatching { (currentNetwork ?: upstream).bindSocket(socket) }
+                }
             }
             val protectUdp: (java.net.DatagramSocket) -> Unit = { datagram ->
-                runCatching { this@OlcboxVpnService.protect(datagram) }
-                runCatching { (currentNetwork ?: upstream).bindSocket(datagram) }
+                if (vpnInterface != null) {
+                    val ok = runCatching { this@OlcboxVpnService.protect(datagram) }.getOrDefault(false)
+                    if (!ok) addLog("Zapret: protect(UDP) returned false")
+                } else {
+                    runCatching { (currentNetwork ?: upstream).bindSocket(datagram) }
+                }
             }
             val effectiveZapret = withContext(Dispatchers.IO) {
                 ZapretSocksServer.resolveRuntimeConfig(

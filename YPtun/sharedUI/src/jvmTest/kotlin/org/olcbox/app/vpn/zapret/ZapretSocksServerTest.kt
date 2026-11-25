@@ -32,14 +32,19 @@ class ZapretSocksServerTest {
         val alt2 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT2)
         assertEquals(false, alt2.tlsRecSplit)
         assertTrue(alt2.tcpSplit)
-        assertEquals(ZapretConfig.SPLIT_MODE_MULTI_SNI, alt2.splitMode)
+        assertEquals(ZapretConfig.SPLIT_MODE_ONE, alt2.splitMode)
+        assertEquals(false, alt2.oob)
 
         val alt3 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3)
-        assertTrue(alt3.oob)
+        assertEquals(ZapretConfig.SPLIT_MODE_MULTI_SNI, alt3.splitMode)
+        assertEquals(false, alt3.oob)
 
         val alt5 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5)
-        assertEquals(false, alt5.blockQuic)
-        assertEquals(3, alt5.udpFakeCount)
+        assertTrue(alt5.oob)
+
+        val alt6 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT6)
+        assertEquals(false, alt6.blockQuic)
+        assertEquals(3, alt6.udpFakeCount)
 
         // Legacy strategy names map cleanly to ALT presets.
         assertEquals(ZapretConfig.STRATEGY_ALT1, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_TLSREC).strategy)
@@ -77,7 +82,7 @@ class ZapretSocksServerTest {
     @Test
     fun desyncSplitsAcrossSniAndFiresOobWithoutAlteringTcpPayload() {
         val hello = ZapretSocksServer.buildProbeClientHello("discord.com")
-        val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3).copy(splitDelayMs = 0)
+        val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5).copy(splitDelayMs = 0)
         val out = ByteArrayOutputStream()
         val oobCount = AtomicInteger(0)
         ZapretSocksServer.writeDesyncedInitial(out, hello, hello.size, cfg, onUrgentByte = { oobCount.incrementAndGet() })

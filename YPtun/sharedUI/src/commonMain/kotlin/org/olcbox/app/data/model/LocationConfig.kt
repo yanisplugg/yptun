@@ -930,11 +930,11 @@ data class ZapretConfig(
         return when (mappedStrategy) {
             STRATEGY_AUTO -> applyPresetFields(STRATEGY_AUTO, DEFAULT_SPLIT_SIZE, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
             STRATEGY_ALT1 -> applyPresetFields(STRATEGY_ALT1, 2, true, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT2 -> applyPresetFields(STRATEGY_ALT2, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, true, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 2, true, true, true, 0, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 2, false, true, false, 3, cleanDns, cleanTargets, cleanProbes)
-            STRATEGY_ALT6 -> applyPresetFields(STRATEGY_ALT6, 3, true, 3, true, SPLIT_MODE_MULTI_SNI, 8, 3, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT2 -> applyPresetFields(STRATEGY_ALT2, 1, false, 2, true, SPLIT_MODE_ONE, 2, 3, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT3 -> applyPresetFields(STRATEGY_ALT3, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 2, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT4 -> applyPresetFields(STRATEGY_ALT4, 3, true, 3, true, SPLIT_MODE_MULTI_SNI, 8, 3, false, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT5 -> applyPresetFields(STRATEGY_ALT5, 2, false, 2, true, SPLIT_MODE_ONE_PLUS_MIDSLD, 4, 2, true, true, true, 0, cleanDns, cleanTargets, cleanProbes)
+            STRATEGY_ALT6 -> applyPresetFields(STRATEGY_ALT6, 2, false, 2, true, SPLIT_MODE_MULTI_SNI, 6, 2, false, true, false, 3, cleanDns, cleanTargets, cleanProbes)
             STRATEGY_ALT7 -> applyPresetFields(STRATEGY_ALT7, 2, true, 2, true, SPLIT_MODE_MIDSLD, 4, 2, true, true, false, 2, cleanDns, cleanTargets, cleanProbes)
             else -> applyPresetFields(
                 STRATEGY_CUSTOM,
@@ -1001,6 +1001,7 @@ data class ZapretConfig(
             if (n.tlsRecSplit) add("TLSRec×${n.tlsRecCount}")
             if (n.tcpSplit) add(
                 when (n.splitMode) {
+                    SPLIT_MODE_ONE -> "Split(1)"
                     SPLIT_MODE_MIDSLD -> "Split(midsld)"
                     SPLIT_MODE_MULTI_SNI -> "Multisplit(SNI)"
                     SPLIT_MODE_FIXED -> "Split(${n.splitSize}B)"
@@ -1042,19 +1043,20 @@ data class ZapretConfig(
         const val STRATEGY_LEGACY_TLSREC = "tlsrec"
         const val STRATEGY_LEGACY_SPLIT = "split"
 
+        const val SPLIT_MODE_ONE = "1"
         const val SPLIT_MODE_ONE_PLUS_MIDSLD = "1+midsld"
         const val SPLIT_MODE_MIDSLD = "midsld"
         const val SPLIT_MODE_MULTI_SNI = "multi_sni"
         const val SPLIT_MODE_FIXED = "fixed"
-        val SPLIT_MODES = listOf(SPLIT_MODE_ONE_PLUS_MIDSLD, SPLIT_MODE_MIDSLD, SPLIT_MODE_MULTI_SNI, SPLIT_MODE_FIXED)
+        val SPLIT_MODES = listOf(SPLIT_MODE_ONE, SPLIT_MODE_ONE_PLUS_MIDSLD, SPLIT_MODE_MIDSLD, SPLIT_MODE_MULTI_SNI, SPLIT_MODE_FIXED)
 
         val ALT_PRESETS: List<PresetInfo> = listOf(
             PresetInfo(STRATEGY_ALT1, "ALT 1 · TLSRec + Split SNI", "ALT 1 (TLSRec + Split)", "2 TLS-записи + резка в 1 и середине SNI, QUIC выкл."),
-            PresetInfo(STRATEGY_ALT2, "ALT 2 · Multisplit (без TLSRec)", "ALT 2 (Multisplit SNI)", "Только TCP-сегменты по SNI (обходит ТСПУ, режущие 2 TLS-записи)"),
-            PresetInfo(STRATEGY_ALT3, "ALT 3 · OOB (URG + Split)", "ALT 3 (OOB + Split)", "TCP-сегмент до середины SNI + Urgent OOB-байт (ByeDPI)"),
-            PresetInfo(STRATEGY_ALT4, "ALT 4 · TLSRec + OOB", "ALT 4 (TLSRec + OOB)", "TLS Record Split + OOB Urgent-байт + блокировка QUIC"),
-            PresetInfo(STRATEGY_ALT5, "ALT 5 · Multisplit + UDP/QUIC", "ALT 5 (Multisplit + UDP)", "Multisplit по SNI без блокировки QUIC + фейк-пакеты UDP для Discord"),
-            PresetInfo(STRATEGY_ALT6, "ALT 6 · Агрессивный (3× TLSRec)", "ALT 6 (3× TLSRec + пауза)", "3 TLS-записи + частый Multisplit SNI с паузой 3 мс"),
+            PresetInfo(STRATEGY_ALT2, "ALT 2 · Split 1 (ByeDPI -s1)", "ALT 2 (Split 1)", "Классический сплит на 1-м байте (без TLSRec и OOB), QUIC выкл."),
+            PresetInfo(STRATEGY_ALT3, "ALT 3 · Multisplit SNI", "ALT 3 (Multisplit SNI)", "Только TCP-сегменты по SNI (обходит ТСПУ, режущие TLSRec)"),
+            PresetInfo(STRATEGY_ALT4, "ALT 4 · 3× TLSRec + Multisplit", "ALT 4 (3× TLSRec)", "3 TLS-записи + глубокая нарезка SNI с паузой 3 мс"),
+            PresetInfo(STRATEGY_ALT5, "ALT 5 · OOB (URG + Split)", "ALT 5 (OOB + Split)", "TCP-сегмент до середины SNI + Urgent OOB-байт (ByeDPI)"),
+            PresetInfo(STRATEGY_ALT6, "ALT 6 · Multisplit + UDP/QUIC", "ALT 6 (Multisplit + UDP)", "Multisplit по SNI без блокировки QUIC + фейк UDP для Discord"),
             PresetInfo(STRATEGY_ALT7, "ALT 7 · TLSRec + OOB + UDP", "ALT 7 (TLSRec + OOB + UDP)", "TLS Record + OOB с разрешённым QUIC и UDP-фейками"),
         )
 

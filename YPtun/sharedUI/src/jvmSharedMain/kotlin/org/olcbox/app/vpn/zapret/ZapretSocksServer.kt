@@ -42,6 +42,8 @@ class ZapretSocksServer {
 
     private val running = AtomicBoolean(false)
     private val dnsTxId = AtomicInteger(1)
+    private val loggedErrors = AtomicInteger(0)
+    private val tcpCount = AtomicInteger(0)
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     private var executor: ExecutorService? = null
@@ -72,6 +74,8 @@ class ZapretSocksServer {
         protectUdp = protectDatagram
         logFn = log
         dnsCache.clear()
+        loggedErrors.set(0)
+        tcpCount.set(0)
 
         val bindAddr = InetAddress.getByName(listenHost.ifBlank { "127.0.0.1" })
         val ss = ServerSocket(listenPort, 128, bindAddr)
@@ -142,7 +146,15 @@ class ZapretSocksServer {
                     0x03 -> handleUdpAssociate(c, inp, out, cfg)
                     else -> writeSocksReply(out, 0x07)
                 }
+            }.onFailure { e ->
+                logLimited("Zapret client error: ${e.javaClass.simpleName}: ${e.message}")
             }
+        }
+    }
+
+    private fun logLimited(msg: String) {
+        if (loggedErrors.incrementAndGet() <= MAX_LOGGED_ERRORS) {
+            logFn(msg)
         }
     }
 
@@ -202,20 +214,27 @@ class ZapretSocksServer {
             return
         }
         val targetAddr = resolveAddress(dstHost, cfg.dnsServer) ?: run {
+            logLimited("Zapret DNS failed for $dstHost (dns=${cfg.dnsServer})")
             writeSocksReply(clientOut, 0x04)
             return
         }
 
         val remote = Socket()
         try {
-            remote.bind(InetSocketAddress(0))
+            val wildcard = if (targetAddr is Inet4Address) InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)) else null
+            remote.bind(InetSocketAddress(wildcard, 0))
             protectTcp(remote)
             remote.tcpNoDelay = true
             remote.connect(InetSocketAddress(targetAddr, dstPort), CONNECT_TIMEOUT_MS)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logLimited("Zapret connect failed $dstHost (${targetAddr.hostAddress}):$dstPort -> ${e.javaClass.simpleName}: ${e.message}")
             runCatching { remote.close() }
             writeSocksReply(clientOut, 0x05)
             return
+        }
+        val n = tcpCount.incrementAndGet()
+        if (n <= 3) {
+            logFn("Zapret TCP #$n $dstHost -> ${targetAddr.hostAddress}:$dstPort connected")
         }
 
         remote.use { r ->
@@ -236,7 +255,9 @@ class ZapretSocksServer {
                 if (firstLen > 0) {
                     val sniffed = sniffHost(firstBuf, firstLen)
                     if (shouldDesync(cfg, dstHost, sniffed)) {
-                        writeDesyncedInitial(remoteOut, firstBuf, firstLen, cfg, rawSocket = r)
+                        // Never send TCP OOB urgent byte to DoT port 853 (Android Private DNS rejects URG).
+                        val effectiveCfg = if (dstPort == 853 && cfg.oob) cfg.copy(oob = false) else cfg
+                        writeDesyncedInitial(remoteOut, firstBuf, firstLen, effectiveCfg, rawSocket = r)
                     } else {
                         remoteOut.write(firstBuf, 0, firstLen)
                         remoteOut.flush()
@@ -511,6 +532,7 @@ class ZapretSocksServer {
         private const val MAX_DNS_CACHE = 512
         private const val RELAY_BUF_SIZE = 32 * 1024
         private const val MAX_UDP_PACKET = 64 * 1024
+        private const val MAX_LOGGED_ERRORS = 25
 
         private val FALLBACK_DOH_URLS = listOf(
             "https://1.1.1.1/dns-query",
@@ -601,13 +623,18 @@ class ZapretSocksServer {
                         val cfg = norm.withPreset(preset.key)
                         var passed = 0
                         var bestRtt: Long? = null
+                        val details = mutableListOf<String>()
                         for ((host, addr) in resolvedTargets) {
                             val rtt = probeTlsWithConfig(host, addr, 443, cfg, protectSocket)
                             if (rtt != null) {
                                 passed++
                                 if (bestRtt == null || rtt < bestRtt) bestRtt = rtt
+                                details.add("$host=${rtt}ms")
+                            } else {
+                                details.add("$host=✗")
                             }
                         }
+                        log("${preset.shortLabel}: $passed/${resolvedTargets.size} [${details.joinToString(", ")}]")
                         ZapretAltProbeResult(
                             strategyKey = preset.key,
                             label = preset.shortLabel,
@@ -867,6 +894,7 @@ class ZapretSocksServer {
             val mid = (hostMid ?: (len / 2)).coerceIn(1, len - 1)
             val start = (hostStart ?: (mid / 2).coerceAtLeast(1)).coerceIn(1, len - 1)
             val raw = when (splitMode) {
+                ZapretConfig.SPLIT_MODE_ONE -> listOf(1)
                 ZapretConfig.SPLIT_MODE_MIDSLD -> listOf(mid)
                 ZapretConfig.SPLIT_MODE_MULTI_SNI -> listOf(1, 2, start, (start + mid) / 2, mid, (mid + 2).coerceAtMost(len - 1))
                 ZapretConfig.SPLIT_MODE_FIXED -> buildList {

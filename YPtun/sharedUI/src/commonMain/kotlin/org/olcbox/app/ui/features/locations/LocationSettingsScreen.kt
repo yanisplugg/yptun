@@ -2376,6 +2376,7 @@ private fun LazyListScope.zapretSection(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf(
+                            ZapretConfig.SPLIT_MODE_ONE to "1 байт (-s1)",
                             ZapretConfig.SPLIT_MODE_ONE_PLUS_MIDSLD to "1 + середина SNI",
                             ZapretConfig.SPLIT_MODE_MIDSLD to "Середина SNI",
                             ZapretConfig.SPLIT_MODE_MULTI_SNI to "Multisplit SNI",
