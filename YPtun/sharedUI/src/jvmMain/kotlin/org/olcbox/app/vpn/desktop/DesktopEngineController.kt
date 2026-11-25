@@ -57,6 +57,7 @@ internal class DesktopEngineController(
     private val openFlux = DesktopOpenFlux(log)
     private val snolc = DesktopSnolc(log)
     private val csqtt = org.olcbox.app.vpn.csqtt.CsqttBridge(log)
+    private val zapretRoot = DesktopZapretRoot(log)
 
     val isSupported: Boolean get() = YpTunCore.isAvailable
 
@@ -165,6 +166,7 @@ internal class DesktopEngineController(
         openFlux.stop()
         snolc.stop()
         zapretServer.stop()
+        zapretRoot.stop()
         csqtt.stop()
         roomPool?.stop()
         roomPool = null
@@ -698,58 +700,61 @@ internal class DesktopEngineController(
             if (isAwg) log("AmneziaWG outbound: QUIC allowed + sniff-override→IPv4")
             if (isHy2) log("Hysteria2 outbound: QUIC allowed + sniff-override→IPv4")
             if (hasOpenVpn) log("OpenVPN endpoint: native sing-box 1.14 (TCP/UDP allowed)")
-            val json = SingBoxConfig.build(
-                profile = effectiveProfile,
-                listenPort = listenPort,
-                listenHost = listenHost,
-                socksUsername = socksUsername,
-                socksPassword = socksPassword,
-                olcrtcChainPort = if (chained) chainPort else warpChainPort.takeUnless { isClientWarp },
-                olcrtcChainUser = if (chained) socksUsername else "",
-                olcrtcChainPass = if (chained) socksPassword else "",
-                warpRelay = warpRelay,
-                autoDetectInterface = true,
-                routing = routing,
-                matchAppsByProcess = true,
-                traffic = traffic,
-                advanced = config.advanced,
-                routingProfile = routingProfile,
-                singboxGeositeBase = profilesState.singboxGeositeBase,
-                singboxGeoipBase = profilesState.singboxGeoipBase,
-                blockQuic = !isLocalUdpTunnel,
-                sniffOverrideDestination = isLocalUdpTunnel,
-                secondProfile = secondProfile,
-                fakeDnsSpec = config.fakeDns,
-                tunMode = requestedTun,
-                splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
-                splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
-                tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
-                // Desktop always fronts sing-box with a TUN (in-core or external tun2socks); the OS
-                // funnels all DNS into it, so sing-box must hijack & resolve DNS itself (see param doc).
-                hijackDns = true,
-                // Plain UDP remote DNS (like the working Android path): with packet_encoding=xudp the
-                // vless tunnel carries UDP, so DNS is fast stateless packets instead of one long-lived
-                // DoH/TCP connection that periodically froze for 5-6s and blocked all resolution.
-                remoteDnsOverHttps = false,
-                // Trust Tunnel's SOCKS listener doesn't carry UDP-ASSOCIATE DNS ("Failed to send UDP ...
-                // -> 8.8.8.8:53: handler returned -1" in its log → every lookup stalls → page loads crawl).
-                // Resolve over TCP (SOCKS CONNECT) like Android does for local UDP tunnels.
-                preferTcpRemoteDns = isTrustTunnel && secondProfile == null,
-                // Let the exit server resolve destination domains instead of forcing a client-side
-                // re-resolve per connection (which made every web connection wait on the single, flaky
-                // DoH-over-proxy channel → 30s stalls). No routing profile here = no geoip rules need a
-                // local IP, so domains pass straight through the vless tunnel. The server (IPv4) picks
-                // the address, so there's no user IPv6 leak. Keep family enforcement only for the local
-                // UDP tunnels that genuinely carry every family themselves.
-                forceFamilyResolve = false,
-                // SOCKS+HTTP inbound so desktop proxy mode can point the Windows system HTTP-proxy at it.
-                mixedInbound = true,
-                logFilePath = singBoxLogPath(),
-                cacheFilePath = singBoxCachePath(),
-            )
             log("Starting sing-box engine=${config.engine} via ${effectiveProfile.server}:${effectiveProfile.serverPort}" +
                 if (requestedTun) " (in-core TUN + per-process rules)" else "")
-            YpTunCore.sbStart(json)
+            startSingBoxTunWithRetry(tunRequested = requestedTun) { tunIpv6 ->
+                SingBoxConfig.build(
+                    profile = effectiveProfile,
+                    listenPort = listenPort,
+                    listenHost = listenHost,
+                    socksUsername = socksUsername,
+                    socksPassword = socksPassword,
+                    olcrtcChainPort = if (chained) chainPort else warpChainPort.takeUnless { isClientWarp },
+                    olcrtcChainUser = if (chained) socksUsername else "",
+                    olcrtcChainPass = if (chained) socksPassword else "",
+                    warpRelay = warpRelay,
+                    autoDetectInterface = true,
+                    routing = routing,
+                    matchAppsByProcess = true,
+                    traffic = traffic,
+                    advanced = config.advanced,
+                    routingProfile = routingProfile,
+                    singboxGeositeBase = profilesState.singboxGeositeBase,
+                    singboxGeoipBase = profilesState.singboxGeoipBase,
+                    blockQuic = !isLocalUdpTunnel,
+                    sniffOverrideDestination = isLocalUdpTunnel,
+                    secondProfile = secondProfile,
+                    fakeDnsSpec = config.fakeDns,
+                    tunMode = requestedTun,
+                    tunIpv6 = tunIpv6,
+                    dnsStrategyOverride = if (requestedTun && !tunIpv6) "ipv4_only" else null,
+                    splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
+                    splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                    tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                    // Desktop always fronts sing-box with a TUN (in-core or external tun2socks); the OS
+                    // funnels all DNS into it, so sing-box must hijack & resolve DNS itself (see param doc).
+                    hijackDns = true,
+                    // Plain UDP remote DNS (like the working Android path): with packet_encoding=xudp the
+                    // vless tunnel carries UDP, so DNS is fast stateless packets instead of one long-lived
+                    // DoH/TCP connection that periodically froze for 5-6s and blocked all resolution.
+                    remoteDnsOverHttps = false,
+                    // Trust Tunnel's SOCKS listener doesn't carry UDP-ASSOCIATE DNS ("Failed to send UDP ...
+                    // -> 8.8.8.8:53: handler returned -1" in its log → every lookup stalls → page loads crawl).
+                    // Resolve over TCP (SOCKS CONNECT) like Android does for local UDP tunnels.
+                    preferTcpRemoteDns = isTrustTunnel && secondProfile == null,
+                    // Let the exit server resolve destination domains instead of forcing a client-side
+                    // re-resolve per connection (which made every web connection wait on the single, flaky
+                    // DoH-over-proxy channel → 30s stalls). No routing profile here = no geoip rules need a
+                    // local IP, so domains pass straight through the vless tunnel. The server (IPv4) picks
+                    // the address, so there's no user IPv6 leak. Keep family enforcement only for the local
+                    // UDP tunnels that genuinely carry every family themselves.
+                    forceFamilyResolve = false,
+                    // SOCKS+HTTP inbound so desktop proxy mode can point the Windows system HTTP-proxy at it.
+                    mixedInbound = true,
+                    logFilePath = singBoxLogPath(),
+                    cacheFilePath = singBoxCachePath(),
+                )
+            }
             tunHandledInCore = requestedTun
         }
 
@@ -824,37 +829,84 @@ internal class DesktopEngineController(
             rawOutbound = "{\"type\":\"socks\",\"server\":\"127.0.0.1\"," +
                 "\"server_port\":$xrayPort,\"version\":\"5\"$credentials}",
         )
-        val json = SingBoxConfig.build(
-            profile = frontProfile,
-            listenPort = listenPort,
-            listenHost = listenHost,
-            socksUsername = socksUsername,
-            socksPassword = socksPassword,
-            autoDetectInterface = true,
-            routing = routing,
-            matchAppsByProcess = true,
-            // Everything policy-shaped is Xray's job here — see the doc above.
-            traffic = traffic.copy(fakeDnsEnabled = false, blockRuDomains = false),
-            routingProfile = null,
-            blockQuic = blockQuic,
-            forceFamilyResolve = false,
-            remoteDnsOverHttps = remoteDnsOverHttps,
-            // DNS goes to Xray as a plain SOCKS5 CONNECT instead of a UDP ASSOCIATE — the associate
-            // path is exactly what died on the tun2socks bridge.
-            preferTcpRemoteDns = true,
-            tunMode = true,
-            splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
-            splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
-            extraBypassProcesses = extraBypassProcesses,
-            tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
-            mixedInbound = true,
-            logFilePath = singBoxLogPath(),
-            cacheFilePath = singBoxCachePath(),
-        )
         log("Fronting Xray with sing-box: in-core TUN on $listenHost:$listenPort → 127.0.0.1:$xrayPort")
-        YpTunCore.sbStart(json)
+        startSingBoxTunWithRetry(tunRequested = true) { tunIpv6 ->
+            SingBoxConfig.build(
+                profile = frontProfile,
+                listenPort = listenPort,
+                listenHost = listenHost,
+                socksUsername = socksUsername,
+                socksPassword = socksPassword,
+                autoDetectInterface = true,
+                routing = routing,
+                matchAppsByProcess = true,
+                // Everything policy-shaped is Xray's job here — see the doc above.
+                traffic = traffic.copy(fakeDnsEnabled = false, blockRuDomains = false),
+                routingProfile = null,
+                blockQuic = blockQuic,
+                forceFamilyResolve = false,
+                remoteDnsOverHttps = remoteDnsOverHttps,
+                // DNS goes to Xray as a plain SOCKS5 CONNECT instead of a UDP ASSOCIATE — the associate
+                // path is exactly what died on the tun2socks bridge.
+                preferTcpRemoteDns = true,
+                tunMode = true,
+                tunIpv6 = tunIpv6,
+                dnsStrategyOverride = if (!tunIpv6) "ipv4_only" else null,
+                splitTunnelMode = tunRequest?.splitMode ?: SingBoxConfig.SPLIT_TUNNEL_ALL,
+                splitTunnelProcesses = tunRequest?.processes ?: emptyList(),
+                extraBypassProcesses = extraBypassProcesses,
+                tunExcludeAddresses = tunRequest?.excludeAddresses ?: emptyList(),
+                mixedInbound = true,
+                logFilePath = singBoxLogPath(),
+                cacheFilePath = singBoxCachePath(),
+            )
+        }
         tunHandledInCore = true
         singBoxFrontActive = true
+    }
+
+    /**
+     * Starts sing-box and, when in-core TUN fails to assign an IPv6 address (`set ipv6 address:
+     * Element not found` on Windows hosts with IPv6 disabled or unbound on Wintun), tears down the
+     * half-started instance and immediately retries with an IPv4-only TUN interface.
+     */
+    private fun startSingBoxTunWithRetry(
+        tunRequested: Boolean,
+        buildConfig: (tunIpv6: Boolean) -> String,
+    ) {
+        val initialIpv6 = !tunRequested || isHostIpv6AvailableForTun()
+        try {
+            YpTunCore.sbStart(buildConfig(initialIpv6))
+        } catch (e: Throwable) {
+            val msg = e.message.orEmpty()
+            val isIpv6TunError = tunRequested && initialIpv6 && (
+                msg.contains("set ipv6 address", ignoreCase = true) ||
+                    (msg.contains("configure tun interface", ignoreCase = true) && msg.contains("ipv6", ignoreCase = true))
+                )
+            if (!isIpv6TunError) throw e
+            log("IPv6 TUN address unavailable ($msg); retrying sing-box TUN in IPv4-only mode")
+            runCatching { YpTunCore.sbStop() }
+            YpTunCore.sbStart(buildConfig(false))
+        }
+    }
+
+    private fun isHostIpv6AvailableForTun(): Boolean {
+        if (org.olcbox.app.desktop.DesktopPaths.os != org.olcbox.app.desktop.DesktopOs.Windows) return true
+        // HKLM\...\Tcpip6\Parameters\DisabledComponents bit 0xFF (or bit 0x10/0x01) disables IPv6 on non-tunnel/all interfaces.
+        val disabled = runCatching {
+            com.sun.jna.platform.win32.Advapi32Util.registryGetIntValue(
+                com.sun.jna.platform.win32.WinReg.HKEY_LOCAL_MACHINE,
+                "SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters",
+                "DisabledComponents",
+            )
+        }.getOrNull()
+        if (disabled != null && ((disabled and 0xFF) == 0xFF || (disabled and 0x11) != 0)) {
+            return false
+        }
+        return runCatching {
+            java.nio.channels.DatagramChannel.open(java.net.StandardProtocolFamily.INET6).use { }
+            true
+        }.getOrDefault(false)
     }
 
     private val zapretServer = ZapretSocksServer()
@@ -881,13 +933,32 @@ internal class DesktopEngineController(
         socksUsername: String,
         socksPassword: String,
     ) {
+        zapretRoot.stop()
         val zapret = (config.zapret ?: org.olcbox.app.data.model.ZapretConfig()).normalized()
-        val effectiveZapret = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            ZapretSocksServer.resolveRuntimeConfig(
-                config = zapret,
-                forceRefresh = false,
-                log = log,
+        val rootActive = if (zapret.rootMode) {
+            zapretRoot.start(zapret)
+        } else {
+            false
+        }
+        val effectiveZapret = if (rootActive && zapret.rootSplitSni) {
+            // Keep ClientHello unsplit in userspace so the kernel/WinDivert helper sees the full SNI
+            // and handles Fake TTL/badsum + midsld disorder cleanly in one pass.
+            zapret.copy(
+                strategy = org.olcbox.app.data.model.ZapretConfig.STRATEGY_CUSTOM,
+                tlsRecSplit = false,
+                tcpSplit = false,
+                oob = false,
+                disorder = false,
+                httpHostTricks = false,
             )
+        } else {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ZapretSocksServer.resolveRuntimeConfig(
+                    config = zapret,
+                    forceRefresh = false,
+                    log = log,
+                )
+            }
         }
         val front = requestedTun
         val port = if (front) singBoxFrontPort(listenPort) else listenPort

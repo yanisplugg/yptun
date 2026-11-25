@@ -154,6 +154,10 @@ object SingBoxConfig {
         // instead of an external tun2socks. Required for per-process split tunneling — only the
         // TUN owner can attribute connections to processes. Needs admin/root.
         tunMode: Boolean = false,
+        // Include an IPv6 address on the synthetic TUN adapter (`tunMode` only). Windows hosts where
+        // IPv6 is disabled on the adapter/system reject `SetIPAddressesForFamily(AF_INET6)` with
+        // "Element not found", so callers can disable it upfront or on fallback retry.
+        tunIpv6: Boolean = true,
         // Per-process split tunneling (desktop analog of Android's per-app VPN): exe names matched
         // with sing-box `process_name` rules. Only effective with [tunMode].
         // "proxy_selected" → ONLY listed processes go through the proxy (everything else direct);
@@ -335,7 +339,7 @@ object SingBoxConfig {
                         put("tag", TUN_IN_TAG)
                         putJsonArray("address") {
                             add("172.19.0.1/28")
-                            add("fdfe:dcba:9876::1/126")
+                            if (tunIpv6) add("fdfe:dcba:9876::1/126")
                         }
                         // Match Hiddify's proven Windows defaults. The "mixed" stack uses the OS native
                         // TCP stack (gVisor only for UDP) — pure gVisor TCP in userspace was dropping
@@ -348,7 +352,7 @@ object SingBoxConfig {
                         // Host routes around the tunnel for the engines' own upstreams (see the param).
                         val excluded = tunExcludeAddresses
                             .map { it.trim() }
-                            .filter { it.isNotEmpty() }
+                            .filter { it.isNotEmpty() && (tunIpv6 || ':' !in it) }
                             .map { if ('/' in it) it else if (':' in it) "$it/128" else "$it/32" }
                             .distinct()
                         if (excluded.isNotEmpty()) {

@@ -1,3 +1,5 @@
+#include "zapret_dpi_common.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <linux/ip.h>
@@ -29,152 +31,6 @@ static void on_sig(int sig) {
     g_running = 0;
 }
 
-static uint16_t checksum_acc(uint32_t sum, const uint8_t *buf, size_t len) {
-    while (len > 1) {
-        sum += ((uint16_t)buf[0] << 8) | buf[1];
-        buf += 2;
-        len -= 2;
-    }
-    if (len == 1) {
-        sum += ((uint16_t)buf[0] << 8);
-    }
-    while (sum >> 16) {
-        sum = (sum & 0xFFFFu) + (sum >> 16);
-    }
-    return (uint16_t)(~sum & 0xFFFFu);
-}
-
-static uint16_t ip4_checksum(const uint8_t *iph_bytes, size_t ip_len) {
-    return htons(checksum_acc(0, iph_bytes, ip_len));
-}
-
-static uint16_t tcp4_checksum(uint32_t saddr_be, uint32_t daddr_be, const uint8_t *tcp_seg, size_t tcp_total_len) {
-    uint32_t s = ntohl(saddr_be);
-    uint32_t d = ntohl(daddr_be);
-    uint32_t sum = 0;
-    sum += (s >> 16) & 0xFFFFu;
-    sum += s & 0xFFFFu;
-    sum += (d >> 16) & 0xFFFFu;
-    sum += d & 0xFFFFu;
-    sum += (uint32_t)IPPROTO_TCP;
-    sum += (uint32_t)tcp_total_len;
-    return htons(checksum_acc(sum, tcp_seg, tcp_total_len));
-}
-
-static size_t build_decoy_client_hello(const char *sni, uint8_t *out, size_t max_out) {
-    size_t sni_len = strlen(sni);
-    if (sni_len == 0 || sni_len > 120) {
-        sni = "ozon.ru";
-        sni_len = strlen(sni);
-    }
-    uint8_t ext[256];
-    size_t ep = 0;
-    uint16_t entry_len = (uint16_t)(1 + 2 + sni_len);
-    uint16_t sni_ext_len = (uint16_t)(2 + entry_len);
-    ext[ep++] = 0x00; ext[ep++] = 0x00;
-    ext[ep++] = (uint8_t)(sni_ext_len >> 8); ext[ep++] = (uint8_t)(sni_ext_len & 0xFF);
-    ext[ep++] = (uint8_t)(entry_len >> 8); ext[ep++] = (uint8_t)(entry_len & 0xFF);
-    ext[ep++] = 0x00;
-    ext[ep++] = (uint8_t)(sni_len >> 8); ext[ep++] = (uint8_t)(sni_len & 0xFF);
-    memcpy(ext + ep, sni, sni_len); ep += sni_len;
-    // ec_point_formats + supported_groups
-    static const uint8_t tail_ext[] = {
-        0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x1d, 0x00, 0x17,
-        0x00, 0x0b, 0x00, 0x02, 0x01, 0x00
-    };
-    memcpy(ext + ep, tail_ext, sizeof(tail_ext)); ep += sizeof(tail_ext);
-
-    size_t body_len = 2 + 32 + 1 + 2 + 4 + 2 + 2 + ep;
-    size_t hs_len = 4 + body_len;
-    size_t total_len = 5 + hs_len;
-    if (total_len > max_out) return 0;
-
-    size_t p = 0;
-    out[p++] = 0x16; out[p++] = 0x03; out[p++] = 0x01;
-    out[p++] = (uint8_t)(hs_len >> 8); out[p++] = (uint8_t)(hs_len & 0xFF);
-    out[p++] = 0x01;
-    out[p++] = 0x00;
-    out[p++] = (uint8_t)(body_len >> 8); out[p++] = (uint8_t)(body_len & 0xFF);
-    out[p++] = 0x03; out[p++] = 0x03;
-    for (int i = 0; i < 32; i++) out[p++] = (uint8_t)((i * 37 + 19) & 0xFF);
-    out[p++] = 0x00; // session id
-    out[p++] = 0x00; out[p++] = 0x04; // 2 cipher suites
-    out[p++] = 0xc0; out[p++] = 0x2b;
-    out[p++] = 0xc0; out[p++] = 0x2f;
-    out[p++] = 0x01; out[p++] = 0x00; // compression
-    out[p++] = (uint8_t)(ep >> 8); out[p++] = (uint8_t)(ep & 0xFF);
-    memcpy(out + p, ext, ep);
-    p += ep;
-    return p;
-}
-
-static size_t find_tls_midsld_offset(const uint8_t *payload, size_t len) {
-    if (len < 44) return 0;
-    if (payload[0] != 0x16 || payload[1] != 0x03 || payload[5] != 0x01) return 0;
-    size_t rec_len = ((size_t)payload[3] << 8) | payload[4];
-    size_t end = 5 + rec_len;
-    if (end > len) end = len;
-    size_t p = 5 + 4 + 2 + 32;
-    if (p >= end) return 0;
-    size_t sess_len = payload[p];
-    p += 1 + sess_len;
-    if (p + 2 > end) return 0;
-    size_t cipher_len = ((size_t)payload[p] << 8) | payload[p + 1];
-    p += 2 + cipher_len;
-    if (p >= end) return 0;
-    size_t comp_len = payload[p];
-    p += 1 + comp_len;
-    if (p + 2 > end) return 0;
-    size_t ext_len = ((size_t)payload[p] << 8) | payload[p + 1];
-    p += 2;
-    size_t ext_end = p + ext_len;
-    if (ext_end > end) ext_end = end;
-    while (p + 4 <= ext_end) {
-        uint16_t etype = ((uint16_t)payload[p] << 8) | payload[p + 1];
-        uint16_t elen = ((uint16_t)payload[p + 2] << 8) | payload[p + 3];
-        p += 4;
-        if (p + elen > ext_end) break;
-        if (etype == 0x0000 && elen >= 5) {
-            size_t list_len = ((size_t)payload[p] << 8) | payload[p + 1];
-            size_t q = p + 2;
-            size_t list_end = q + list_len;
-            if (list_end > p + elen) list_end = p + elen;
-            while (q + 3 <= list_end) {
-                uint8_t ntype = payload[q];
-                size_t nlen = ((size_t)payload[q + 1] << 8) | payload[q + 2];
-                q += 3;
-                if (q + nlen > list_end) break;
-                if (ntype == 0 && nlen >= 4) {
-                    // Locate registered SLD middle (e.g. inside "googlevideo" for rr4---sn-xxx.googlevideo.com).
-                    size_t last_dot = nlen;
-                    size_t prev_dot = nlen;
-                    for (size_t i = nlen; i > 0; i--) {
-                        if (payload[q + i - 1] == '.') {
-                            if (last_dot == nlen) {
-                                last_dot = i - 1;
-                            } else {
-                                prev_dot = i - 1;
-                                break;
-                            }
-                        }
-                    }
-                    if (last_dot < nlen) {
-                        size_t sld_start = (prev_dot < last_dot) ? (prev_dot + 1) : 0;
-                        size_t sld_len = last_dot - sld_start;
-                        if (sld_len >= 2) {
-                            return q + sld_start + (sld_len / 2);
-                        }
-                    }
-                    return q + (nlen / 2);
-                }
-                q += nlen;
-            }
-        }
-        p += elen;
-    }
-    return 0;
-}
-
 static void send_raw_ipv4_tcp(
     int raw_fd,
     const uint8_t *orig_ip, size_t ip_len,
@@ -183,28 +39,16 @@ static void send_raw_ipv4_tcp(
     uint8_t ttl, uint16_t ip_id_offset, uint32_t seq_offset,
     int set_psh, int corrupt_tcp_sum
 ) {
-    size_t tot_len = ip_len + tcp_len + payload_len;
-    if (tot_len > 1500) return;
     uint8_t pkt[1500];
-    memcpy(pkt, orig_ip, ip_len);
-    memcpy(pkt + ip_len, orig_tcp, tcp_len);
-    if (payload_len > 0) memcpy(pkt + ip_len + tcp_len, payload, payload_len);
+    size_t tot_len = 0;
+    if (!zapret_build_ipv4_tcp_segment(
+            pkt, sizeof(pkt), &tot_len,
+            orig_ip, ip_len, orig_tcp, tcp_len, payload, payload_len,
+            ttl, ip_id_offset, seq_offset, set_psh, corrupt_tcp_sum)) {
+        return;
+    }
 
-    struct iphdr *iph = (struct iphdr *)pkt;
-    struct tcphdr *tcph = (struct tcphdr *)(pkt + ip_len);
-
-    iph->ttl = ttl;
-    iph->id = htons((uint16_t)(ntohs(iph->id) + ip_id_offset));
-    iph->tot_len = htons((uint16_t)tot_len);
-    iph->check = 0;
-    iph->check = ip4_checksum(pkt, ip_len);
-
-    tcph->seq = htonl(ntohl(tcph->seq) + seq_offset);
-    if (set_psh >= 0) tcph->psh = (uint16_t)(set_psh ? 1 : 0);
-    tcph->check = 0;
-    uint16_t sum = tcp4_checksum(iph->saddr, iph->daddr, pkt + ip_len, tcp_len + payload_len);
-    tcph->check = corrupt_tcp_sum ? (uint16_t)(sum ^ 0xFFFFu) : sum;
-
+    const struct iphdr *iph = (const struct iphdr *)pkt;
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
@@ -296,6 +140,12 @@ static void nfq_send_verdict(int nfq_fd, uint16_t queue_num, uint32_t pkt_id_be,
 }
 
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--self-test") == 0) {
+            return run_zapret_dpi_self_test("zapret_root");
+        }
+    }
+
     uint16_t queue_num = 240;
     uint8_t fake_ttl = 5;
     const char *decoy_sni = "ozon.ru";
@@ -358,7 +208,7 @@ int main(int argc, char **argv) {
     setsockopt(raw_fd, SOL_SOCKET, SO_MARK, &mark, sizeof(mark));
 
     uint8_t fake_tls[512];
-    size_t fake_tls_len = build_decoy_client_hello(decoy_sni, fake_tls, sizeof(fake_tls));
+    size_t fake_tls_len = zapret_build_decoy_client_hello(decoy_sni, fake_tls, sizeof(fake_tls));
     char fake_http[256];
     int fake_http_n = snprintf(fake_http, sizeof(fake_http), "GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", decoy_sni);
     size_t fake_http_len = (fake_http_n > 0) ? (size_t)fake_http_n : 0;
@@ -417,15 +267,10 @@ int main(int argc, char **argv) {
                     if (tcp_len >= 20 && ip_len + tcp_len <= ip_tot) {
                         const uint8_t *payload = pkt + ip_len + tcp_len;
                         size_t payload_len = ip_tot - ip_len - tcp_len;
-                        int is_tls = payload_len >= 10 && payload[0] == 0x16 && payload[1] == 0x03 && payload[5] == 0x01;
-                        int is_http = payload_len >= 12 && (
-                            memcmp(payload, "GET ", 4) == 0 ||
-                            memcmp(payload, "POST ", 5) == 0 ||
-                            memcmp(payload, "HEAD ", 5) == 0
-                        );
-                        if (is_tls || is_http) {
-                            const uint8_t *fake_p = is_tls ? fake_tls : (const uint8_t *)fake_http;
-                            size_t fake_l = is_tls ? fake_tls_len : fake_http_len;
+                        int kind = zapret_is_dpi_payload(payload, payload_len);
+                        if (kind != 0) {
+                            const uint8_t *fake_p = (kind == 1) ? fake_tls : (const uint8_t *)fake_http;
+                            size_t fake_l = (kind == 1) ? fake_tls_len : fake_http_len;
                             if (fake_l > 0) {
                                 for (int r = 0; r < repeats; r++) {
                                     send_raw_ipv4_tcp(
@@ -438,10 +283,9 @@ int main(int argc, char **argv) {
                                     );
                                 }
                             }
-                            if (split_sni && is_tls && payload_len < 1400) {
-                                size_t cut = find_tls_midsld_offset(payload, payload_len);
+                            if (split_sni && kind == 1 && payload_len < 1400) {
+                                size_t cut = zapret_find_tls_midsld_offset(payload, payload_len);
                                 if (cut > 1 && cut < payload_len) {
-                                    // Disorder real packet right at midsld: send part 2 first, part 1 second.
                                     send_raw_ipv4_tcp(
                                         raw_fd,
                                         pkt, ip_len,

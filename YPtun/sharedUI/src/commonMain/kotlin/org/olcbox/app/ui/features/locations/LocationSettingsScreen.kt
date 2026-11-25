@@ -2546,7 +2546,7 @@ private fun LazyListScope.zapretSection(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     VkTurnSwitchRow(
-                        "Root-режим (NFQUEUE + фейк-пакеты DPI)",
+                        "Root-режим (NFQUEUE / WinDivert + фейки)",
                         normalized.rootMode,
                         enabled
                     ) { v ->
@@ -2554,9 +2554,9 @@ private fun LazyListScope.zapretSection(
                     }
                     SettingsNote(
                         text = if (normalized.rootMode) {
-                            "На уровне ядра через su + iptables NFQUEUE отправляются фейковые TLS ClientHello (TTL=${normalized.rootFakeTtl}, приманка ${normalized.rootDecoySni}) и выполняется disorder-нарезка настоящего SNI — сильно повышает пробитие YouTube/видео и ТСПУ. Если root не выдан, клиент автоматически останется на userspace ALT."
+                            "На уровне ядра/драйвера (NFQUEUE на Android/Linux, WinDivert на Windows) отправляются фейковые TLS ClientHello (TTL=${normalized.rootFakeTtl}, приманка ${normalized.rootDecoySni}) и выполняется disorder-нарезка настоящего SNI — сильно повышает пробитие YouTube/видео и ТСПУ. Без прав суперпользователя клиент автоматически останется на userspace ALT."
                         } else {
-                            "Требует root (su) на Android. Позволяет отправлять сырые фейк-пакеты с низким TTL и badsum прямо через NFQUEUE — намного эффективнее против ТСПУ, чем обычный режим без root."
+                            "На Android требует root (su), на Linux — root/pkexec (NFQUEUE), на Windows — запуск от администратора (WinDivert). Позволяет отправлять сырые фейк-пакеты с низким TTL и badsum — намного эффективнее против ТСПУ, чем обычный режим."
                         }
                     )
                     if (normalized.rootMode) {

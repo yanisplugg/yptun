@@ -549,6 +549,28 @@ if (currentBuildOs.isLinux) {
     }
     desktopNativeAssetTasks.add(buildHevSocks5TunnelLinux)
     hostDesktopNativeAssetTasks.add(buildHevSocks5TunnelLinux)
+
+    val zapretRootSourceDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/zapret_root")
+    val buildZapretRootLinux = tasks.register<Exec>("buildZapretRootLinux") {
+        val outputFile = generatedNativeResources.map {
+            it.file("native/zapret-root-linux-$hostDesktopArch")
+        }
+        val output = outputFile.get().asFile
+        val srcDir = zapretRootSourceDir.asFile
+
+        inputs.files(
+            srcDir.resolve("zapret_root.c"),
+            srcDir.resolve("zapret_dpi_common.h"),
+        )
+        outputs.file(outputFile)
+        commandLine(
+            "sh",
+            "-c",
+            "mkdir -p ${shellQuote(output.parentFile.absolutePath)} && \${CC:-gcc} -O2 -s -I ${shellQuote(srcDir.absolutePath)} ${shellQuote(srcDir.resolve("zapret_root.c").absolutePath)} -o ${shellQuote(output.absolutePath)} && chmod 0755 ${shellQuote(output.absolutePath)}"
+        )
+    }
+    desktopNativeAssetTasks.add(buildZapretRootLinux)
+    hostDesktopNativeAssetTasks.add(buildZapretRootLinux)
 }
 
 // yptuncore: every proxy core (sing-box/OpenVPN, xray, AmneziaWG, Hysteria2, VK-TURN, olcrtc) compiled
@@ -789,6 +811,62 @@ if (currentBuildOs.isWindows) {
     hostDesktopNativeAssetTasks.add(extractWintunWindows)
     hostDesktopNativeAssetTasks.add(extractTrustTunnelClientWindows)
     hostDesktopNativeAssetTasks.add(extractTrustTunnelWizardWindows)
+
+    if (hostDesktopArch == "amd64") {
+        val winDivertVersion = "2.2.2"
+        val winDivertIncludeDir = layout.buildDirectory.dir("tmp/windivert/include")
+        val downloadWinDivertWindows = tasks.register<DownloadFileTask>("downloadWinDivertWindows") {
+            sourceUrl.set("https://github.com/basil00/WinDivert/releases/download/v$winDivertVersion/WinDivert-$winDivertVersion-A.zip")
+            outputFile.set(layout.buildDirectory.file("tmp/windivert/WinDivert-$winDivertVersion-A.zip"))
+        }
+        val extractWinDivertDllWindows = tasks.register<ExtractZipEntryTask>("extractWinDivertDllWindows") {
+            zipFile.set(downloadWinDivertWindows.flatMap { it.outputFile })
+            entrySuffix.set("/x64/WinDivert.dll")
+            outputFile.set(generatedNativeResources.map { it.file("native/WinDivert.dll") })
+        }
+        val extractWinDivertSysWindows = tasks.register<ExtractZipEntryTask>("extractWinDivertSysWindows") {
+            zipFile.set(downloadWinDivertWindows.flatMap { it.outputFile })
+            entrySuffix.set("/x64/WinDivert64.sys")
+            outputFile.set(generatedNativeResources.map { it.file("native/WinDivert64.sys") })
+        }
+        val extractWinDivertHeaderWindows = tasks.register<ExtractZipEntryTask>("extractWinDivertHeaderWindows") {
+            zipFile.set(downloadWinDivertWindows.flatMap { it.outputFile })
+            entrySuffix.set("/include/windivert.h")
+            outputFile.set(winDivertIncludeDir.map { it.file("windivert.h") })
+        }
+        val zapretRootCommonDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/zapret_root")
+        val zapretRootWinSrc = layout.projectDirectory.file("src/main/native/zapret_root/zapret_root_win.c")
+        val winCCompiler = providers.environmentVariable("CC").orElse("gcc")
+        val buildZapretRootWindows = tasks.register<Exec>("buildZapretRootWindows") {
+            dependsOn(extractWinDivertHeaderWindows)
+            val outExe = generatedNativeResources.map { it.file("native/zapret-root-windows-amd64.exe") }
+            val commonDir = zapretRootCommonDir.asFile
+            val incDir = winDivertIncludeDir.get().asFile
+            inputs.files(
+                zapretRootWinSrc,
+                commonDir.resolve("zapret_dpi_common.h"),
+                incDir.resolve("windivert.h"),
+            )
+            outputs.file(outExe)
+            doFirst { outExe.get().asFile.parentFile.mkdirs() }
+            commandLine(
+                winCCompiler.get(),
+                "-O2",
+                "-s",
+                "-I", commonDir.absolutePath,
+                "-I", incDir.absolutePath,
+                zapretRootWinSrc.asFile.absolutePath,
+                "-lws2_32",
+                "-o", outExe.get().asFile.absolutePath,
+            )
+        }
+        desktopNativeAssetTasks.add(extractWinDivertDllWindows)
+        desktopNativeAssetTasks.add(extractWinDivertSysWindows)
+        desktopNativeAssetTasks.add(buildZapretRootWindows)
+        hostDesktopNativeAssetTasks.add(extractWinDivertDllWindows)
+        hostDesktopNativeAssetTasks.add(extractWinDivertSysWindows)
+        hostDesktopNativeAssetTasks.add(buildZapretRootWindows)
+    }
 }
 
 fun requiredHostNativeResourcePaths(): List<String> = buildList {
@@ -808,11 +886,17 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/trusttunnel-client-windows-$hostDesktopArch.exe")
             add("native/trusttunnel-wizard-windows-$hostDesktopArch.exe")
             add("native/openflux-windows-$hostDesktopArch.exe")
+            if (hostDesktopArch == "amd64") {
+                add("native/zapret-root-windows-amd64.exe")
+                add("native/WinDivert.dll")
+                add("native/WinDivert64.sys")
+            }
             snolcHostName?.let { add("native/$it") }
             csqttHostNames.forEach { add("native/$it") }
         }
         currentBuildOs.isLinux -> {
             add("native/openflux-linux-$hostDesktopArch")
+            add("native/zapret-root-linux-$hostDesktopArch")
             snolcHostName?.let { add("native/$it") }
             csqttHostNames.forEach { add("native/$it") }
             add("native/olcrtc-linux-$hostDesktopArch")
@@ -855,7 +939,7 @@ sourceSets {
                 }
             }
             currentBuildOs.isLinux -> {
-                resources.exclude("native/*-windows-*", "native/*-darwin-*", "native/*.dll", "native/*.exe", "native/*.h")
+                resources.exclude("native/*-windows-*", "native/*-darwin-*", "native/*.dll", "native/*.exe", "native/*.sys", "native/*.h")
                 if (hostDesktopArch == "amd64") {
                     resources.exclude("native/*-arm64*", "native/*-arm.*")
                 } else if (hostDesktopArch == "arm64") {
@@ -943,6 +1027,9 @@ compose.desktop {
         // bounded log buffer, so 512 MB is generous; the cap makes the GC keep the footprint honest.
         // MaxMetaspaceSize bounds the other half (Compose/Kotlin generate a lot of classes).
         jvmArgs += listOf(
+            "--add-opens=java.base/java.io=ALL-UNNAMED",
+            "--add-opens=java.base/java.net=ALL-UNNAMED",
+            "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
             "-Xmx512m",
             "-XX:MaxMetaspaceSize=256m",
             // Hand freed pages back to the OS instead of holding the high-water mark forever, so the

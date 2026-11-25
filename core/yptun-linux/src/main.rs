@@ -2816,7 +2816,7 @@ impl YpTunApp {
                             ("Конфиденциальность", "Анонимный HWID, подтверждение удаления", Page::Privacy),
                             ("AmneziaWG", "Параметры Jc, Jmin, Jmax, S1, S2, H1..H4", Page::Advanced),
                             ("Журнал работы", "Логи в реальном времени, экспорт и копирование", Page::Logs),
-                            ("О программе", "Версия 4.0.0, sing-box, Xray, AmneziaWG", Page::About),
+                            ("О программе", "Версия 4.0.1, sing-box, Xray, AmneziaWG", Page::About),
                         ];
 
                         for (title, desc, page) in search_index {

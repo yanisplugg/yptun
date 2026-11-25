@@ -23,7 +23,8 @@ fi
 work_dir="/tmp/work-arm64"
 appdir="$work_dir/AppDir-arm64"
 debdir="$work_dir/deb-arm64"
-out="/mnt/d/yptun/release-4.0.0"
+out="/mnt/d/yptun/release-4.0.1"
+mkdir -p "$out"
 
 rm -rf "$work_dir"
 mkdir -p "$work_dir"
@@ -69,7 +70,10 @@ cat > "$appdir/bin/YPtun" << 'LAUNCHER'
 HERE="$(dirname "$(readlink -f "$0")")"
 APPDIR="$(dirname "$HERE")"
 exec "$APPDIR/lib/runtime/bin/java" \
-  -Djpackage.app-version=4.0.0 \
+  -Djpackage.app-version=4.0.1 \
+  --add-opens=java.base/java.io=ALL-UNNAMED \
+  --add-opens=java.base/java.net=ALL-UNNAMED \
+  --add-opens=java.base/sun.nio.ch=ALL-UNNAMED \
   -Dcompose.application.resources.dir="$APPDIR/lib/app/resources" \
   -Dcompose.application.configure.swing.globals=true \
   -Xmx512m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC \
@@ -94,8 +98,8 @@ APPRUN
 chmod +x "$appdir/AppRun"
 
 echo "=== Building Slimmed ARM64 AppImage ==="
-rm -f "$out/YPtun-4.0.0-arm64.AppImage"
-ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 "$cache_dir/appimagetool.AppImage" --runtime-file "$cache_dir/runtime-aarch64" "$appdir" "$out/YPtun-4.0.0-arm64.AppImage"
+rm -f "$out/YPtun-4.0.1-arm64.AppImage"
+ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 "$cache_dir/appimagetool.AppImage" --runtime-file "$cache_dir/runtime-aarch64" "$appdir" "$out/YPtun-4.0.1-arm64.AppImage"
 
 echo "=== Building Slimmed ARM64 DEB ==="
 mkdir -p "$debdir/DEBIAN"
@@ -109,7 +113,7 @@ cp "$appdir/org.olcbox.app.desktopApp.desktop" "$debdir/usr/share/applications/y
 
 cat > "$debdir/DEBIAN/control" << 'CONTROL'
 Package: yptun
-Version: 4.0.0-1
+Version: 4.0.1-1
 Section: net
 Maintainer: YPtun <yptun@users.noreply.github.com>
 Priority: optional
@@ -119,8 +123,8 @@ Description: YPtun Compose Linux client
 Depends: libasound2t64, libc6, libexpat1, libfontconfig1, libfreetype6, libgl1, libx11-6, libxext6, libxi6, libxrender1, libxtst6, xdg-utils, zlib1g
 CONTROL
 
-rm -f "$out/YPtun-4.0.0-arm64.deb"
-dpkg-deb -Zxz --build --root-owner-group "$debdir" "$out/YPtun-4.0.0-arm64.deb"
+rm -f "$out/YPtun-4.0.1-arm64.deb"
+dpkg-deb -Zxz --build --root-owner-group "$debdir" "$out/YPtun-4.0.1-arm64.deb"
 
 echo "=== Clean up temp dirs ==="
 rm -rf "$work_dir"

@@ -33,6 +33,7 @@ on:
     paths:
       - ".github/workflows/windows-desktop.yml"
       - "YPtun/desktopApp/**"
+      - "YPtun/androidApp/src/main/jni/zapret_root/**"
       - "YPtun/sharedUI/src/jvmMain/**"
       - "YPtun/sharedUI/src/commonMain/**"
       - "YPtun/gradle.properties"

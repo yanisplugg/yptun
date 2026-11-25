@@ -88,4 +88,22 @@ class SingBoxConfigDesktopTest {
     fun tunOmittedWhenNotInTunMode() {
         assertTrue(build(tunMode = false, mixedInbound = true)["tun"] == null)
     }
+
+    @Test
+    fun desktopTunCanOmitIpv6AddressWhenUnavailable() {
+        val json = SingBoxConfig.build(
+            profile = visionProfile,
+            listenPort = 10808,
+            listenHost = "127.0.0.1",
+            socksUsername = "",
+            socksPassword = "",
+            tunMode = true,
+            tunIpv6 = false,
+            mixedInbound = true,
+        )
+        val inbounds = Json.parseToJsonElement(json).jsonObject["inbounds"]!!.jsonArray.map { it.jsonObject }
+        val tun = inbounds.first { it["type"]?.jsonPrimitive?.content == "tun" }
+        val addrs = tun["address"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("172.19.0.1/28"), addrs)
+    }
 }

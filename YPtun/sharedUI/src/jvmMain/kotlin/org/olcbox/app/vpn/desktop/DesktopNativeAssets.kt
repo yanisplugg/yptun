@@ -175,6 +175,40 @@ internal object DesktopNativeAssets {
         return resolveBinary(fileName = fileName, resourceName = "native/$fileName", candidates = emptyList())
     }
 
+    /**
+     * Native Root/Admin DPI-bypass helper:
+     * - Windows: `zapret-root-windows-<arch>.exe` + `WinDivert.dll` + `WinDivert64.sys`
+     * - Linux: `zapret-root-linux-<arch>`
+     *
+     * Returns null when no root helper is bundled for the host OS/arch (e.g. macOS or Windows ARM64),
+     * letting callers fall back cleanly to userspace Zapret.
+     */
+    fun resolveZapretRootBinary(): Path? = runCatching {
+        when (DesktopPaths.os) {
+            DesktopOs.Windows -> {
+                val arch = desktopArch()
+                if (arch != "amd64") return@runCatching null
+                val fileName = "zapret-root-windows-$arch.exe"
+                copyRuntimeAsset("WinDivert.dll")
+                copyRuntimeAsset("WinDivert64.sys")
+                resolveBinary(
+                    fileName = fileName,
+                    resourceName = "native/$fileName",
+                    candidates = desktopNativeResourceCandidates(fileName)
+                )
+            }
+            DesktopOs.Linux -> {
+                val fileName = "zapret-root-linux-${desktopArch()}"
+                resolveBinary(
+                    fileName = fileName,
+                    resourceName = "native/$fileName",
+                    candidates = desktopNativeResourceCandidates(fileName)
+                )
+            }
+            else -> null
+        }
+    }.getOrNull()
+
     private fun trustTunnelFileName(kind: String): String {
         return when (DesktopPaths.os) {
             DesktopOs.Linux -> "trusttunnel-$kind-linux-${desktopArch()}"
@@ -317,18 +351,23 @@ internal object DesktopNativeAssets {
         val target = DesktopPaths.appDataDir().resolve("bin").resolve(fileName)
         Files.createDirectories(target.parent)
         val resourceName = "native/$fileName"
+        fun copyAssetStream(source: () -> java.io.InputStream) {
+            try {
+                source().use { Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING) }
+            } catch (e: java.io.IOException) {
+                if (!Files.isRegularFile(target)) throw e
+            }
+        }
         val resource = javaClass.classLoader.getResourceAsStream(resourceName)
         if (resource != null) {
-            resource.use {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+            copyAssetStream { resource }
             return target
         }
 
         desktopNativeResourceCandidates(fileName)
             .firstOrNull { it.exists() }
-            ?.let {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
+            ?.let { candidate ->
+                copyAssetStream { Files.newInputStream(candidate) }
                 return target
             }
 

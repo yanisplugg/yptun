@@ -4,6 +4,7 @@ import org.olcbox.app.data.model.EngineType
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.ZapretConfig
 import org.olcbox.app.vpn.PingProbeHelpers
+import org.olcbox.app.vpn.desktop.DesktopZapretRoot
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
@@ -253,5 +254,119 @@ class ZapretSocksServerTest {
             assertNotNull(ms)
             assertTrue(ms >= 1L)
         }
+    }
+
+    @Test
+    fun jvmSocketTtlModificationWorksOnLiveConnectedLoopbackSocket() {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { ss ->
+            val t = Thread { runCatching { ss.accept().close() } }.apply { isDaemon = true; start() }
+            Socket().use { sock ->
+                sock.connect(InetSocketAddress("127.0.0.1", ss.localPort), 2_000)
+                assertTrue(setZapretSocketTtl(sock, 1), "Expected IP_TTL=1 setsockopt to succeed on JVM socket")
+                assertTrue(setZapretSocketTtl(sock, 64), "Expected IP_TTL=64 setsockopt restore to succeed")
+            }
+            t.join(2_000)
+        }
+    }
+
+    @Test
+    fun socks5ConnectDisordersAndSplitsRealTlsClientHelloThroughZapret() {
+        val hello = ZapretSocksServer.buildProbeClientHello("www.youtube.com")
+        // Verify full 2-record TLSRec + SNI-Hole Disorder(TTL=1) preserves handshake payload over live TCP.
+        val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT4).copy(splitDelayMs = 0)
+        val received = ByteArrayOutputStream()
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { upstreamServer ->
+            val t = Thread {
+                upstreamServer.accept().use { s ->
+                    val buf = ByteArray(1024)
+                    // ClientHello split across 3 TLS records adds 10 bytes of record headers.
+                    var total = 0
+                    val deadline = System.currentTimeMillis() + 3_000
+                    while (total < hello.size + 10 && System.currentTimeMillis() < deadline) {
+                        val n = s.getInputStream().read(buf)
+                        if (n <= 0) break
+                        received.write(buf, 0, n)
+                        total += n
+                    }
+                    s.getOutputStream().write("OK".toByteArray(Charsets.US_ASCII))
+                    s.getOutputStream().flush()
+                }
+            }.apply { isDaemon = true; start() }
+
+            val socksPort = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+            val zapret = ZapretSocksServer()
+            try {
+                zapret.start(config = cfg, listenHost = "127.0.0.1", listenPort = socksPort)
+                Socket().use { client ->
+                    client.connect(InetSocketAddress("127.0.0.1", socksPort), 3_000)
+                    client.soTimeout = 3_000
+                    val out = client.getOutputStream()
+                    val inp = client.getInputStream()
+                    out.write(byteArrayOf(0x05, 0x01, 0x00)); out.flush()
+                    assertContentEquals(byteArrayOf(0x05, 0x00), inp.readNBytes(2))
+                    val port = upstreamServer.localPort
+                    out.write(
+                        byteArrayOf(
+                            0x05, 0x01, 0x00, 0x01,
+                            127, 0, 0, 1,
+                            ((port shr 8) and 0xFF).toByte(), (port and 0xFF).toByte()
+                        )
+                    )
+                    out.flush()
+                    assertEquals(0x00, inp.readNBytes(10)[1].toInt() and 0xFF)
+                    out.write(hello); out.flush()
+                    assertContentEquals("OK".toByteArray(Charsets.US_ASCII), inp.readNBytes(2))
+                }
+                t.join(3_000)
+                val delivered = received.toByteArray()
+                assertEquals(hello.size + 10, delivered.size)
+                val reassembled = ByteArrayOutputStream()
+                var pos = 0
+                var records = 0
+                while (pos < delivered.size) {
+                    assertEquals(0x16, delivered[pos].toInt() and 0xFF)
+                    val recLen = ((delivered[pos + 3].toInt() and 0xFF) shl 8) or (delivered[pos + 4].toInt() and 0xFF)
+                    reassembled.write(delivered, pos + 5, recLen)
+                    pos += 5 + recLen
+                    records++
+                }
+                assertEquals(3, records)
+                assertContentEquals(hello.copyOfRange(5, hello.size), reassembled.toByteArray())
+            } finally {
+                zapret.stop()
+            }
+        }
+    }
+
+    @Test
+    fun desktopZapretRootBuildsExpectedCliArgsAndLinuxNfqueueScripts() {
+        val cfg = ZapretConfig(
+            strategy = ZapretConfig.STRATEGY_ALT5,
+            rootMode = true,
+            rootFakeTtl = 4,
+            rootDecoySni = "ya.ru",
+            rootFakeCount = 3,
+            rootBadSum = true,
+            rootSplitSni = false,
+        )
+        val args = DesktopZapretRoot.buildHelperArgs(cfg)
+        assertEquals(
+            listOf("--ttl", "4", "--sni", "ya.ru", "--repeats", "3", "--badsum", "1", "--split-sni", "0"),
+            args,
+        )
+
+        val down = DesktopZapretRoot.buildLinuxDownScript(uid = 1000)
+        assertTrue("--uid-owner 1000" in down)
+        assertTrue("--queue-num 240" in down)
+
+        val run = DesktopZapretRoot.buildLinuxRunScript(
+            binaryPath = "/opt/yptun/zapret-root-linux-amd64",
+            config = cfg,
+            uid = 1000,
+            downScriptPath = "/tmp/zapret-root-down.sh",
+        )
+        assertTrue("iptables -t mangle -I OUTPUT 1 -m owner --uid-owner 1000" in run)
+        assertTrue("cat >/dev/null" in run)
+        assertTrue("'/opt/yptun/zapret-root-linux-amd64'" in run)
     }
 }
