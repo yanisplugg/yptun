@@ -827,7 +827,7 @@ class ZapretSocksServer {
                 val sniMidInFramed = if (cfg.tlsRecSplit && framed.size > len) {
                     findLastTlsRecordStart(framed)
                 } else {
-                    sniSpanInFramed?.let { (it.first + it.last) / 2 }
+                    sniSpanInFramed?.let { findMidSldOffsetInRange(framed, it) }
                 }
                 val sniStartInFramed = sniSpanInFramed?.first
                     ?: (5 + (((framed[3].toInt() and 0xFF) shl 8) or (framed[4].toInt() and 0xFF)))
@@ -871,6 +871,7 @@ class ZapretSocksServer {
             if (isHttpRequest(buf, len)) {
                 val payload = if (cfg.httpHostTricks) mutateHttpHostHeader(buf, len) else buf.copyOf(len)
                 val hostRange = findHttpHostRange(payload, payload.size)
+                val hostMid = hostRange?.let { findMidSldOffsetInRange(payload, it) }
                 val cuts = if (cfg.tcpSplit) {
                     computeTcpSplitBoundaries(
                         len = payload.size,
@@ -878,14 +879,14 @@ class ZapretSocksServer {
                         splitSize = cfg.splitSize,
                         splitCount = cfg.splitCount,
                         hostStart = hostRange?.first,
-                        hostMid = hostRange?.let { (it.first + it.last) / 2 },
+                        hostMid = hostMid,
                         hostEnd = hostRange?.let { it.last + 1 },
                     )
                 } else {
                     emptyList()
                 }
                 val oobOffset = if (cfg.oob) {
-                    hostRange?.let { (it.first + it.last) / 2 } ?: 1
+                    hostMid ?: 1
                 } else {
                     null
                 }
@@ -1028,6 +1029,36 @@ class ZapretSocksServer {
          * across the SNI payload (and an early handshake offset when 3 records are requested), preserving
          * the exact reassembled ClientHello byte stream.
          */
+        /**
+         * Returns the byte offset at the midpoint of the registered second-level domain (e.g. inside
+         * `googlevideo` for `rr4---sn-jvhnu5g-n8vs.googlevideo.com`, never inside the CDN prefix).
+         */
+        internal fun findMidSldOffsetInRange(buf: ByteArray, span: IntRange): Int {
+            val start = span.first
+            val endExclusive = (span.last + 1).coerceAtMost(buf.size)
+            if (endExclusive - start < 2) return start
+            val domain = buf.copyOfRange(start, endExclusive).decodeToString().trimEnd('.')
+            val labels = domain.split('.').filter { it.isNotEmpty() }
+            if (labels.size >= 2) {
+                val last = labels.last()
+                val secondLast = labels[labels.size - 2]
+                val sldIndex = if (labels.size >= 3 && last.length == 2 && secondLast.length <= 3) {
+                    labels.size - 3
+                } else {
+                    labels.size - 2
+                }
+                var charOffset = 0
+                for (i in 0 until sldIndex) {
+                    charOffset += labels[i].length + 1
+                }
+                val sldLen = labels[sldIndex].length
+                if (sldLen >= 2) {
+                    return (start + charOffset + (sldLen / 2)).coerceIn(start + 1, endExclusive - 1)
+                }
+            }
+            return ((start + endExclusive) / 2).coerceIn(start + 1, endExclusive - 1)
+        }
+
         internal fun splitTlsClientHelloRecords(
             buf: ByteArray,
             len: Int,
@@ -1041,7 +1072,7 @@ class ZapretSocksServer {
             val sniSpan = findTlsSniPayloadRange(buf, 5, 5 + recLen)
             val mainCut = when {
                 sniSpan != null && sniSpan.last - sniSpan.first >= 2 -> {
-                    ((sniSpan.first + sniSpan.last) / 2 - 5).coerceIn(1, recLen - 1)
+                    (findMidSldOffsetInRange(buf, sniSpan) - 5).coerceIn(1, recLen - 1)
                 }
                 else -> splitOffset.coerceIn(1, recLen - 1)
             }

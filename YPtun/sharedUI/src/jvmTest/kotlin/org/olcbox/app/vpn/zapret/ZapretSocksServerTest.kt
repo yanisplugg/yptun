@@ -125,6 +125,16 @@ class ZapretSocksServerTest {
         assertTrue(ZapretSocksServer.isStaleMappedDnsIp(InetAddress.getByName("100.64.0.104")))
         assertEquals(false, ZapretSocksServer.isStaleMappedDnsIp(InetAddress.getByName("1.1.1.1")))
 
+        // Long CDN subdomains like *.googlevideo.com must split inside "googlevideo", not inside "rr4---sn-...".
+        val gvHost = "rr4---sn-jvhnu5g-n8vs.googlevideo.com"
+        val gvHello = ZapretSocksServer.buildProbeClientHello(gvHost)
+        val gvSplit = ZapretSocksServer.splitTlsClientHelloRecords(gvHello, gvHello.size, splitOffset = 10, recordCount = 2)
+        val rec1Len = ((gvSplit[3].toInt() and 0xFF) shl 8) or (gvSplit[4].toInt() and 0xFF)
+        val rec1Text = gvSplit.copyOfRange(5, 5 + rec1Len).decodeToString()
+        val rec2Text = gvSplit.copyOfRange(5 + rec1Len + 5, gvSplit.size).decodeToString()
+        assertTrue(rec1Text.endsWith("rr4---sn-jvhnu5g-n8vs.googl"), "Expected record 1 to split inside 'googlevideo', got tail: ${rec1Text.takeLast(32)}")
+        assertTrue(rec2Text.contains("evideo.com"), "Expected record 2 to contain second half 'evideo.com'")
+
         val cuts = ZapretSocksServer.computeTcpSplitBoundaries(
             len = hello.size,
             splitMode = ZapretConfig.SPLIT_MODE_MULTI_SNI,
