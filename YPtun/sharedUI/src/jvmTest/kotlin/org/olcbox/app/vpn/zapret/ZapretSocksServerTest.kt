@@ -30,25 +30,30 @@ class ZapretSocksServerTest {
         assertEquals(ZapretConfig.STRATEGY_AUTO, cfg.zapret?.strategy)
 
         val alt2 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT2)
-        assertEquals(false, alt2.tlsRecSplit)
+        assertTrue(alt2.tlsRecSplit)
+        assertEquals(3, alt2.tlsRecCount)
         assertTrue(alt2.tcpSplit)
-        assertEquals(ZapretConfig.SPLIT_MODE_ONE, alt2.splitMode)
         assertEquals(false, alt2.oob)
 
         val alt3 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT3)
-        assertEquals(ZapretConfig.SPLIT_MODE_MULTI_SNI, alt3.splitMode)
+        assertEquals(false, alt3.tlsRecSplit)
+        assertEquals(ZapretConfig.SPLIT_MODE_ONE_PLUS_MIDSLD, alt3.splitMode)
         assertEquals(false, alt3.oob)
 
-        val alt5 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5)
-        assertTrue(alt5.oob)
+        val alt4 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT4)
+        assertEquals(ZapretConfig.SPLIT_MODE_ONE, alt4.splitMode)
+        assertEquals(false, alt4.oob)
 
         val alt6 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT6)
-        assertEquals(false, alt6.blockQuic)
-        assertEquals(3, alt6.udpFakeCount)
+        assertTrue(alt6.oob)
+
+        val alt7 = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT7)
+        assertEquals(false, alt7.blockQuic)
+        assertEquals(3, alt7.udpFakeCount)
 
         // Legacy strategy names map cleanly to ALT presets.
         assertEquals(ZapretConfig.STRATEGY_ALT1, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_TLSREC).strategy)
-        assertEquals(ZapretConfig.STRATEGY_ALT2, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_SPLIT).strategy)
+        assertEquals(ZapretConfig.STRATEGY_ALT3, ZapretConfig().withPreset(ZapretConfig.STRATEGY_LEGACY_SPLIT).strategy)
     }
 
     @Test
@@ -82,7 +87,7 @@ class ZapretSocksServerTest {
     @Test
     fun desyncSplitsAcrossSniAndFiresOobWithoutAlteringTcpPayload() {
         val hello = ZapretSocksServer.buildProbeClientHello("discord.com")
-        val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT5).copy(splitDelayMs = 0)
+        val cfg = ZapretConfig().withPreset(ZapretConfig.STRATEGY_ALT6).copy(splitDelayMs = 0)
         val out = ByteArrayOutputStream()
         val oobCount = AtomicInteger(0)
         ZapretSocksServer.writeDesyncedInitial(out, hello, hello.size, cfg, onUrgentByte = { oobCount.incrementAndGet() })
@@ -144,7 +149,7 @@ class ZapretSocksServerTest {
             val zapret = ZapretSocksServer()
             try {
                 zapret.start(
-                    config = ZapretConfig(strategy = ZapretConfig.STRATEGY_ALT2, splitDelayMs = 0),
+                    config = ZapretConfig(strategy = ZapretConfig.STRATEGY_ALT5, splitDelayMs = 0),
                     listenHost = "127.0.0.1",
                     listenPort = socksPort,
                     socksUsername = "u",

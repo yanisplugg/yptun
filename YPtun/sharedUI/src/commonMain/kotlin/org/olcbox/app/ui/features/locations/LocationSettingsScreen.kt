@@ -2240,7 +2240,6 @@ private fun LazyListScope.zapretSection(
     item {
         val normalized = config.normalized()
         val probeMap = probeResults.associateBy { it.strategyKey }
-        val activePreset = ZapretConfig.PRESETS.firstOrNull { it.key == normalized.strategy }
 
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -2255,28 +2254,58 @@ private fun LazyListScope.zapretSection(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ZapretConfig.PRESETS.forEach { preset ->
+            SettingsCard {
+                ZapretConfig.PRESETS.forEachIndexed { index, preset ->
+                    if (index > 0) SettingsCardDivider()
+                    val selected = normalized.strategy == preset.key
                     val probe = probeMap[preset.key]
-                    val badge = when {
-                        probe == null -> ""
-                        probe.succeeded -> " ✓ ${probe.rttMs ?: 0}мс"
-                        else -> " ✗"
+                    val subtitle = when {
+                        probe != null && probe.succeeded ->
+                            "✓ ${probe.rttMs ?: 0} мс (${probe.details})"
+                        probe != null ->
+                            "✗ Не прошёл (${probe.details})"
+                        else -> preset.description
                     }
-                    FilterChip(
-                        selected = normalized.strategy == preset.key,
-                        onClick = { onChange { it.withPreset(preset.key) } },
-                        enabled = enabled && !autoTuning,
-                        label = { Text(preset.label + badge) }
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = enabled && !autoTuning) {
+                                onChange { it.withPreset(preset.key) }
+                            }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = preset.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = when {
+                                    probe != null && probe.succeeded -> MaterialTheme.colorScheme.primary
+                                    probe != null -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        if (selected) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
                 }
-            }
-            if (activePreset != null) {
-                SettingsNote(text = activePreset.description)
             }
 
             Row(

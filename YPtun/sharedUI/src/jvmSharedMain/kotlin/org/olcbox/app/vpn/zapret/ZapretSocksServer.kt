@@ -524,9 +524,9 @@ class ZapretSocksServer {
     companion object {
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
         private const val INITIAL_TLS_READ_TIMEOUT_MS = 350
-        private const val CONNECT_TIMEOUT_MS = 8_000
-        private const val PROBE_TIMEOUT_MS = 2_400
-        private const val DNS_TIMEOUT_MS = 3_000
+        private const val CONNECT_TIMEOUT_MS = 4_500
+        private const val PROBE_TIMEOUT_MS = 2_500
+        private const val DNS_TIMEOUT_MS = 2_000
         private const val DNS_CACHE_TTL_MS = 120_000L
         private const val AUTO_CACHE_TTL_MS = 10 * 60_000L
         private const val MAX_DNS_CACHE = 512
@@ -625,22 +625,25 @@ class ZapretSocksServer {
                         var bestRtt: Long? = null
                         val details = mutableListOf<String>()
                         for ((host, addr) in resolvedTargets) {
-                            val rtt = probeTlsWithConfig(host, addr, 443, cfg, protectSocket)
-                            if (rtt != null) {
+                            val outcome = probeTlsWithConfig(host, addr, 443, cfg, protectSocket)
+                            if (outcome.rttMs != null) {
                                 passed++
-                                if (bestRtt == null || rtt < bestRtt) bestRtt = rtt
-                                details.add("$host=${rtt}ms")
+                                if (bestRtt == null || outcome.rttMs < bestRtt) bestRtt = outcome.rttMs
+                                details.add("$host=${outcome.rttMs}ms")
                             } else {
-                                details.add("$host=✗")
+                                details.add("$host=${outcome.failCode}")
                             }
                         }
-                        log("${preset.shortLabel}: $passed/${resolvedTargets.size} [${details.joinToString(", ")}]")
+                        val detailStr = details.joinToString(", ")
+                        log("${preset.shortLabel}: $passed/${resolvedTargets.size} [$detailStr]")
                         ZapretAltProbeResult(
                             strategyKey = preset.key,
                             label = preset.shortLabel,
                             passedCount = passed,
                             totalCount = resolvedTargets.size,
                             rttMs = bestRtt,
+                            usesOob = cfg.oob,
+                            details = detailStr,
                         )
                     })
                 }
@@ -653,6 +656,7 @@ class ZapretSocksServer {
                 .filter { it.passedCount > 0 }
                 .sortedWith(
                     compareByDescending<ZapretAltProbeResult> { it.passedCount }
+                        .thenBy { it.usesOob }
                         .thenBy { it.rttMs ?: Long.MAX_VALUE }
                 )
                 .firstOrNull()
@@ -670,21 +674,26 @@ class ZapretSocksServer {
             )
         }
 
+        private data class TlsProbeOutcome(val rttMs: Long? = null, val failCode: String = "err")
+
         private fun probeTlsWithConfig(
             sniHost: String,
             addr: InetAddress,
             port: Int,
             cfg: ZapretConfig,
             protectSocket: (Socket) -> Unit,
-        ): Long? {
+        ): TlsProbeOutcome {
             val hello = buildProbeClientHello(sniHost)
             val startNs = System.nanoTime()
+            var connected = false
             return try {
                 Socket().use { s ->
-                    s.bind(InetSocketAddress(0))
+                    val wildcard = if (addr is Inet4Address) InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)) else null
+                    s.bind(InetSocketAddress(wildcard, 0))
                     protectSocket(s)
                     s.tcpNoDelay = true
                     s.connect(InetSocketAddress(addr, port), PROBE_TIMEOUT_MS)
+                    connected = true
                     s.soTimeout = PROBE_TIMEOUT_MS
                     val out = s.getOutputStream()
                     val inp = s.getInputStream()
@@ -693,13 +702,23 @@ class ZapretSocksServer {
                     val second = if (first >= 0) inp.read() else -1
                     // ServerHello (0x16 0x03) or valid TLS Alert (0x15 0x03) proves bidirectional TLS handshake passed DPI.
                     if ((first == 0x16 || first == 0x15) && second == 0x03) {
-                        ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
+                        TlsProbeOutcome(rttMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L))
+                    } else if (first < 0) {
+                        TlsProbeOutcome(failCode = "eof")
                     } else {
-                        null
+                        TlsProbeOutcome(failCode = "bad(${first.toString(16)})")
                     }
                 }
-            } catch (_: Exception) {
-                null
+            } catch (e: java.net.SocketTimeoutException) {
+                TlsProbeOutcome(failCode = if (connected) "tls-to" else "conn-to")
+            } catch (e: Exception) {
+                val msg = e.message?.lowercase().orEmpty()
+                val code = when {
+                    "reset" in msg -> "rst"
+                    "refused" in msg -> "refused"
+                    else -> e.javaClass.simpleName.take(8)
+                }
+                TlsProbeOutcome(failCode = code)
             }
         }
 
@@ -1093,6 +1112,12 @@ class ZapretSocksServer {
             return null
         }
 
+        private sealed class DnsLookupResult {
+            data class Found(val address: InetAddress) : DnsLookupResult()
+            data object EmptyAnswer : DnsLookupResult()
+            data object Failed : DnsLookupResult()
+        }
+
         private fun queryProtectedDnsWithFallback(
             domain: String,
             primaryDns: String,
@@ -1109,14 +1134,19 @@ class ZapretSocksServer {
             }
             for (server in candidates) {
                 val query = buildDnsQuery(domain, txIdGen.getAndIncrement() and 0xFFFF) ?: return null
-                val addr = runCatching {
+                val res = runCatching {
                     if (server.startsWith("https://", ignoreCase = true)) {
                         queryDoh(server, query, protectTcp)
                     } else {
                         queryUdpDns(server, query, protectUdp)
                     }
-                }.getOrNull()
-                if (addr != null) return addr
+                }.getOrDefault(DnsLookupResult.Failed)
+                when (res) {
+                    is DnsLookupResult.Found -> return res.address
+                    // Authoritative empty A answer (e.g. IPv6-only api6.ipify.org): do not spin through fallbacks.
+                    DnsLookupResult.EmptyAnswer -> return null
+                    DnsLookupResult.Failed -> Unit
+                }
             }
             return null
         }
@@ -1125,15 +1155,16 @@ class ZapretSocksServer {
             dohUrl: String,
             wireQuery: ByteArray,
             protectTcp: (Socket) -> Unit,
-        ): InetAddress? {
+        ): DnsLookupResult {
             val uri = URI(dohUrl)
-            val host = uri.host ?: return null
+            val host = uri.host ?: return DnsLookupResult.Failed
             val port = if (uri.port > 0) uri.port else 443
             val path = uri.rawPath.ifBlank { "/dns-query" } + (uri.rawQuery?.let { "?$it" } ?: "")
             val bootstrapIp = bootstrapDohHost(host)
 
             Socket().use { raw ->
-                raw.bind(InetSocketAddress(0))
+                val wildcard = if (bootstrapIp is Inet4Address) InetAddress.getByAddress(byteArrayOf(0, 0, 0, 0)) else null
+                raw.bind(InetSocketAddress(wildcard, 0))
                 protectTcp(raw)
                 raw.tcpNoDelay = true
                 raw.connect(InetSocketAddress(bootstrapIp, port), DNS_TIMEOUT_MS)
@@ -1162,8 +1193,10 @@ class ZapretSocksServer {
                     out.write(wireQuery)
                     out.flush()
 
-                    val body = readHttpBody(s.getInputStream()) ?: return null
-                    return parseDnsAResponse(body, 0, body.size)
+                    val body = readHttpBody(s.getInputStream()) ?: return DnsLookupResult.Failed
+                    if (body.size < 12) return DnsLookupResult.Failed
+                    val addr = parseDnsAResponse(body, 0, body.size)
+                    return if (addr != null) DnsLookupResult.Found(addr) else DnsLookupResult.EmptyAnswer
                 }
             }
         }
@@ -1256,7 +1289,7 @@ class ZapretSocksServer {
             serverSpec: String,
             wireQuery: ByteArray,
             protectUdp: (DatagramSocket) -> Unit,
-        ): InetAddress? {
+        ): DnsLookupResult {
             val clean = serverSpec.removePrefix("udp://").trim()
             val host = clean.substringBefore(':').trim('[', ']')
             val port = clean.substringAfter(':', "").toIntOrNull()?.takeIf { it in 1..65535 } ?: 53
@@ -1268,7 +1301,9 @@ class ZapretSocksServer {
                 val resp = ByteArray(1500)
                 val pkt = DatagramPacket(resp, resp.size)
                 ds.receive(pkt)
-                return parseDnsAResponse(pkt.data, 0, pkt.length)
+                if (pkt.length < 12) return DnsLookupResult.Failed
+                val resolved = parseDnsAResponse(pkt.data, 0, pkt.length)
+                return if (resolved != null) DnsLookupResult.Found(resolved) else DnsLookupResult.EmptyAnswer
             }
         }
 

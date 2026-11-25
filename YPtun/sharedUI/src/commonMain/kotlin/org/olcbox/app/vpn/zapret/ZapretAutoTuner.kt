@@ -9,6 +9,8 @@ data class ZapretAltProbeResult(
     val passedCount: Int,
     val totalCount: Int,
     val rttMs: Long?,
+    val usesOob: Boolean = false,
+    val details: String = "",
 ) {
     val succeeded: Boolean get() = passedCount > 0
 }
