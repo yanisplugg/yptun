@@ -16,6 +16,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     private var stopping = false
     private var pumpingLogs = false
     private var watchdogFailures = 0
+    private var wdttRawSocksPort: Int? = nil
     private var activePlan: AppleNativeRuntimePlan?
     private var runtimeDirectoryPath: String = ""
     private var snolcLogURL: URL?
@@ -43,6 +44,9 @@ final class NativeTunnelRuntime: @unchecked Sendable {
     ) {
         do {
             setStopping(false)
+            lock.lock()
+            wdttRawSocksPort = nil
+            lock.unlock()
             self.provider = provider
             let request = try AppleTunnelStore.loadRequest()
             let logURL = try AppleTunnelStore.url(for: AppleTunnelStore.logFileName)
@@ -87,6 +91,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             if plan.snolc != nil {
                 bridgeYaml = bridgeYaml.replacingOccurrences(of: "udp: 'udp'", with: "udp: 'tcp'")
             }
+            lock.lock()
+            let rawSocksPort = wdttRawSocksPort
+            lock.unlock()
+            if let rawSocksPort {
+                bridgeYaml = rewriteBridgeSocksPort(bridgeYaml, port: rawSocksPort)
+            }
             provider.setTunnelNetworkSettings(settings) { [weak self] error in
                 guard error == nil else {
                     self?.record(error: error!)
@@ -130,6 +140,7 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         lock.lock()
         stopping = true
         running = false
+        wdttRawSocksPort = nil
         trustTunnelStartTimer?.cancel()
         trustTunnelStartTimer = nil
         let ttClient = trustTunnelClient
@@ -735,20 +746,28 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             guard !negotiated.isEmpty, !negotiated.hasPrefix("ERROR:") else {
                 throw NativeTunnelRuntimeError.wdttConfigurationUnavailable
             }
-            guard !negotiated.hasPrefix("RAWCONF:") else {
-                throw NativeTunnelRuntimeError.wdttRawModeUnavailable
+            if negotiated.hasPrefix("RAWCONF:") {
+                let socksPort = extractWdttListenPort(from: plan.auxiliary) ?? 10_808
+                lock.lock()
+                wdttRawSocksPort = socksPort
+                lock.unlock()
+                log("VK-TURN WDTT Raw up (\(negotiated.dropFirst("RAWCONF:".count))); SOCKS on 127.0.0.1:\(socksPort)")
+            } else {
+                lock.lock()
+                wdttRawSocksPort = nil
+                lock.unlock()
+                let proxy = try appleWireguardRuntimeProxy(
+                    wireguardIni: negotiated,
+                    trafficJson: request.trafficJSON,
+                    routingJson: request.routingJSON,
+                    routingProfilesJson: request.routingProfilesJSON,
+                    locationJson: request.locationJSON,
+                    socksPort: 10_808,
+                    logFilePath: logFilePath,
+                    cacheFilePath: cacheFilePath
+                )
+                try callCore { CoreapiSbStart(proxy.config, $0) }
             }
-            let proxy = try appleWireguardRuntimeProxy(
-                wireguardIni: negotiated,
-                trafficJson: request.trafficJSON,
-                routingJson: request.routingJSON,
-                routingProfilesJson: request.routingProfilesJSON,
-                locationJson: request.locationJSON,
-                socksPort: 10_808,
-                logFilePath: logFilePath,
-                cacheFilePath: cacheFilePath
-            )
-            try callCore { CoreapiSbStart(proxy.config, $0) }
         }
         if let proxy = plan.proxy {
             switch proxy.kind {
@@ -1366,8 +1385,13 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             case .mieru where !CoreapiMieruRunning(): return false
             default: break
             }
-        } else if plan.deferredWireguardProxy && !CoreapiSbRunning() {
-            return false
+        } else if plan.deferredWireguardProxy {
+            lock.lock()
+            let isRaw = wdttRawSocksPort != nil
+            lock.unlock()
+            if !isRaw && !CoreapiSbRunning() {
+                return false
+            }
         }
         return true
     }
@@ -2197,6 +2221,36 @@ final class NativeTunnelRuntime: @unchecked Sendable {
             }
         }
         return values
+    }
+
+    private func extractWdttListenPort(from auxiliary: [AppleAuxiliaryRuntimePlan]) -> Int? {
+        guard let wdtt = auxiliary.first(where: { $0.kind == .wdtt }),
+              let outerData = wdtt.optionsJson.data(using: .utf8),
+              let outer = try? JSONSerialization.jsonObject(with: outerData) as? [String: Any],
+              let innerJson = outer["options_json"] as? String,
+              let innerData = innerJson.data(using: .utf8),
+              let inner = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any],
+              let listen = inner["listen"] as? String,
+              let portStr = listen.split(separator: ":").last,
+              let port = Int(portStr), (1...65_535).contains(port)
+        else {
+            return nil
+        }
+        return port
+    }
+
+    private func rewriteBridgeSocksPort(_ yaml: String, port: Int) -> String {
+        var inSocks5 = false
+        return yaml.split(separator: "\n", omittingEmptySubsequences: false).map { rawLine in
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !line.hasPrefix(" ") && !trimmed.isEmpty {
+                inSocks5 = trimmed == "socks5:"
+            } else if inSocks5 && trimmed.hasPrefix("port:") {
+                return "  port: \(port)"
+            }
+            return line
+        }.joined(separator: "\n")
     }
 
     private func ipv4Mask(forPrefixLength length: Int) -> String {
