@@ -1022,44 +1022,83 @@ class LocationsRepositoryImpl(
         // brings its own routing/DNS — a link carries none of it, and the panel's routing (RU direct,
         // torrents blocked, …) must apply exactly as in Happ. See [verbatimXhttpConfigs].
         val verbatimXhttp = richBody?.let { verbatimXhttpConfigs(it) }.orEmpty()
-        if (fakeDnsSpec == null && descByServer.isEmpty() && verbatimXhttp.isEmpty()) return parsed
-        val enriched = parsed.bundle.copy(
-            locations = parsed.bundle.locations.map { entry ->
-                var e = entry
-                // Description: fill only when the location has none yet (a Happ-UA main fetch already set
-                // it during parse). Matched by the proxy's server:port against the rich body.
-                if (e.description.isBlank() && descByServer.isNotEmpty()) {
-                    val key = e.proxy?.let { "${it.server}:${it.serverPort}" }
-                    if (key != null) descByServer[key]?.let { d -> e = e.copy(description = d) }
-                }
-                // Replace the link-parsed typed profile (no `extra` fronting block, no routing) with the
-                // verbatim Happ config so it runs identically to Happ. Match by NAME first — several
-                // servers share one host:port (same server, different routing), so server:port alone is
-                // ambiguous; fall back to it only when exactly one verbatim config has that endpoint.
-                if (verbatimXhttp.isNotEmpty() &&
-                    e.proxy != null &&
-                    e.proxy?.rawXrayConfig.isNullOrBlank()
-                ) {
-                    val sp = "${e.proxy?.server}:${e.proxy?.serverPort}"
-                    val match = verbatimXhttp.firstOrNull { it.first.isNotBlank() && it.first == e.name.trim() }
-                        ?: verbatimXhttp.singleOrNull { it.second == sp }
-                    if (match != null) {
-                        e = e.copy(
-                            proxy = e.proxy!!.copy(rawXrayConfig = match.third),
-                            core = ProxyCore.Xray,
-                        )
-                    }
-                }
-                // FakeDNS: attach to locations that don't already have one and aren't verbatim Xray.
-                if (fakeDnsSpec != null &&
-                    e.fakeDns == null &&
-                    e.proxy?.rawXrayConfig.isNullOrBlank() &&
-                    e.proxy?.network != ProxyProfile.NETWORK_XHTTP
-                ) {
-                    e = e.copy(fakeDns = fakeDnsSpec)
-                }
-                if (e !== entry) e.normalized() else entry
+        // Some panels (e.g. stealth/custom Remnawave forks) omit vless:// links when queried with YPtun UA
+        // on iOS and return only stealth protocols (tt://, awg://, snolc://, …), while still returning the
+        // vless servers in the Happ-UA JSON array. Merge any missing vless/vmess/trojan/ss entries from
+        // richBody so iOS shows both standard VLESS and stealth locations, matching Android.
+        val existingProxyNames = parsed.bundle.locations
+            .filter {
+                it.engine == EngineType.Standard &&
+                    it.proxy?.type?.lowercase() in setOf(
+                        ProxyProfile.TYPE_VLESS,
+                        ProxyProfile.TYPE_VMESS,
+                        ProxyProfile.TYPE_TROJAN,
+                        ProxyProfile.TYPE_SHADOWSOCKS,
+                    )
             }
+            .mapTo(mutableSetOf()) { it.name.trim() }
+        val subMeta = parsed.bundle.locations.firstOrNull()?.metadata?.subscription
+        val isLocked = parsed.bundle.locations.any { it.metadata?.locked == true }
+        val rawExtraXray = richBody?.let {
+            parseRawXray(it, source.subscriptionUrl, subMeta)
+        }?.locations.orEmpty()
+            .filter { it.name.trim() !in existingProxyNames }
+            .map { entry ->
+                if (isLocked) {
+                    entry.copy(metadata = (entry.metadata ?: LocationMetadata()).copy(locked = true)).normalized()
+                } else {
+                    entry
+                }
+            }
+        if (fakeDnsSpec == null && descByServer.isEmpty() && verbatimXhttp.isEmpty() && rawExtraXray.isEmpty()) return parsed
+        val enrichedLocations = parsed.bundle.locations.map { entry ->
+            var e = entry
+            // Description: fill only when the location has none yet (a Happ-UA main fetch already set
+            // it during parse). Matched by the proxy's server:port against the rich body.
+            if (e.description.isBlank() && descByServer.isNotEmpty()) {
+                val key = e.proxy?.let { "${it.server}:${it.serverPort}" }
+                if (key != null) descByServer[key]?.let { d -> e = e.copy(description = d) }
+            }
+            // Replace the link-parsed typed profile (no `extra` fronting block, no routing) with the
+            // verbatim Happ config so it runs identically to Happ. Match by NAME first — several
+            // servers share one host:port (same server, different routing), so server:port alone is
+            // ambiguous; fall back to it only when exactly one verbatim config has that endpoint.
+            if (verbatimXhttp.isNotEmpty() &&
+                e.proxy != null &&
+                e.proxy?.rawXrayConfig.isNullOrBlank()
+            ) {
+                val sp = "${e.proxy?.server}:${e.proxy?.serverPort}"
+                val match = verbatimXhttp.firstOrNull { it.first.isNotBlank() && it.first == e.name.trim() }
+                    ?: verbatimXhttp.singleOrNull { it.second == sp }
+                if (match != null) {
+                    e = e.copy(
+                        proxy = e.proxy!!.copy(rawXrayConfig = match.third),
+                        core = ProxyCore.Xray,
+                    )
+                }
+            }
+            // FakeDNS: attach to locations that don't already have one and aren't verbatim Xray.
+            if (fakeDnsSpec != null &&
+                e.fakeDns == null &&
+                e.proxy?.rawXrayConfig.isNullOrBlank() &&
+                e.proxy?.network != ProxyProfile.NETWORK_XHTTP
+            ) {
+                e = e.copy(fakeDns = fakeDnsSpec)
+            }
+            if (e !== entry) e.normalized() else entry
+        }
+        val combinedLocations = if (rawExtraXray.isEmpty()) {
+            enrichedLocations
+        } else {
+            val usedStorageIds = enrichedLocations.mapTo(mutableSetOf()) { it.storageId }
+            val uniqueExtra = rawExtraXray.map { entry ->
+                entry.copy(storageId = uniqueStorageId(entry.storageId, usedStorageIds))
+            }
+            uniqueExtra + enrichedLocations
+        }
+        val enriched = parsed.bundle.copy(
+            activeLocationId = parsed.bundle.activeLocationId ?: combinedLocations.firstOrNull()?.storageId,
+            locations = combinedLocations
         )
         return parsed.copy(bundle = enriched)
     }

@@ -1189,6 +1189,62 @@ class LocationsRepositoryImplTest {
         }
     }
 
+    @Test
+    fun `merges missing vless locations from Happ JSON body when YPtun body has only stealth links`() = runBlocking {
+        val prevMode = org.olcbox.app.data.model.SubscriptionUserAgentHolder.mode
+        try {
+            org.olcbox.app.data.model.SubscriptionUserAgentHolder.mode = org.olcbox.app.data.model.AppBehaviorSettings.SUB_UA_BOTH
+            val happJson = """
+                [
+                  {
+                    "remarks": "Germany VLESS",
+                    "meta": {"serverDescription": "Fast node"},
+                    "inbounds": [{"tag":"socks","port":10808,"listen":"127.0.0.1","protocol":"socks"}],
+                    "outbounds": [
+                      {
+                        "tag": "proxy",
+                        "protocol": "vless",
+                        "settings": {"vnext":[{"address":"de.example.com","port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none"}]}]},
+                        "streamSettings": {"network":"tcp","security":"tls","tlsSettings":{"serverName":"de.example.com"}}
+                      }
+                    ]
+                  }
+                ]
+            """.trimIndent()
+            val yptunStealthBody = "snolc://edge.example.com:8443?key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#Riga%20(SNOLC)"
+            val engine = MockEngine { request ->
+                val ua = request.headers[HttpHeaders.UserAgent].orEmpty()
+                if (ua == org.olcbox.app.data.model.AppBehaviorSettings.HAPP_USER_AGENT) {
+                    respond(
+                        content = happJson,
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json")
+                    )
+                } else {
+                    respond(
+                        content = yptunStealthBody,
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "text/plain")
+                    )
+                }
+            }
+            val dataSource = FakeLocationsDataSource()
+            val repo = LocationsRepositoryImpl(
+                dataSource = dataSource,
+                httpClient = HttpClient(engine),
+                deviceIdentityProvider = StaticIdentityProvider("hwid-test"),
+                platformProxyFactory = { HttpClient(engine) }
+            )
+            val result = repo.importText("https://panel.example.com/sub/abc")
+            assertNotNull(result)
+            val names = result.bundle.locations.map { it.name }
+            assertEquals(listOf("Germany VLESS", "Riga (SNOLC)"), names)
+            assertEquals("Fast node", result.bundle.locations.first().description)
+        } finally {
+            org.olcbox.app.data.model.SubscriptionUserAgentHolder.mode = prevMode
+        }
+    }
+
     private class FakeLocationsDataSource(
         var stored: LocationBundleV4? = null,
         private val legacy: List<Pair<String, String>> = emptyList(),
