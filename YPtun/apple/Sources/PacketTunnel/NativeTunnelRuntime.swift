@@ -1699,63 +1699,69 @@ final class NativeTunnelRuntime: @unchecked Sendable {
         return defaultVal
     }
 
-    private func sanitizeXhttpSettingsForIOS(_ original: [String: Any]) -> [String: Any] {
+    private func sanitizeXhttpSettingsForIOS(_ original: [String: Any], isNestedExtra: Bool = false) -> [String: Any] {
         var s = original
 
         // 1. scMaxBufferedPosts: default in Xray is 30! Clamp to 2 for iOS to prevent buffering tens of MBs.
-        let bufPosts = (s["scMaxBufferedPosts"] as? NSNumber)?.intValue ?? 0
-        if bufPosts <= 0 || bufPosts > 2 {
-            s["scMaxBufferedPosts"] = 2
+        if !isNestedExtra || s["scMaxBufferedPosts"] != nil {
+            let bufPosts = (s["scMaxBufferedPosts"] as? NSNumber)?.intValue ?? 0
+            if bufPosts <= 0 || bufPosts > 2 {
+                s["scMaxBufferedPosts"] = 2
+            }
         }
 
         // 2. scMaxEachPostBytes: clamp to 250 KB max ("150000-250000" or int 250000).
         // Xray default is 1,000,000 (1 MB) if omitted!
-        s["scMaxEachPostBytes"] = clampRangeOrInt(
-            s["scMaxEachPostBytes"],
-            minVal: 100_000,
-            maxVal: 250_000,
-            defaultVal: "150000-250000"
-        )
-
-        // 3. xmux settings
-        var xmux = (s["xmux"] as? [String: Any]) ?? [:]
-        // maxConnections: on iOS 15MB Jetsam ceiling, clamp to max 2 parallel connections
-        xmux["maxConnections"] = clampRangeOrInt(
-            xmux["maxConnections"],
-            minVal: 1,
-            maxVal: 2,
-            defaultVal: "1-2"
-        )
-        // maxConcurrency: clamp to 4
-        if xmux["maxConcurrency"] != nil {
-            xmux["maxConcurrency"] = clampRangeOrInt(
-                xmux["maxConcurrency"],
-                minVal: 1,
-                maxVal: 4,
-                defaultVal: "1-4"
+        if !isNestedExtra || s["scMaxEachPostBytes"] != nil {
+            s["scMaxEachPostBytes"] = clampRangeOrInt(
+                s["scMaxEachPostBytes"],
+                minVal: 100_000,
+                maxVal: 250_000,
+                defaultVal: "150000-250000"
             )
         }
-        // hMaxReusableSecs: retire idle H2 connections after 180-300s (3-5 min) so Go can collect memory
-        // Instead of desktop 1800-3000s (30-50 min)
-        xmux["hMaxReusableSecs"] = clampRangeOrInt(
-            xmux["hMaxReusableSecs"],
-            minVal: 60,
-            maxVal: 300,
-            defaultVal: "180-300"
-        )
-        s["xmux"] = xmux
+
+        // 3. xmux settings (never set both maxConnections and maxConcurrency — Xray rejects both at once!)
+        if !isNestedExtra || s["xmux"] != nil {
+            var xmux = (s["xmux"] as? [String: Any]) ?? [:]
+            if xmux["maxConcurrency"] != nil {
+                xmux.removeValue(forKey: "maxConnections")
+                xmux["maxConcurrency"] = clampRangeOrInt(
+                    xmux["maxConcurrency"],
+                    minVal: 1,
+                    maxVal: 4,
+                    defaultVal: "1-4"
+                )
+            } else {
+                xmux["maxConnections"] = clampRangeOrInt(
+                    xmux["maxConnections"],
+                    minVal: 1,
+                    maxVal: 2,
+                    defaultVal: "1-2"
+                )
+            }
+            // hMaxReusableSecs: retire idle H2 connections after 180-300s (3-5 min) so Go can collect memory
+            // Instead of desktop 1800-3000s (30-50 min)
+            xmux["hMaxReusableSecs"] = clampRangeOrInt(
+                xmux["hMaxReusableSecs"],
+                minVal: 60,
+                maxVal: 300,
+                defaultVal: "180-300"
+            )
+            s["xmux"] = xmux
+        }
 
         // 4. Handle nested extra if present
         if let extraStr = s["extra"] as? String,
            let extraData = extraStr.data(using: .utf8),
            var extraDict = (try? JSONSerialization.jsonObject(with: extraData)) as? [String: Any] {
-            extraDict = sanitizeXhttpSettingsForIOS(extraDict)
+            extraDict = sanitizeXhttpSettingsForIOS(extraDict, isNestedExtra: true)
             if let newExtraData = try? JSONSerialization.data(withJSONObject: extraDict),
                let newExtraStr = String(data: newExtraData, encoding: .utf8) {
                 s["extra"] = newExtraStr
             }
         } else if let extraDict = s["extra"] as? [String: Any] {
-            s["extra"] = sanitizeXhttpSettingsForIOS(extraDict)
+            s["extra"] = sanitizeXhttpSettingsForIOS(extraDict, isNestedExtra: true)
         }
 
         // 5. Handle downloadSettings if present
@@ -1774,7 +1780,12 @@ final class NativeTunnelRuntime: @unchecked Sendable {
 
     private func sanitizeOutboundForIOS(_ outbound: [String: Any]) -> [String: Any] {
         var out = outbound
-        if var mux = out["mux"] as? [String: Any], (mux["enabled"] as? Bool) == true {
+        let streamNet = ((out["streamSettings"] as? [String: Any])?["network"] as? String)?.lowercased() ?? ""
+        let vnextFlow = (((out["settings"] as? [String: Any])?["vnext"] as? [[String: Any]])?.first?["users"] as? [[String: Any]])?.first?["flow"] as? String ?? ""
+        let muxIncompatible = streamNet == "xhttp" || streamNet == "splithttp" || vnextFlow.lowercased().contains("vision")
+        if muxIncompatible {
+            out.removeValue(forKey: "mux")
+        } else if var mux = out["mux"] as? [String: Any], (mux["enabled"] as? Bool) == true {
             let concurrency = (mux["concurrency"] as? NSNumber)?.intValue ?? 0
             if concurrency <= 0 || concurrency > 4 {
                 mux["concurrency"] = 4

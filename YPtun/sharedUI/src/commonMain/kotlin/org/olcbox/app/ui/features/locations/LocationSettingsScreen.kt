@@ -3846,10 +3846,15 @@ private fun AdvancedCoreSection(
                         valueLabel = { it }
                     )
                 }
+                var maxStreamsText by remember(advanced.muxMaxStreams) { mutableStateOf(advanced.muxMaxStreams.toString()) }
                 VkTurnField(
-                    value = advanced.muxMaxStreams.toString(),
+                    value = maxStreamsText,
                     onValueChange = { v ->
-                        onChange { it.copy(muxMaxStreams = v.filter(Char::isDigit).toIntOrNull() ?: 8) }
+                        val digits = v.filter(Char::isDigit)
+                        maxStreamsText = digits
+                        digits.toIntOrNull()?.coerceIn(1, 64)?.let { num ->
+                            onChange { it.copy(muxMaxStreams = num) }
+                        }
                     },
                     label = LocalStrings.current.maxStreamsField,
                     placeholder = "8",
